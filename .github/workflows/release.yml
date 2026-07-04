@@ -130,10 +130,20 @@ jobs:
         if: ${{ env.GPG_PRIVATE_KEY != '' }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # passphrase 보호 키인데 GPG_PASSPHRASE 가 비어 있으면 여기서 명확히
+          # 실패시킨다 — batchmode 의 "can't get input" 으로 조용히 죽지 않게.
+          if ! echo test | gpg --batch --pinentry-mode loopback \
+              ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
+              --detach-sign --output /dev/null 2>/dev/null; then
+            echo "::error::GPG key cannot sign. If the key is passphrase-protected, set the GPG_PASSPHRASE secret (non-empty)."
+            exit 1
+          fi
           for f in dist/*; do
             gpg --batch --yes --pinentry-mode loopback \
               ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
               --detach-sign --output "$f.sig" "$f"
+            # 서명 자가검증 — 깨진 .sig 가 릴리스에 올라가지 않게.
+            gpg --verify "$f.sig" "$f"
           done
       # bare 바이너리를 먼저, 패키지를 다음에 — extension 의 release-hash 검증이
       # 이 표에서 Keeper self-hash (bare 바이너리) 를 찾는다.
