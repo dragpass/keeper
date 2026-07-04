@@ -182,3 +182,25 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file /tmp/notes.md \
             dist/*
+
+  # Homebrew tap 채널 — GoReleaser 가 darwin tar.gz 를 릴리스에 append 하고
+  # dragpass/homebrew-tap 의 Formula/keeper.rb 를 자동 갱신한다 (.goreleaser.yml).
+  brew:
+    name: goreleaser brew tap
+    needs: release
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

@@ -1,0 +1,87 @@
+# GoReleaser — Homebrew tap 채널 전용.
+#
+# 전체 릴리스 파이프라인을 대체하지 않는다: Keeper 는 Native Messaging 호스트라
+# macOS .pkg (시스템 manifest) / Windows Inno Setup (레지스트리 등록) / Linux
+# .deb 은 release.yml 의 기존 job 이 만든다. GoReleaser 는 darwin 바이너리
+# tar.gz 를 기존 릴리스에 append 하고 homebrew-tap 의 formula 를 자동 갱신하는
+# 역할만 한다. brew 설치는 유저 레벨 manifest (post_install) 를 쓰므로 sudo 가
+# 필요 없다.
+version: 2
+
+project_name: dragpass-keeper
+
+builds:
+  - id: keeper-darwin
+    binary: dragpass-keeper
+    main: .
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: darwin-tarball
+    ids:
+      - keeper-darwin
+    formats:
+      - tar.gz
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  # 기존 release job 의 checksums.txt (bare 바이너리 + 패키지 표) 와 충돌 방지.
+  name_template: 'brew_checksums.txt'
+
+changelog:
+  # 릴리스 노트는 release job 이 만든 본문 (체크섬 표 포함) 을 유지한다.
+  disable: true
+
+release:
+  # 기존 릴리스에 자산만 append — 본문/기존 자산은 건드리지 않는다.
+  mode: append
+
+# brews (formula) 는 goreleaser 가 deprecated 로 표시하지만 의도적으로 유지한다:
+# 대체재 homebrew_casks 는 다운로드에 macOS quarantine 이 붙어 무서명 CLI
+# 바이너리가 Gatekeeper 에 차단된다 — brew 채널을 쓰는 이유(무마찰 설치)가
+# 사라진다. formula 는 quarantine 없이 설치된다. release 실행은 경고만 내고
+# 정상 동작한다 (version pin ~> v2).
+brews:
+  - name: keeper
+    ids:
+      - darwin-tarball
+    repository:
+      owner: dragpass
+      name: homebrew-tap
+      token: '{{ .Env.TAP_GITHUB_TOKEN }}'
+    directory: Formula
+    homepage: 'https://github.com/dragpass/keeper'
+    description: 'Native key-custody helper for the DragPass Chrome Extension'
+    license: Apache-2.0
+    commit_author:
+      name: dragpass-release-bot
+      email: vjinhyeokv@gmail.com
+    install: |
+      bin.install "dragpass-keeper"
+    # Chrome 유저 레벨 Native Messaging manifest 등록 — sudo 불필요.
+    # opt_bin 은 버전과 무관한 안정 경로 (/opt/homebrew/opt/keeper/bin).
+    post_install: |
+      manifest_dir = File.expand_path("~/Library/Application Support/Google/Chrome/NativeMessagingHosts")
+      FileUtils.mkdir_p manifest_dir
+      manifest = <<~JSON
+        {
+          "name": "com.dragpass.keeper",
+          "description": "DragPass Device Key Storage",
+          "path": "#{opt_bin}/dragpass-keeper",
+          "type": "stdio",
+          "allowed_origins": [
+            "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk/"
+          ]
+        }
+      JSON
+      File.write(File.join(manifest_dir, "com.dragpass.keeper.json"), manifest)
+    caveats: |
+      The Chrome Native Messaging manifest was installed to:
+        ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
+      Restart Chrome (or disable and re-enable the DragPass extension) to pick it up.
