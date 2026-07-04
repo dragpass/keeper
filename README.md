@@ -1,8 +1,10 @@
-<p align="center">
-  <img width="500" height="500" alt="Image" src="https://github.com/user-attachments/assets/11b193f0-b9ed-45e9-a7fa-923f0c8c47ae" />
-</p>
+# DragPass Keeper
 
-This helper program supports the E2EE configuration for the [BlindFold Chrome Extension](https://chromewebstore.google.com/detail/blindfold/cmgjlocmnppfpknaipdfodjhbplnhimk?hl=ko&utm_source=ext_sidebar) **v1.0.2** by securely storing device keys in OS-native encrypted vaults:
+The open-source native key-custody helper for the [BlindFold Chrome Extension](https://chromewebstore.google.com/detail/blindfold/cmgjlocmnppfpknaipdfodjhbplnhimk?hl=ko&utm_source=ext_sidebar) (**v1.0.2**). It performs the RSA / AES crypto and holds private key material so that keys never enter the browser, which is what makes BlindFold's end-to-end encryption verifiable.
+
+Licensed under [Apache-2.0](LICENSE).
+
+The helper secures device keys in OS-native encrypted vaults:
 
 - **macOS**: Keychain
 - **Linux**: Secret Service API (GNOME Keyring / KDE Wallet)
