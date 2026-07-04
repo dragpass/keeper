@@ -1,0 +1,161 @@
+# Release CI — v* 태그 push 시 5개 플랫폼 패키지를 빌드해 GitHub Release 로 게시.
+#
+#   macOS  : macos-14 러너에서 go build(양 아키텍처) + pkgbuild (.pkg)
+#   Linux  : ubuntu 러너에서 CGO_ENABLED=0 크로스 빌드 + docker dpkg-deb (.deb)
+#   Windows: ubuntu 러너에서 mingw 크로스 CGO 빌드 + docker innosetup (.exe)
+#
+# 버전 규약: 태그 vX.Y.Z 는 internal/keystore/version/version.go 의 Version 과
+# 일치해야 한다 (verify job 이 강제). 패키지 메타데이터 버전은 make VERSION= 으로
+# 태그에서 주입한다.
+#
+# GPG 서명: repo secret GPG_PRIVATE_KEY (+ 선택 GPG_PASSPHRASE) 가 있으면 자산별
+# .sig 를 생성한다. 없으면 서명 없이 게시 (다운로드 검증은 checksums 로 가능).
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: tag matches version.go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check version consistency
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          CODE_VER=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/keystore/version/version.go)
+          echo "tag=$TAG_VER code=$CODE_VER"
+          if [ "$TAG_VER" != "$CODE_VER" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version.go ($CODE_VER)"
+            exit 1
+          fi
+
+  build-macos:
+    name: build macOS packages
+    needs: verify
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build + package (x86_64, arm64)
+        run: make pkg-macos VERSION="${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          path: output/macos/*.pkg
+          if-no-files-found: error
+      # bare 바이너리 해시는 릴리스 노트 체크섬 표에 필요 — extension 의
+      # release-hash 검증이 Keeper self-hash (설치된 바이너리) 와 대조한다.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: dragpass-keeper-macos-*
+          if-no-files-found: error
+
+  build-linux-windows:
+    name: build Linux debs + Windows installer
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install mingw cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: build + package linux debs
+        run: make pkg-linux VERSION="${GITHUB_REF_NAME#v}"
+      - name: build + package windows installer
+        run: make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-windows-packages
+          path: |
+            output/linux/*.deb
+            output/windows/*.exe
+          if-no-files-found: error
+      # bare 바이너리 (repo 루트) — 릴리스 노트 체크섬 표용. Windows 는 bare
+      # 바이너리와 인스톨러가 같은 파일명이라 별 아티팩트로 분리해 충돌 방지.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-windows-binaries
+          path: |
+            dragpass-keeper-linux-*
+            dragpass-keeper.exe
+          if-no-files-found: error
+
+  release:
+    name: sign + checksums + publish
+    needs: [build-macos, build-linux-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-packages'
+          path: pkgs
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-binaries'
+          path: bins
+          merge-multiple: true
+      - name: flatten assets
+        run: |
+          mkdir -p dist
+          find pkgs -type f \( -name '*.pkg' -o -name '*.deb' -o -name '*.exe' \) -exec mv {} dist/ \;
+          echo "--- release assets (dist) ---" && ls -la dist
+          echo "--- bare binaries (checksum only) ---" && find bins -type f
+      - name: gpg sign assets
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          for f in dist/*; do
+            gpg --batch --yes --pinentry-mode loopback \
+              ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
+              --detach-sign --output "$f.sig" "$f"
+          done
+      # bare 바이너리를 먼저, 패키지를 다음에 — extension 의 release-hash 검증이
+      # 이 표에서 Keeper self-hash (bare 바이너리) 를 찾는다.
+      - name: generate checksums
+        run: |
+          {
+            echo "# Hashes:"
+            echo ""
+            echo "| Filename | SHA256 |"
+            echo "|----------|--------|"
+            find bins -type f | sort | while read -r f; do
+              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
+            done
+            for f in dist/*; do
+              case "$f" in *.sig) continue ;; esac
+              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
+            done
+          } > dist/checksums.txt
+          cat dist/checksums.txt
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "DragPass Keeper ${GITHUB_REF_NAME}."
+            echo ""
+            echo "See the README's \"Verifying Downloads\" section for GPG verification steps."
+            echo ""
+            cat dist/checksums.txt
+          } > /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/notes.md \
+            dist/*
