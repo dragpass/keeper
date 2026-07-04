@@ -352,8 +352,8 @@ Promotes pending keypair to permanent storage and saves the session code. Used d
 **Process:**
 1. Verifies signature using server's public key
 2. **Promotes pending keypair to permanent storage** (if exists from signup)
-   - Signup flow: Pending keypair exists → Promoted ✅
-   - Login-on-another-device flow: No pending keypair → Skipped ✅
+   - Signup flow: Pending keypair exists → Promoted
+   - Login-on-another-device flow: No pending keypair → Skipped
 3. Decrypts the session code using Helper's private key (RSA-OAEP with SHA-256)
 4. Stores the decrypted session code in the OS keystore
 5. Returns the decrypted session code
