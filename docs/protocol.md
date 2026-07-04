@@ -6,8 +6,8 @@
 > same PR.
 >
 > Field names below are the actual JSON tags emitted/parsed by Keeper (see
-> `internal/keystore/models.go`). They are reproduced here verbatim — do not
-> paraphrase. Any drift between this file and `models.go` is a bug.
+> `internal/keystore/proto/`). They are reproduced here verbatim — do not
+> paraphrase. Any drift between this file and the `proto` package is a bug.
 
 ## Transport
 
@@ -92,13 +92,13 @@ as a contract:
 |`public material`|`publickey`, `recipient_public_key`, `my_public_key`, `other_public_key`, `new_public_key`, `iv_b64`, `ciphertext_b64` (already enc), `challenge_token`, `signature` (Base64 over public token)|OK to log|
 
 Validation errors echo **field names only**, never the field's value
-(see `internal/keystore/validation.go`).
+(see `internal/keystore/proto/validation.go`).
 
 ## Action catalog
 
 Action names are the literal strings used in the `action` envelope field.
-Implementation lives in `internal/keystore/`. The corresponding Go types are
-in `internal/keystore/models.go`.
+Implementation lives in `internal/keystore/handlers/`. The corresponding Go
+types are in `internal/keystore/proto/`.
 
 ### Health
 
@@ -150,7 +150,7 @@ general API requests.
 |`rotate_request_key_abort`|_empty_|`{ aborted }`|Force-discard the pending slot. Idempotent (aborted=false if neither exists).|
 
 `canonical_request` is the LF-separated 10-field string from the dp-req-v1
-spec (`docs/exec-plans/active/phase-18-device-request-signing.md`). It must
+spec. It must
 never contain plaintext payload / tokens / secrets themselves — the handler
 does not inspect the input, so this is the caller's responsibility.
 
@@ -204,8 +204,8 @@ does not inspect the input, so this is the caller's responsibility.
 |`aes_generate_and_wrap`|`group_handle`|`{ item_dek_raw_b64, wrapped_item_dek }`|Generate new 32B Item DEK + Group-DEK-wrap. `wrapped_item_dek` = Base64(IV(12)‖ciphertext).|
 |`aes_unwrap_and_encrypt`|`wrapped_item_dek`, `group_handle`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Decrypt Item DEK in Keeper, AES-GCM encrypt plaintext.|
 |`aes_rewrap`|`wrapped_item_dek`, `src_group_handle`, `dst_group_handle`|`{ wrapped_item_dek }`|Cross-group share. raw Item DEK in Keeper memory only.|
-|`aes_unshare_rewrap_meta`|`wrapped_item_dek`, `src_group_handle`, `iv_b64`, `ciphertext_b64`, `meta_fields` (key→Base64(IV‖ct)), `extra_dst_group_handles[]`|`{ new_encrypted_value, new_encrypted_fields, new_grants[] }`|UNSHARE_REENCRYPT synthetic — OLD Item DEK unwrap → decrypt value/meta → generate new Item DEK → re-encrypt + wrap to N groups. plaintext echoed 0 times. plaintext-removal-followup §B-1.|
-|`aes_unwrap_and_decrypt_meta`|`wrapped_item_dek`, `group_handle`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of group entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times (use the separate *_to_clipboard action). plaintext-removal-followup §C-1 / SECURITY.md §6.21.|
+|`aes_unshare_rewrap_meta`|`wrapped_item_dek`, `src_group_handle`, `iv_b64`, `ciphertext_b64`, `meta_fields` (key→Base64(IV‖ct)), `extra_dst_group_handles[]`|`{ new_encrypted_value, new_encrypted_fields, new_grants[] }`|UNSHARE_REENCRYPT synthetic — OLD Item DEK unwrap → decrypt value/meta → generate new Item DEK → re-encrypt + wrap to N groups. plaintext echoed 0 times.|
+|`aes_unwrap_and_decrypt_meta`|`wrapped_item_dek`, `group_handle`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of group entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times (use the separate *_to_clipboard action).|
 
 ### Personal DEK (Phase 12d)
 
@@ -215,19 +215,19 @@ does not inspect the input, so this is the caller's responsibility.
 |`dek_generate_and_wrap_dual`|`password`|`{ password_wrapped_dek_b64, device_wrapped_dek_b64 }`|Dual wrap (password + deviceKey). Signup. Server form Base64(salt(16)‖iv(12)‖ct); local form Base64(iv(12)‖ct). deviceKey is fetched from Keychain inside Keeper (Keeper 0.0.8 fix-forward — never crosses IPC).|
 |`dek_rotate_to_device_key`|`password`, `encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|Login: re-wrap server password-wrap with deviceKey. deviceKey from Keychain.|
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain.|
-|`dek_unwrap_and_decrypt_meta`|`encrypted_dek_b64`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of personal entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times. plaintext-removal-followup §C-2 / SECURITY.md §6.21.|
+|`dek_unwrap_and_decrypt_meta`|`encrypted_dek_b64`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of personal entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times.|
 
-> **Removed (Keeper 0.0.21):** `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt` — the plaintext-returning actions have been removed from dispatcher / proto / handler entirely. User-visible decryption uses `*_unwrap_and_decrypt_to_clipboard` (clipboard sink), and UI meta display uses `*_unwrap_and_decrypt_meta` (metadata carve-out). Follow-up to plaintext-removal-followup §A.
+> **Removed (Keeper 0.0.21):** `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt` — the plaintext-returning actions have been removed from dispatcher / proto / handler entirely. User-visible decryption uses `*_unwrap_and_decrypt_to_clipboard` (clipboard sink), and UI meta display uses `*_unwrap_and_decrypt_meta` (metadata carve-out). Follow-up to
 
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
-Phase-1 wiring for the [keeper-plaintext-command-api plan](../../docs/security/keeper-plaintext-command-api-plan.md). Keeper decrypts in process memory and writes the plaintext directly to the OS clipboard via `Deps.Clipboard`. Responses carry no plaintext / `plaintext_b64` / preview / length metadata. `clipboard_ttl_ms` must be in `[5000, 60000]`.
+Keeper owns the plaintext sink: it decrypts in process memory and writes the plaintext directly to the OS clipboard via `Deps.Clipboard`. Responses carry no plaintext / `plaintext_b64` / preview / length metadata. `clipboard_ttl_ms` must be in `[5000, 60000]`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`aes_unwrap_and_decrypt_to_clipboard`|`wrapped_item_dek`, `group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Group decrypt → Keeper clipboard. No plaintext echoed.|
 |`dek_unwrap_and_decrypt_to_clipboard`|`encrypted_dek_b64`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Personal decrypt → Keeper clipboard. deviceKey from Keychain. No plaintext echoed.|
-|`group_decrypt_to_clipboard`|`group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Drag/audit token (raw Group DEK direct) → Keeper clipboard. No Item DEK indirection. No plaintext echoed. Follow-up to plaintext-removal-followup §A.|
+|`group_decrypt_to_clipboard`|`group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Drag/audit token (raw Group DEK direct) → Keeper clipboard. No Item DEK indirection. No plaintext echoed. Follow-up to|
 
 Default `Deps.Clipboard` is the production OS clipboard backend. If backend initialization fails, Keeper uses an explicit unavailable clipboard fallback whose writes fail; copy actions must not report `{ copied: true }` unless the clipboard write succeeded. Tests inject `clipboard.MemoryClipboard` for SHA-256-hash-based assertions without storing plaintext in the fake.
 
@@ -249,7 +249,7 @@ message. Codes are stable enums; messages are not.
 
 The `error` string is sanitized but **may include field names** (e.g.
 `wrap_key_b64: must be 32 bytes`). It never includes secret values. Mapping
-between Go sentinel errors and codes lives in `internal/keystore/errors.go`
+between Go sentinel errors and codes lives in `internal/keystore/errs/errs.go`
 (`CodeForError`):
 
 - `*ValidationError` → `validation_error`
@@ -272,7 +272,7 @@ Extension treats absence as `internal_error` for branching purposes.
 |---|---|---|
 |0.0.6|`aes_*` (4) + `dek_*` (5 personal)|Phase 12 Zero-Extractable first cut.|
 |0.0.7|`dek_rewrap_with_old_key`|Recovery raw exposure fix-forward.|
-|0.0.8|`dek_*` shape change (deviceKey from Keychain, no IPC)|SECURITY.md §6.2 fix-forward.|
+|0.0.8|`dek_*` shape change (deviceKey from Keychain, no IPC)|2 fix-forward.|
 |0.0.9|`aes_*` shape: `group_dek_b64` → `group_handle`. New `group_session_*` (4).|Phase 12c opaque handle.|
 |0.0.10|`recovery_session_open`/`_close`. `recoverysign`/`dek_rewrap_with_old_key` accept `recovery_handle`.|§3 mitigation — PEM held in Keeper memguard.|
 |0.0.11|`group_dek_generate_and_open`, `dek_rewrap_for_member`|Admin path raw-free synthetic actions.|
@@ -283,13 +283,14 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.16|`rotate_user_keypair_promote` request adds `confirmation_payload`|Bind confirmation to pending key + Keeper-side TTL.|
 |0.0.17|Remove `unwrapgroupdekwithkey` dispatch/export|Close legacy Recovery raw PEM IPC path; use `recovery_session_open` + `dek_rewrap_with_old_key`.|
 |0.0.18|`aes_unwrap_and_decrypt_to_clipboard` / `dek_unwrap_and_decrypt_to_clipboard` activated|Phase 1 decrypt-to-clipboard cutover. RegistryList copy flow now delegates to Keeper-owned OS clipboard. Plaintext leaves Native Messaging response.|
-|0.0.19|`aes_unshare_rewrap_meta`, `aes_unwrap_and_decrypt_meta`, `dek_unwrap_and_decrypt_meta`|plaintext-removal-followup §B/§C. UNSHARE_REENCRYPT synthetic action + two bulk meta-field decrypt actions (group/personal). value plaintext is only via the separate `*_to_clipboard` actions — meta responses contain plaintext metadata but secret values 0 times. SECURITY.md §6.21.|
-|0.0.20|`group_decrypt_to_clipboard`|Follow-up to plaintext-removal-followup §A. Writes plaintext from drag/audit tokens (encrypted directly with the raw Group DEK) directly to the Keeper-owned OS clipboard. Used in the context menu / the group branch of `REGISTRY_DECRYPT` — limited to normal mode + current-version DEK tokens (audit / older versions remain on the old `decryptWithGroupDEK` plaintext fallback, cutover in a later phase).|
-|0.0.21 (current)|Remove `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt`|Final follow-up to plaintext-removal-followup §A. The two plaintext-returning actions are removed from dispatcher / proto / handler entirely. User-visible decryption always uses the clipboard sink, UI meta uses the `*_unwrap_and_decrypt_meta` carve-out action — the surface where plaintext values could be included in the Native Messaging response envelope is fully closed at the dispatcher boundary. The e2e verification pattern has been migrated to `*_to_clipboard` + `KEEPER_GET_CLIPBOARD_HASH_E2E` SHA-256 comparison (see clipboard-copy.test.ts).|
+|0.0.19|`aes_unshare_rewrap_meta`, `aes_unwrap_and_decrypt_meta`, `dek_unwrap_and_decrypt_meta`| UNSHARE_REENCRYPT synthetic action + two bulk meta-field decrypt actions (group/personal). value plaintext is only via the separate `*_to_clipboard` actions — meta responses contain plaintext metadata but secret values 0 times.|
+|0.0.20|`group_decrypt_to_clipboard`|Writes plaintext from drag/audit tokens (encrypted directly with the raw Group DEK) directly to the Keeper-owned OS clipboard. Used in the context menu / the group branch of `REGISTRY_DECRYPT` — limited to normal mode + current-version DEK tokens (audit / older versions remain on the old `decryptWithGroupDEK` plaintext fallback, cutover in a later phase).|
+|0.0.21|Remove `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt`|The two plaintext-returning actions are removed from dispatcher / proto / handler entirely. User-visible decryption always uses the clipboard sink, UI meta uses the `*_unwrap_and_decrypt_meta` carve-out action — the surface where plaintext values could be included in the Native Messaging response envelope is fully closed at the dispatcher boundary. The e2e verification pattern has been migrated to `*_to_clipboard` + `KEEPER_GET_CLIPBOARD_HASH_E2E` SHA-256 comparison (see clipboard-copy.test.ts).|
+|0.0.1 (current)|Version epoch reset|Release numbering restarted at 0.0.1 when the project moved to its public home (github.com/dragpass/keeper). No protocol change — 0.0.1 speaks the same protocol as the last pre-reset version (0.0.21 line above).|
 
-The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.21"`, see
-`chrome-extension/src/background/keeper-health.ts`). Keeper-down or below-min
-sets a red `'!'` badge and blocks Phase 12 actions until the user upgrades.
+The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.1"`, the first
+release of the public version epoch). Keeper-down or below-min sets a red
+`'!'` badge and blocks crypto actions until the user upgrades.
 
 The `error_code` response field (Wave 7 P2 Error Taxonomy) was added without
 a Keeper version bump — it is `omitempty`, so older Extensions that don't
@@ -298,20 +299,20 @@ builds that don't emit it continue to work against newer Extensions.
 
 ## Adding a new action
 
-1. Add the action name constant to `internal/keystore/consts.go` with a
+1. Add the action name constant to `internal/keystore/proto/actions.go` with a
    doc-comment that explains intent + security model.
-2. Define `<Name>Request` / `<Name>ResponseData` in `internal/keystore/models.go`.
+2. Define `<Name>Request` / `<Name>ResponseData` in `internal/keystore/proto/`.
 3. Implement `Validate()` on the request using helpers from `validation.go`
    (`requireString`, `requireBase64`, `requireHandle`, etc.).
 4. Implement the handler as an `*App` method in the appropriate domain file
-   (`actions.go`, `dek_actions.go`, `group_session_actions.go`, etc.). Wrap
+   (`internal/keystore/handlers/identity.go`, `dek.go`, `group_session.go`, etc.). Wrap
    secrets in `memguard.NewBufferFromBytes` and `defer Destroy`. Add a free
    function wrapper `func HandleX(req XRequest) BaseResponse { return DefaultApp().HandleX(req) }`
    for dispatcher / backward-compat callers.
-5. Register the handler in `dispatcher.go` `actionRegistry` map using
+5. Register the handler in the `dispatch` package registry map using
    `wrap((*App).HandleX)` (Go method value form — propagates injected `*App`).
 6. Add a row to the matching table in this file (action catalog) and
-   bump `MIN_KEEPER_VERSION` in `chrome-extension/src/background/keeper-health.ts`
+   bump the Extension's `MIN_KEEPER_VERSION` gate
    if the Extension cannot run on older Keeper.
 7. Add a positive + negative unit test in
    `internal/keystore/<file>_test.go`. For sensitive fields, add a regression
@@ -320,11 +321,9 @@ builds that don't emit it continue to work against newer Extensions.
 
 ## References
 
-- `internal/keystore/consts.go` — action name constants.
-- `internal/keystore/models.go` — request / response types and `Validate()`.
-- `internal/keystore/dispatcher.go` — action → handler routing.
-- `internal/keystore/validation.go` — request validation helpers.
-- `internal/keystore/errors.go` — `ErrorCode` enum + `CodeForError` mapping.
-- `internal/keystore/refresh_server_keys.go` — `SystemServerKeyEntry` shape.
-- `chrome-extension/src/background/keeper-health.ts` — `MIN_KEEPER_VERSION`.
-- `dragpass/packages/storage/lib/impl/native-keychain.ts` — Extension wrappers.
+- `internal/keystore/proto/actions.go` — action name constants.
+- `internal/keystore/proto/` — request / response types and `Validate()`.
+- `internal/keystore/dispatch/dispatch.go` — action → handler routing.
+- `internal/keystore/proto/validation.go` — request validation helpers.
+- `internal/keystore/errs/errs.go` — `ErrorCode` enum + `CodeForError` mapping.
+- `internal/keystore/handlers/refresh_server_keys.go` — `SystemServerKeyEntry` shape.

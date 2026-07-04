@@ -282,7 +282,7 @@ refresh:
 	echo ""; \
 	echo "Next steps:"; \
 	echo "  1. Disable/re-enable the DragPass Chrome extension to reload the Native Messaging host"; \
-	echo "  2. (Optional) Reset ariadne DB if schema/encoding changed"; \
+	echo "  2. (Optional) Reset the DragPass server DB if schema/encoding changed"; \
 	echo "  3. (Optional) Reset Chrome Storage: uninstall + reinstall the extension, or log out / revoke device from the popup"; \
 	echo "  4. Re-register account"
 

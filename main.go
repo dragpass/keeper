@@ -104,16 +104,11 @@ func main() {
 	// Stdout is sent to the Chrome extension, so we log to Stderr
 	log.SetOutput(os.Stderr)
 
-	// For debugging, log to a file
-	// logFile, _ := os.OpenFile("/tmp/keeper.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	// log.SetOutput(logFile)
-
 	app := keystore.DefaultApp()
 	logger := app.Logger
 
-	// security/keeper-plaintext-command-api-plan.md "Process hardening" —
-	// disable core dumps. Closes the surface where plaintext could be
-	// exposed in a disk core file. Failure is not fatal.
+	// Process hardening — disable core dumps. Closes the surface where
+	// plaintext could be exposed in a disk core file. Failure is not fatal.
 	if err := proc.DisableCoreDumps(); err != nil {
 		logger.Printf("Warning: Failed to disable core dumps: %v", err)
 	}

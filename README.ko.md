@@ -37,7 +37,7 @@
 curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc | gpg --import
 ```
 
-또는 [GPG_KEYSPUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc)에서 직접 가져올 수도 있습니다.
+또는 [GPG_PUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc)에서 직접 가져올 수도 있습니다.
 
 **Key Fingerprint**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
@@ -160,7 +160,7 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 {
   "success": true,
   "data": {
-    "version": "0.0.6",
+    "version": "0.0.1",
     "hash": "binary_sha256_hash",
     "path": "/path/to/dragpass-keeper"
   }
@@ -569,8 +569,7 @@ Credentials:
 를 기록하므로, 운영 환경에서 실수로 활성화된 경우 쉽게 찾아낼 수 있습니다.
 
 **운영 빌드에는 영향을 주지 않습니다.** 이 환경 변수는 런타임에 확인되므로 동일한
-바이너리가 두 모드 모두에서 동작합니다. Phase 12e Step 6 자동화에서 사용됩니다
-([dragpass/tests/e2e-extension/keeper/](https://github.com/dragpass/dragpass/tree/develop/dragpass/tests/e2e-extension/keeper)).
+바이너리가 두 모드 모두에서 동작합니다.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 

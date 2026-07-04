@@ -37,7 +37,7 @@
 curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc | gpg --import
 ```
 
-または [GPG_KEYSPUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc) から手動でインポートしてください。
+または [GPG_PUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc) から手動でインポートしてください。
 
 **鍵のフィンガープリント**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
@@ -160,7 +160,7 @@ DragPass Keeper が稼働中で応答可能かどうかを確認します。
 {
   "success": true,
   "data": {
-    "version": "0.0.6",
+    "version": "0.0.1",
     "hash": "binary_sha256_hash",
     "path": "/path/to/dragpass-keeper"
   }
@@ -569,8 +569,7 @@ Credentials:
 とログ出力されるため、本番環境での誤った有効化を見つけやすくなっています。
 
 **本番ビルドには影響しません** — この環境変数は実行時にチェックされるため、
-同じバイナリが両方のモードで動作します。Phase 12e Step 6 の自動化で使用されています
-（[dragpass/tests/e2e-extension/keeper/](https://github.com/dragpass/dragpass/tree/develop/dragpass/tests/e2e-extension/keeper)）。
+同じバイナリが両方のモードで動作します。
 
 ### KEEPER_E2E_KEYRING_FILE（複数プロセス間でのキーリング共有）
 

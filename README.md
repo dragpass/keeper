@@ -37,7 +37,7 @@ All release packages are signed with GPG for security. We strongly recommend ver
 curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc | gpg --import
 ```
 
-Or import manually from [GPG_KEYSPUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc).
+Or import manually from [GPG_PUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc).
 
 **Key Fingerprint**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
@@ -160,7 +160,7 @@ Check if the DragPass Keeper is running and responsive.
 {
   "success": true,
   "data": {
-    "version": "0.0.6",
+    "version": "0.0.1",
     "hash": "binary_sha256_hash",
     "path": "/path/to/dragpass-keeper"
   }
@@ -569,8 +569,7 @@ Stderr logs `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
 on startup so accidental activation in production is easy to spot.
 
 **Production builds are unaffected** — the env variable is checked at runtime,
-so the same binary works in both modes. Used by Phase 12e Step 6 automation
-([dragpass/tests/e2e-extension/keeper/](https://github.com/dragpass/dragpass/tree/develop/dragpass/tests/e2e-extension/keeper)).
+so the same binary works in both modes.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
