@@ -42,12 +42,10 @@ release:
   # 기존 릴리스에 자산만 append — 본문/기존 자산은 건드리지 않는다.
   mode: append
 
-# brews (formula) 는 goreleaser 가 deprecated 로 표시하지만 의도적으로 유지한다:
-# 대체재 homebrew_casks 는 다운로드에 macOS quarantine 이 붙어 무서명 CLI
-# 바이너리가 Gatekeeper 에 차단된다 — brew 채널을 쓰는 이유(무마찰 설치)가
-# 사라진다. formula 는 quarantine 없이 설치된다. release 실행은 경고만 내고
-# 정상 동작한다 (version pin ~> v2).
-brews:
+# homebrew_casks — brews(formula) 의 후속 (brews 는 v2.10 soft / v2.16 hard
+# deprecated). 무서명 바이너리의 quarantine 은 공식 가이드대로 post install
+# hook 의 xattr 제거로 해제한다.
+homebrew_casks:
   - name: keeper
     ids:
       - darwin-tarball
@@ -55,32 +53,39 @@ brews:
       owner: dragpass
       name: homebrew-tap
       token: '{{ .Env.TAP_GITHUB_TOKEN }}'
-    directory: Formula
+    directory: Casks
     homepage: 'https://github.com/dragpass/keeper'
     description: 'Native key-custody helper for the DragPass Chrome Extension'
-    license: Apache-2.0
     commit_author:
       name: dragpass-release-bot
       email: vjinhyeokv@gmail.com
-    install: |
-      bin.install "dragpass-keeper"
-    # Chrome 유저 레벨 Native Messaging manifest 등록 — sudo 불필요.
-    # opt_bin 은 버전과 무관한 안정 경로 (/opt/homebrew/opt/keeper/bin).
-    post_install: |
-      manifest_dir = File.expand_path("~/Library/Application Support/Google/Chrome/NativeMessagingHosts")
-      FileUtils.mkdir_p manifest_dir
-      manifest = <<~JSON
-        {
-          "name": "com.dragpass.keeper",
-          "description": "DragPass Device Key Storage",
-          "path": "#{opt_bin}/dragpass-keeper",
-          "type": "stdio",
-          "allowed_origins": [
-            "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk/"
-          ]
-        }
-      JSON
-      File.write(File.join(manifest_dir, "com.dragpass.keeper.json"), manifest)
+    binaries:
+      - dragpass-keeper
+    hooks:
+      post:
+        # 1) 무서명 바이너리 quarantine 해제 (goreleaser 공식 가이드 패턴)
+        # 2) Chrome 유저 레벨 Native Messaging manifest 등록 — sudo 불필요.
+        #    binary 스탠자가 HOMEBREW_PREFIX/bin 에 symlink 하므로 그 경로를
+        #    manifest 에 기록한다.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/dragpass-keeper"]
+            manifest_dir = File.expand_path("~/Library/Application Support/Google/Chrome/NativeMessagingHosts")
+            FileUtils.mkdir_p manifest_dir
+            manifest = <<~JSON
+              {
+                "name": "com.dragpass.keeper",
+                "description": "DragPass Device Key Storage",
+                "path": "#{HOMEBREW_PREFIX}/bin/dragpass-keeper",
+                "type": "stdio",
+                "allowed_origins": [
+                  "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk/"
+                ]
+              }
+            JSON
+            File.write(File.join(manifest_dir, "com.dragpass.keeper.json"), manifest)
+          end
     caveats: |
       The Chrome Native Messaging manifest was installed to:
         ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
