@@ -77,9 +77,10 @@ jobs:
         run: |
           # amake/innosetup 컨테이너는 비루트 유저로 실행돼 runner 소유
           # 워크스페이스에 output/windows 를 만들지 못한다 (File access
-          # denied). 미리 만들어 쓰기 권한을 열어둔다.
+          # denied). 디렉토리만 비재귀로 열어둔다 — 재귀 chmod 는 직전 deb
+          # 단계에서 docker root 가 만든 파일에 걸려 실패한다.
           mkdir -p output/windows
-          chmod -R a+rwX output
+          chmod a+rwX output output/windows
           make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
