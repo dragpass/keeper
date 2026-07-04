@@ -130,14 +130,18 @@ jobs:
         if: ${{ env.GPG_PRIVATE_KEY != '' }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          # passphrase 보호 키인데 GPG_PASSPHRASE 가 비어 있으면 여기서 명확히
-          # 실패시킨다 — batchmode 의 "can't get input" 으로 조용히 죽지 않게.
-          if ! echo test | gpg --batch --pinentry-mode loopback \
+          # secret 에 trailing newline 이 들어가는 사고 (pbpaste 등) 방어.
+          GPG_PASSPHRASE="${GPG_PASSPHRASE%$'\n'}"
+          # passphrase 보호 키인데 GPG_PASSPHRASE 가 비어 있거나 틀리면 여기서
+          # 명확히 실패시킨다. gpg 의 실제 사유는 로그로 그대로 노출한다
+          # (passphrase 는 GitHub 이 마스킹).
+          if ! echo test | gpg --batch --yes --pinentry-mode loopback \
               ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
-              --detach-sign --output /dev/null 2>/dev/null; then
-            echo "::error::GPG key cannot sign. If the key is passphrase-protected, set the GPG_PASSPHRASE secret (non-empty)."
+              --detach-sign --output /tmp/guard.sig; then
+            echo "::error::GPG test signing failed. If the key is passphrase-protected, the GPG_PASSPHRASE secret must be set to the correct, non-empty passphrase."
             exit 1
           fi
+          rm -f /tmp/guard.sig
           for f in dist/*; do
             gpg --batch --yes --pinentry-mode loopback \
               ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
