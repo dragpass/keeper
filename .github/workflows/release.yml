@@ -96,6 +96,11 @@ jobs:
     name: sign + checksums + publish
     needs: [build-macos, build-linux-windows]
     runs-on: ubuntu-latest
+    env:
+      # step-level if 에서는 secrets 컨텍스트를 못 쓴다 — job env 로 승격 후
+      # env 로 존재 여부를 검사한다.
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -115,10 +120,7 @@ jobs:
           echo "--- release assets (dist) ---" && ls -la dist
           echo "--- bare binaries (checksum only) ---" && find bins -type f
       - name: gpg sign assets
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           for f in dist/*; do
