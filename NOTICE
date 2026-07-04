@@ -1,0 +1,11 @@
+DragPass Keeper
+Copyright 2026 DragPass
+
+This product includes software developed by DragPass and its contributors.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full license text.
+
+This software bundles third-party Go modules under the vendor/ directory. Each
+bundled module retains its own license, included alongside its source within
+vendor/. Those licenses continue to govern the respective bundled code.
