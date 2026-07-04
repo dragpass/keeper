@@ -1,12 +1,12 @@
 # DragPass Keeper
 
-The open-source native key-custody helper for the [DragPass Chrome Extension](https://chromewebstore.google.com/detail/blindfold/cmgjlocmnppfpknaipdfodjhbplnhimk?hl=ko&utm_source=ext_sidebar) (**v1.0.2**). It performs the RSA / AES crypto and holds private key material so that keys never enter the browser, which is what makes DragPass's end-to-end encryption verifiable.
+[DragPass Chrome Extension](https://chromewebstore.google.com/detail/blindfold/cmgjlocmnppfpknaipdfodjhbplnhimk?hl=ko&utm_source=ext_sidebar)(**v1.0.2**)을 위한 오픈소스 네이티브 키 보관 헬퍼입니다. RSA / AES 암호 연산을 수행하고 개인키 자료를 보관해, 키가 브라우저 안으로 들어오지 않도록 합니다. 이것이 바로 DragPass의 종단간 암호화를 검증 가능하게 만드는 핵심입니다.
 
-<sub>English | [한국어](README.ko.md) | [日本語](README.ja.md)</sub>
+<sub>[English](README.md) | 한국어 | [日本語](README.ja.md)</sub>
 
-Licensed under [Apache-2.0](LICENSE).
+라이선스는 [Apache-2.0](LICENSE)입니다.
 
-The helper secures device keys in OS-native encrypted vaults:
+헬퍼는 기기 키를 OS 기본 암호화 저장소에 안전하게 보관합니다.
 
 - **macOS**: Keychain
 - **Linux**: Secret Service API (GNOME Keyring / KDE Wallet)
@@ -14,7 +14,7 @@ The helper secures device keys in OS-native encrypted vaults:
 
 ## Download
 
-Download the latest release from the [Releases page](https://github.com/dragpass/keeper/releases).
+최신 릴리스는 [Releases page](https://github.com/dragpass/keeper/releases)에서 내려받을 수 있습니다.
 
 ### Available Packages
 
@@ -28,7 +28,7 @@ Download the latest release from the [Releases page](https://github.com/dragpass
 
 ## Verifying Downloads
 
-All release packages are signed with GPG for security. We strongly recommend verifying the integrity of downloaded files.
+모든 릴리스 패키지는 보안을 위해 GPG로 서명되어 있습니다. 내려받은 파일의 무결성을 반드시 검증하시길 강력히 권장합니다.
 
 ### 1. Import the Public Key
 
@@ -37,7 +37,7 @@ All release packages are signed with GPG for security. We strongly recommend ver
 curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc | gpg --import
 ```
 
-Or import manually from [GPG_KEYSPUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc).
+또는 [GPG_KEYSPUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc)에서 직접 가져올 수도 있습니다.
 
 **Key Fingerprint**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
@@ -60,7 +60,7 @@ gpg --verify dragpass-keeper-linux-arm64.deb.sig dragpass-keeper-linux-arm64.deb
 gpg --verify dragpass-keeper.exe.sig dragpass-keeper.exe
 ```
 
-You should see output like:
+다음과 같은 출력이 표시되어야 합니다.
 ```
 gpg: Good signature from "JinHyeok Hong <vjinhyeokv@gmail.com>" [ultimate]
 ```
@@ -69,7 +69,7 @@ gpg: Good signature from "JinHyeok Hong <vjinhyeokv@gmail.com>" [ultimate]
 
 ### macOS
 
-After installing the `.pkg` file, the following files are created:
+`.pkg` 파일을 설치하면 다음 파일들이 생성됩니다.
 
 - `/Library/Application Support/DragPass/dragpass-keeper` - Main executable
 - `/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json` - Chrome Native Messaging manifest
@@ -78,7 +78,7 @@ After installing the `.pkg` file, the following files are created:
 
 ### Linux
 
-After installing the `.deb` file, the following files are created:
+`.deb` 파일을 설치하면 다음 파일들이 생성됩니다.
 
 - `/opt/dragpass/dragpass-keeper` - Main executable
 - `/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json` - Chrome manifest
@@ -88,7 +88,7 @@ After installing the `.deb` file, the following files are created:
 
 ### Windows
 
-After running the `.exe` installer, the following files are created:
+`.exe` 설치 프로그램을 실행하면 다음 파일들이 생성됩니다.
 
 **64-bit System:**
 - `C:\Program Files\DragPass\`
@@ -108,7 +108,7 @@ After running the `.exe` installer, the following files are created:
 
 ## API Reference
 
-DragPass Keeper communicates with the Chrome extension via Native Messaging protocol. All messages use an **envelope pattern** for better type safety and extensibility.
+DragPass Keeper는 Native Messaging 프로토콜을 통해 Chrome 확장과 통신합니다. 모든 메시지는 타입 안전성과 확장성을 높이기 위해 **envelope 패턴**을 사용합니다.
 
 ### Message Format
 
@@ -146,7 +146,7 @@ DragPass Keeper communicates with the Chrome extension via Native Messaging prot
 
 #### `ping` - Health Check
 
-Check if the DragPass Keeper is running and responsive.
+DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니다.
 
 **Request:**
 ```json
@@ -173,7 +173,7 @@ Check if the DragPass Keeper is running and responsive.
 
 #### `savedevicekey` - Save Device Key
 
-Stores the device encryption key in the OS keystore.
+기기 암호화 키를 OS 키스토어에 저장합니다.
 
 **Request:**
 ```json
@@ -196,7 +196,7 @@ Stores the device encryption key in the OS keystore.
 
 #### `getdevicekey` - Get Device Key
 
-Retrieves the stored device encryption key.
+저장된 기기 암호화 키를 가져옵니다.
 
 **Request:**
 ```json
@@ -219,7 +219,7 @@ Retrieves the stored device encryption key.
 
 #### `deletedevicekey` - Delete Device Key
 
-Removes the device encryption key from the keystore.
+키스토어에서 기기 암호화 키를 삭제합니다.
 
 **Request:**
 ```json
@@ -241,7 +241,7 @@ Removes the device encryption key from the keystore.
 
 #### `generatekeypair` - Generate RSA Keypair
 
-Generates a new RSA-2048 keypair for the Helper. Requires server signature verification.
+헬퍼용 RSA-2048 키쌍을 새로 생성합니다. 서버 서명 검증이 필요합니다.
 
 **Request:**
 ```json
@@ -265,15 +265,15 @@ Generates a new RSA-2048 keypair for the Helper. Requires server signature verif
 ```
 
 **Notes:**
-- Verifies the signature using the server's public key
-- Deletes existing session code and keypair before generating new one
-- Stores both private and public keys in the OS keystore
+- 서버 공개키로 서명을 검증합니다
+- 새 키쌍을 생성하기 전에 기존 세션 코드와 키쌍을 삭제합니다
+- 개인키와 공개키를 모두 OS 키스토어에 저장합니다
 
 ---
 
 #### `getpublickey` - Get Helper Public Key
 
-Retrieves the Helper's public key.
+헬퍼의 공개키를 가져옵니다.
 
 **Request:**
 ```json
@@ -296,7 +296,7 @@ Retrieves the Helper's public key.
 
 #### `getserverpubkey` - Get Server Public Key
 
-Retrieves the server's public key that is stored in the OS keystore.
+OS 키스토어에 저장된 서버 공개키를 가져옵니다.
 
 **Request:**
 ```json
@@ -316,9 +316,9 @@ Retrieves the server's public key that is stored in the OS keystore.
 ```
 
 **Notes:**
-- The server public key is hardcoded in the binary and initialized on first run
-- This key is used to verify signatures from the server
-- Stored in OS-native keystore for retrieval
+- 서버 공개키는 바이너리에 하드코딩되어 있으며 최초 실행 시 초기화됩니다
+- 이 키는 서버가 보낸 서명을 검증하는 데 사용됩니다
+- 이후 조회를 위해 OS 기본 키스토어에 저장됩니다
 
 ---
 
@@ -326,7 +326,7 @@ Retrieves the server's public key that is stored in the OS keystore.
 
 #### `savesessioncode` - Save Encrypted Session Code
 
-Promotes pending keypair to permanent storage and saves the session code. Used during both signup and login-on-another-device flows.
+대기 중인 키쌍을 영구 저장소로 승격하고 세션 코드를 저장합니다. 회원가입 흐름과 다른 기기 로그인 흐름 모두에서 사용됩니다.
 
 **Request:**
 ```json
@@ -350,23 +350,23 @@ Promotes pending keypair to permanent storage and saves the session code. Used d
 ```
 
 **Process:**
-1. Verifies signature using server's public key
-2. **Promotes pending keypair to permanent storage** (if exists from signup)
-   - Signup flow: Pending keypair exists → Promoted ✅
-   - Login-on-another-device flow: No pending keypair → Skipped ✅
-3. Decrypts the session code using Helper's private key (RSA-OAEP with SHA-256)
-4. Stores the decrypted session code in the OS keystore
-5. Returns the decrypted session code
+1. 서버 공개키로 서명을 검증합니다
+2. **대기 중인 키쌍을 영구 저장소로 승격합니다** (회원가입에서 생성된 키쌍이 있는 경우)
+   - 회원가입 흐름: 대기 중인 키쌍 존재 → 승격 ✅
+   - 다른 기기 로그인 흐름: 대기 중인 키쌍 없음 → 건너뜀 ✅
+3. 헬퍼의 개인키로 세션 코드를 복호화합니다 (RSA-OAEP with SHA-256)
+4. 복호화된 세션 코드를 OS 키스토어에 저장합니다
+5. 복호화된 세션 코드를 반환합니다
 
 **Notes:**
-- This action completes the two-phase commit for signup keypair lifecycle
-- Safe for both signup and login-on-another-device flows
+- 이 액션은 회원가입 키쌍 생명주기의 2단계 커밋(two-phase commit)을 완료합니다
+- 회원가입 흐름과 다른 기기 로그인 흐름 모두에서 안전합니다
 
 ---
 
 #### `getsessioncode` - Get Session Code
 
-Retrieves the stored session code.
+저장된 세션 코드를 가져옵니다.
 
 **Request:**
 ```json
@@ -391,7 +391,7 @@ Retrieves the stored session code.
 
 #### `signalias` - Sign User Alias
 
-Generates a keypair and signs the user alias. Used during signup. Uses **pending storage** to prevent orphaned keys if signup fails.
+키쌍을 생성하고 사용자 별칭(alias)에 서명합니다. 회원가입 시 사용됩니다. 회원가입이 실패했을 때 고아 키가 남지 않도록 **대기 저장소(pending storage)**를 사용합니다.
 
 **Request:**
 ```json
@@ -415,16 +415,16 @@ Generates a keypair and signs the user alias. Used during signup. Uses **pending
 ```
 
 **Process:**
-1. Checks if device is already registered (keypair + session code exist)
-2. Generates a new RSA-2048 keypair
-3. Stores keypair in **pending storage** (not permanent yet)
-4. Signs the alias using the pending private key (RSA PKCS#1 v1.5 with SHA-256)
-5. Returns the signature and pending public key
+1. 기기가 이미 등록되어 있는지 확인합니다 (키쌍 + 세션 코드 존재 여부)
+2. 새 RSA-2048 키쌍을 생성합니다
+3. 키쌍을 **대기 저장소**에 저장합니다 (아직 영구 저장 아님)
+4. 대기 중인 개인키로 별칭에 서명합니다 (RSA PKCS#1 v1.5 with SHA-256)
+5. 서명과 대기 중인 공개키를 반환합니다
 
 **Notes:**
-- Keypair is stored in pending storage and will be promoted to permanent storage by `savesessioncode`
-- If signup fails (e.g., 409 Conflict), the pending keypair can be safely overwritten on retry
-- This prevents orphaned keypairs in the OS keystore when signup fails
+- 키쌍은 대기 저장소에 저장되며, `savesessioncode`에 의해 영구 저장소로 승격됩니다
+- 회원가입이 실패하면 (예: 409 Conflict) 재시도 시 대기 중인 키쌍을 안전하게 덮어쓸 수 있습니다
+- 이를 통해 회원가입 실패 시 OS 키스토어에 고아 키쌍이 남는 것을 방지합니다
 
 ---
 
@@ -432,7 +432,7 @@ Generates a keypair and signs the user alias. Used during signup. Uses **pending
 
 #### `signaliaswithtimestamp` - Sign Alias with Timestamp
 
-Signs the user alias with current timestamp. Used for login authentication.
+현재 타임스탬프와 함께 사용자 별칭에 서명합니다. 로그인 인증에 사용됩니다.
 
 **Request:**
 ```json
@@ -456,16 +456,16 @@ Signs the user alias with current timestamp. Used for login authentication.
 ```
 
 **Process:**
-1. Generates current Unix timestamp
-2. Creates payload: `"alias:timestamp"`
-3. Signs the payload using Helper's private key
-4. Returns the signature and timestamp
+1. 현재 Unix 타임스탬프를 생성합니다
+2. 페이로드를 만듭니다: `"alias:timestamp"`
+3. 헬퍼의 개인키로 페이로드에 서명합니다
+4. 서명과 타임스탬프를 반환합니다
 
 ---
 
 #### `signchallengetoken` - Sign Challenge Token
 
-Verifies and signs a challenge token. Used for login verification.
+챌린지 토큰을 검증하고 서명합니다. 로그인 검증에 사용됩니다.
 
 **Request:**
 ```json
@@ -489,9 +489,9 @@ Verifies and signs a challenge token. Used for login verification.
 ```
 
 **Process:**
-1. Verifies the server's signature on the challenge token using server's public key
-2. Signs the challenge token using Helper's private key
-3. Returns the Helper's signature
+1. 서버 공개키로 챌린지 토큰에 대한 서버 서명을 검증합니다
+2. 헬퍼의 개인키로 챌린지 토큰에 서명합니다
+3. 헬퍼의 서명을 반환합니다
 
 ---
 
@@ -550,54 +550,55 @@ Credentials:
 ```
 
 **Notes:**
-- Pending keys are automatically deleted after promotion to permanent storage
-- Pending keys prevent orphaned keys when signup fails (e.g., 409 Conflict errors)
+- 대기 중인 키는 영구 저장소로 승격된 뒤 자동으로 삭제됩니다
+- 대기 중인 키는 회원가입 실패 시 (예: 409 Conflict 오류) 고아 키가 남는 것을 방지합니다
 
 ## Test Mode (KEEPER_E2E_MODE)
 
-For end-to-end tests that need to exercise the full signup/login flow without
-touching the user's real OS Keychain, set `KEEPER_E2E_MODE=1` in the
-environment that spawns the Keeper process. When enabled:
+사용자의 실제 OS Keychain을 건드리지 않고 회원가입/로그인 전체 흐름을 검증해야
+하는 종단간 테스트를 위해, Keeper 프로세스를 실행하는 환경에서
+`KEEPER_E2E_MODE=1`을 설정합니다. 이 모드가 활성화되면 다음과 같이 동작합니다.
 
-- `main.init()` calls `keyring.MockInit()` from `github.com/zalando/go-keyring`
-- All `keyring.Set/Get/Delete` operations go to a process-local in-memory map
-- `EnsureServerPublicKey` writes the hardcoded server pubkey into the mock
-- The OS Keychain is never read or written
-- Process exit clears all keys (perfect test isolation)
+- `main.init()`이 `github.com/zalando/go-keyring`의 `keyring.MockInit()`을 호출합니다
+- 모든 `keyring.Set/Get/Delete` 연산이 프로세스 로컬 인메모리 맵으로 향합니다
+- `EnsureServerPublicKey`가 하드코딩된 서버 공개키를 mock에 기록합니다
+- OS Keychain은 읽거나 쓰지 않습니다
+- 프로세스가 종료되면 모든 키가 지워집니다 (완벽한 테스트 격리)
 
-Stderr logs `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
-on startup so accidental activation in production is easy to spot.
+시작 시 stderr에 `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
+를 기록하므로, 운영 환경에서 실수로 활성화된 경우 쉽게 찾아낼 수 있습니다.
 
-**Production builds are unaffected** — the env variable is checked at runtime,
-so the same binary works in both modes. Used by Phase 12e Step 6 automation
+**운영 빌드에는 영향을 주지 않습니다.** 이 환경 변수는 런타임에 확인되므로 동일한
+바이너리가 두 모드 모두에서 동작합니다. Phase 12e Step 6 자동화에서 사용됩니다
 ([dragpass/tests/e2e-extension/keeper/](https://github.com/dragpass/dragpass/tree/develop/dragpass/tests/e2e-extension/keeper)).
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
-`KEEPER_E2E_MODE=1` alone uses a process-local in-memory map. When the
-Extension's popup and service worker (SW) each spawn their own Keeper process
-via `connectNative`, they get separate mock keyrings — signup persists a
-keypair in the popup's Keeper, but the SW's Keeper sees an empty keyring and
-fails ADMIN_CREATE_ORG with "secret not found".
+`KEEPER_E2E_MODE=1`만 설정하면 프로세스 로컬 인메모리 맵을 사용합니다. 확장의
+popup과 서비스 워커(SW)가 각각 `connectNative`로 자신만의 Keeper 프로세스를
+띄우면 서로 다른 mock 키링을 갖게 됩니다. 회원가입이 popup의 Keeper에는 키쌍을
+저장하지만, SW의 Keeper는 빈 키링을 보게 되어 "secret not found"로
+ADMIN_CREATE_ORG에 실패합니다.
 
-Setting `KEEPER_E2E_KEYRING_FILE=/path/to/keyring.json` *in addition to*
-`KEEPER_E2E_MODE=1` makes `storage.go` mirror every Set/Get/Delete to a JSON
-file (`internal/keystore/krfile.go`). All Keeper processes that share the
-same file path now see the same keyring entries. The file is loaded into the
-mock map at startup and rewritten on every Set/Delete.
+`KEEPER_E2E_MODE=1`에 *더해서* `KEEPER_E2E_KEYRING_FILE=/path/to/keyring.json`을
+설정하면 `storage.go`가 모든 Set/Get/Delete를 JSON 파일
+(`internal/keystore/krfile.go`)에 미러링합니다. 이제 같은 파일 경로를 공유하는
+모든 Keeper 프로세스가 동일한 키링 항목을 보게 됩니다. 파일은 시작 시 mock 맵에
+로드되고, Set/Delete가 일어날 때마다 다시 기록됩니다.
 
-This flag is opt-in and only meaningful with the mock provider active. It
-does not enable file storage in production builds. The automation fixture
-generates a per-test path under `user-data-dir/e2e-keyring.json` so test
-runs are isolated from each other.
+이 플래그는 opt-in 방식이며 mock 프로바이더가 활성화된 경우에만 의미가 있습니다.
+운영 빌드에서 파일 저장을 활성화하지는 않습니다. 자동화 픽스처는
+`user-data-dir/e2e-keyring.json` 아래에 테스트별 경로를 생성하므로 각 테스트
+실행이 서로 격리됩니다.
 
 ## Production Clipboard Smoke (DRAGPASS_KEEPER_CLIPBOARD_E2E)
 
-`internal/keystore/clipboard` ships an opt-in smoke/e2e suite that exercises the
-real OS clipboard backend (`golang.design/x/clipboard`). It is **off by default**
-so `go test ./...` never touches the developer's clipboard.
+`internal/keystore/clipboard`에는 실제 OS 클립보드 백엔드
+(`golang.design/x/clipboard`)를 검증하는 opt-in smoke/e2e 스위트가 포함되어
+있습니다. 기본적으로 **비활성화**되어 있으므로 `go test ./...`는 개발자의
+클립보드를 절대 건드리지 않습니다.
 
-To run it:
+실행 방법:
 
 ```bash
 make test-clipboard-e2e
@@ -606,13 +607,13 @@ DRAGPASS_KEEPER_CLIPBOARD_E2E=1 \
   go test ./internal/keystore/clipboard -count=1 -run ProductionSmoke -v
 ```
 
-What it verifies:
+검증 항목:
 
-- `OSClipboard.Write` actually lands a sentinel string on the OS clipboard.
-- TTL expiry clears the sentinel (best-effort, `compare-then-clear`).
-- TTL expiry does **not** clobber a value the user copied during the TTL
-  window — the SHA-256 compare-and-clear invariant from `production.go`.
+- `OSClipboard.Write`가 실제로 sentinel 문자열을 OS 클립보드에 올리는지
+- TTL 만료가 sentinel을 지우는지 (best-effort, `compare-then-clear`)
+- TTL 만료가 TTL 구간 동안 사용자가 복사한 값을 덮어쓰지 **않는지**. `production.go`의
+  SHA-256 compare-and-clear 불변식입니다
 
-Cleanup restores the clipboard contents read at the start of the test, so a
-clean run leaves the system clipboard untouched. The suite is intended for
-OS-specific local checks and per-OS CI smoke jobs, not the default test job.
+테스트 종료 시 정리 단계에서 테스트 시작 시점에 읽어둔 클립보드 내용을 복원하므로,
+정상적으로 실행되면 시스템 클립보드가 그대로 유지됩니다. 이 스위트는 기본 테스트
+잡이 아니라 OS별 로컬 점검과 OS별 CI smoke 잡을 위한 것입니다.
