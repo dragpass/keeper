@@ -74,7 +74,13 @@ jobs:
       - name: build + package linux debs
         run: make pkg-linux VERSION="${GITHUB_REF_NAME#v}"
       - name: build + package windows installer
-        run: make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
+        run: |
+          # amake/innosetup 컨테이너는 비루트 유저로 실행돼 runner 소유
+          # 워크스페이스에 output/windows 를 만들지 못한다 (File access
+          # denied). 미리 만들어 쓰기 권한을 열어둔다.
+          mkdir -p output/windows
+          chmod -R a+rwX output
+          make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-windows-packages
