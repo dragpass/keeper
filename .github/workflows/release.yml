@@ -204,3 +204,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+      # brew(tar.gz) 바이너리는 GoReleaser 빌드라 Makefile 빌드와 해시가 다르다
+      # (-trimpath/ldflags 차이). extension 의 Keeper self-hash 검증이 릴리스
+      # 노트의 체크섬 표를 파싱하므로, brew 바이너리 해시도 노트에 append 해야
+      # brew 설치 사용자가 'unauthorized(비인증)' 로 오판되지 않는다.
+      - name: append brew binary hashes to release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : > /tmp/rows.md
+          for f in dist/*.tar.gz; do
+            d=$(mktemp -d)
+            tar -xzf "$f" -C "$d"
+            h=$(shasum -a 256 "$d/dragpass-keeper" | awk '{print $1}')
+            printf '| dragpass-keeper (%s, brew) | %s |\n' \
+              "$(basename "$f" .tar.gz)" "$h" >> /tmp/rows.md
+          done
+          cat /tmp/rows.md
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json body --jq '.body' > /tmp/body.md
+          cat /tmp/rows.md >> /tmp/body.md
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --notes-file /tmp/body.md
