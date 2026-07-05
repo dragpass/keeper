@@ -237,6 +237,34 @@ DragPass Keeper が稼働中で応答可能かどうかを確認します。
 
 ---
 
+#### `reset_device_identity` - デバイスアイデンティティのリセット
+
+サーバー側でアカウントや DB がリセットされた後、ユーザーがこのデバイスで再登録
+できるように、デバイスに残るアカウント関連の鍵素材をすべて消去します。アクティブ
+鍵ペア、保留中の鍵ペア、セッションコード、デバイス鍵を削除します。
+`server_public_key` はアカウントに依存しない信頼アンカーのため保持されます。冪等
+であり（対象が何もなくても成功します）、鍵素材は返さず、削除したスロット名のみを
+返します。
+
+**リクエスト:**
+```json
+{
+  "action": "reset_device_identity"
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": {
+    "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
+  }
+}
+```
+
+---
+
 ### 鍵ペアの管理
 
 #### `generatekeypair` - RSA 鍵ペアの生成

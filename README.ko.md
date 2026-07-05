@@ -237,6 +237,33 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 
 ---
 
+#### `reset_device_identity` - Reset Device Identity
+
+서버에서 계정이나 DB가 초기화된 뒤, 사용자가 이 기기로 다시 가입할 수 있도록
+기기에 남은 계정 관련 키 자료를 모두 지웁니다. 활성 키페어, 대기 키페어, 세션
+코드, 디바이스 키를 삭제합니다. `server_public_key`는 계정과 무관한 신뢰 앵커라
+그대로 둡니다. 멱등이라 지울 게 없어도 성공하며, 키 자료는 반환하지 않고 삭제된
+슬롯 이름만 돌려줍니다.
+
+**Request:**
+```json
+{
+  "action": "reset_device_identity"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
+  }
+}
+```
+
+---
+
 ### Keypair Management
 
 #### `generatekeypair` - Generate RSA Keypair

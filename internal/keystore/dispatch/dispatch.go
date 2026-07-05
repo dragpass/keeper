@@ -66,6 +66,9 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionSaveDeviceKey:   wrap(handlers.HandleSaveDeviceKey),
 	proto.ActionDeleteDeviceKey: wrap(handlers.HandleDeleteDeviceKey),
 
+	// local self-recovery: wipe this device's account-scoped key material
+	proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),
+
 	proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
 	proto.ActionGetSessionCode:  wrap(handlers.HandleGetSessionCode),
 
