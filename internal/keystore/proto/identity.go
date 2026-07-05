@@ -82,3 +82,14 @@ type SignAliasWithTimestampResponseData struct {
 type SignChallengeTokenResponseData struct {
 	Signature string `json:"signature"`
 }
+
+// ResetDeviceIdentityRequest carries no payload — see ActionResetDeviceIdentity.
+type ResetDeviceIdentityRequest struct{}
+
+// ResetDeviceIdentityResponseData reports the Keychain slots that were actually
+// removed. Idempotent: absent slots are omitted, so the list is empty (never
+// null — the handler emits `[]`) when nothing was present. Only slot names are
+// returned; no key material is ever echoed.
+type ResetDeviceIdentityResponseData struct {
+	Cleared []string `json:"cleared"`
+}

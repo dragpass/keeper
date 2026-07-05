@@ -237,6 +237,33 @@ Removes the device encryption key from the keystore.
 
 ---
 
+#### `reset_device_identity` - Reset Device Identity
+
+Wipes this device's account-scoped key material so the user can re-enroll after
+a server-side account/DB reset. Clears the active keypair, pending keypair,
+session code, and device key. `server_public_key` is an account-independent
+trust anchor and is preserved. Idempotent (succeeds even when nothing is
+present) and returns no key material — only the names of the slots removed.
+
+**Request:**
+```json
+{
+  "action": "reset_device_identity"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
+  }
+}
+```
+
+---
+
 ### Keypair Management
 
 #### `generatekeypair` - Generate RSA Keypair

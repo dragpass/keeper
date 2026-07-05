@@ -19,6 +19,26 @@ const (
 	ActionSaveDeviceKey   = "savedevicekey"
 	ActionDeleteDeviceKey = "deletedevicekey"
 
+	// Device identity reset — local self-recovery action.
+	//
+	// ResetDeviceIdentity wipes this device's account-scoped key material so
+	// the user can re-enroll after a server-side account/DB reset. Without it,
+	// leftover Keychain state (active keypair + session code) makes
+	// HandleSignAlias refuse signup forever with "device already registered"
+	// (identity_sign.go guard) and there is no Extension-callable escape.
+	//
+	// Clears: active keypair (keeper_private_key / keeper_public_key), pending
+	// keypair (pending_keeper_private_key / pending_keeper_public_key),
+	// session_code, and device_key. server_public_key is an account-independent
+	// trust anchor and is deliberately preserved.
+	//
+	// This is a purely local, destructive action. It returns no secret
+	// material — only the names of the slots actually removed. It is
+	// idempotent: success even when nothing was present. Worst case is that the
+	// device must re-enroll; the account still exists server-side and remains
+	// reachable via password / recovery key.
+	ActionResetDeviceIdentity = "reset_device_identity"
+
 	// Session code related actions
 	ActionGetSessionCode = "getsessioncode"
 
