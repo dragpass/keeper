@@ -223,6 +223,11 @@ jobs:
           cat /tmp/rows.md
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --json body --jq '.body' > /tmp/body.md
-          cat /tmp/rows.md >> /tmp/body.md
+          # 표와 append 행 사이에 빈 줄이 끼면 extension 구버전 빌드의
+          # release-hash 파서가 표 종료로 보고 뒷 행을 놓친다 (v0.0.1 실사고)
+          # — trailing 빈 줄을 제거해 체크섬 표에 연속으로 붙인다.
+          # "$(cat ...)" 은 trailing newline 을 전부 벗겨낸다.
+          printf '%s\n' "$(cat /tmp/body.md)" > /tmp/body-trimmed.md
+          cat /tmp/rows.md >> /tmp/body-trimmed.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --notes-file /tmp/body.md
+            --notes-file /tmp/body-trimmed.md
