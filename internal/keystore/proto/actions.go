@@ -391,6 +391,22 @@ const (
 	ActionRotateRequestKeyPromote = "rotate_request_key_promote"
 	ActionRotateRequestKeyAbort   = "rotate_request_key_abort"
 
+	// per-org Archive / Recovery keypair actions.
+	//
+	// ArchiveKeyGenerate: generate an RSA archive keypair. If an active key
+	//                     already exists, this is a no-op returning only its
+	//                     meta (idempotent). The private key is stored in a
+	//                     dedicated slot and never leaves it.
+	// ArchiveKeyStatus:   whether an active archive key exists + public key +
+	//                     fingerprint. Absence is normal (archive not enabled).
+	//
+	// The archive key is a break-glass recovery key: during group DEK rotation
+	// the OLD Group DEK is additionally wrapped to its public half so the org
+	// owner can recover past DEKs. It is never used for identity / login /
+	// recovery / request signing.
+	ActionArchiveKeyGenerate = "archive_key_generate"
+	ActionArchiveKeyStatus   = "archive_key_status"
+
 	// ClipboardGetLastHash: test-only — used by the Extension `pnpm e2e`
 	// flow to verify that the dispatch path
 	// (background → Keeper → Clipboard.Write) sent the correct plaintext.
