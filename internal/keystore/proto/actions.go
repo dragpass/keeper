@@ -339,6 +339,25 @@ const (
 	//   Output: {copied, clipboard_ttl_ms}
 	ActionGroupDecryptToClipboard = "group_decrypt_to_clipboard"
 
+	// GroupTranscryptForGuest: re-encrypts an org Group-DEK token as an
+	// external guest share without ever returning plaintext to the Extension
+	// JS heap. Mirrors GroupDecryptToClipboard's input (group_handle + iv +
+	// ciphertext) but the sink is a one-time guest key K re-encryption instead
+	// of the clipboard.
+	//
+	// The Keeper unwraps the raw Group DEK behind the opaque handle, decrypts
+	// the token inside a memguard-protected buffer, generates a fresh random
+	// 32B guest key K, and AES-GCM-re-encrypts under a key derived from K
+	// (optionally strengthened with a passphrase via HKDF(K ‖ PBKDF2(pass))).
+	// The plaintext is zeroized the moment re-encryption completes.
+	//   Inputs: group_handle, iv_b64(12B), ciphertext_b64,
+	//           passphrase?(string), passphrase_salt?(base64, app-generated)
+	//   Output: {guest_ciphertext (base64 IV‖ct), guest_key (base64url K)}
+	// The output is byte-compatible with the admin SPA guest viewer
+	// (app/src/shared/lib/guest-share-crypto.ts). Plaintext / Group DEK never
+	// appear in the response.
+	ActionGroupTranscryptForGuest = "group_transcrypt_for_guest"
+
 	// per-device request-signing key actions.
 	//
 	// RequestKeyGenerate: generate an Ed25519 keypair. If an active key

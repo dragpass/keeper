@@ -522,6 +522,56 @@ OS 키스토어에 저장된 서버 공개키를 가져옵니다.
 
 ---
 
+### 게스트 공유
+
+#### `group_transcrypt_for_guest` - 조직 토큰을 외부 게스트용으로 재암호화
+
+조직 Group DEK 로 직접 암호화한 토큰을 외부 게스트 공유용으로 재암호화합니다.
+이때 평문은 확장 프로그램으로 절대 반환되지 않습니다. Keeper 는 불투명 세션
+핸들 뒤의 Group DEK 를 풀어 보호된 메모리 안에서 토큰을 복호화하고, 일회성 32
+바이트 게스트 키 `K` 를 새로 생성해 `K` 로 재암호화(패스프레이즈로 추가 강화
+가능)한 다음 평문을 지우고, 게스트 암호문과 `K` 만 돌려줍니다.
+
+출력은 관리 콘솔의 게스트 뷰어(`app/src/shared/lib/guest-share-crypto.ts`)와
+바이트 단위로 호환됩니다.
+
+- `guest_ciphertext` = `IV(12) ‖ AES-GCM(암호문‖태그)` 의 표준 Base64
+- `guest_key` = 원본 32 바이트 `K` 의 Base64URL(패딩 없음)
+- AES 키는 패스프레이즈가 없으면 `K` 자체, 있으면
+  `HKDF-SHA256(ikm = K ‖ PBKDF2-SHA256(passphrase, salt, 200000, 32B), salt = salt, info = "dragpass-guest-v1", 32B)`.
+
+`passphrase` 와 `passphrase_salt`(표준 Base64, 앱이 생성)는 함께 보내거나 둘 다
+생략합니다.
+
+**요청:**
+```json
+{
+  "action": "group_transcrypt_for_guest",
+  "payload": {
+    "group_handle": "base64_group_session_handle",
+    "iv_b64": "base64_12_byte_iv",
+    "ciphertext_b64": "base64_ciphertext_with_tag",
+    "passphrase": "optional-passphrase",
+    "passphrase_salt": "optional_base64_salt"
+  }
+}
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "data": {
+    "guest_ciphertext": "base64_iv_plus_ciphertext",
+    "guest_key": "base64url_one_time_key"
+  }
+}
+```
+
+응답에는 평문이나 원본 Group DEK 가 절대 포함되지 않습니다.
+
+---
+
 ## Cryptographic Details
 
 ### Key Formats
