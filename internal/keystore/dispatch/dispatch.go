@@ -139,6 +139,10 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
 	proto.ActionGroupDecryptToClipboard:        wrap(handlers.HandleGroupDecryptToClipboard),
 
+	// org token → external guest share re-encryption (Keeper-owned re-encrypt
+	// sink; plaintext / Group DEK never enter the JS heap).
+	proto.ActionGroupTranscryptForGuest: wrap(handlers.HandleGroupTranscryptForGuest),
+
 	// per-device request-signing key actions
 	proto.ActionRequestKeyGenerate: wrap(handlers.HandleRequestKeyGenerate),
 	proto.ActionRequestKeyStatus:   wrap(handlers.HandleRequestKeyStatus),
