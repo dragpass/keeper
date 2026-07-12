@@ -89,7 +89,7 @@ func TestHandleRequest_WrapUnwrapGroupDEK_RoundTrip(t *testing.T) {
 	if len(decoded) != 32 {
 		t.Fatalf("decoded length = %d, want 32", len(decoded))
 	}
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if decoded[i] != groupDEK[i] {
 			t.Fatalf("round-trip mismatch at byte %d: got %02x, want %02x", i, decoded[i], groupDEK[i])
 		}

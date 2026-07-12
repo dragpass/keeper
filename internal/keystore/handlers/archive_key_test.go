@@ -94,7 +94,7 @@ func TestHandleArchiveKeyGenerate_DoesNotLeakPrivateKey(t *testing.T) {
 
 	// Guard each base64 body line of the stored private key against the logger
 	// and the response error string.
-	for _, line := range strings.Split(priv, "\n") {
+	for line := range strings.SplitSeq(priv, "\n") {
 		line = strings.TrimSpace(line)
 		if len(line) < 40 || strings.Contains(line, "PRIVATE KEY") {
 			continue
