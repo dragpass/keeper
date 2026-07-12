@@ -32,7 +32,9 @@ import (
 // HandleArchiveKeySplit Shamir-splits the org archive private key into shares,
 // hybrid-wraps each to a recipient (admin account archive) public key, then
 // deletes the private key. Not idempotent: with no archive private key present
-// it returns not_found. The public key slot is preserved.
+// it returns not_found. The public key slot is preserved, and the ACCOUNT
+// archive slot (the admin receiving key) is never touched — only the ORG slot
+// is wiped.
 func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
 	d.Logger.Println("archive key split processing...")
 
@@ -56,6 +58,19 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		return errs.Response(err) // ErrSecretNotFound → not_found
 	}
 	defer privKeyBuf.Destroy()
+
+	// Fingerprint of the key being split, derived from the private key itself
+	// (not the pub slot) so the server can verify the coordinator split the
+	// org's actual active archive key.
+	splitPriv, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse archive private key: "+err.Error())
+	}
+	splitPubPEM, err := crypto.PublicKeyToPEM(&splitPriv.PublicKey)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to derive archive public key: "+err.Error())
+	}
+	keyFingerprint := fingerprintBase64Public(splitPubPEM)
 
 	shares, err := crypto.SplitSecret(privKeyBuf.Bytes(), req.ThresholdN, len(pubs))
 	if err != nil {
@@ -89,13 +104,17 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 
 	d.Logger.Printf("archive key split: %d shares (threshold %d), private key wiped",
 		len(out), req.ThresholdN)
-	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeySplitResponseData{Shares: out}}
+	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeySplitResponseData{
+		KeyFingerprint: keyFingerprint,
+		Shares:         out,
+	}}
 }
 
 // HandleArchiveShareRewrap re-wraps an admin's own hybrid-wrapped share from
-// their account archive key (the dedicated archive slot) to the recovery
-// session public key, so the coordinator can combine it. The share plaintext
-// lives only briefly in Keeper memory.
+// their ACCOUNT archive key (the dedicated per-account receiving slot — the
+// key published to the account directory that the share was wrapped to at
+// split time) to the recovery session public key, so the coordinator can
+// combine it. The share plaintext lives only briefly in Keeper memory.
 func HandleArchiveShareRewrap(d Deps, req proto.ArchiveShareRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive share rewrap processing...")
 
@@ -108,15 +127,15 @@ func HandleArchiveShareRewrap(d Deps, req proto.ArchiveShareRewrapRequest) proto
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse session_public_key: "+err.Error())
 	}
 
-	privKeyBuf, err := GetArchivePrivateKeySecure(d.Store)
+	privKeyBuf, err := GetAccountArchivePrivateKeySecure(d.Store)
 	if err != nil {
-		return errs.Response(err) // not_found if this admin has no archive key
+		return errs.Response(err) // not_found if this admin has no account archive key
 	}
 	defer privKeyBuf.Destroy()
 
 	priv, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse archive private key: "+err.Error())
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse account archive private key: "+err.Error())
 	}
 
 	share, err := crypto.HybridUnwrap(priv, req.WrappedKey, req.Ciphertext)

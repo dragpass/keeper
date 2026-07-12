@@ -168,7 +168,24 @@ recovery / request signing. The private key never leaves its slot.
 |---|---|---|---|
 |`archive_key_generate`|_empty_|`{ publickey, fingerprint }`|Generate an RSA archive keypair if no active key exists. If one already exists, idempotently return only its metadata. `publickey` is a PEM string; `fingerprint` is `hex(sha256(publickey PEM))`.|
 |`archive_key_status`|_empty_|`{ has_active, publickey?, fingerprint? }`|Whether an active archive key exists + the public key. Before enable, has_active=false.|
-|`archive_unwrap_and_rewrap`|`wrapped_for_archive_b64`, `recipient_public_key`|`{ encrypted_for_other_b64 }`|Break-glass re-grant composite. Unwrap an OLD Group DEK wrapped to the archive public key (`org_owner_archive` grant) with the archive private key → RSA-OAEP re-wrap to a target member's public key. raw Group DEK lives only in Keeper memory (memguard); the response carries only the new wrap. Missing archive slot → `not_found`. Same raw-free pattern as `dek_rewrap_for_member`.|
+|`archive_unwrap_and_rewrap`|`wrapped_for_archive_b64`, `recipient_public_key`|`{ encrypted_for_other_b64 }`|Break-glass re-grant composite. Unwrap an OLD Group DEK wrapped to the archive public key (`org_owner_archive` grant) with the archive private key → RSA-OAEP re-wrap to a target member's public key. raw Group DEK lives only in Keeper memory (memguard); the response carries only the new wrap. Unwrap tries the org slot first and falls back to the **account archive slot** on decrypt failure — after an ownership handoff, grants are wrapped to the new owner's account directory key. Both slots empty → `not_found`. Same raw-free pattern as `dek_rewrap_for_member`.|
+
+#### Per-account Archive / Recovery receiving keypair
+
+A second, independent archive keypair in its own slots
+(`account_archive_private_key` / `account_archive_public_key`). Its public
+half is what the account publishes to the server account directory
+(`account_archive_keys`) so the account can RECEIVE material wrapped to it:
+ownership-handoff re-wrapped grants and archive quorum Shamir shares. It is
+deliberately not the org archive keypair — `archive_key_split` deletes the org
+private key when quorum is enabled, and the account receiving key must survive
+that wipe. Kept as separate actions (rather than a slot parameter on
+`archive_key_*`) because the two keys have different lifecycles.
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`account_archive_key_generate`|_empty_|`{ publickey, fingerprint }`|Generate an RSA account archive keypair if none exists; idempotently return only its metadata otherwise. Same contract as `archive_key_generate`, against the account slot.|
+|`account_archive_key_status`|_empty_|`{ has_active, publickey?, fingerprint? }`|Whether an account archive key exists + the public key.|
 
 #### Archive-key admin quorum (Shamir N-of-M break-glass)
 
@@ -187,8 +204,8 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`archive_key_split`|`threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|Shamir-split the archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the archive private key (kept: the public key). Not idempotent — a missing private key → `not_found`.|
-|`archive_share_rewrap`|`wrapped_key`, `ciphertext`, `session_public_key`|`{ wrapped_key, ciphertext }`|An approving admin re-wraps their own share from their account archive key (their archive slot) to the recovery session public key. Distinct from `archive_unwrap_and_rewrap` because shares are hybrid envelopes, not 32-byte DEKs. Missing admin archive slot → `not_found`.|
+|`archive_key_split`|`threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the org archive private key (kept: the org public key; the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. Not idempotent — a missing private key → `not_found`.|
+|`archive_share_rewrap`|`wrapped_key`, `ciphertext`, `session_public_key`|`{ wrapped_key, ciphertext }`|An approving admin re-wraps their own share from their ACCOUNT archive key (the dedicated account slot — the key the share was wrapped to at split time; the org slot is not consulted) to the recovery session public key. Distinct from `archive_unwrap_and_rewrap` because shares are hybrid envelopes, not 32-byte DEKs. Missing account archive slot → `not_found`.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
 |`archive_session_end`|_empty_|`{ ended }`|Destroy the recovery-session keypair. Idempotent (`ended=false` when none was open).|
 |`archive_quorum_combine_and_rewrap`|`rewrapped_shares[]` (each `{ wrapped_key, ciphertext }` to the session key), `wrapped_old_dek_b64`, `recipient_public_keys[]`|`{ grants: [{ recipient_fingerprint, encrypted_group_dek_b64 }] }`|Coordinator unwraps the re-wrapped shares with the session private key, Shamir-reconstructs the archive private key, RSA-OAEP-unwraps the OLD Group DEK, and re-wraps it to each target member. All reconstructed key material (shares, private key, raw DEK) lives only in memguard and is wiped before returning. Below-threshold or tampered shares reconstruct a non-parsable key → `crypto_failure` (no silent wrong-DEK leak). Missing session slot → `not_found`.|
@@ -342,7 +359,7 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.4|`archive_key_generate` / `archive_key_status`|Per-org break-glass Archive / Recovery keypair (RSA-2048) in a dedicated Keychain slot. Used only to additionally wrap OLD Group DEKs during rotation (`org_owner_archive` grant). Both actions are best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case archive wrapping is silently skipped.|
 |0.0.5|`archive_unwrap_and_rewrap`|Break-glass re-grant composite. Unwraps an OLD Group DEK from the `org_owner_archive` grant with the archive private key and re-wraps it to a target member's public key, entirely inside Keeper memory (raw-free, same pattern as `dek_rewrap_for_member`). Best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case the break-glass re-grant flow surfaces a "upgrade Keeper" notice.|
 |0.0.6|`dek_unwrap_and_rewrap_for_many`|Multi-recipient variant of `dek_rewrap_for_member`. Unwraps the OLD Group DEK once and re-wraps it to every member + the org archive key in one round-trip, so `adminRotateDek` (and the auto-rotation scheduler) no longer unwrap the OLD raw into the Extension JS heap. (The pre-existing per-member unwrap→JS→wrap fallback for older Keepers was removed on the Extension side — rotation now fails with `keeper:unsupported` rather than routing the raw OLD DEK through the JS heap.)|
-|0.0.7 (current)|`archive_key_split`, `archive_share_rewrap`, `archive_session_begin`/`_end`, `archive_quorum_combine_and_rewrap`|Archive-key admin quorum (Shamir N-of-M break-glass). Splits the org archive private key across M admin devices (in-repo GF(2^8) Shamir, hybrid RSA-OAEP+AES-GCM share wrap) and deletes the whole key; break-glass reconstructs it only inside the coordinator's Keeper during an N-approval recovery session, wiping all key material before returning only the re-granted wraps.|
+|0.0.7 (current)|`archive_key_split`, `archive_share_rewrap`, `archive_session_begin`/`_end`, `archive_quorum_combine_and_rewrap`, `account_archive_key_generate`/`_status`|Archive-key admin quorum (Shamir N-of-M break-glass). Splits the org archive private key across M admin devices (in-repo GF(2^8) Shamir, hybrid RSA-OAEP+AES-GCM share wrap) and deletes the whole key; break-glass reconstructs it only inside the coordinator's Keeper during an N-approval recovery session, wiping all key material before returning only the re-granted wraps. Also introduces the per-account archive receiving keypair in its own slot (published to the server account directory; receives handoff grants and quorum shares; survives the org-slot wipe) and gives `archive_unwrap_and_rewrap` an account-slot decrypt fallback for handoff-received grants.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.1"`, the first
 release of the public version epoch). Keeper-down or below-min sets a red

@@ -260,14 +260,15 @@ func TestArchiveQuorum_SplitMissingArchiveKey(t *testing.T) {
 	}
 }
 
-// HandleArchiveShareRewrap must round-trip through an admin's own archive slot:
-// a share wrapped to the admin key becomes a share wrapped to the session key
-// whose plaintext is unchanged.
+// HandleArchiveShareRewrap must round-trip through an admin's own ACCOUNT
+// archive slot (the receiving key the share was wrapped to at split time): a
+// share wrapped to the admin's account key becomes a share wrapped to the
+// session key whose plaintext is unchanged.
 func TestArchiveQuorum_ShareRewrapHandler(t *testing.T) {
 	adminDeps, _, adminStore := newTestDeps(t)
 
 	adminKP, _ := crypto.GenerateRSAKeyPair()
-	_ = keychain.SaveArchivePrivateKey(adminStore, adminKP.PrivateKey)
+	_ = keychain.SaveAccountArchivePrivateKey(adminStore, adminKP.PrivateKey)
 	adminPub, _ := crypto.ParsePublicKey(adminKP.PublicKey)
 
 	sessionKP, _ := crypto.GenerateRSAKeyPair()
@@ -318,5 +319,72 @@ func TestArchiveQuorum_SessionLifecycle(t *testing.T) {
 	}
 	if priv, _ := keychain.GetArchiveSessionPrivateKey(store); priv != "" {
 		t.Fatal("session private key should be gone after end")
+	}
+}
+
+// archive_key_split must wipe only the ORG archive slot. The ACCOUNT archive
+// slot (the admin receiving key that quorum shares / handoff grants are
+// wrapped to) must survive, and the response fingerprint must identify the
+// split key.
+func TestArchiveQuorum_SplitPreservesAccountSlotAndReportsFingerprint(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+
+	orgKP, _ := crypto.GenerateRSAKeyPair()
+	_ = keychain.SaveArchivePrivateKey(store, orgKP.PrivateKey)
+	_ = keychain.SaveArchivePublicKey(store, orgKP.PublicKey)
+
+	accountKP, _ := crypto.GenerateRSAKeyPair()
+	_ = keychain.SaveAccountArchivePrivateKey(store, accountKP.PrivateKey)
+	_ = keychain.SaveAccountArchivePublicKey(store, accountKP.PublicKey)
+
+	_, adminPems := genAdminKeys(t, 3)
+	resp := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
+		ThresholdN: 2, RecipientPublicKeys: adminPems,
+	})
+	if !resp.Success {
+		t.Fatalf("split failed: %s", resp.Error)
+	}
+	data := resp.Data.(proto.ArchiveKeySplitResponseData)
+
+	// The reported fingerprint identifies the split (org) key.
+	if want := fingerprintBase64Public(orgKP.PublicKey); data.KeyFingerprint != want {
+		t.Fatalf("key_fingerprint = %q, want %q (org archive key)", data.KeyFingerprint, want)
+	}
+
+	// Org private slot wiped; account slot fully intact.
+	if pk, _ := keychain.GetArchivePrivateKey(store); pk != "" {
+		t.Fatal("org archive private key must be deleted after split")
+	}
+	if pk, _ := keychain.GetAccountArchivePrivateKey(store); pk != accountKP.PrivateKey {
+		t.Fatal("account archive private key must survive archive_key_split")
+	}
+	if pub, _ := keychain.GetAccountArchivePublicKey(store); pub != accountKP.PublicKey {
+		t.Fatal("account archive public key must survive archive_key_split")
+	}
+}
+
+// archive_share_rewrap must fail with not_found when the admin has no ACCOUNT
+// archive key — the org slot is not consulted for share rewrap.
+func TestArchiveQuorum_ShareRewrapIgnoresOrgSlot(t *testing.T) {
+	adminDeps, _, adminStore := newTestDeps(t)
+
+	// Only an ORG archive key present — shares are never wrapped to this.
+	orgKP, _ := crypto.GenerateRSAKeyPair()
+	_ = keychain.SaveArchivePrivateKey(adminStore, orgKP.PrivateKey)
+
+	sessionKP, _ := crypto.GenerateRSAKeyPair()
+	orgPub, _ := crypto.ParsePublicKey(orgKP.PublicKey)
+	wk, ct, _ := crypto.HybridWrap(orgPub, []byte("share-bytes"))
+
+	resp := HandleArchiveShareRewrap(adminDeps, proto.ArchiveShareRewrapRequest{
+		WrappedKey:       wk,
+		Ciphertext:       ct,
+		SessionPublicKey: sessionKP.PublicKey,
+	})
+	if resp.Success {
+		t.Fatal("share rewrap without an account archive key must fail")
+	}
+	if resp.ErrorCode != string(errs.ErrCodeNotFound) {
+		t.Errorf("expected not_found, got %q", resp.ErrorCode)
 	}
 }

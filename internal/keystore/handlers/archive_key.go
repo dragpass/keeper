@@ -91,12 +91,40 @@ func HandleArchiveKeyStatus(d Deps, req proto.ArchiveKeyStatusRequest) proto.Bas
 	}}
 }
 
+// archiveUnwrapWithSlot fetches a private key with getKey, parses it, and
+// RSA-OAEP-decrypts encrypted. Helper for HandleArchiveUnwrapAndRewrap's
+// org-slot → account-slot fallback; each error keeps its source so the caller
+// can decide whether falling back makes sense.
+func archiveUnwrapWithSlot(
+	d Deps,
+	getKey func(keychain.SecretStore) (*memguard.LockedBuffer, error),
+	encrypted []byte,
+) ([]byte, error) {
+	privKeyBuf, err := getKey(d.Store)
+	if err != nil {
+		return nil, err
+	}
+	defer privKeyBuf.Destroy()
+
+	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
+	if err != nil {
+		return nil, err
+	}
+	return crypto.DecryptData(privKey, encrypted)
+}
+
 // HandleArchiveUnwrapAndRewrap is the break-glass re-grant composite. It
 // unwraps an OLD Group DEK that was wrapped to the org archive public key
 // (org_owner_archive grant) with the archive private key, then re-wraps it to
 // a target member's public key. The raw Group DEK lives only briefly in Keeper
 // memory and is never in the response — same raw-free pattern as
 // HandleDEKRewrapForMember. The archive private key never leaves its slot.
+//
+// Unwrap tries the ORG archive slot first, then falls back to the ACCOUNT
+// archive slot: after an ownership handoff, grants are re-wrapped to the new
+// owner's account directory key, which lives in the account slot, while the
+// org slot may hold an unrelated key (or none). Both slots failing surfaces
+// the org-slot error (not_found when neither slot has a key).
 func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive unwrap and rewrap request processing...")
 
@@ -116,23 +144,21 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_for_archive_b64: "+err.Error())
 	}
 
-	privKeyBuf, err := GetArchivePrivateKeySecure(d.Store)
-	if err != nil {
-		d.Logger.Printf("archive unwrap and rewrap error: failed to get archive private key: %v", err)
-		return errs.Response(err) // ErrSecretNotFound → not_found (archive slot absent)
-	}
-	defer privKeyBuf.Destroy()
-
-	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
-	if err != nil {
-		d.Logger.Printf("archive unwrap and rewrap error: failed to parse archive private key: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse archive private key: "+err.Error())
-	}
-
-	groupDEK, err := crypto.DecryptData(privKey, encrypted)
-	if err != nil {
-		d.Logger.Printf("archive unwrap and rewrap error: RSA-OAEP decrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+	groupDEK, orgErr := archiveUnwrapWithSlot(d, GetArchivePrivateKeySecure, encrypted)
+	if orgErr != nil {
+		var accErr error
+		groupDEK, accErr = archiveUnwrapWithSlot(d, GetAccountArchivePrivateKeySecure, encrypted)
+		if accErr != nil {
+			d.Logger.Printf("archive unwrap and rewrap error: org slot: %v; account slot: %v", orgErr, accErr)
+			// Neither slot worked. Prefer the org-slot error for the coarse
+			// code: missing org slot stays not_found (re-bootstrap signal);
+			// an org-slot decrypt failure is crypto_failure.
+			if resp := errs.Response(orgErr); resp.ErrorCode == string(errs.ErrCodeNotFound) {
+				return resp
+			}
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+orgErr.Error())
+		}
+		d.Logger.Println("archive unwrap and rewrap: org slot failed, account archive slot succeeded (handoff-received grant)")
 	}
 	defer secure.Zeroize(groupDEK)
 

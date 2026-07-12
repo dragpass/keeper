@@ -59,7 +59,12 @@ func (r ArchiveKeySplitRequest) Validate() error {
 }
 
 type ArchiveKeySplitResponseData struct {
-	Shares []WrappedShare `json:"shares"`
+	// KeyFingerprint is hex(sha256(public key PEM)) of the key that was split,
+	// derived from the private key itself. The server verifies it against the
+	// org's active archive key so shares of a wrong / stale key are rejected
+	// at setup instead of being discovered at recovery time.
+	KeyFingerprint string         `json:"key_fingerprint"`
+	Shares         []WrappedShare `json:"shares"`
 }
 
 // ArchiveShareRewrapRequest — an admin re-wraps their own hybrid-wrapped share

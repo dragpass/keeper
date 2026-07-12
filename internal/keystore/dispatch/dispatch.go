@@ -158,6 +158,10 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionArchiveKeyStatus:       wrap(handlers.HandleArchiveKeyStatus),
 	proto.ActionArchiveUnwrapAndRewrap: wrap(handlers.HandleArchiveUnwrapAndRewrap),
 
+	// per-account Archive / Recovery receiving keypair actions
+	proto.ActionAccountArchiveKeyGenerate: wrap(handlers.HandleAccountArchiveKeyGenerate),
+	proto.ActionAccountArchiveKeyStatus:   wrap(handlers.HandleAccountArchiveKeyStatus),
+
 	// archive-key admin quorum (Shamir N-of-M break-glass)
 	proto.ActionArchiveKeySplit:               wrap(handlers.HandleArchiveKeySplit),
 	proto.ActionArchiveShareRewrap:            wrap(handlers.HandleArchiveShareRewrap),

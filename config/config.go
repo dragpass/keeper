@@ -54,6 +54,19 @@ const (
 	OrgArchivePrivateKey = "org_archive_private_key"
 	OrgArchivePublicKey  = "org_archive_public_key"
 
+	// Per-account Archive / Recovery receiving keypair (RSA-2048).
+	//
+	// The key whose PUBLIC half this account publishes to the server-side
+	// account directory (account_archive_keys) so it can RECEIVE material
+	// wrapped to it: ownership-handoff re-wrapped grants and archive quorum
+	// Shamir shares. A separate slot from the org archive keypair
+	// (OrgArchivePrivateKey) — the org key is the org break-glass key that
+	// archive_key_split deletes when quorum is enabled, while this account key
+	// must survive that wipe (it is what the admin unwraps their quorum share
+	// with). Never used for identity / login / request signing.
+	AccountArchivePrivateKey = "account_archive_private_key"
+	AccountArchivePublicKey  = "account_archive_public_key"
+
 	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a
