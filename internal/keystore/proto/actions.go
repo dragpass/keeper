@@ -418,14 +418,56 @@ const (
 	ActionArchiveKeyGenerate = "archive_key_generate"
 	ActionArchiveKeyStatus   = "archive_key_status"
 
+	// Per-account Archive / Recovery receiving keypair actions.
+	//
+	// AccountArchiveKeyGenerate / AccountArchiveKeyStatus: same idempotent
+	// generate / status contract as the org archive actions, but against the
+	// dedicated ACCOUNT slot (account_archive_private_key). This is the key
+	// whose public half the account publishes to the server directory
+	// (account_archive_keys) to receive ownership-handoff grants and archive
+	// quorum Shamir shares. Kept as separate actions (rather than a slot
+	// parameter on archive_key_*) because the two keys have different
+	// lifecycles: the org key is deleted by archive_key_split when quorum is
+	// enabled, while the account key must survive that wipe.
+	ActionAccountArchiveKeyGenerate = "account_archive_key_generate"
+	ActionAccountArchiveKeyStatus   = "account_archive_key_status"
+
 	// ArchiveUnwrapAndRewrap: break-glass re-grant composite. Unwrap an OLD
 	// Group DEK that was wrapped to the org archive public key
 	// (org_owner_archive grant) with the archive private key, then re-wrap it
 	// to a target member's public key. The raw Group DEK lives only briefly in
 	// Keeper memory (memguard) and is never in the response — same raw-free
 	// pattern as dek_rewrap_for_member. The archive private key never leaves
-	// its slot. Missing archive slot → not_found.
+	// its slot. Unwrap tries the org slot first and falls back to the account
+	// archive slot on decrypt failure — after an ownership handoff the grants
+	// are wrapped to the new owner's account directory key, not their org
+	// slot key. Both slots missing → not_found.
 	ActionArchiveUnwrapAndRewrap = "archive_unwrap_and_rewrap"
+
+	// Archive-key admin quorum (Shamir N-of-M break-glass).
+	//
+	// ArchiveKeySplit: Shamir-split the org archive private key into
+	//   len(recipient_public_keys) shares with threshold_n reconstruction,
+	//   hybrid-wrap each share to an admin's account archive public key, then
+	//   DELETE the archive private key. Not idempotent — a missing private key
+	//   slot → not_found. After this the whole private key exists nowhere at
+	//   rest; only the shares do.
+	// ArchiveShareRewrap: an approving admin re-wraps their own share from
+	//   their account archive key to the recovery session public key. Uses the
+	//   admin's account archive private slot; shares are hybrid envelopes, not
+	//   32B DEKs, so this is distinct from archive_unwrap_and_rewrap.
+	// ArchiveSessionBegin / ArchiveSessionEnd: create / destroy the
+	//   coordinator's ephemeral recovery-session keypair (its own slot).
+	// ArchiveQuorumCombineAndRewrap: coordinator unwraps N re-wrapped shares
+	//   with the session private key, reconstructs the archive private key,
+	//   unwraps the OLD Group DEK, and re-wraps it to the target members. All
+	//   reconstructed key material is wiped before returning; only the new
+	//   per-recipient wraps are in the response.
+	ActionArchiveKeySplit               = "archive_key_split"
+	ActionArchiveShareRewrap            = "archive_share_rewrap"
+	ActionArchiveSessionBegin           = "archive_session_begin"
+	ActionArchiveSessionEnd             = "archive_session_end"
+	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
 
 	// ClipboardGetLastHash: test-only — used by the Extension `pnpm e2e`
 	// flow to verify that the dispatch path
