@@ -407,6 +407,15 @@ const (
 	ActionArchiveKeyGenerate = "archive_key_generate"
 	ActionArchiveKeyStatus   = "archive_key_status"
 
+	// ArchiveUnwrapAndRewrap: break-glass re-grant composite. Unwrap an OLD
+	// Group DEK that was wrapped to the org archive public key
+	// (org_owner_archive grant) with the archive private key, then re-wrap it
+	// to a target member's public key. The raw Group DEK lives only briefly in
+	// Keeper memory (memguard) and is never in the response — same raw-free
+	// pattern as dek_rewrap_for_member. The archive private key never leaves
+	// its slot. Missing archive slot → not_found.
+	ActionArchiveUnwrapAndRewrap = "archive_unwrap_and_rewrap"
+
 	// ClipboardGetLastHash: test-only — used by the Extension `pnpm e2e`
 	// flow to verify that the dispatch path
 	// (background → Keeper → Clipboard.Write) sent the correct plaintext.
