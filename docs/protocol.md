@@ -155,6 +155,20 @@ spec. It must
 never contain plaintext payload / tokens / secrets themselves — the handler
 does not inspect the input, so this is the caller's responsibility.
 
+### Per-org Archive / Recovery keypair
+
+A break-glass recovery keypair (RSA-2048) held on the org owner's device in a
+dedicated Keychain slot (`org_archive_private_key` / `org_archive_public_key`),
+completely separate from the account identity keypair and the request-signing
+key. It is used only to additionally wrap OLD Group DEKs during rotation (an
+`org_owner_archive` grant, defense-in-depth) — never for identity / login /
+recovery / request signing. The private key never leaves its slot.
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`archive_key_generate`|_empty_|`{ publickey, fingerprint }`|Generate an RSA archive keypair if no active key exists. If one already exists, idempotently return only its metadata. `publickey` is a PEM string; `fingerprint` is `hex(sha256(publickey PEM))`.|
+|`archive_key_status`|_empty_|`{ has_active, publickey?, fingerprint? }`|Whether an active archive key exists + the public key. Before enable, has_active=false.|
+
 ### Server key distribution (Phase 13b)
 
 |Action|Request fields|Response fields|Description|
@@ -299,7 +313,8 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.21|Remove `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt`|The two plaintext-returning actions are removed from dispatcher / proto / handler entirely. User-visible decryption always uses the clipboard sink, UI meta uses the `*_unwrap_and_decrypt_meta` carve-out action — the surface where plaintext values could be included in the Native Messaging response envelope is fully closed at the dispatcher boundary. The e2e verification pattern has been migrated to `*_to_clipboard` + `KEEPER_GET_CLIPBOARD_HASH_E2E` SHA-256 comparison (see clipboard-copy.test.ts).|
 |0.0.1|Version epoch reset|Release numbering restarted at 0.0.1 when the project moved to its public home (github.com/dragpass/keeper). No protocol change — 0.0.1 speaks the same protocol as the last pre-reset version (0.0.21 line above).|
 |0.0.2|`reset_device_identity`|Local self-recovery action wiping this device's account-scoped key material after a server-side account/DB reset.|
-|0.0.3 (current)|`group_transcrypt_for_guest`|Re-encrypts an org Group-DEK token into an external guest share (fresh one-time key K, optional passphrase HKDF) entirely inside Keeper memory. Byte-compatible with the admin SPA guest viewer. Plaintext / Group DEK never enter the JS heap.|
+|0.0.3|`group_transcrypt_for_guest`|Re-encrypts an org Group-DEK token into an external guest share (fresh one-time key K, optional passphrase HKDF) entirely inside Keeper memory. Byte-compatible with the admin SPA guest viewer. Plaintext / Group DEK never enter the JS heap.|
+|0.0.4 (current)|`archive_key_generate` / `archive_key_status`|Per-org break-glass Archive / Recovery keypair (RSA-2048) in a dedicated Keychain slot. Used only to additionally wrap OLD Group DEKs during rotation (`org_owner_archive` grant). Both actions are best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case archive wrapping is silently skipped.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.1"`, the first
 release of the public version epoch). Keeper-down or below-min sets a red

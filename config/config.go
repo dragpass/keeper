@@ -42,4 +42,15 @@ const (
 	// only empties pending (active is untouched).
 	PendingDragPassRequestSigningPrivateKey = "pending_request_signing_private_key"
 	PendingDragPassRequestSigningPublicKey  = "pending_request_signing_public_key"
+
+	// Per-org Archive / Recovery keypair (RSA-2048).
+	//
+	// A break-glass recovery key held on the org owner's device. Completely
+	// separate namespace from the account identity keypair
+	// (DragPassKeeperPrivateKey) — this key is only used to wrap OLD Group DEKs
+	// during rotation (defense-in-depth org_owner_archive grant) and never for
+	// identity / login / recovery / request signing. The private key never
+	// leaves this slot.
+	OrgArchivePrivateKey = "org_archive_private_key"
+	OrgArchivePublicKey  = "org_archive_public_key"
 )

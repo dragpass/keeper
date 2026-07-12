@@ -152,6 +152,10 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionRotateRequestKeyPromote: wrap(handlers.HandleRotateRequestKeyPromote),
 	proto.ActionRotateRequestKeyAbort:   wrap(handlers.HandleRotateRequestKeyAbort),
 
+	// per-org Archive / Recovery keypair actions
+	proto.ActionArchiveKeyGenerate: wrap(handlers.HandleArchiveKeyGenerate),
+	proto.ActionArchiveKeyStatus:   wrap(handlers.HandleArchiveKeyStatus),
+
 	// test-only — query SHA-256 hash recorded in MemoryClipboard under
 	// KEEPER_E2E_MODE.
 	proto.ActionClipboardGetLastHash: wrap(handlers.HandleClipboardGetLastHash),
