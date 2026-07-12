@@ -114,8 +114,9 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionGroupSessionStatus:      wrap(handlers.HandleGroupSessionStatus),
 
 	// Admin-path raw-free composite actions (Group DEK never crosses into JS).
-	proto.ActionGroupDEKGenerateAndOpen: wrap(handlers.HandleGroupDEKGenerateAndOpen),
-	proto.ActionDEKRewrapForMember:      wrap(handlers.HandleDEKRewrapForMember),
+	proto.ActionGroupDEKGenerateAndOpen:   wrap(handlers.HandleGroupDEKGenerateAndOpen),
+	proto.ActionDEKRewrapForMember:        wrap(handlers.HandleDEKRewrapForMember),
+	proto.ActionDEKUnwrapAndRewrapForMany: wrap(handlers.HandleDEKUnwrapAndRewrapForMany),
 
 	// Item DEK / personal DEK delegated to Keeper.
 	// The old ActionAESUnwrapAndDecrypt / ActionDEKUnwrapAndDecrypt
