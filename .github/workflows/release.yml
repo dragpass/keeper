@@ -110,6 +110,9 @@ jobs:
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # changelog 생성에 이전 태그까지의 커밋 이력이 필요하다.
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: '*-packages'
@@ -173,6 +176,17 @@ jobs:
         run: |
           {
             echo "DragPass Keeper ${GITHUB_REF_NAME}."
+            echo ""
+            echo "## Changes"
+            echo ""
+            # 이전 태그부터 현 태그까지의 커밋 제목을 changelog 로. 첫 릴리스
+            # (이전 태그 없음) 는 전체 이력. merge commit 제목은 제외.
+            prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "${prev}..${GITHUB_REF_NAME}"
+            else
+              git log --no-merges --pretty='- %s' "${GITHUB_REF_NAME}"
+            fi
             echo ""
             echo "See the README's \"Verifying Downloads\" section for GPG verification steps."
             echo ""
