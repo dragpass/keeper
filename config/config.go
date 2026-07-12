@@ -53,4 +53,15 @@ const (
 	// leaves this slot.
 	OrgArchivePrivateKey = "org_archive_private_key"
 	OrgArchivePublicKey  = "org_archive_public_key"
+
+	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
+	//
+	// Created by archive_session_begin when the org owner (coordinator) opens a
+	// break-glass recovery session, and deleted by archive_session_end. Quorum
+	// admins re-wrap their Shamir shares to this session public key; the
+	// coordinator's Keeper uses this private key to unwrap them in
+	// archive_quorum_combine_and_rewrap. A short-lived slot scoped to a single
+	// recovery session — never the archive key itself.
+	OrgArchiveSessionPrivateKey = "org_archive_session_private_key"
+	OrgArchiveSessionPublicKey  = "org_archive_session_public_key"
 )

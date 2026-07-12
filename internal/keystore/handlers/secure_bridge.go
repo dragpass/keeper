@@ -65,6 +65,21 @@ func GetArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuf
 	return buf, nil
 }
 
+// GetArchiveSessionPrivateKeySecure is the same as GetArchivePrivateKeySecure
+// but for the archive quorum recovery-session ephemeral slot. Returns
+// keychain.ErrSecretNotFound (→ not_found) when no session is open.
+func GetArchiveSessionPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
+	pemStr, err := keychain.GetArchiveSessionPrivateKey(store)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := memguard.NewBufferFromBytes([]byte(pemStr))
+	secure.WipeString(&pemStr)
+
+	return buf, nil
+}
+
 // ParsePrivateKeyFromSecureBuf parses an RSA private key from a LockedBuffer.
 // The LockedBuffer is NOT destroyed here — caller controls lifetime.
 func ParsePrivateKeyFromSecureBuf(buf *memguard.LockedBuffer) (*rsa.PrivateKey, error) {
