@@ -11,6 +11,7 @@
 package handlers
 
 import (
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 
@@ -121,5 +122,76 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 	d.Logger.Println("dek rewrap for member successful (raw group dek never left Keeper)")
 	return proto.BaseResponse{Success: true, Data: proto.DEKRewrapForMemberResponseData{
 		EncryptedForOtherB64: newEncryptedB64,
+	}}
+}
+
+// HandleDEKUnwrapAndRewrapForMany unwraps my wrapped Group DEK once with the
+// Keychain private key, then RSA-OAEP re-wraps it to every recipient public
+// key in the request. The raw Group DEK is unwrapped a single time, lives
+// only inside a zeroized buffer, and the response carries only the parallel
+// list of new wraps (same raw-free guarantee as HandleDEKRewrapForMember,
+// amortized over N recipients).
+func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForManyRequest) proto.BaseResponse {
+	d.Logger.Println("dek unwrap and rewrap for many request processing...")
+
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+
+	// Parse every recipient public key up front so a bad key fails before we
+	// unwrap the raw Group DEK.
+	recipientKeys := make([]*rsa.PublicKey, len(req.RecipientPublicKeys))
+	for i, pem := range req.RecipientPublicKeys {
+		pub, err := crypto.ParsePublicKey(pem)
+		if err != nil {
+			d.Logger.Printf("dek unwrap and rewrap for many error: failed to parse recipient public key [%d]: %v", i, err)
+			return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
+		}
+		recipientKeys[i] = pub
+	}
+
+	encrypted, err := base64.StdEncoding.DecodeString(req.WrappedForMeB64)
+	if err != nil {
+		d.Logger.Printf("dek unwrap and rewrap for many error: failed to decode wrapped_for_me_b64: %v", err)
+		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_for_me_b64: "+err.Error())
+	}
+
+	privKeyBuf, err := getPrivateKeySecure(d.Store)
+	if err != nil {
+		d.Logger.Printf("dek unwrap and rewrap for many error: failed to get private key: %v", err)
+		return errs.Response(err) // ErrSecretNotFound → not_found
+	}
+	defer privKeyBuf.Destroy()
+
+	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
+	if err != nil {
+		d.Logger.Printf("dek unwrap and rewrap for many error: failed to parse private key: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key: "+err.Error())
+	}
+
+	groupDEK, err := crypto.DecryptData(privKey, encrypted)
+	if err != nil {
+		d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP decrypt failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+	}
+	defer secure.Zeroize(groupDEK)
+
+	if len(groupDEK) != 32 {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, errors.New("unexpected group dek length (want 32)").Error())
+	}
+
+	wraps := make([]string, len(recipientKeys))
+	for i, pub := range recipientKeys {
+		newEncrypted, err := crypto.EncryptData(pub, groupDEK)
+		if err != nil {
+			d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP encrypt failed [%d]: %v", i, err)
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
+		}
+		wraps[i] = base64.StdEncoding.EncodeToString(newEncrypted)
+	}
+
+	d.Logger.Printf("dek unwrap and rewrap for many successful (%d recipients, raw group dek never left Keeper)", len(wraps))
+	return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndRewrapForManyResponseData{
+		EncryptedForRecipientsB64: wraps,
 	}}
 }

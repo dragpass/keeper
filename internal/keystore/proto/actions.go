@@ -236,8 +236,19 @@ const (
 	//                          key. The raw briefly lives only in Keeper
 	//                          memory; the response contains only the new
 	//                          wrap.
-	ActionGroupDEKGenerateAndOpen = "group_dek_generate_and_open"
-	ActionDEKRewrapForMember      = "dek_rewrap_for_member"
+	// DEKUnwrapAndRewrapForMany: the multi-recipient variant of
+	//                          DEKRewrapForMember. Unwrap my wrapped Group DEK
+	//                          once with the Keychain priv, then RSA-OAEP wrap
+	//                          it to each recipient public key in the list. The
+	//                          raw is unwrapped once and lives only in Keeper
+	//                          memory; the response carries only the parallel
+	//                          list of new wraps. Used by adminRotateDek to
+	//                          wrap the OLD Group DEK to every member + the org
+	//                          archive key without the raw ever entering the
+	//                          Extension JS heap.
+	ActionGroupDEKGenerateAndOpen   = "group_dek_generate_and_open"
+	ActionDEKRewrapForMember        = "dek_rewrap_for_member"
+	ActionDEKUnwrapAndRewrapForMany = "dek_unwrap_and_rewrap_for_many"
 
 	// Zero-Extractable: Item DEK operations delegated to the Keeper.
 	//

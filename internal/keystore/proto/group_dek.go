@@ -157,3 +157,39 @@ func (r DEKRewrapForMemberRequest) Validate() error {
 type DEKRewrapForMemberResponseData struct {
 	EncryptedForOtherB64 string `json:"encrypted_for_other_b64"`
 }
+
+// DEKUnwrapAndRewrapForManyRequest — the multi-recipient variant of
+// DEKRewrapForMemberRequest. Unwraps my wrapped Group DEK once with the
+// Keychain private key and re-wraps it to every recipient public key. The
+// raw Group DEK is unwrapped a single time and lives only briefly in Keeper
+// memory; the response carries only the parallel list of new wraps.
+//
+// Usage: adminRotateDek — wrap the OLD Group DEK to each active member plus
+// the org archive key in one round-trip, replacing the per-member
+// unwrap→JS→wrap loop so the raw never enters the Extension JS heap.
+type DEKUnwrapAndRewrapForManyRequest struct {
+	WrappedForMeB64     string   `json:"wrapped_for_me_b64"`
+	RecipientPublicKeys []string `json:"recipient_public_keys"`
+}
+
+func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
+	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
+		return err
+	}
+	if len(r.RecipientPublicKeys) == 0 {
+		return newValidationError("recipient_public_keys", "must not be empty")
+	}
+	for _, pem := range r.RecipientPublicKeys {
+		if err := requirePEM(pem, "recipient_public_keys"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DEKUnwrapAndRewrapForManyResponseData carries the new wraps in the same
+// order as the request's RecipientPublicKeys — the caller maps each entry
+// back to its recipient by index.
+type DEKUnwrapAndRewrapForManyResponseData struct {
+	EncryptedForRecipientsB64 []string `json:"encrypted_for_recipients_b64"`
+}
