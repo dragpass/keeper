@@ -170,6 +170,29 @@ recovery / request signing. The private key never leaves its slot.
 |`archive_key_status`|_empty_|`{ has_active, publickey?, fingerprint? }`|Whether an active archive key exists + the public key. Before enable, has_active=false.|
 |`archive_unwrap_and_rewrap`|`wrapped_for_archive_b64`, `recipient_public_key`|`{ encrypted_for_other_b64 }`|Break-glass re-grant composite. Unwrap an OLD Group DEK wrapped to the archive public key (`org_owner_archive` grant) with the archive private key → RSA-OAEP re-wrap to a target member's public key. raw Group DEK lives only in Keeper memory (memguard); the response carries only the new wrap. Missing archive slot → `not_found`. Same raw-free pattern as `dek_rewrap_for_member`.|
 
+#### Archive-key admin quorum (Shamir N-of-M break-glass)
+
+An alternative custody where the archive private key is Shamir-split across M
+admin devices instead of held whole on the owner's device. After split the
+whole private key exists nowhere at rest, only as shares. Break-glass then
+requires N of M admins to approve within a coordinator-run recovery session.
+
+A Shamir share of the archive private-key PEM (~1.7 KB) exceeds the RSA-OAEP
+plaintext limit, so every wrapped share is a **hybrid envelope**: `wrapped_key`
+is `Base64( RSA-OAEP( 32-byte AES key ) )` and `ciphertext` is
+`Base64( IV(12) || AES-256-GCM(share) )`. The share's Shamir x-coordinate is
+embedded (authenticated) inside the ciphertext, so a reconstruction cannot be
+fed a wrong index. Shamir is an in-repo GF(2^8) implementation (no external
+dependency).
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`archive_key_split`|`threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|Shamir-split the archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the archive private key (kept: the public key). Not idempotent — a missing private key → `not_found`.|
+|`archive_share_rewrap`|`wrapped_key`, `ciphertext`, `session_public_key`|`{ wrapped_key, ciphertext }`|An approving admin re-wraps their own share from their account archive key (their archive slot) to the recovery session public key. Distinct from `archive_unwrap_and_rewrap` because shares are hybrid envelopes, not 32-byte DEKs. Missing admin archive slot → `not_found`.|
+|`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
+|`archive_session_end`|_empty_|`{ ended }`|Destroy the recovery-session keypair. Idempotent (`ended=false` when none was open).|
+|`archive_quorum_combine_and_rewrap`|`rewrapped_shares[]` (each `{ wrapped_key, ciphertext }` to the session key), `wrapped_old_dek_b64`, `recipient_public_keys[]`|`{ grants: [{ recipient_fingerprint, encrypted_group_dek_b64 }] }`|Coordinator unwraps the re-wrapped shares with the session private key, Shamir-reconstructs the archive private key, RSA-OAEP-unwraps the OLD Group DEK, and re-wraps it to each target member. All reconstructed key material (shares, private key, raw DEK) lives only in memguard and is wiped before returning. Below-threshold or tampered shares reconstruct a non-parsable key → `crypto_failure` (no silent wrong-DEK leak). Missing session slot → `not_found`.|
+
 ### Server key distribution (Phase 13b)
 
 |Action|Request fields|Response fields|Description|
@@ -318,7 +341,8 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.3|`group_transcrypt_for_guest`|Re-encrypts an org Group-DEK token into an external guest share (fresh one-time key K, optional passphrase HKDF) entirely inside Keeper memory. Byte-compatible with the admin SPA guest viewer. Plaintext / Group DEK never enter the JS heap.|
 |0.0.4|`archive_key_generate` / `archive_key_status`|Per-org break-glass Archive / Recovery keypair (RSA-2048) in a dedicated Keychain slot. Used only to additionally wrap OLD Group DEKs during rotation (`org_owner_archive` grant). Both actions are best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case archive wrapping is silently skipped.|
 |0.0.5|`archive_unwrap_and_rewrap`|Break-glass re-grant composite. Unwraps an OLD Group DEK from the `org_owner_archive` grant with the archive private key and re-wraps it to a target member's public key, entirely inside Keeper memory (raw-free, same pattern as `dek_rewrap_for_member`). Best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case the break-glass re-grant flow surfaces a "upgrade Keeper" notice.|
-|0.0.6 (current)|`dek_unwrap_and_rewrap_for_many`|Multi-recipient variant of `dek_rewrap_for_member`. Unwraps the OLD Group DEK once and re-wraps it to every member + the org archive key in one round-trip, so `adminRotateDek` (and the auto-rotation scheduler) no longer unwrap the OLD raw into the Extension JS heap. Best-effort from the Extension's side — an older Keeper returns `unsupported`, in which case rotation falls back to the pre-existing per-member unwrap→JS→wrap loop with a console warning.|
+|0.0.6|`dek_unwrap_and_rewrap_for_many`|Multi-recipient variant of `dek_rewrap_for_member`. Unwraps the OLD Group DEK once and re-wraps it to every member + the org archive key in one round-trip, so `adminRotateDek` (and the auto-rotation scheduler) no longer unwrap the OLD raw into the Extension JS heap. (The pre-existing per-member unwrap→JS→wrap fallback for older Keepers was removed on the Extension side — rotation now fails with `keeper:unsupported` rather than routing the raw OLD DEK through the JS heap.)|
+|0.0.7 (current)|`archive_key_split`, `archive_share_rewrap`, `archive_session_begin`/`_end`, `archive_quorum_combine_and_rewrap`|Archive-key admin quorum (Shamir N-of-M break-glass). Splits the org archive private key across M admin devices (in-repo GF(2^8) Shamir, hybrid RSA-OAEP+AES-GCM share wrap) and deletes the whole key; break-glass reconstructs it only inside the coordinator's Keeper during an N-approval recovery session, wiping all key material before returning only the re-granted wraps.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.1"`, the first
 release of the public version epoch). Keeper-down or below-min sets a red
