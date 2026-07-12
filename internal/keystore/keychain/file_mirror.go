@@ -132,13 +132,9 @@ func krDelete(service, user string) error {
 	return err
 }
 
-// KrSet / KrGet / KrDelete are exported variants used via alias from the
-// keystore root so existing white-box tests can continue to call krDelete
-// without importing this subpackage.
-func KrSet(service, user, value string) error { return krSet(service, user, value) }
-
-func KrGet(service, user string) (string, error) { return krGet(service, user) }
-
+// KrDelete is an exported variant used via alias from the keystore root so
+// existing white-box tests can continue to call krDelete without importing
+// this subpackage.
 func KrDelete(service, user string) error { return krDelete(service, user) }
 
 // LoadE2EKeyringFile is the entry point called from main.go init.

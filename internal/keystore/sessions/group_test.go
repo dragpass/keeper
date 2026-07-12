@@ -195,7 +195,7 @@ func TestGroupSession_ConcurrentUseIsSafe(t *testing.T) {
 	const N = 50
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
+	for range N {
 		go func() {
 			defer wg.Done()
 			err := store.Use(handle, func(dek []byte) error {
@@ -218,7 +218,7 @@ func TestGroupSession_HandleIDsAreUnique(t *testing.T) {
 	// confirm 0 duplicates.
 	store := NewGroupSessionStore(15 * time.Minute)
 	seen := make(map[string]bool, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		handle, _, err := store.Open(mustRandKey(t))
 		if err != nil {
 			t.Fatalf("open #%d: %v", i, err)

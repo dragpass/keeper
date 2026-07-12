@@ -166,7 +166,7 @@ func TestRecoverySession_ConcurrentUseIsSafe(t *testing.T) {
 	const N = 50
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
+	for range N {
 		go func() {
 			defer wg.Done()
 			err := store.Use(handle, func(pem []byte) error {
@@ -186,7 +186,7 @@ func TestRecoverySession_ConcurrentUseIsSafe(t *testing.T) {
 func TestRecoverySession_HandleIDsAreUnique(t *testing.T) {
 	store := NewRecoverySessionStore(5 * time.Minute)
 	seen := make(map[string]bool, 50)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		handle, _, err := store.Open([]byte(fakePEM))
 		if err != nil {
 			t.Fatalf("open #%d: %v", i, err)

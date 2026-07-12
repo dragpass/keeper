@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // gfExp / gfLog are the exp/log tables for GF(2^8) with generator 0x03 under
@@ -32,7 +33,7 @@ var (
 
 func init() {
 	x := byte(1)
-	for i := 0; i < 255; i++ {
+	for i := range 255 {
 		gfExp[i] = x
 		gfLog[x] = byte(i)
 		// multiply x by the generator 0x03 in GF(2^8): x*3 = x*2 ^ x.
@@ -49,7 +50,7 @@ func init() {
 // multiply with reduction by 0x11b. Used only to bootstrap the tables at init.
 func gfMulNoTable(a, b byte) byte {
 	var p byte
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		if b&1 != 0 {
 			p ^= a
 		}
@@ -108,19 +109,19 @@ func SplitSecret(secret []byte, threshold, total int) ([]Share, error) {
 	}
 
 	shares := make([]Share, total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		shares[i] = Share{X: byte(i + 1), Y: make([]byte, len(secret))}
 	}
 
 	// One random polynomial per secret byte. coeffs[0] is the secret byte;
 	// coeffs[1..threshold-1] are uniformly random.
 	coeffs := make([]byte, threshold)
-	for b := 0; b < len(secret); b++ {
+	for b := range secret {
 		coeffs[0] = secret[b]
 		if _, err := rand.Read(coeffs[1:]); err != nil {
 			return nil, fmt.Errorf("shamir: rand read: %w", err)
 		}
-		for i := 0; i < total; i++ {
+		for i := range total {
 			shares[i].Y[b] = evalPoly(coeffs, shares[i].X)
 		}
 	}
@@ -131,8 +132,8 @@ func SplitSecret(secret []byte, threshold, total int) ([]Share, error) {
 // degree) at x using Horner's method in GF(2^8).
 func evalPoly(coeffs []byte, x byte) byte {
 	var y byte
-	for i := len(coeffs) - 1; i >= 0; i-- {
-		y = gfMul(y, x) ^ coeffs[i]
+	for _, coeff := range slices.Backward(coeffs) {
+		y = gfMul(y, x) ^ coeff
 	}
 	return y
 }
@@ -166,7 +167,7 @@ func CombineShares(shares []Share) ([]byte, error) {
 	}
 
 	secret := make([]byte, length)
-	for b := 0; b < length; b++ {
+	for b := range length {
 		var acc byte
 		for i := range shares {
 			// Lagrange basis L_i(0) = Π_{j≠i} x_j / (x_j - x_i), evaluated in

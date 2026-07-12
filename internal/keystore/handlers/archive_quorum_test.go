@@ -103,7 +103,7 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 
 	// 3) threshold admins re-wrap their shares to the session key.
 	rewrapped := make([]proto.RewrappedShareInput, 0, threshold)
-	for i := 0; i < threshold; i++ {
+	for i := range threshold {
 		rewrapped = append(rewrapped, adminRewrapShare(t, adminKPs[i], splitData.Shares[i], sessionPubPEM))
 	}
 
