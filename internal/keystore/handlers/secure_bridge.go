@@ -50,6 +50,21 @@ func GetPendingPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuf
 	return buf, nil
 }
 
+// GetArchivePrivateKeySecure is the same as GetPrivateKeySecure but for the
+// per-org archive private key slot. Returns keychain.ErrSecretNotFound (→
+// not_found) when the archive slot is empty.
+func GetArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
+	pemStr, err := keychain.GetArchivePrivateKey(store)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := memguard.NewBufferFromBytes([]byte(pemStr))
+	secure.WipeString(&pemStr)
+
+	return buf, nil
+}
+
 // ParsePrivateKeyFromSecureBuf parses an RSA private key from a LockedBuffer.
 // The LockedBuffer is NOT destroyed here — caller controls lifetime.
 func ParsePrivateKeyFromSecureBuf(buf *memguard.LockedBuffer) (*rsa.PrivateKey, error) {

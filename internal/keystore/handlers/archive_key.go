@@ -13,6 +13,9 @@
 package handlers
 
 import (
+	"encoding/base64"
+	"errors"
+
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -85,5 +88,67 @@ func HandleArchiveKeyStatus(d Deps, req proto.ArchiveKeyStatusRequest) proto.Bas
 		HasActive:   true,
 		PublicKey:   pub,
 		Fingerprint: fingerprintBase64Public(pub),
+	}}
+}
+
+// HandleArchiveUnwrapAndRewrap is the break-glass re-grant composite. It
+// unwraps an OLD Group DEK that was wrapped to the org archive public key
+// (org_owner_archive grant) with the archive private key, then re-wraps it to
+// a target member's public key. The raw Group DEK lives only briefly in Keeper
+// memory and is never in the response — same raw-free pattern as
+// HandleDEKRewrapForMember. The archive private key never leaves its slot.
+func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) proto.BaseResponse {
+	d.Logger.Println("archive unwrap and rewrap request processing...")
+
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+
+	recipientPubKey, err := crypto.ParsePublicKey(req.RecipientPublicKey)
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: failed to parse recipient public key: %v", err)
+		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
+	}
+
+	encrypted, err := base64.StdEncoding.DecodeString(req.WrappedForArchiveB64)
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: failed to decode wrapped_for_archive_b64: %v", err)
+		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_for_archive_b64: "+err.Error())
+	}
+
+	privKeyBuf, err := GetArchivePrivateKeySecure(d.Store)
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: failed to get archive private key: %v", err)
+		return errs.Response(err) // ErrSecretNotFound → not_found (archive slot absent)
+	}
+	defer privKeyBuf.Destroy()
+
+	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: failed to parse archive private key: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse archive private key: "+err.Error())
+	}
+
+	groupDEK, err := crypto.DecryptData(privKey, encrypted)
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: RSA-OAEP decrypt failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+	}
+	defer secure.Zeroize(groupDEK)
+
+	if len(groupDEK) != 32 {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, errors.New("unexpected group dek length (want 32)").Error())
+	}
+
+	newEncrypted, err := crypto.EncryptData(recipientPubKey, groupDEK)
+	if err != nil {
+		d.Logger.Printf("archive unwrap and rewrap error: RSA-OAEP encrypt failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
+	}
+
+	newEncryptedB64 := base64.StdEncoding.EncodeToString(newEncrypted)
+	d.Logger.Println("archive unwrap and rewrap successful (raw group dek never left Keeper)")
+	return proto.BaseResponse{Success: true, Data: proto.ArchiveUnwrapAndRewrapResponseData{
+		EncryptedForOtherB64: newEncryptedB64,
 	}}
 }
