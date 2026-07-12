@@ -72,14 +72,6 @@ func (a *App) saveSessionCode(sessionCode string) error {
 	return keychain.SaveSessionCode(a.Store, sessionCode)
 }
 
-func (a *App) deleteSessionCode() error {
-	return keychain.DeleteSessionCode(a.Store)
-}
-
-func (a *App) deletePrivateKey() error {
-	return keychain.DeletePrivateKey(a.Store)
-}
-
 // Pending keypair related functions
 
 func (a *App) savePendingPrivateKey(privateKey string) error {
@@ -92,14 +84,6 @@ func (a *App) getPendingPrivateKey() (string, error) {
 
 func (a *App) savePendingPublicKey(publicKey string) error {
 	return keychain.SavePendingPublicKey(a.Store, publicKey)
-}
-
-func (a *App) deletePendingPrivateKey() error {
-	return keychain.DeletePendingPrivateKey(a.Store)
-}
-
-func (a *App) deletePendingPublicKey() error {
-	return keychain.DeletePendingPublicKey(a.Store)
 }
 
 // promotePendingKeypair moves pending keypair to permanent storage.

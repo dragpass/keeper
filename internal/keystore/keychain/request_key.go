@@ -19,12 +19,6 @@ func GetRequestSigningPrivateKey(store SecretStore) (string, error) {
 	return store.Get(config.Service, config.DragPassRequestSigningPrivateKey)
 }
 
-// DeleteRequestSigningPrivateKey clears the slot. Called from rotation /
-// revocation flows.
-func DeleteRequestSigningPrivateKey(store SecretStore) error {
-	return store.Delete(config.Service, config.DragPassRequestSigningPrivateKey)
-}
-
 // SaveRequestSigningPublicKey stores base64(Ed25519 32B public).
 func SaveRequestSigningPublicKey(store SecretStore, base64Pub string) error {
 	return store.Set(config.Service, config.DragPassRequestSigningPublicKey, base64Pub)
@@ -33,11 +27,6 @@ func SaveRequestSigningPublicKey(store SecretStore, base64Pub string) error {
 // GetRequestSigningPublicKey returns the stored base64 string.
 func GetRequestSigningPublicKey(store SecretStore) (string, error) {
 	return store.Get(config.Service, config.DragPassRequestSigningPublicKey)
-}
-
-// DeleteRequestSigningPublicKey clears the slot.
-func DeleteRequestSigningPublicKey(store SecretStore) error {
-	return store.Delete(config.Service, config.DragPassRequestSigningPublicKey)
 }
 
 // ──────────────────────────────────────────────────────────────────────
