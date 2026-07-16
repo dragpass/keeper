@@ -158,6 +158,11 @@ var actionRegistry = map[string]actionHandlerFunc{
 	proto.ActionArchiveKeyStatus:       wrap(handlers.HandleArchiveKeyStatus),
 	proto.ActionArchiveUnwrapAndRewrap: wrap(handlers.HandleArchiveUnwrapAndRewrap),
 
+	// same-device org archive key rotation (staging-slot pattern)
+	proto.ActionArchiveKeyRotateBegin:  wrap(handlers.HandleArchiveKeyRotateBegin),
+	proto.ActionArchiveKeyRotateCommit: wrap(handlers.HandleArchiveKeyRotateCommit),
+	proto.ActionArchiveKeyRotateAbort:  wrap(handlers.HandleArchiveKeyRotateAbort),
+
 	// per-account Archive / Recovery receiving keypair actions
 	proto.ActionAccountArchiveKeyGenerate: wrap(handlers.HandleAccountArchiveKeyGenerate),
 	proto.ActionAccountArchiveKeyStatus:   wrap(handlers.HandleAccountArchiveKeyStatus),

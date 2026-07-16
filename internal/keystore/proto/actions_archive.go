@@ -26,6 +26,34 @@ const (
 	ActionArchiveKeyGenerate = "archive_key_generate"
 	ActionArchiveKeyStatus   = "archive_key_status"
 
+	// Same-device org archive key rotation (staging-slot pattern).
+	//
+	// archive_key_generate is idempotent, so re-running it on the same device
+	// returns the existing key — it can't perform a genuine rotation. These
+	// three actions stage a new keypair, keep the old one live for re-wrapping,
+	// then promote.
+	//
+	// ArchiveKeyRotateBegin:  generate a NEW archive keypair into the STAGING
+	//                         slot (org_archive_private_key_staging) and return
+	//                         its public key + fingerprint. The ACTIVE slot is
+	//                         left untouched, so existing grants stay re-wrappable
+	//                         with the OLD key (archive_unwrap_and_rewrap) until
+	//                         commit. Any existing staging is wiped and replaced
+	//                         (a stale abandoned staging must not bind a new
+	//                         rotation to a fingerprint the caller never saw). No
+	//                         active key present → validation_error (first-time
+	//                         enable is archive_key_generate, not a rotation).
+	// ArchiveKeyRotateCommit: promote the staging keypair to the active slot
+	//                         (overwriting, and thereby wiping, the old active
+	//                         private key), then clear the staging slot. No
+	//                         staging present → not_found. Returns the promoted
+	//                         key's fingerprint.
+	// ArchiveKeyRotateAbort:  wipe the staging slot. no-op success when empty —
+	//                         cleanup for a rotation that was never committed.
+	ActionArchiveKeyRotateBegin  = "archive_key_rotate_begin"
+	ActionArchiveKeyRotateCommit = "archive_key_rotate_commit"
+	ActionArchiveKeyRotateAbort  = "archive_key_rotate_abort"
+
 	// Per-account Archive / Recovery receiving keypair actions.
 	//
 	// AccountArchiveKeyGenerate / AccountArchiveKeyStatus: same idempotent
