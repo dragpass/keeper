@@ -54,6 +54,18 @@ const (
 	OrgArchivePrivateKey = "org_archive_private_key"
 	OrgArchivePublicKey  = "org_archive_public_key"
 
+	// Staging slot for same-device org archive key rotation.
+	//
+	// archive_key_generate is idempotent, so on the same device it can never
+	// produce a genuinely new key. archive_key_rotate_begin instead generates a
+	// new keypair into this staging slot while leaving the active slot
+	// (OrgArchivePrivateKey) untouched — existing grants can still be re-wrapped
+	// with the OLD active key (archive_unwrap_and_rewrap) until the rotation is
+	// committed. archive_key_rotate_commit promotes staging → active and clears
+	// staging; archive_key_rotate_abort just clears staging.
+	OrgArchivePrivateKeyStaging = "org_archive_private_key_staging"
+	OrgArchivePublicKeyStaging  = "org_archive_public_key_staging"
+
 	// Per-account Archive / Recovery receiving keypair (RSA-2048).
 	//
 	// The key whose PUBLIC half this account publishes to the server-side

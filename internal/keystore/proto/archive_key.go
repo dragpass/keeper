@@ -33,6 +33,35 @@ type ArchiveKeyStatusResponseData struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
+// Same-device org archive key rotation (staging-slot pattern). begin stages a
+// new keypair, commit promotes it, abort discards it. All three carry an empty
+// request; responses expose only public material.
+
+type ArchiveKeyRotateBeginRequest struct{}
+
+func (r ArchiveKeyRotateBeginRequest) Validate() error { return nil }
+
+type ArchiveKeyRotateBeginResponseData struct {
+	PublicKey   string `json:"publickey"`   // NEW (staged) RSA public key PEM
+	Fingerprint string `json:"fingerprint"` // hex(sha256(public key PEM))
+}
+
+type ArchiveKeyRotateCommitRequest struct{}
+
+func (r ArchiveKeyRotateCommitRequest) Validate() error { return nil }
+
+type ArchiveKeyRotateCommitResponseData struct {
+	Fingerprint string `json:"fingerprint"` // promoted (now active) key fingerprint
+}
+
+type ArchiveKeyRotateAbortRequest struct{}
+
+func (r ArchiveKeyRotateAbortRequest) Validate() error { return nil }
+
+type ArchiveKeyRotateAbortResponseData struct {
+	Aborted bool `json:"aborted"` // true if a staging key was discarded, false if none
+}
+
 // Per-account Archive / Recovery receiving keypair (dedicated slot, separate
 // from the org archive keypair). Same idempotent generate / status contract as
 // the org actions, but against the account slot: this is the key published to
