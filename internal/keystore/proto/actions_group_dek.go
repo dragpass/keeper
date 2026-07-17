@@ -104,10 +104,6 @@ const (
 	// operational path the raw Group DEK Base64 does not live in the
 	// Extension JS heap.
 	//
-	// AESGenerateAndWrap:    generate a rand 32B Item DEK → AES-GCM-wrap
-	//                        with the Group DEK → return
-	//                        {item_dek_raw_b64, wrapped_item_dek}.
-	//                        Replaces generateItemDEK + wrapItemDEK.
 	// AESUnwrapAndEncrypt:   unwrap the wrapped Item DEK with the Group DEK
 	//                        and AES-GCM-encrypt plaintext → return
 	//                        {iv_b64, ciphertext_b64}. Braille encoding is
@@ -117,7 +113,8 @@ const (
 	//  AESUnwrapAndDecryptMeta.)
 	// (AESRewrap — cross-group Item DEK rewrap — was removed alongside
 	//  the item_dek_grants schema.)
-	ActionAESGenerateAndWrap  = "aes_generate_and_wrap"
+	// (AESGenerateAndWrap — which returned a raw Item DEK over IPC — was
+	//  removed as a vault-deprecation leftover; no raw Item DEK crosses IPC.)
 	ActionAESUnwrapAndEncrypt = "aes_unwrap_and_encrypt"
 	// AESUnshareRewrapMeta: UNSHARE_REENCRYPT composite.
 	ActionAESUnshareRewrapMeta = "aes_unshare_rewrap_meta"

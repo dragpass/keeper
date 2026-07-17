@@ -33,7 +33,6 @@ func groupActions() map[string]actionHandlerFunc {
 		// The old ActionAESUnwrapAndDecrypt (returning plaintext) was removed in
 		// the plaintext-removal follow-up §A and replaced by *_to_clipboard /
 		// *_meta variants.
-		proto.ActionAESGenerateAndWrap:      wrap(handlers.HandleAESGenerateAndWrap),
 		proto.ActionAESUnwrapAndEncrypt:     wrap(handlers.HandleAESUnwrapAndEncrypt),
 		proto.ActionAESUnshareRewrapMeta:    wrap(handlers.HandleAESUnshareRewrapMeta),
 		proto.ActionAESUnwrapAndDecryptMeta: wrap(handlers.HandleAESUnwrapAndDecryptMeta),

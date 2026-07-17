@@ -16,28 +16,10 @@ import (
 // and handlers run AES-GCM directly on top of the buffer via Use(handle, fn).
 // ────────────────────────────────────────────────────────────────────────
 
-// AESGenerateAndWrapRequest generates a new 32B Item DEK and AES-GCM-wraps
-// it with the Group DEK. Replaces the Extension's generateItemDEK +
-// wrapItemDEK pair.
-type AESGenerateAndWrapRequest struct {
-	GroupHandle string `json:"group_handle"`
-}
-
-func (r AESGenerateAndWrapRequest) Validate() error {
-	return requireHandle(r.GroupHandle, "group_handle")
-}
-
-type AESGenerateAndWrapResponseData struct {
-	// ItemDEKRawB64 is the raw 32B Base64 of the newly generated Item DEK.
-	// In the interim, the Extension still uses this value directly for
-	// follow-up encryption; once the opaque handle migration is complete,
-	// this field will be removed.
-	ItemDEKRawB64 string `json:"item_dek_raw_b64"`
-	// WrappedItemDEK is the Item DEK AES-GCM-wrapped with the Group DEK,
-	// formatted as Base64(IV(12) || ciphertext); stored on the server in
-	// item_dek_grants.wrapped_item_dek.
-	WrappedItemDEK string `json:"wrapped_item_dek"`
-}
+// AESGenerateAndWrap (which returned a raw Item DEK over IPC) was removed as
+// a vault-deprecation leftover — the raw Item DEK must not cross the IPC
+// boundary. A wrapped Item DEK is produced client-side / by the
+// UNSHARE_REENCRYPT composite; there is no generate-and-return-raw action.
 
 // AESUnwrapAndEncryptRequest unwraps a wrapped Item DEK with the Group DEK
 // and AES-GCM-encrypts plaintext. Braille encoding is the Extension's job.

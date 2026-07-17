@@ -21,15 +21,10 @@ import (
 // TestAESUnwrapAndDecryptMeta_Roundtrip — group entry meta fields roundtrip.
 func TestAESUnwrapAndDecryptMeta_Roundtrip(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	handle, _ := openSessionForFreshKey(t, deps)
+	handle, raw := openSessionForFreshKey(t, deps)
 
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	if !gen.Success {
-		t.Fatalf("generate: %s", gen.Error)
-	}
-	wrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
-	itemDEKB64 := gen.Data.(proto.AESGenerateAndWrapResponseData).ItemDEKRawB64
-	itemDEK, _ := base64.StdEncoding.DecodeString(itemDEKB64)
+	wrapped, itemDEK := wrapFreshItemDEK(t, raw)
+	itemDEKB64 := base64.StdEncoding.EncodeToString(itemDEK)
 
 	const LABEL = "my-secret-label"
 	const URL = "https://example.com/login"
@@ -79,9 +74,8 @@ func TestAESUnwrapAndDecryptMeta_Roundtrip(t *testing.T) {
 
 func TestAESUnwrapAndDecryptMeta_RejectsInvalid(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	handle, _ := openSessionForFreshKey(t, deps)
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	wrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
+	handle, raw := openSessionForFreshKey(t, deps)
+	wrapped, _ := wrapFreshItemDEK(t, raw)
 
 	cases := []struct {
 		name string

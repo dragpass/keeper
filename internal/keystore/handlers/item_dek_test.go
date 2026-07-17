@@ -1,7 +1,4 @@
 // item_dek_test.go — regression guard for Item DEK handlers in item_dek.go.
-//
-// **Additional defects caught:**
-//   - regression where HandleAESGenerateAndWrap emits a success log on the store-miss branch
 package handlers
 
 import (
@@ -39,66 +36,22 @@ func openSessionForFreshKey(t *testing.T, deps Deps) (handle string, raw []byte)
 	return handle, raw
 }
 
-// TestAESGenerateAndWrap_Roundtrip: generate + wrap a new Item DEK, then
-// unwrap with the same Group DEK and check the raw bytes match the response's
-// ItemDEKRawB64.
-func TestAESGenerateAndWrap_Roundtrip(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	handle, groupRaw := openSessionForFreshKey(t, deps)
-
-	resp := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	if !resp.Success {
-		t.Fatalf("generate_and_wrap failed: %s", resp.Error)
+// wrapFreshItemDEK generates a random 32B Item DEK and AES-GCM-wraps it with
+// the raw Group DEK, producing the same {wrapped_item_dek, raw Item DEK} pair
+// the removed aes_generate_and_wrap action used to return. Downstream item-DEK
+// handler tests need a wrapped Item DEK fixture; this keeps that setup local to
+// the tests without reintroducing a raw-returning IPC action.
+func wrapFreshItemDEK(t *testing.T, groupRaw []byte) (wrapped string, itemDEKRaw []byte) {
+	t.Helper()
+	itemDEKRaw = make([]byte, 32)
+	if _, err := rand.Read(itemDEKRaw); err != nil {
+		t.Fatalf("rand: %v", err)
 	}
-	data, ok := resp.Data.(proto.AESGenerateAndWrapResponseData)
-	if !ok {
-		t.Fatalf("unexpected data type: %T", resp.Data)
-	}
-	if data.ItemDEKRawB64 == "" {
-		t.Fatal("item_dek_raw_b64 should not be empty")
-	}
-	if data.WrappedItemDEK == "" {
-		t.Fatal("wrapped_item_dek should not be empty")
-	}
-
-	rawItem, err := base64.StdEncoding.DecodeString(data.ItemDEKRawB64)
+	w, err := AESGCMSeal(groupRaw, itemDEKRaw)
 	if err != nil {
-		t.Fatalf("decode item_dek: %v", err)
+		t.Fatalf("seal item dek: %v", err)
 	}
-	if len(rawItem) != 32 {
-		t.Fatalf("item dek length = %d, want 32", len(rawItem))
-	}
-
-	// unwrap the wrapped Item DEK and check it matches the raw bytes
-	unwrapped, err := UnwrapItemDEK(groupRaw, data.WrappedItemDEK)
-	if err != nil {
-		t.Fatalf("unwrap: %v", err)
-	}
-	for i := range rawItem {
-		if rawItem[i] != unwrapped[i] {
-			t.Fatalf("item dek mismatch at byte %d", i)
-		}
-	}
-}
-
-// TestAESGenerateAndWrap_RejectsInvalidHandle: ensures an invalid handle is rejected.
-func TestAESGenerateAndWrap_RejectsInvalidHandle(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	cases := []struct {
-		name   string
-		handle string
-	}{
-		{"empty", ""},
-		{"bogus", "this-handle-does-not-exist"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resp := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: tc.handle})
-			if resp.Success {
-				t.Errorf("expected failure for %s", tc.name)
-			}
-		})
-	}
+	return w, itemDEKRaw
 }
 
 // TestAESUnwrapAndEncrypt_Decrypt_Roundtrip: ensures encrypt → decrypt round
@@ -116,12 +69,6 @@ func TestAESGenerateAndWrap_RejectsInvalidHandle(t *testing.T) {
 // TestAES_Validation: covers the Validate() branch of all Item DEK actions at once.
 func TestAES_Validation(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	t.Run("generate_and_wrap_empty", func(t *testing.T) {
-		resp := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{})
-		if resp.Success {
-			t.Error("expected validation failure")
-		}
-	})
 	t.Run("unwrap_and_encrypt_missing_fields", func(t *testing.T) {
 		cases := []proto.AESUnwrapAndEncryptRequest{
 			{GroupHandle: "h", PlaintextB64: "AA=="},       // wrapped_item_dek missing
@@ -150,15 +97,8 @@ func TestAESUnshareRewrapMeta_Roundtrip(t *testing.T) {
 	srcHandle, srcRaw := openSessionForFreshKey(t, deps)
 	extraHandle, extraRaw := openSessionForFreshKey(t, deps)
 
-	// (1) generate OLD Item DEK + encrypt value + meta with the same Item DEK
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: srcHandle})
-	if !gen.Success {
-		t.Fatalf("generate: %s", gen.Error)
-	}
-	oldWrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
-	oldItemDEKRaw, _ := base64.StdEncoding.DecodeString(
-		gen.Data.(proto.AESGenerateAndWrapResponseData).ItemDEKRawB64,
-	)
+	// (1) build OLD Item DEK + encrypt value + meta with the same Item DEK
+	oldWrapped, oldItemDEKRaw := wrapFreshItemDEK(t, srcRaw)
 
 	const VALUE_PT = "secret-payload"
 	const LABEL_PT = "label-text"
@@ -263,9 +203,8 @@ func TestAESUnshareRewrapMeta_Roundtrip(t *testing.T) {
 
 func TestAESUnshareRewrapMeta_RejectsInvalidInput(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	handle, _ := openSessionForFreshKey(t, deps)
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	wrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
+	handle, raw := openSessionForFreshKey(t, deps)
+	wrapped, _ := wrapFreshItemDEK(t, raw)
 
 	cases := []struct {
 		name string
@@ -307,22 +246,6 @@ func TestAESUnshareRewrapMeta_RejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// --- App receiver method DI guard --------
-
-func TestApp_HandleAESGenerateAndWrap_NoStoreHandle(t *testing.T) {
-	deps, log, _ := newTestDeps(t)
-
-	// 32B Base64 — passes requireHandle (missing handle → rejected at store.Use step).
-	resp := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{
-		GroupHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-	})
-	if resp.Success {
-		t.Fatalf("expected failure for unknown handle")
-	}
-	if !log.Contains("aes generate and wrap request processing") {
-		t.Fatalf("expected processing log")
-	}
-	if log.Contains("aes generate and wrap successful") {
-		t.Fatalf("must not log success on store miss")
-	}
-}
+// TestApp_HandleAESGenerateAndWrap_NoStoreHandle was removed together with
+// HandleAESGenerateAndWrap (vault-deprecation leftover; raw Item DEK must not
+// cross IPC).

@@ -60,6 +60,14 @@ func HandleWrapGroupDEK(d Deps, req proto.WrapGroupDEKRequest) proto.BaseRespons
 
 // HandleUnwrapGroupDEK decrypts encrypted_group_dek with my active private
 // key from the Keychain and returns the raw Group DEK.
+//
+// Carve-out (raw Group DEK crosses IPC): this is the client-side crypto path.
+// The extension imports the returned raw Group DEK as a non-extractable Web
+// Crypto key for drag encrypt/decrypt (the client-side Group DEK cache) and
+// zeroizes the field immediately after import. Handle-only flows use
+// group_session_open, which never returns the raw. The plaintext is protected
+// by memguard and zeroized right after the response is built (see the deferred
+// secure.Zeroize below).
 func HandleUnwrapGroupDEK(d Deps, req proto.UnwrapGroupDEKRequest) proto.BaseResponse {
 	d.Logger.Println("unwrap group dek request processing...")
 

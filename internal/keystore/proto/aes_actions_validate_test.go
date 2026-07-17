@@ -14,23 +14,9 @@ import (
 	"testing"
 )
 
-func TestAESGenerateAndWrap_Validate_RejectsEmptyHandle(t *testing.T) {
-	r := AESGenerateAndWrapRequest{GroupHandle: ""}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected validation error for empty group_handle")
-	}
-	if !strings.Contains(err.Error(), "group_handle") {
-		t.Fatalf("error must mention field name, got %q", err.Error())
-	}
-}
-
-func TestAESGenerateAndWrap_Validate_RejectsTooShortHandle(t *testing.T) {
-	r := AESGenerateAndWrapRequest{GroupHandle: "short"}
-	if err := r.Validate(); err == nil {
-		t.Fatalf("expected error for handle shorter than minimum length")
-	}
-}
+// TestAESGenerateAndWrap_Validate_* was removed alongside the
+// AESGenerateAndWrapRequest type (vault-deprecation leftover; the action
+// returned a raw Item DEK over IPC and had no live consumer).
 
 const VALID_HANDLE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 const SECRET_VALUE = "SUPER_SECRET_PAYLOAD_DO_NOT_LEAK_BASE64=="
