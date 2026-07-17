@@ -10,20 +10,21 @@ package proto
 
 const (
 	// related to team encryption
-	// WrapGroupDEK:   takes the recipient's RSA public key PEM and returns
-	//                 the Group DEK (raw 32B) RSA-OAEP-SHA256-wrapped as
-	//                 Base64. No Keychain access (public key only). Shared
-	//                 by 3 paths: team creation / member invite / Recovery
-	//                 re-wrap.
+	//
+	// (WrapGroupDEK — which RSA-OAEP-SHA256-wrapped a raw 32B Group DEK
+	//  supplied in the request — was removed. A raw Group DEK cannot exist
+	//  in the extension JS heap, so a raw-input wrap action had no legitimate
+	//  caller; member grant / rotation wraps are synthesized inside the Keeper
+	//  by group_dek_generate_and_open / dek_rewrap_for_member /
+	//  dek_unwrap_and_rewrap_for_many.)
 	//
 	// (UnwrapGroupDEK — which RSA-OAEP-decrypted a wrapped Group DEK and
 	//  returned the raw 32B over IPC — was removed. The raw Group DEK no
 	//  longer crosses IPC in the unwrap direction; use group_session_open,
 	//  which unwraps into a Keeper-held opaque handle instead.)
-	ActionWrapGroupDEK = "wrapgroupdek"
 
 	// DEKRewrapWithOldKey: composite Recovery re-wrap action. Handles the
-	// old unwrapgroupdekwithkey + WrapGroupDEK pair inside the Keeper in one
+	// old unwrap + wrap pair inside the Keeper in one
 	// shot. The raw Group DEK exists only inside a memguard LockedBuffer
 	// and is zeroized right before the response →
 	// **the raw never lives in the Extension JS heap.**

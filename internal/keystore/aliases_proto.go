@@ -22,5 +22,4 @@ type (
 	GroupSessionStatusResponseData         = proto.GroupSessionStatusResponseData
 	SignAliasResponseData                  = proto.SignAliasResponseData
 	SignAliasWithTimestampResponseData     = proto.SignAliasWithTimestampResponseData
-	WrapGroupDEKResponseData               = proto.WrapGroupDEKResponseData
 )
