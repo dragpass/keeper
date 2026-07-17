@@ -37,15 +37,14 @@ func withMemoryClipboard(t *testing.T) (Deps, *clipboard.MemoryClipboard) {
 // reaches the fake clipboard and the response carries plaintext 0 times.
 func TestHandleAESUnwrapAndDecryptToClipboard_RoundTrip(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
-	handle, _ := openSessionForFreshKey(t, deps)
+	handle, raw := openSessionForFreshKey(t, deps)
 
 	// plaintext uses a sentinel — shared with other regression guards (logger / response echo).
 	const plaintextSentinel = "PLAINTEXT_SENTINEL_DO_NOT_LEAK"
 	plaintextB64 := base64.StdEncoding.EncodeToString([]byte(plaintextSentinel))
 
-	// Prelude: AES generate + encrypt to produce wrapped + iv + ct.
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	wrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
+	// Prelude: wrap a fresh Item DEK + encrypt to produce wrapped + iv + ct.
+	wrapped, _ := wrapFreshItemDEK(t, raw)
 	enc := HandleAESUnwrapAndEncrypt(deps, proto.AESUnwrapAndEncryptRequest{
 		WrappedItemDEK: wrapped,
 		GroupHandle:    handle,
@@ -204,11 +203,10 @@ func TestHandleAESUnwrapAndDecryptToClipboard_RejectsInvalidTTL(t *testing.T) {
 func TestHandleAESUnwrapAndDecryptToClipboard_NoPlaintextInLogger(t *testing.T) {
 	deps, log, _ := newTestDeps(t)
 	deps.Clipboard = clipboard.NewMemoryClipboard()
-	handle, _ := openSessionForFreshKey(t, deps)
+	handle, raw := openSessionForFreshKey(t, deps)
 
 	const sentinel = "LOGGER_LEAK_SENTINEL"
-	gen := HandleAESGenerateAndWrap(deps, proto.AESGenerateAndWrapRequest{GroupHandle: handle})
-	wrapped := gen.Data.(proto.AESGenerateAndWrapResponseData).WrappedItemDEK
+	wrapped, _ := wrapFreshItemDEK(t, raw)
 	enc := HandleAESUnwrapAndEncrypt(deps, proto.AESUnwrapAndEncryptRequest{
 		WrappedItemDEK: wrapped,
 		GroupHandle:    handle,

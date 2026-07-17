@@ -1,6 +1,6 @@
 // item_dek.go — Item DEK handlers (AES-GCM family with opaque GroupHandle).
 //
-// HandleAESGenerateAndWrap / HandleAESUnwrapAndEncrypt.
+// HandleAESUnwrapAndEncrypt.
 //
 // The UNSHARE_REENCRYPT composite action (HandleAESUnshareRewrapMeta) is a
 // 100+ line, 6-step flow in a single function, split out to
@@ -8,9 +8,11 @@
 //
 // The old plaintext-returning handler (`HandleAESUnwrapAndDecrypt`) was
 // removed. HandleAESRewrap (cross-group Item DEK rewrap) was removed
-// alongside the item_dek_grants schema. Shared crypto utils (decodeGroupDEK
-// / unwrapItemDEK / aesGCMSeal / aesGCMSealSplit / aesGCMOpen) live in
-// `aes_crypto.go`.
+// alongside the item_dek_grants schema. HandleAESGenerateAndWrap (which
+// returned a raw Item DEK over IPC) was removed as a vault-deprecation
+// leftover — no raw Item DEK crosses the IPC boundary. Shared crypto utils
+// (decodeGroupDEK / unwrapItemDEK / aesGCMSeal / aesGCMSealSplit /
+// aesGCMOpen) live in `aes_crypto.go`.
 
 package handlers
 
@@ -22,39 +24,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// HandleAESGenerateAndWrap generates a new 32B Item DEK and returns both the
-// raw and the AES-GCM-wrapped (with the Group DEK) result.
-func HandleAESGenerateAndWrap(d Deps, req proto.AESGenerateAndWrapRequest) proto.BaseResponse {
-	d.Logger.Println("aes generate and wrap request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// generate Item DEK; raw is zeroized inside the Use callback.
-	itemDEK := make([]byte, 32)
-	if err := d.FillRandom(itemDEK); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate item dek: "+err.Error())
-	}
-	defer secure.Zeroize(itemDEK)
-
-	var wrapped string
-	err := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		var inner error
-		wrapped, inner = aesGCMSeal(groupDEK, itemDEK)
-		return inner
-	})
-	if err != nil {
-		return groupSessionUseError(err, "wrap item dek")
-	}
-
-	d.Logger.Println("aes generate and wrap successful")
-	return proto.BaseResponse{Success: true, Data: proto.AESGenerateAndWrapResponseData{
-		ItemDEKRawB64:  base64.StdEncoding.EncodeToString(itemDEK),
-		WrappedItemDEK: wrapped,
-	}}
-}
 
 // HandleAESUnwrapAndEncrypt unwraps the Item DEK with the Group DEK,
 // AES-GCM-encrypts the plaintext, and returns IV / ciphertext separately.

@@ -11,10 +11,13 @@
 package keystore
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/dragpass/keeper/internal/keystore/handlers"
 )
 
 // openTestGroupSession registers a raw 32B Group DEK directly into the
@@ -37,42 +40,26 @@ func openTestGroupSession(t *testing.T, app *App, raw []byte) string {
 	return handle
 }
 
-// TestHandleRequest_AESGenerateAndWrap_JSONRoundtrip verifies the
-// action dispatches correctly and response fields are populated via the
-// JSON-message envelope.
-//
-// Same dispatch path works after the group_dek_b64 → group_handle
-// migration.
-func TestHandleRequest_AESGenerateAndWrap_JSONRoundtrip(t *testing.T) {
-	app := newFacadeTestApp()
-	groupDEK := make([]byte, 32)
-	for i := range groupDEK {
-		groupDEK[i] = byte(i)
+// wrapItemDEKForTest wraps a fresh random 32B Item DEK with the raw Group DEK,
+// producing the wrapped_item_dek fixture the removed aes_generate_and_wrap
+// action used to return. Kept local so the dispatcher tests exercise the
+// still-live encrypt / decrypt-to-clipboard actions without a raw-returning
+// IPC action.
+func wrapItemDEKForTest(t *testing.T, groupDEK []byte) string {
+	t.Helper()
+	itemDEK := make([]byte, 32)
+	if _, err := rand.Read(itemDEK); err != nil {
+		t.Fatalf("rand: %v", err)
 	}
-	handle := openTestGroupSession(t, app, groupDEK)
-
-	msg := fmt.Sprintf(
-		`{"action":"aes_generate_and_wrap","request_id":"r-1","payload":{"group_handle":%q}}`,
-		handle,
-	)
-	resp := app.HandleRequest([]byte(msg))
-	if !resp.Success {
-		t.Fatalf("aes_generate_and_wrap dispatch failed: %s", resp.Error)
+	wrapped, err := handlers.AESGCMSeal(groupDEK, itemDEK)
+	if err != nil {
+		t.Fatalf("seal item dek: %v", err)
 	}
-	if resp.RequestID != "r-1" {
-		t.Errorf("request_id echo mismatch: got %q", resp.RequestID)
-	}
-
-	raw, _ := json.Marshal(resp.Data)
-	var data AESGenerateAndWrapResponseData
-	json.Unmarshal(raw, &data)
-	if data.WrappedItemDEK == "" || data.ItemDEKRawB64 == "" {
-		t.Error("response should populate wrapped_item_dek and item_dek_raw_b64")
-	}
+	return wrapped
 }
 
-// TestHandleRequest_AES_FullRoundtrip verifies the full
-// generate→encrypt→decrypt flow works through the dispatch layer.
+// TestHandleRequest_AES_FullRoundtrip verifies the encrypt→decrypt flow works
+// through the dispatch layer for a wrapped Item DEK.
 //
 // group_handle-based.
 func TestHandleRequest_AES_FullRoundtrip(t *testing.T) {
@@ -83,21 +70,14 @@ func TestHandleRequest_AES_FullRoundtrip(t *testing.T) {
 	}
 	handle := openTestGroupSession(t, app, groupDEK)
 
-	// 1) generate
-	genMsg := fmt.Sprintf(`{"action":"aes_generate_and_wrap","payload":{"group_handle":%q}}`, handle)
-	genResp := app.HandleRequest([]byte(genMsg))
-	if !genResp.Success {
-		t.Fatalf("generate: %s", genResp.Error)
-	}
-	rawGen, _ := json.Marshal(genResp.Data)
-	var genData AESGenerateAndWrapResponseData
-	json.Unmarshal(rawGen, &genData)
+	// 1) wrap a fresh Item DEK with the raw Group DEK (fixture)
+	wrappedItemDEK := wrapItemDEKForTest(t, groupDEK)
 
 	// 2) encrypt
 	plaintextB64 := base64.StdEncoding.EncodeToString([]byte("hello world"))
 	encMsg := fmt.Sprintf(
 		`{"action":"aes_unwrap_and_encrypt","payload":{"wrapped_item_dek":%q,"group_handle":%q,"plaintext_b64":%q}}`,
-		genData.WrappedItemDEK, handle, plaintextB64,
+		wrappedItemDEK, handle, plaintextB64,
 	)
 	encResp := app.HandleRequest([]byte(encMsg))
 	if !encResp.Success {
@@ -111,7 +91,7 @@ func TestHandleRequest_AES_FullRoundtrip(t *testing.T) {
 	//    Since the response has no plaintext, the regression guard is the success-response envelope + copied flag instead.
 	decMsg := fmt.Sprintf(
 		`{"action":"aes_unwrap_and_decrypt_to_clipboard","payload":{"wrapped_item_dek":%q,"group_handle":%q,"iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
-		genData.WrappedItemDEK, handle, encData.IVB64, encData.CiphertextB64,
+		wrappedItemDEK, handle, encData.IVB64, encData.CiphertextB64,
 	)
 	decResp := app.HandleRequest([]byte(decMsg))
 	if !decResp.Success {
