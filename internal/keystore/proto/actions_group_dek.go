@@ -143,6 +143,19 @@ const (
 	// raw Group DEK never crosses IPC.
 	ActionGroupEncrypt = "group_encrypt"
 
+	// GroupEncryptWithAAD: AAD-binding variant of GroupEncrypt. AES-GCM-seals
+	// plaintext under the raw Group DEK behind the opaque handle with a caller-
+	// supplied AAD bound into the GCM tag. The AAD carries the sealed payload's
+	// canonical context (org_id|entry_id|payload_kind|schema_version|dek_version)
+	// so a ciphertext cannot be swapped to a different context without failing to
+	// open. AAD is required — a nil/empty AAD is what GroupEncrypt already covers.
+	//   Inputs: group_handle, plaintext_b64, aad_b64
+	//   Output: {iv_b64(12B), ciphertext_b64}
+	// The plaintext lives only in the request and briefly in Keeper memory
+	// (zeroized after sealing); it never appears in the response or logs. The AAD
+	// is public context material (not secret). The raw Group DEK never crosses IPC.
+	ActionGroupEncryptWithAAD = "group_encrypt_with_aad"
+
 	// GroupEncryptMeta / GroupDecryptMeta: raw Group DEK direct batch metadata
 	// crypto. Same shape as aes_unwrap_and_decrypt_meta but with the Item DEK
 	// unwrap step replaced by a direct raw Group DEK use behind the opaque
