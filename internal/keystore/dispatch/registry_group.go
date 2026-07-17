@@ -40,6 +40,10 @@ func groupActions() map[string]actionHandlerFunc {
 		// raw Group DEK direct AES-GCM encrypt (mirror of group_decrypt_to_clipboard).
 		proto.ActionGroupEncrypt: wrap(handlers.HandleGroupEncrypt),
 
+		// AAD-binding variant of group_encrypt: binds a canonical context AAD
+		// into the GCM tag to prevent ciphertext swap across contexts.
+		proto.ActionGroupEncryptWithAAD: wrap(handlers.HandleGroupEncryptWithAAD),
+
 		// raw Group DEK direct batch metadata encrypt/decrypt (mirror of
 		// aes_unwrap_and_decrypt_meta without Item DEK indirection).
 		proto.ActionGroupEncryptMeta: wrap(handlers.HandleGroupEncryptMeta),
