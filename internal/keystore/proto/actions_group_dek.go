@@ -140,6 +140,18 @@ const (
 	//   Output: {copied, clipboard_ttl_ms}
 	ActionGroupDecryptToClipboard = "group_decrypt_to_clipboard"
 
+	// GroupEncrypt: the encrypt-direction mirror of GroupDecryptToClipboard.
+	// AES-GCM-seals plaintext directly under the raw Group DEK behind the
+	// opaque handle (no Item DEK indirection) and returns {iv_b64,
+	// ciphertext_b64}. First step of moving drag encryption off client-side
+	// AES-GCM onto Keeper handles.
+	//   Inputs: group_handle, plaintext_b64
+	//   Output: {iv_b64(12B), ciphertext_b64}
+	// The plaintext lives only in the request and briefly in Keeper memory
+	// (zeroized after sealing); it never appears in the response or logs. The
+	// raw Group DEK never crosses IPC.
+	ActionGroupEncrypt = "group_encrypt"
+
 	// GroupTranscryptForGuest: re-encrypts an org Group-DEK token as an
 	// external guest share without ever returning plaintext to the Extension
 	// JS heap. Mirrors GroupDecryptToClipboard's input (group_handle + iv +

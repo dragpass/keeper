@@ -41,6 +41,9 @@ func groupActions() map[string]actionHandlerFunc {
 		proto.ActionAESUnwrapAndDecryptToClipboard: wrap(handlers.HandleAESUnwrapAndDecryptToClipboard),
 		proto.ActionGroupDecryptToClipboard:        wrap(handlers.HandleGroupDecryptToClipboard),
 
+		// raw Group DEK direct AES-GCM encrypt (mirror of group_decrypt_to_clipboard).
+		proto.ActionGroupEncrypt: wrap(handlers.HandleGroupEncrypt),
+
 		// org token → external guest share re-encryption (Keeper-owned re-encrypt
 		// sink; plaintext / Group DEK never enter the JS heap).
 		proto.ActionGroupTranscryptForGuest: wrap(handlers.HandleGroupTranscryptForGuest),

@@ -18,7 +18,7 @@ import (
 // Version 은 공개 repo (github.com/dragpass/keeper) 이관 시점에 0.0.1 로
 // 리셋했다 (구 내부 넘버링 마지막은 0.0.23). 릴리스 태그 vX.Y.Z 와 반드시
 // 일치해야 한다 — release CI 의 verify job 이 강제한다.
-const Version = "0.0.9"
+const Version = "0.0.10"
 
 var (
 	BinaryHash string
