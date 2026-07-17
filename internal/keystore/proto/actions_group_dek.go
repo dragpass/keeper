@@ -152,6 +152,25 @@ const (
 	// raw Group DEK never crosses IPC.
 	ActionGroupEncrypt = "group_encrypt"
 
+	// GroupEncryptMeta / GroupDecryptMeta: raw Group DEK direct batch metadata
+	// crypto. Same shape as aes_unwrap_and_decrypt_meta but with the Item DEK
+	// unwrap step replaced by a direct raw Group DEK use behind the opaque
+	// handle (mirror of group_encrypt vs aes_unwrap_and_encrypt).
+	//
+	// GroupDecryptMeta: group_handle + meta_fields (key→Base64(IV(12)||ct)) →
+	//                   {fields} (key→plaintext UTF-8). Batch decrypt for the
+	//                   DragLink page. Plaintext metadata carve-out — value
+	//                   plaintext is never returned here.
+	// GroupEncryptMeta: group_handle + fields (key→plaintext UTF-8) →
+	//                   {meta_fields} (key→Base64(IV(12)||ct)). The inverse of
+	//                   GroupDecryptMeta: its meta_fields output is directly
+	//                   feedable back as GroupDecryptMeta's meta_fields input,
+	//                   and the combined Base64(IV||ct) form matches what the
+	//                   Extension stores per meta field. plaintext / raw Group
+	//                   DEK echoed 0 times.
+	ActionGroupEncryptMeta = "group_encrypt_meta"
+	ActionGroupDecryptMeta = "group_decrypt_meta"
+
 	// GroupTranscryptForGuest: re-encrypts an org Group-DEK token as an
 	// external guest share without ever returning plaintext to the Extension
 	// JS heap. Mirrors GroupDecryptToClipboard's input (group_handle + iv +
