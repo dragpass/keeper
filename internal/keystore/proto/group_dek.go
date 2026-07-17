@@ -36,25 +36,6 @@ type WrapGroupDEKResponseData struct {
 	EncryptedGroupDEK string `json:"encrypted_group_dek"`
 }
 
-// UnwrapGroupDEKRequest decrypts encrypted_group_dek with my active
-// private key in the Keychain to obtain the raw Group DEK. Needed by all
-// of drag decrypt / group-member invite / Recovery re-wrap paths.
-type UnwrapGroupDEKRequest struct {
-	EncryptedGroupDEK string `json:"encrypted_group_dek"`
-}
-
-func (r UnwrapGroupDEKRequest) Validate() error {
-	_, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek")
-	return err
-}
-
-type UnwrapGroupDEKResponseData struct {
-	// GroupDEKB64 is the Base64 of the raw 32B Group DEK. The Extension
-	// imports it via Web Crypto importKey as a non-extractable CryptoKey
-	// and zeroes this field immediately.
-	GroupDEKB64 string `json:"group_dek_b64"`
-}
-
 // DEKRewrapWithOldKeyRequest is the request for the Recovery composite
 // re-wrap action. Replaces the old `unwrapgroupdekwithkey` + WrapGroupDEK
 // pair with a single Keeper-side composite action so the raw Group DEK does

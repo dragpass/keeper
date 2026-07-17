@@ -28,15 +28,12 @@ import (
 // rawSecretResponseCarveOuts lists "<ResponseType>.<json_field>" entries that
 // legitimately carry raw secret material across IPC. Each entry needs an
 // English rationale. Keep this list as small as possible.
-var rawSecretResponseCarveOuts = map[string]string{
-	// unwrapgroupdek returns the raw Group DEK so the extension can import it
-	// as a non-extractable Web Crypto key for client-side drag encrypt/decrypt
-	// (the client-side Group DEK cache), then zeroizes the field immediately
-	// after import. This is the client-side crypto path; the handle-only paths
-	// use group_session_open. The raw return cannot be dropped without breaking
-	// client-side AES-GCM group crypto.
-	"UnwrapGroupDEKResponseData.group_dek_b64": "extension client-side Group DEK cache: non-extractable Web Crypto import + immediate zeroize",
-}
+//
+// This map is intentionally empty: no Keeper action returns raw secret key
+// material over IPC. The last carve-out (unwrapgroupdek's group_dek_b64) was
+// removed together with the unwrapgroupdek / group_session_open_with_raw
+// actions — all group crypto is now handle-based.
+var rawSecretResponseCarveOuts = map[string]string{}
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)
 

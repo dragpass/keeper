@@ -15,13 +15,12 @@ const (
 	//                 Base64. No Keychain access (public key only). Shared
 	//                 by 3 paths: team creation / member invite / Recovery
 	//                 re-wrap.
-	// UnwrapGroupDEK: RSA-OAEP-decrypts encrypted_group_dek(Base64) with
-	//                 my active private key in the Keychain and returns
-	//                 the raw 32B as Base64. The plaintext is briefly
-	//                 protected by memguard and zeroized right after
-	//                 returning.
-	ActionWrapGroupDEK   = "wrapgroupdek"
-	ActionUnwrapGroupDEK = "unwrapgroupdek"
+	//
+	// (UnwrapGroupDEK — which RSA-OAEP-decrypted a wrapped Group DEK and
+	//  returned the raw 32B over IPC — was removed. The raw Group DEK no
+	//  longer crosses IPC in the unwrap direction; use group_session_open,
+	//  which unwraps into a Keeper-held opaque handle instead.)
+	ActionWrapGroupDEK = "wrapgroupdek"
 
 	// DEKRewrapWithOldKey: composite Recovery re-wrap action. Handles the
 	// old unwrapgroupdekwithkey + WrapGroupDEK pair inside the Keeper in one
@@ -37,36 +36,27 @@ const (
 
 	// Group DEK opaque handle.
 	//
-	// GroupSessionOpen:        takes wrapped_group_dek and (with the
-	//                          active Keychain priv key) RSA-OAEP-unwraps
-	//                          to keep the raw 32B in Keeper memguard.
-	//                          Returns a 32B random handle ID (Base64) and
-	//                          expires_at_ms (Unix ms). The Extension
-	//                          never sees the raw bytes on the normal path.
-	// GroupSessionOpenWithRaw: takes a raw 32B Group DEK Base64 directly
-	//                          and registers it in the store.
-	//                          **DEK rotation only — escape hatch**: at
-	//                          rotation a new DEK is generated on the
-	//                          Extension side (generateRawGroupDEK) or the
-	//                          old DEK is fetched from the server in
-	//                          plaintext. Handle registration is needed
-	//                          only in this brief window, so a raw input
-	//                          is allowed. Normal operations
-	//                          (drag / draglink / share) use
-	//                          GroupSessionOpen only.
-	// GroupSessionClose:       destroys and removes the handle. Idempotent
-	//                          (missing handles are OK).
-	// GroupSessionStatus:      whether the handle exists + remaining TTL
-	//                          in ms. Debugging / observability.
+	// GroupSessionOpen:   takes wrapped_group_dek and (with the active
+	//                     Keychain priv key) RSA-OAEP-unwraps to keep the
+	//                     raw 32B in Keeper memguard. Returns a 32B random
+	//                     handle ID (Base64) and expires_at_ms (Unix ms).
+	//                     The Extension never sees the raw bytes.
+	// GroupSessionClose:  destroys and removes the handle. Idempotent
+	//                     (missing handles are OK).
+	// GroupSessionStatus: whether the handle exists + remaining TTL in ms.
+	//                     Debugging / observability.
 	//
 	// Subsequent aes_* actions (4 of them) take group_handle instead of
-	// group_dek_b64 and run AES-GCM against the same key material. The
-	// raw Group DEK Base64 does not live in the Extension JS heap (except
-	// during rotation).
-	ActionGroupSessionOpen        = "group_session_open"
-	ActionGroupSessionOpenWithRaw = "group_session_open_with_raw"
-	ActionGroupSessionClose       = "group_session_close"
-	ActionGroupSessionStatus      = "group_session_status"
+	// group_dek_b64 and run AES-GCM against the same key material. The raw
+	// Group DEK Base64 does not live in the Extension JS heap.
+	//
+	// (GroupSessionOpenWithRaw — which registered a raw 32B Group DEK Base64
+	//  directly, a DEK-rotation escape hatch — was removed. No raw Group DEK
+	//  crosses IPC in either direction; all group sessions open from a
+	//  wrapped DEK via GroupSessionOpen.)
+	ActionGroupSessionOpen   = "group_session_open"
+	ActionGroupSessionClose  = "group_session_close"
+	ActionGroupSessionStatus = "group_session_status"
 
 	// Closes surfaces where admin actions (adminCreateOrg / adminCreateGroup
 	// / adminInviteMember / adminRotateDek) had the raw 32B Group DEK

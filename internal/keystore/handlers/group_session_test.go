@@ -1,5 +1,5 @@
 // group_session_test.go — regression guard for group_session.go
-// (HandleGroupSession{Open, Close, Status, OpenWithRaw}).
+// (HandleGroupSession{Open, Close, Status}).
 //
 // **Defects this test catches:**
 //   - regressions where the handler calls stdlib `log.*` directly (bypassing a.Logger)
@@ -69,28 +69,6 @@ func TestApp_HandleGroupSessionStatus_LogsProcessing(t *testing.T) {
 	}
 	if !log.Contains("group session status request processing") {
 		t.Fatalf("expected processing log")
-	}
-}
-
-func TestApp_HandleGroupSessionOpenWithRaw_DoesNotEchoRawDEK(t *testing.T) {
-	// Regression guard — whether the raw 32B Group DEK Base64 echoes to the logger on failure branches.
-	deps, log, _ := newTestDeps(t)
-
-	// Valid 32B Base64 that passes validate. store.Open succeeds, but the
-	// raw value must not appear in the logger.
-	const sentinel = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-	resp := HandleGroupSessionOpenWithRaw(deps, proto.GroupSessionOpenWithRawRequest{
-		GroupDEKB64: sentinel,
-	})
-	if !resp.Success {
-		t.Fatalf("expected success with valid 32B input, got %s", resp.Error)
-	}
-
-	if log.Contains(sentinel) {
-		t.Fatalf("logger echoed raw DEK Base64: %v", log.Messages())
-	}
-	if !log.Contains("group session open (with raw) successful") {
-		t.Fatalf("expected success log")
 	}
 }
 
