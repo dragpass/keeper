@@ -13,16 +13,14 @@ import (
 
 func groupActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionWrapGroupDEK:   wrap(handlers.HandleWrapGroupDEK),
-		proto.ActionUnwrapGroupDEK: wrap(handlers.HandleUnwrapGroupDEK),
+		proto.ActionWrapGroupDEK: wrap(handlers.HandleWrapGroupDEK),
 
 		proto.ActionDEKRewrapWithOldKey: wrap(handlers.HandleDEKRewrapWithOldKey),
 
 		// Group DEK opaque handle
-		proto.ActionGroupSessionOpen:        wrap(handlers.HandleGroupSessionOpen),
-		proto.ActionGroupSessionOpenWithRaw: wrap(handlers.HandleGroupSessionOpenWithRaw),
-		proto.ActionGroupSessionClose:       wrap(handlers.HandleGroupSessionClose),
-		proto.ActionGroupSessionStatus:      wrap(handlers.HandleGroupSessionStatus),
+		proto.ActionGroupSessionOpen:   wrap(handlers.HandleGroupSessionOpen),
+		proto.ActionGroupSessionClose:  wrap(handlers.HandleGroupSessionClose),
+		proto.ActionGroupSessionStatus: wrap(handlers.HandleGroupSessionStatus),
 
 		// Admin-path raw-free composite actions (Group DEK never crosses into JS).
 		proto.ActionGroupDEKGenerateAndOpen:   wrap(handlers.HandleGroupDEKGenerateAndOpen),

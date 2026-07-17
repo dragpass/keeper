@@ -1,7 +1,6 @@
-// group_dek.go — Group DEK RSA wrap/unwrap handlers.
-// HandleWrapGroupDEK / HandleUnwrapGroupDEK / HandleDEKRewrapWithOldKey —
-// actions routed by the dispatcher. Group encrypt/decrypt + the Recovery
-// rewrap composite action.
+// group_dek.go — Group DEK RSA wrap handlers.
+// HandleWrapGroupDEK / HandleDEKRewrapWithOldKey — actions routed by the
+// dispatcher. Group DEK wrap + the Recovery rewrap composite action.
 
 package handlers
 
@@ -55,65 +54,6 @@ func HandleWrapGroupDEK(d Deps, req proto.WrapGroupDEKRequest) proto.BaseRespons
 	d.Logger.Println("wrap group dek successful")
 	return proto.BaseResponse{Success: true, Data: proto.WrapGroupDEKResponseData{
 		EncryptedGroupDEK: encryptedB64,
-	}}
-}
-
-// HandleUnwrapGroupDEK decrypts encrypted_group_dek with my active private
-// key from the Keychain and returns the raw Group DEK.
-//
-// Carve-out (raw Group DEK crosses IPC): this is the client-side crypto path.
-// The extension imports the returned raw Group DEK as a non-extractable Web
-// Crypto key for drag encrypt/decrypt (the client-side Group DEK cache) and
-// zeroizes the field immediately after import. Handle-only flows use
-// group_session_open, which never returns the raw. The plaintext is protected
-// by memguard and zeroized right after the response is built (see the deferred
-// secure.Zeroize below).
-func HandleUnwrapGroupDEK(d Deps, req proto.UnwrapGroupDEKRequest) proto.BaseResponse {
-	d.Logger.Println("unwrap group dek request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// decode ciphertext
-	encrypted, err := base64.StdEncoding.DecodeString(req.EncryptedGroupDEK)
-	if err != nil {
-		d.Logger.Printf("unwrap group dek error: failed to decode encrypted_group_dek: %v", err)
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode encrypted_group_dek: "+err.Error())
-	}
-
-	// fetch my active private key PEM from Keychain and protect with memguard (secure_bridge helper)
-	privKeyBuf, err := getPrivateKeySecure(d.Store)
-	if err != nil {
-		d.Logger.Printf("unwrap group dek error: failed to get private key: %v", err)
-		return errs.Response(err) // ErrSecretNotFound → not_found
-	}
-	defer privKeyBuf.Destroy()
-
-	// parse PEM
-	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
-	if err != nil {
-		d.Logger.Printf("unwrap group dek error: failed to parse private key: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key: "+err.Error())
-	}
-
-	// RSA-OAEP decrypt
-	groupDEK, err := crypto.DecryptData(privKey, encrypted)
-	if err != nil {
-		d.Logger.Printf("unwrap group dek error: RSA-OAEP decrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
-	}
-	// schedule zeroize of the plaintext Group DEK until just before return
-	defer secure.Zeroize(groupDEK)
-
-	if len(groupDEK) != 32 {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, fmt.Sprintf("unexpected group dek length: %d (want 32)", len(groupDEK)))
-	}
-
-	groupDEKB64 := base64.StdEncoding.EncodeToString(groupDEK)
-	d.Logger.Println("unwrap group dek successful")
-	return proto.BaseResponse{Success: true, Data: proto.UnwrapGroupDEKResponseData{
-		GroupDEKB64: groupDEKB64,
 	}}
 }
 

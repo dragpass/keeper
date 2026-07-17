@@ -1,5 +1,5 @@
 // group_session.go — Group DEK opaque handle handlers.
-// HandleGroupSessionOpen / Close / Status — four actions routed by the dispatcher.
+// HandleGroupSessionOpen / Close / Status — three actions routed by the dispatcher.
 //
 // The groupSessionUseError helper is also referenced by item_dek.go's AES
 // family handlers — they share automatically within the same (handlers)
@@ -63,34 +63,6 @@ func HandleGroupSessionOpen(d Deps, req proto.GroupSessionOpenRequest) proto.Bas
 	}
 
 	d.Logger.Println("group session open successful")
-	return proto.BaseResponse{Success: true, Data: proto.GroupSessionOpenResponseData{
-		GroupHandle: handle,
-		ExpiresAtMs: expiresAt.UnixMilli(),
-	}}
-}
-
-// HandleGroupSessionOpenWithRaw takes the raw 32B Group DEK Base64 and
-// registers it with the store. DEK rotation escape hatch only — the normal
-// path uses GroupSessionOpen.
-func HandleGroupSessionOpenWithRaw(d Deps, req proto.GroupSessionOpenWithRawRequest) proto.BaseResponse {
-	d.Logger.Println("group session open (with raw) request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	raw, err := decodeGroupDEK(req.GroupDEKB64)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
-	}
-
-	handle, expiresAt, openErr := d.GroupSessions.Open(raw)
-	if openErr != nil {
-		secure.Zeroize(raw)
-		return errs.CodeResponse(errs.ErrCodeInternal, "store open failed: "+openErr.Error())
-	}
-
-	d.Logger.Println("group session open (with raw) successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupSessionOpenResponseData{
 		GroupHandle: handle,
 		ExpiresAtMs: expiresAt.UnixMilli(),

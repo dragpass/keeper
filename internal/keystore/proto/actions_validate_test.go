@@ -141,13 +141,6 @@ func TestWrapGroupDEK_Validate_RejectsNonPEMRecipient(t *testing.T) {
 	}
 }
 
-func TestUnwrapGroupDEK_Validate_RejectsInvalidBase64(t *testing.T) {
-	r := UnwrapGroupDEKRequest{EncryptedGroupDEK: testInvalidB64}
-	if err := r.Validate(); err == nil {
-		t.Fatalf("expected error for invalid Base64")
-	}
-}
-
 func TestDEKRewrapWithOldKey_Validate_RejectsShortHandle(t *testing.T) {
 	r := DEKRewrapWithOldKeyRequest{
 		ChallengeToken:    "ct",
@@ -186,17 +179,6 @@ func TestGroupSessionOpen_Validate_RejectsInvalidBase64(t *testing.T) {
 	r := GroupSessionOpenRequest{EncryptedGroupDEK: testInvalidB64}
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected error for invalid Base64")
-	}
-}
-
-func TestGroupSessionOpenWithRaw_Validate_RejectsNon32BKey(t *testing.T) {
-	r := GroupSessionOpenWithRawRequest{GroupDEKB64: "AAAAAAAAAAAAAAAAAAAAAg=="} // 16B
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-32B group_dek")
-	}
-	if !strings.Contains(err.Error(), "group_dek_b64") {
-		t.Fatalf("error must mention field, got %q", err.Error())
 	}
 }
 

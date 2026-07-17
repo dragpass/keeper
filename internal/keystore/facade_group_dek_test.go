@@ -1,8 +1,11 @@
-// facade_group_dek_test.go: dispatch-level behavior of wrapgroupdek /
-// unwrapgroupdek actions. Covers the team encrypt/decrypt key invariant
-// round-trip + 32B length enforcement + malformed PEM reject + clear
-// error when the active private key is missing + reject ciphertext
-// wrapped with a different keypair.
+// facade_group_dek_test.go: dispatch-level behavior of wrapgroupdek +
+// group_session_open. Covers the team encrypt key invariant round-trip
+// (wrap → open into a handle) + 32B length enforcement + malformed PEM
+// reject + clear error when the active private key is missing + reject
+// ciphertext wrapped with a different keypair.
+//
+// The raw-returning unwrapgroupdek action was removed; group_session_open
+// (RSA-OAEP unwrap into a Keeper-held opaque handle) is now the unwrap path.
 package keystore
 
 import (
@@ -13,26 +16,24 @@ import (
 	"testing"
 )
 
-// TestHandleRequest_WrapUnwrapGroupDEK_RoundTrip verifies the core
-// team-encrypt/decrypt invariant
-// "wrap(group_dek, pub) → unwrap(_, priv) == group_dek" end-to-end.
+// TestHandleRequest_WrapGroupDEK_ThenGroupSessionOpen verifies the core
+// team-encrypt invariant end-to-end after the raw-return unwrap action was
+// removed: "wrap(group_dek, pub) → group_session_open(_, priv)" succeeds.
+//
+// group_session_open RSA-OAEP-unwraps with the active private key into a
+// Keeper-held opaque handle, so a successful open proves the wrap is a valid
+// ciphertext the private key can recover (the raw Group DEK never crosses IPC).
 //
 // Scenario:
-//  1. The Keeper has a keypair (signup-like state, with active key set
-//     via signalias).
+//  1. The Keeper has an active keypair (saved directly).
 //  2. Assume the Extension generated a 32B Group DEK (use a fixed value).
 //  3. wrapgroupdek: wrap the Group DEK with the Keeper's public key
 //     (recipient is self).
-//  4. unwrapgroupdek: decrypt with the Keeper's private key → must equal
-//     the original.
-func TestHandleRequest_WrapUnwrapGroupDEK_RoundTrip(t *testing.T) {
+//  4. group_session_open: unwrap with the Keeper's private key → returns a
+//     non-empty handle.
+func TestHandleRequest_WrapGroupDEK_ThenGroupSessionOpen(t *testing.T) {
 	app := newFacadeTestApp()
 
-	// Keypair setup — signalias creates a pending keypair, but promoting
-	// it to active is done by savesessioncode. A pending-only state
-	// isn't suitable for the unwrap test, so we could go through
-	// generatekeypair, but the simplest thing is to create a KeyPair and
-	// save it directly.
 	kp, err := GenerateRSAKeyPair()
 	if err != nil {
 		t.Fatalf("GenerateRSAKeyPair: %v", err)
@@ -51,7 +52,7 @@ func TestHandleRequest_WrapUnwrapGroupDEK_RoundTrip(t *testing.T) {
 	}
 	groupDEKB64 := base64.StdEncoding.EncodeToString(groupDEK)
 
-	// 1. wrapgroupdek
+	// 1. wrapgroupdek — wrap to my own public key.
 	wrapMsg := fmt.Sprintf(
 		`{"action":"wrapgroupdek","payload":{"group_dek_b64":%q,"recipient_public_key":%q}}`,
 		groupDEKB64,
@@ -68,32 +69,26 @@ func TestHandleRequest_WrapUnwrapGroupDEK_RoundTrip(t *testing.T) {
 		t.Fatal("encrypted_group_dek should not be empty")
 	}
 
-	// 2. unwrapgroupdek — same Keeper's private key is in the Keychain
-	unwrapMsg := fmt.Sprintf(
-		`{"action":"unwrapgroupdek","payload":{"encrypted_group_dek":%q}}`,
+	// 2. group_session_open — unwrap with the active private key into a handle.
+	openMsg := fmt.Sprintf(
+		`{"action":"group_session_open","payload":{"encrypted_group_dek":%q}}`,
 		wrapData.EncryptedGroupDEK,
 	)
-	unwrapResp := app.HandleRequest([]byte(unwrapMsg))
-	if !unwrapResp.Success {
-		t.Fatalf("unwrapgroupdek failed: %s", unwrapResp.Error)
+	openResp := app.HandleRequest([]byte(openMsg))
+	if !openResp.Success {
+		t.Fatalf("group_session_open failed: %s", openResp.Error)
 	}
-	var unwrapData UnwrapGroupDEKResponseData
-	raw2, _ := json.Marshal(unwrapResp.Data)
-	json.Unmarshal(raw2, &unwrapData)
-
-	// 3. Confirm the unwrap result matches the original Group DEK
-	decoded, err := base64.StdEncoding.DecodeString(unwrapData.GroupDEKB64)
-	if err != nil {
-		t.Fatalf("failed to decode unwrap result: %v", err)
+	var openData struct {
+		GroupHandle string `json:"group_handle"`
 	}
-	if len(decoded) != 32 {
-		t.Fatalf("decoded length = %d, want 32", len(decoded))
+	raw2, _ := json.Marshal(openResp.Data)
+	json.Unmarshal(raw2, &openData)
+	if openData.GroupHandle == "" {
+		t.Fatal("group_handle should not be empty")
 	}
-	for i := range 32 {
-		if decoded[i] != groupDEK[i] {
-			t.Fatalf("round-trip mismatch at byte %d: got %02x, want %02x", i, decoded[i], groupDEK[i])
-		}
-	}
+	t.Cleanup(func() {
+		app.GroupSessions.Close(openData.GroupHandle)
+	})
 }
 
 // TestHandleRequest_WrapGroupDEK_InvalidLength verifies the handler
@@ -141,29 +136,29 @@ func TestHandleRequest_WrapGroupDEK_InvalidPublicKey(t *testing.T) {
 	}
 }
 
-// TestHandleRequest_UnwrapGroupDEK_NoPrivateKey verifies unwrap fails
+// TestHandleRequest_GroupSessionOpen_NoPrivateKey verifies open fails
 // with a clear error when no active private key is in the Keychain.
-func TestHandleRequest_UnwrapGroupDEK_NoPrivateKey(t *testing.T) {
+func TestHandleRequest_GroupSessionOpen_NoPrivateKey(t *testing.T) {
 	app := newFacadeTestApp()
 
-	msg := `{"action":"unwrapgroupdek","payload":{"encrypted_group_dek":"aGVsbG8="}}`
+	msg := `{"action":"group_session_open","payload":{"encrypted_group_dek":"aGVsbG8="}}`
 	resp := app.HandleRequest([]byte(msg))
 	if resp.Success {
-		t.Error("unwrapgroupdek should fail without active private key")
+		t.Error("group_session_open should fail without active private key")
 	}
 }
 
-// TestHandleRequest_UnwrapGroupDEK_WrongCiphertext verifies RSA-OAEP
+// TestHandleRequest_GroupSessionOpen_WrongCiphertext verifies RSA-OAEP
 // decryption fails when a correct key is present but the ciphertext was
 // wrapped with a different key.
-func TestHandleRequest_UnwrapGroupDEK_WrongCiphertext(t *testing.T) {
+func TestHandleRequest_GroupSessionOpen_WrongCiphertext(t *testing.T) {
 	// Save keypair A to the Keychain.
 	kpA, _ := GenerateRSAKeyPair()
 	app := newFacadeTestApp()
 	app.savePrivateKey(kpA.PrivateKey)
 	app.savePublicKey(kpA.PublicKey)
 
-	// Don't save keypair B; wrap a ciphertext with its public key and then try to unwrap.
+	// Don't save keypair B; wrap a ciphertext with its public key and then try to open.
 	kpB, _ := GenerateRSAKeyPair()
 	groupDEK := make([]byte, 32)
 	for i := range groupDEK {
@@ -184,13 +179,13 @@ func TestHandleRequest_UnwrapGroupDEK_WrongCiphertext(t *testing.T) {
 	var wrapData WrapGroupDEKResponseData
 	json.Unmarshal(raw, &wrapData)
 
-	// Try to unwrap a ciphertext wrapped with B's key using A's private key → must fail.
-	unwrapMsg := fmt.Sprintf(
-		`{"action":"unwrapgroupdek","payload":{"encrypted_group_dek":%q}}`,
+	// Try to open a ciphertext wrapped with B's key using A's private key → must fail.
+	openMsg := fmt.Sprintf(
+		`{"action":"group_session_open","payload":{"encrypted_group_dek":%q}}`,
 		wrapData.EncryptedGroupDEK,
 	)
-	unwrapResp := app.HandleRequest([]byte(unwrapMsg))
-	if unwrapResp.Success {
-		t.Error("unwrap should fail when ciphertext was wrapped with a different public key")
+	openResp := app.HandleRequest([]byte(openMsg))
+	if openResp.Success {
+		t.Error("group_session_open should fail when ciphertext was wrapped with a different public key")
 	}
 }
