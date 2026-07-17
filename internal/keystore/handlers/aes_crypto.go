@@ -8,7 +8,6 @@
 //
 // Resident functions (called within the handlers package + by other handler
 // files via lowercase aliases):
-//   - DecodeGroupDEK / decodeGroupDEK — Base64 → 32B Group DEK
 //   - UnwrapItemDEK / unwrapItemDEK — wrapped Item DEK (with Group DEK) → 32B Item DEK
 //   - AESGCMSeal / aesGCMSeal — raw key + plaintext → Base64(IV||ct)
 //   - AESGCMSealSplit / aesGCMSealSplit — returns IV / ciphertext separately
@@ -28,20 +27,6 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// DecodeGroupDEK decodes Base64 and verifies it is a 32B key. A wrong-length
-// buffer is zeroized before return.
-func DecodeGroupDEK(b64 string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil, errors.New("failed to decode group_dek_b64: " + err.Error())
-	}
-	if len(raw) != 32 {
-		secure.Zeroize(raw)
-		return nil, errors.New("group_dek must be 32 bytes (AES-256 key)")
-	}
-	return raw, nil
-}
 
 // UnwrapItemDEK unwraps a wrapped Item DEK Base64(IV || ciphertext) with the
 // Group DEK and returns the raw 32B Item DEK. The caller must zeroize the
@@ -125,7 +110,6 @@ func AESGCMOpen(key, iv, ciphertext []byte) ([]byte, error) {
 // Lowercase aliases — used by callers inside the handlers/ package via shorter names.
 // ────────────────────────────────────────────────────────────────────────
 
-func decodeGroupDEK(b64 string) ([]byte, error)        { return DecodeGroupDEK(b64) }
 func unwrapItemDEK(g []byte, w string) ([]byte, error) { return UnwrapItemDEK(g, w) }
 func aesGCMSeal(k, p []byte) (string, error)           { return AESGCMSeal(k, p) }
 func aesGCMSealSplit(k, p []byte) ([]byte, []byte, error) {
