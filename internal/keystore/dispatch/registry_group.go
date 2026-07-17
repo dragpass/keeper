@@ -13,8 +13,6 @@ import (
 
 func groupActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionWrapGroupDEK: wrap(handlers.HandleWrapGroupDEK),
-
 		proto.ActionDEKRewrapWithOldKey: wrap(handlers.HandleDEKRewrapWithOldKey),
 
 		// Group DEK opaque handle

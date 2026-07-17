@@ -3,49 +3,16 @@
 
 package proto
 
-// WrapGroupDEKRequest is the Group DEK wrap request for team
-// encrypt/decrypt.
-//
-// GroupDEKB64:        Base64 of the raw 32B AES-GCM key the Extension
-//
-//	already holds. (Team creation: the newly generated Group DEK. Member
-//	invite: the current Group DEK pulled from cache. Recovery re-wrap:
-//	the Group DEK unwrapped with the old private key.)
-//
-// RecipientPublicKey: the target member's Keeper RSA public key PEM. No
-//
-//	Keychain access — only the PEM in the request is used (the Keeper
-//	acts as a plain wrap tool).
-type WrapGroupDEKRequest struct {
-	GroupDEKB64        string `json:"group_dek_b64"`
-	RecipientPublicKey string `json:"recipient_public_key"`
-}
-
-func (r WrapGroupDEKRequest) Validate() error {
-	// Raw 32B Group DEK Base64.
-	if _, err := requireBase64Len(r.GroupDEKB64, "group_dek_b64", 32); err != nil {
-		return err
-	}
-	return requirePEM(r.RecipientPublicKey, "recipient_public_key")
-}
-
-type WrapGroupDEKResponseData struct {
-	// EncryptedGroupDEK is the Base64 of the Group DEK wrapped via
-	// RSA-OAEP-SHA256. Stored as-is in the server
-	// group_member_deks.encrypted_group_dek.
-	EncryptedGroupDEK string `json:"encrypted_group_dek"`
-}
-
 // DEKRewrapWithOldKeyRequest is the request for the Recovery composite
-// re-wrap action. Replaces the old `unwrapgroupdekwithkey` + WrapGroupDEK
-// pair with a single Keeper-side composite action so the raw Group DEK does
-// not live in the Extension JS heap.
+// re-wrap action. Replaces the old `unwrapgroupdekwithkey` + wrap pair with
+// a single Keeper-side composite action so the raw Group DEK does not live
+// in the Extension JS heap.
 //
 // Takes a `recovery_handle` instead of the PEM. The PEM is referenced
 // through the handle from the store pre-registered by recovery_session_open.
 //
-// NewPublicKey is the same as RecipientPublicKey in WrapGroupDEKRequest —
-// the new RSA public key PEM of the re-wrap target member (usually self).
+// NewPublicKey is the new RSA public key PEM of the re-wrap target member
+// (usually self).
 type DEKRewrapWithOldKeyRequest struct {
 	ChallengeToken    string `json:"challenge_token"`
 	Signature         string `json:"signature"`

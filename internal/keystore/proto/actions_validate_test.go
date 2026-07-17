@@ -110,36 +110,8 @@ func TestRecoverySessionClose_Validate_RejectsShortHandle(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Group DEK wrap/unwrap
+// Group DEK rewrap
 // ────────────────────────────────────────────────────────────────────────
-
-func TestWrapGroupDEK_Validate_RejectsNon32BGroupDEK(t *testing.T) {
-	r := WrapGroupDEKRequest{
-		GroupDEKB64:        "AAAAAAAAAAAAAAAAAAAAAg==", // 16B
-		RecipientPublicKey: testValidPubPEM,
-	}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-32B group_dek")
-	}
-	if !strings.Contains(err.Error(), "group_dek_b64") {
-		t.Fatalf("error must mention field, got %q", err.Error())
-	}
-}
-
-func TestWrapGroupDEK_Validate_RejectsNonPEMRecipient(t *testing.T) {
-	r := WrapGroupDEKRequest{
-		GroupDEKB64:        testValid32BKey,
-		RecipientPublicKey: testInvalidPEM,
-	}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-PEM recipient_public_key")
-	}
-	if !strings.Contains(err.Error(), "recipient_public_key") {
-		t.Fatalf("error must mention field, got %q", err.Error())
-	}
-}
 
 func TestDEKRewrapWithOldKey_Validate_RejectsShortHandle(t *testing.T) {
 	r := DEKRewrapWithOldKeyRequest{
@@ -273,13 +245,6 @@ func TestNonAESValidate_DoesNotEchoSecretInError(t *testing.T) {
 		name string
 		err  error
 	}{
-		{
-			name: "WrapGroupDEK group_dek leaks via wrong length",
-			err: (&WrapGroupDEKRequest{
-				GroupDEKB64:        testSecretLeak,
-				RecipientPublicKey: testValidPubPEM,
-			}).Validate(),
-		},
 		{
 			name: "RecoverySessionOpen wrap_key leaks via wrong length",
 			err: (&RecoverySessionOpenRequest{

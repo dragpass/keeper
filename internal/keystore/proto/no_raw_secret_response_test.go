@@ -1,15 +1,25 @@
-// no_raw_secret_response_test.go — registry-wide guard: no dispatcher action
-// may return raw secret key material in its response envelope.
+// no_raw_secret_response_test.go — registry-wide guards: no dispatcher action
+// may carry raw secret key material across the IPC boundary, in either
+// direction.
 //
-// Every registered Keeper action returns one of the proto *ResponseData structs
-// defined in this package. This test AST-scans the whole package, walks each
-// *ResponseData struct's JSON field names (recursing into nested proto structs),
-// and flags any field whose name matches a raw-secret pattern: raw key bytes,
-// a bare unwrapped DEK, plaintext, or a private-key PEM. A match must be listed
-// in rawSecretResponseCarveOuts with an English rationale, otherwise the test
-// fails — so a new action that accidentally puts a raw DEK in its response is
-// caught at CI time instead of shipping. Encrypted / wrapped key material is
-// ciphertext and is explicitly treated as safe to return.
+// Every registered Keeper action takes one of the proto *Request structs and
+// returns one of the *ResponseData structs defined in this package. These tests
+// AST-scan the whole package, walk each struct's JSON field names (recursing
+// into nested proto structs), and flag any field whose name matches a raw-secret
+// pattern: raw key bytes, a bare unwrapped DEK, plaintext, or a private-key PEM.
+//
+//   - TestNoRawSecretInResponseTypes scans *ResponseData structs. A response
+//     must never echo raw secret material back to the JS heap.
+//   - TestNoRawSecretInRequestTypes scans *Request structs. This is the guard
+//     the removal of wrapgroupdek added: a raw Group DEK cannot exist in the
+//     extension JS heap, so no request may accept raw Group DEK / raw key bytes
+//     as input either — the only legitimate raw input is encrypt-direction
+//     plaintext (see rawSecretRequestCarveOuts).
+//
+// A match must be listed in the matching carve-out map with an English
+// rationale, otherwise the test fails — so a new action that accidentally moves
+// a raw DEK across IPC is caught at CI time instead of shipping. Encrypted /
+// wrapped key material is ciphertext and is explicitly treated as safe.
 package proto
 
 import (
@@ -34,6 +44,23 @@ import (
 // removed together with the unwrapgroupdek / group_session_open_with_raw
 // actions — all group crypto is now handle-based.
 var rawSecretResponseCarveOuts = map[string]string{}
+
+// rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
+// raw secret input is a structurally unavoidable part of the action's contract.
+// Each entry needs an English rationale. Keep this list as small as possible.
+//
+// The only legitimate raw input is encrypt-direction plaintext: an encrypt
+// action's entire purpose is to seal caller-supplied plaintext, so the
+// plaintext must arrive in the request. It lives only briefly in Keeper memory
+// (zeroized after sealing) and never appears in the response or logs. Raw *key*
+// material (a raw Group DEK / Item DEK / private key) has no such excuse and
+// must never appear here — the removed wrapgroupdek's group_dek_b64 and the
+// removed group_session_open_with_raw were exactly such inputs.
+var rawSecretRequestCarveOuts = map[string]string{
+	"GroupEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"AESUnwrapAndEncryptRequest.plaintext_b64": "encrypt direction: plaintext to seal under the Item DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
+}
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)
 
@@ -106,6 +133,53 @@ func TestNoRawSecretInResponseTypes(t *testing.T) {
 		if !seenCarveOut[key] {
 			t.Errorf("stale carve-out %q — no response field matched it; "+
 				"remove it from rawSecretResponseCarveOuts.", key)
+		}
+	}
+}
+
+func TestNoRawSecretInRequestTypes(t *testing.T) {
+	structs := parseProtoStructs(t)
+
+	seenCarveOut := map[string]bool{}
+	reported := map[string]bool{}
+	requestTypes := 0
+
+	for name, st := range structs {
+		if !strings.HasSuffix(name, "Request") {
+			continue
+		}
+		requestTypes++
+		for _, f := range collectJSONFields(structs, name, st) {
+			if !isRawSecretField(f.json) {
+				continue
+			}
+			key := f.owner + "." + f.json
+			if _, ok := rawSecretRequestCarveOuts[key]; ok {
+				seenCarveOut[key] = true
+				continue
+			}
+			if reported[key] {
+				continue
+			}
+			reported[key] = true
+			t.Errorf("request type %s carries raw-secret field %q (declared on %s); "+
+				"raw key material must not cross IPC as input. If this is intentional "+
+				"(encrypt-direction plaintext), add %q to rawSecretRequestCarveOuts "+
+				"with an English rationale.",
+				name, f.json, f.owner, key)
+		}
+	}
+
+	if requestTypes == 0 {
+		t.Fatal("scanned 0 *Request types — parser/discovery is broken")
+	}
+
+	// Keep the carve-out list honest: a stale entry means the raw input was
+	// removed and the exception should be deleted.
+	for key := range rawSecretRequestCarveOuts {
+		if !seenCarveOut[key] {
+			t.Errorf("stale carve-out %q — no request field matched it; "+
+				"remove it from rawSecretRequestCarveOuts.", key)
 		}
 	}
 }

@@ -1,6 +1,6 @@
-// group_dek.go — Group DEK RSA wrap handlers.
-// HandleWrapGroupDEK / HandleDEKRewrapWithOldKey — actions routed by the
-// dispatcher. Group DEK wrap + the Recovery rewrap composite action.
+// group_dek.go — Group DEK RSA rewrap handler.
+// HandleDEKRewrapWithOldKey — the Recovery rewrap composite action routed by
+// the dispatcher.
 
 package handlers
 
@@ -14,48 +14,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// HandleWrapGroupDEK is the Group DEK wrap handler for group encrypt/decrypt.
-func HandleWrapGroupDEK(d Deps, req proto.WrapGroupDEKRequest) proto.BaseResponse {
-	d.Logger.Println("wrap group dek request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// decode Group DEK plaintext (expects a 32B AES-GCM key)
-	groupDEK, err := base64.StdEncoding.DecodeString(req.GroupDEKB64)
-	if err != nil {
-		d.Logger.Printf("wrap group dek error: failed to decode group_dek_b64: %v", err)
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode group_dek_b64: "+err.Error())
-	}
-	if len(groupDEK) != 32 {
-		// also zeroize wrong-length buffer before returning
-		secure.Zeroize(groupDEK)
-		return errs.CodeResponse(errs.ErrCodeValidation, "group_dek must be 32 bytes (AES-256 key)")
-	}
-	defer secure.Zeroize(groupDEK)
-
-	// parse recipient public key
-	recipientPubKey, err := crypto.ParsePublicKey(req.RecipientPublicKey)
-	if err != nil {
-		d.Logger.Printf("wrap group dek error: failed to parse recipient public key: %v", err)
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
-	}
-
-	// wrap with RSA-OAEP-SHA256
-	encrypted, err := crypto.EncryptData(recipientPubKey, groupDEK)
-	if err != nil {
-		d.Logger.Printf("wrap group dek error: RSA-OAEP encrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
-	}
-
-	encryptedB64 := base64.StdEncoding.EncodeToString(encrypted)
-	d.Logger.Println("wrap group dek successful")
-	return proto.BaseResponse{Success: true, Data: proto.WrapGroupDEKResponseData{
-		EncryptedGroupDEK: encryptedB64,
-	}}
-}
 
 // HandleDEKRewrapWithOldKey is the Recovery rewrap composite action.
 func HandleDEKRewrapWithOldKey(d Deps, req proto.DEKRewrapWithOldKeyRequest) proto.BaseResponse {
