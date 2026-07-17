@@ -1,0 +1,49 @@
+// registry_group.go — Group DEK / Item DEK action registrations.
+//
+// Mirrors proto/actions_group_dek.go: Group DEK RSA wrap/unwrap, group session
+// opaque handles, admin raw-free composite re-wraps, AES-GCM item ops,
+// decrypt-to-clipboard, and guest transcrypt.
+
+package dispatch
+
+import (
+	"github.com/dragpass/keeper/internal/keystore/handlers"
+	"github.com/dragpass/keeper/internal/keystore/proto"
+)
+
+func groupActions() map[string]actionHandlerFunc {
+	return map[string]actionHandlerFunc{
+		proto.ActionWrapGroupDEK:   wrap(handlers.HandleWrapGroupDEK),
+		proto.ActionUnwrapGroupDEK: wrap(handlers.HandleUnwrapGroupDEK),
+
+		proto.ActionDEKRewrapWithOldKey: wrap(handlers.HandleDEKRewrapWithOldKey),
+
+		// Group DEK opaque handle
+		proto.ActionGroupSessionOpen:        wrap(handlers.HandleGroupSessionOpen),
+		proto.ActionGroupSessionOpenWithRaw: wrap(handlers.HandleGroupSessionOpenWithRaw),
+		proto.ActionGroupSessionClose:       wrap(handlers.HandleGroupSessionClose),
+		proto.ActionGroupSessionStatus:      wrap(handlers.HandleGroupSessionStatus),
+
+		// Admin-path raw-free composite actions (Group DEK never crosses into JS).
+		proto.ActionGroupDEKGenerateAndOpen:   wrap(handlers.HandleGroupDEKGenerateAndOpen),
+		proto.ActionDEKRewrapForMember:        wrap(handlers.HandleDEKRewrapForMember),
+		proto.ActionDEKUnwrapAndRewrapForMany: wrap(handlers.HandleDEKUnwrapAndRewrapForMany),
+
+		// Item DEK / AES-GCM item ops delegated to Keeper.
+		// The old ActionAESUnwrapAndDecrypt (returning plaintext) was removed in
+		// the plaintext-removal follow-up §A and replaced by *_to_clipboard /
+		// *_meta variants.
+		proto.ActionAESGenerateAndWrap:      wrap(handlers.HandleAESGenerateAndWrap),
+		proto.ActionAESUnwrapAndEncrypt:     wrap(handlers.HandleAESUnwrapAndEncrypt),
+		proto.ActionAESUnshareRewrapMeta:    wrap(handlers.HandleAESUnshareRewrapMeta),
+		proto.ActionAESUnwrapAndDecryptMeta: wrap(handlers.HandleAESUnwrapAndDecryptMeta),
+
+		// decrypt-to-clipboard (Keeper-owned plaintext sink)
+		proto.ActionAESUnwrapAndDecryptToClipboard: wrap(handlers.HandleAESUnwrapAndDecryptToClipboard),
+		proto.ActionGroupDecryptToClipboard:        wrap(handlers.HandleGroupDecryptToClipboard),
+
+		// org token → external guest share re-encryption (Keeper-owned re-encrypt
+		// sink; plaintext / Group DEK never enter the JS heap).
+		proto.ActionGroupTranscryptForGuest: wrap(handlers.HandleGroupTranscryptForGuest),
+	}
+}

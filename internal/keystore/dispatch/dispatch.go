@@ -7,6 +7,10 @@
 // dispatch does not import the keystore root (avoids an import cycle). The
 // caller (App) injects logger.Logger and handlers.Deps explicitly — same Deps
 // pattern used elsewhere.
+//
+// This file holds only the request routing entry points. The action→handler
+// registry is assembled from per-domain fragments in registry.go and the
+// registry_*.go files.
 package dispatch
 
 import (
@@ -37,146 +41,6 @@ func HandleRequest(log logger.Logger, deps handlers.Deps, msg []byte) proto.Base
 	resp := dispatchAction(log, deps, base)
 	resp.RequestID = base.RequestID
 	return resp
-}
-
-// actionHandlerFunc is the unified signature for the dispatcher action map
-// ("action registry" — Go pattern terminology, unrelated to the DragPass
-// product DragLink inventory).
-type actionHandlerFunc func(d handlers.Deps, payload json.RawMessage) proto.BaseResponse
-
-// wrap adapts a typed handler (func(handlers.Deps, T) proto.BaseResponse) to
-// actionHandlerFunc. process[T] handles JSON decoding and the Validate call,
-// so wrap is a simple delegation.
-func wrap[T any](handler func(handlers.Deps, T) proto.BaseResponse) actionHandlerFunc {
-	return func(d handlers.Deps, payload json.RawMessage) proto.BaseResponse {
-		return process(payload, func(req T) proto.BaseResponse {
-			return handler(d, req)
-		})
-	}
-}
-
-// actionRegistry maps action strings to handler functions.
-// Add a new action with a single line. The registration order matches the
-// group order in proto/actions.go.
-var actionRegistry = map[string]actionHandlerFunc{
-	proto.ActionPing:            wrap(handlers.HandlePing),
-	proto.ActionGenerateKeypair: wrap(handlers.HandleGenerateKeypair),
-
-	proto.ActionGetDeviceKey:    wrap(handlers.HandleGetDeviceKey),
-	proto.ActionSaveDeviceKey:   wrap(handlers.HandleSaveDeviceKey),
-	proto.ActionDeleteDeviceKey: wrap(handlers.HandleDeleteDeviceKey),
-
-	// local self-recovery: wipe this device's account-scoped key material
-	proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),
-
-	proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
-	proto.ActionGetSessionCode:  wrap(handlers.HandleGetSessionCode),
-
-	proto.ActionGetPublicKey:       wrap(handlers.HandleGetPublicKey),
-	proto.ActionGetServerPublicKey: wrap(handlers.HandleGetServerPublicKey),
-
-	// multi-version server public key refresh
-	proto.ActionRefreshServerKeys: wrap(handlers.HandleRefreshServerKeys),
-
-	// voluntary user RSA keypair rotation (two-step)
-	proto.ActionRotateUserKeypairPrepare: wrap(handlers.HandleRotateUserKeypairPrepare),
-	proto.ActionRotateUserKeypairPromote: wrap(handlers.HandleRotateUserKeypairPromote),
-
-	// user keypair rotation partial-failure recovery (status/abort)
-	proto.ActionRotateUserKeypairStatus: wrap(handlers.HandleRotateUserKeypairStatus),
-	proto.ActionRotateUserKeypairAbort:  wrap(handlers.HandleRotateUserKeypairAbort),
-
-	// voluntary DeviceKey rotation (single composite action)
-	proto.ActionRotateDeviceKey: wrap(handlers.HandleRotateDeviceKey),
-
-	proto.ActionSignAlias:              wrap(handlers.HandleSignAlias),
-	proto.ActionSignAliasWithTimestamp: wrap(handlers.HandleSignAliasWithTimestamp),
-	proto.ActionSignChallengeToken:     wrap(handlers.HandleSignChallengeToken),
-
-	proto.ActionRecoverySign:                    wrap(handlers.HandleRecoverySign),
-	proto.ActionGenerateKeypairWithRecoveryWrap: wrap(handlers.HandleGenerateKeypairWithRecoveryWrap),
-	// Re-wrap the active privkey when a new RK24 is issued (the keypair
-	// itself is unchanged).
-	proto.ActionWrapActivePrivateKey: wrap(handlers.HandleWrapActivePrivateKey),
-
-	proto.ActionRecoverySessionOpen:  wrap(handlers.HandleRecoverySessionOpen),
-	proto.ActionRecoverySessionClose: wrap(handlers.HandleRecoverySessionClose),
-
-	proto.ActionWrapGroupDEK:   wrap(handlers.HandleWrapGroupDEK),
-	proto.ActionUnwrapGroupDEK: wrap(handlers.HandleUnwrapGroupDEK),
-
-	proto.ActionDEKRewrapWithOldKey: wrap(handlers.HandleDEKRewrapWithOldKey),
-
-	// Group DEK opaque handle
-	proto.ActionGroupSessionOpen:        wrap(handlers.HandleGroupSessionOpen),
-	proto.ActionGroupSessionOpenWithRaw: wrap(handlers.HandleGroupSessionOpenWithRaw),
-	proto.ActionGroupSessionClose:       wrap(handlers.HandleGroupSessionClose),
-	proto.ActionGroupSessionStatus:      wrap(handlers.HandleGroupSessionStatus),
-
-	// Admin-path raw-free composite actions (Group DEK never crosses into JS).
-	proto.ActionGroupDEKGenerateAndOpen:   wrap(handlers.HandleGroupDEKGenerateAndOpen),
-	proto.ActionDEKRewrapForMember:        wrap(handlers.HandleDEKRewrapForMember),
-	proto.ActionDEKUnwrapAndRewrapForMany: wrap(handlers.HandleDEKUnwrapAndRewrapForMany),
-
-	// Item DEK / personal DEK delegated to Keeper.
-	// The old ActionAESUnwrapAndDecrypt / ActionDEKUnwrapAndDecrypt
-	// (returning plaintext) were removed in the plaintext-removal follow-up
-	// §A and replaced by *_to_clipboard / *_meta variants.
-	proto.ActionAESGenerateAndWrap:      wrap(handlers.HandleAESGenerateAndWrap),
-	proto.ActionAESUnwrapAndEncrypt:     wrap(handlers.HandleAESUnwrapAndEncrypt),
-	proto.ActionAESUnshareRewrapMeta:    wrap(handlers.HandleAESUnshareRewrapMeta),
-	proto.ActionAESUnwrapAndDecryptMeta: wrap(handlers.HandleAESUnwrapAndDecryptMeta),
-
-	proto.ActionDEKGenerateAndWrapPassword: wrap(handlers.HandleDEKGenerateAndWrapPassword),
-	proto.ActionDEKGenerateAndWrapDual:     wrap(handlers.HandleDEKGenerateAndWrapDual),
-	proto.ActionDEKRotateToDeviceKey:       wrap(handlers.HandleDEKRotateToDeviceKey),
-	// Re-wrap DEK under a new password (deviceMaster / DEK itself unchanged).
-	proto.ActionDEKRotateToNewPassword:  wrap(handlers.HandleDEKRotateToNewPassword),
-	proto.ActionDEKUnwrapAndEncrypt:     wrap(handlers.HandleDEKUnwrapAndEncrypt),
-	proto.ActionDEKUnwrapAndDecryptMeta: wrap(handlers.HandleDEKUnwrapAndDecryptMeta),
-
-	// decrypt-to-clipboard (Keeper-owned plaintext sink)
-	proto.ActionAESUnwrapAndDecryptToClipboard: wrap(handlers.HandleAESUnwrapAndDecryptToClipboard),
-	proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
-	proto.ActionGroupDecryptToClipboard:        wrap(handlers.HandleGroupDecryptToClipboard),
-
-	// org token → external guest share re-encryption (Keeper-owned re-encrypt
-	// sink; plaintext / Group DEK never enter the JS heap).
-	proto.ActionGroupTranscryptForGuest: wrap(handlers.HandleGroupTranscryptForGuest),
-
-	// per-device request-signing key actions
-	proto.ActionRequestKeyGenerate: wrap(handlers.HandleRequestKeyGenerate),
-	proto.ActionRequestKeyStatus:   wrap(handlers.HandleRequestKeyStatus),
-	proto.ActionSignRequest:        wrap(handlers.HandleSignRequest),
-	// request-signing key rotation
-	proto.ActionRotateRequestKeyPrepare: wrap(handlers.HandleRotateRequestKeyPrepare),
-	proto.ActionRotateRequestKeyPromote: wrap(handlers.HandleRotateRequestKeyPromote),
-	proto.ActionRotateRequestKeyAbort:   wrap(handlers.HandleRotateRequestKeyAbort),
-
-	// per-org Archive / Recovery keypair actions
-	proto.ActionArchiveKeyGenerate:     wrap(handlers.HandleArchiveKeyGenerate),
-	proto.ActionArchiveKeyStatus:       wrap(handlers.HandleArchiveKeyStatus),
-	proto.ActionArchiveUnwrapAndRewrap: wrap(handlers.HandleArchiveUnwrapAndRewrap),
-
-	// same-device org archive key rotation (staging-slot pattern)
-	proto.ActionArchiveKeyRotateBegin:  wrap(handlers.HandleArchiveKeyRotateBegin),
-	proto.ActionArchiveKeyRotateCommit: wrap(handlers.HandleArchiveKeyRotateCommit),
-	proto.ActionArchiveKeyRotateAbort:  wrap(handlers.HandleArchiveKeyRotateAbort),
-
-	// per-account Archive / Recovery receiving keypair actions
-	proto.ActionAccountArchiveKeyGenerate: wrap(handlers.HandleAccountArchiveKeyGenerate),
-	proto.ActionAccountArchiveKeyStatus:   wrap(handlers.HandleAccountArchiveKeyStatus),
-
-	// archive-key admin quorum (Shamir N-of-M break-glass)
-	proto.ActionArchiveKeySplit:               wrap(handlers.HandleArchiveKeySplit),
-	proto.ActionArchiveShareRewrap:            wrap(handlers.HandleArchiveShareRewrap),
-	proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin),
-	proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd),
-	proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap),
-
-	// test-only — query SHA-256 hash recorded in MemoryClipboard under
-	// KEEPER_E2E_MODE.
-	proto.ActionClipboardGetLastHash: wrap(handlers.HandleClipboardGetLastHash),
 }
 
 // dispatchAction looks up the handler in actionRegistry and forwards deps +
