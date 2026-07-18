@@ -16,8 +16,11 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"time"
 
 	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
@@ -25,6 +28,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/userpresence"
 )
 
 // HandleDEKUnwrapAndEncrypt unwraps the device-wrapped DEK and AES-GCM-encrypts the plaintext.
@@ -80,6 +84,44 @@ func HandleDEKRotateToDeviceKey(d Deps, req proto.DEKRotateToDeviceKeyRequest) p
 	secure.WipeString(&password)
 	secure.WipeString(&req.Password)
 	defer pwBuf.Destroy()
+	return rotateDEKToDeviceKey(d, req.EncryptedDEKB64, pwBuf)
+}
+
+// HandleDEKRotateToDeviceKeyPrompt is the app-first login variant. Password
+// input and DEK rewrap stay inside Keeper; Native Messaging carries only the
+// server's password-wrapped ciphertext and the resulting device wrap.
+func HandleDEKRotateToDeviceKeyPrompt(d Deps, req proto.DEKRotateToDeviceKeyPromptRequest) proto.BaseResponse {
+	d.Logger.Println("dek rotate to device key prompt request processing...")
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	if d.UserPresence == nil || !d.UserPresence.Capabilities().PromptSecret {
+		return errs.CodeResponse(errs.ErrCodeUnsupported, userpresence.ErrUnavailable.Error())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	result, err := d.UserPresence.PromptSecret(ctx, userpresence.SecretPrompt{
+		Title:   "Unlock DragPass",
+		Message: "Enter your DragPass password to unlock this device.",
+		Label:   "DragPass password",
+		Timeout: 2 * time.Minute,
+	})
+	if err != nil {
+		if errors.Is(err, userpresence.ErrUnavailable) {
+			return errs.CodeResponse(errs.ErrCodeUnsupported, err.Error())
+		}
+		return errs.CodeResponse(errs.ErrCodeInternal, err.Error())
+	}
+	if result.Secret == nil || len(result.Secret.Bytes()) == 0 {
+		return errs.CodeResponse(errs.ErrCodeValidation, userpresence.ErrEmptySecret.Error())
+	}
+	defer result.Secret.Destroy()
+
+	return rotateDEKToDeviceKey(d, req.EncryptedDEKB64, result.Secret)
+}
+
+func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.LockedBuffer) proto.BaseResponse {
 
 	// fetch deviceKey internally — never accept it via the IPC payload
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
@@ -90,7 +132,7 @@ func HandleDEKRotateToDeviceKey(d Deps, req proto.DEKRotateToDeviceKeyRequest) p
 	defer deviceKeyBuf.Destroy()
 
 	// decode encrypted_dek: salt(16) || iv(12) || ciphertext_with_tag
-	raw, err := base64.StdEncoding.DecodeString(req.EncryptedDEKB64)
+	raw, err := base64.StdEncoding.DecodeString(encryptedDEKB64)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode encrypted_dek_b64: "+err.Error())
 	}

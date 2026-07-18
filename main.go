@@ -10,6 +10,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proc"
+	"github.com/dragpass/keeper/internal/keystore/userpresence"
 	"github.com/zalando/go-keyring"
 )
 
@@ -63,6 +64,8 @@ const e2eEnvVar = "KEEPER_E2E_MODE"
 //     (zerolog, etc.) changes only one place.
 
 func init() {
+	userpresence.PrepareProcessMainThread()
+	deps := keystore.Deps{UserPresence: userpresence.NewPlatform()}
 	// e2e mode: use an in-memory mock instead of the Keychain. Must be
 	// called before EnsureServerPublicKey (so that the server pubkey is
 	// saved into the mock).
@@ -72,7 +75,9 @@ func init() {
 		// clipboard. User clipboard is unaffected, and the
 		// clipboard_get_last_hash action can query the SHA-256 hash.
 		// SetDefaultDeps must run before the first DefaultApp() call.
-		keystore.SetDefaultDeps(keystore.Deps{Clipboard: clipboard.NewMemoryClipboard()})
+		deps.Clipboard = clipboard.NewMemoryClipboard()
+		deps.UserPresence = userpresence.Unavailable{}
+		keystore.SetDefaultDeps(deps)
 		app := keystore.DefaultApp()
 		app.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
 		app.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
@@ -88,6 +93,9 @@ func init() {
 				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
 			}
 		}
+	}
+	if os.Getenv(e2eEnvVar) != "1" {
+		keystore.SetDefaultDeps(deps)
 	}
 
 	app := keystore.DefaultApp()
@@ -137,6 +145,18 @@ func main() {
 		}
 	}()
 
+	runHost := func() {
+		runMessageLoop(app)
+	}
+	if app.UserPresence.Capabilities().Available {
+		userpresence.RunHost(runHost)
+		return
+	}
+	runHost()
+}
+
+func runMessageLoop(app *keystore.App) {
+	logger := app.Logger
 	msgr := app.NewMessenger(os.Stdin, os.Stdout)
 	for {
 

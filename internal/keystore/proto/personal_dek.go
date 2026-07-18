@@ -78,6 +78,18 @@ type DEKRotateToDeviceKeyResponseData struct {
 	DeviceWrappedDEKB64 string `json:"device_wrapped_dek_b64"`
 }
 
+// DEKRotateToDeviceKeyPromptRequest is the app-first login variant. The
+// password is collected by Keeper's trusted OS UI and never crosses Native
+// Messaging.
+type DEKRotateToDeviceKeyPromptRequest struct {
+	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
+}
+
+func (r DEKRotateToDeviceKeyPromptRequest) Validate() error {
+	_, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64")
+	return err
+}
+
 // DEKUnwrapAndEncryptRequest unwraps a device-wrapped personal DEK and
 // AES-GCM encrypts plaintext with it.
 //   - EncryptedDEKB64: Base64(iv(12) || ciphertext_with_tag) — the raw
