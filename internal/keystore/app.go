@@ -74,6 +74,9 @@ type Deps struct {
 	// key PEM bytes with memguard. Defaults to
 	// sessions.DefaultRecoverySessionStore() singleton if nil.
 	RecoverySessions *sessions.RecoverySessionStore
+	// RecoveryKeySessions protects short-lived RK24 values behind opaque
+	// handles. Native Messaging carries only the handle.
+	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	// Clipboard is the OS-clipboard abstraction the decrypt-to-clipboard
 	// actions write plaintext into. Defaults to the OS clipboard backend
 	// if nil. On Init failure, Write fails explicitly.
@@ -86,15 +89,16 @@ type Deps struct {
 // App is the single wiring container for the Keeper process. Handlers
 // access dependencies through App rather than global state.
 type App struct {
-	Store             SecretStore
-	Clock             Clock
-	Rand              io.Reader
-	Logger            Logger
-	ServerKeyVerifier ServerKeyVerifier
-	GroupSessions     *sessions.GroupSessionStore
-	RecoverySessions  *sessions.RecoverySessionStore
-	Clipboard         clipboard.Clipboard
-	UserPresence      userpresence.UserPresence
+	Store               SecretStore
+	Clock               Clock
+	Rand                io.Reader
+	Logger              Logger
+	ServerKeyVerifier   ServerKeyVerifier
+	GroupSessions       *sessions.GroupSessionStore
+	RecoverySessions    *sessions.RecoverySessionStore
+	RecoveryKeySessions *sessions.RecoveryKeySessionStore
+	Clipboard           clipboard.Clipboard
+	UserPresence        userpresence.UserPresence
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
@@ -112,15 +116,16 @@ type App struct {
 //	})
 func NewApp(deps Deps) *App {
 	app := &App{
-		Store:             deps.Store,
-		Clock:             deps.Clock,
-		Rand:              deps.Rand,
-		Logger:            deps.Logger,
-		ServerKeyVerifier: deps.ServerKeyVerifier,
-		GroupSessions:     deps.GroupSessions,
-		RecoverySessions:  deps.RecoverySessions,
-		Clipboard:         deps.Clipboard,
-		UserPresence:      deps.UserPresence,
+		Store:               deps.Store,
+		Clock:               deps.Clock,
+		Rand:                deps.Rand,
+		Logger:              deps.Logger,
+		ServerKeyVerifier:   deps.ServerKeyVerifier,
+		GroupSessions:       deps.GroupSessions,
+		RecoverySessions:    deps.RecoverySessions,
+		RecoveryKeySessions: deps.RecoveryKeySessions,
+		Clipboard:           deps.Clipboard,
+		UserPresence:        deps.UserPresence,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}
@@ -146,6 +151,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.RecoverySessions == nil {
 		app.RecoverySessions = sessions.DefaultRecoverySessionStore()
+	}
+	if app.RecoveryKeySessions == nil {
+		app.RecoveryKeySessions = sessions.DefaultRecoveryKeySessionStore()
 	}
 	if app.Clipboard == nil {
 		if testing.Testing() {

@@ -76,7 +76,8 @@ payload (see Phase 13b multi-version server keys). Semantics:
 
 Actions that accept it: `generatekeypair`, `savesessioncode`, `signchallengetoken`,
 `recoverysign`, `generatekeypairwithrecoverywrap`, `recovery_session_open`,
-`dek_rewrap_with_old_key`, `rotate_user_keypair_prepare`, `rotate_user_keypair_promote`.
+`auth_recovery_prepare`, `dek_rewrap_with_old_key`,
+`rotate_user_keypair_prepare`, `rotate_user_keypair_promote`.
 
 ## Sensitive payload classification
 
@@ -87,7 +88,7 @@ as a contract:
 |---|---|---|
 |`secret`|`password`, `passphrase`, raw DEK Base64 (`group_dek_b64`, `item_dek_raw_b64`), `plaintext_b64`, `wrap_key_b64`|Never log|
 |`wrapped`|`wrapped_item_dek`, `encrypted_dek_b64`, `wrapped_keeper`, `wrapped_keeper_b64`, `encrypted_group_dek`, `wrapped_for_me_b64`, `wrapped_for_archive_b64`, `encrypted_for_other_b64`, `device_wrapped_dek_b64`, `password_wrapped_dek_b64`|Never log|
-|`handle`|`group_handle`, `recovery_handle`, `src_group_handle`, `dst_group_handle` (32B random ID)|OK to log|
+|`handle`|`group_handle`, `recovery_handle`, `recovery_key_handle`, `entered_recovery_key_handle`, `src_group_handle`, `dst_group_handle` (32B random ID)|OK to log|
 |`metadata`|`server_key_version`, `request_id`, `expires_at_ms`, `remaining_ms`, `version`|OK to log|
 |`public material`|`publickey`, `recipient_public_key`, `my_public_key`, `other_public_key`, `new_public_key`, `iv_b64`, `ciphertext_b64` (already enc), `challenge_token`, `signature` (Base64 over public token)|OK to log|
 
@@ -105,13 +106,14 @@ types are in `internal/keystore/proto/`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`ping`|_empty_|`{ version, hash, path }`|Liveness + version. Used by Extension health check.|
-|`user_presence_capabilities`|_empty_|`{ available, prompt_secret, confirm, show_recovery_key, backend }`|Reports trusted OS prompt support. All capability fields are false when no native backend is installed.|
+|`user_presence_capabilities`|_empty_|`{ available, prompt_secret, prompt_new_secret, confirm, show_recovery_key, backend }`|Reports trusted OS prompt support. All capability fields are false when no native backend is installed.|
 
 The current production backend is macOS Cocoa. Generic confirmation is not
 exposed as a wire action: a domain handler must verify the server-signed
 request before invoking it. Password input is exposed only through composite
 crypto actions that do not return the password. Recovery-key prompts remain
-disabled until their complete auth orchestration is implemented.
+available only through composite auth actions that return opaque handles rather
+than RK24 text.
 
 ### Device key (per-device wrap layer)
 
@@ -136,6 +138,9 @@ disabled until their complete auth orchestration is implemented.
 |---|---|---|---|
 |`signalias`|`alias`, `wrap_key_b64?`|`{ signature, publickey, wrapped_keeper? }`|Signup challenge signing. If `wrap_key_b64` is non-empty, Keeper also returns the freshly generated pending privkey AES-GCM-wrapped under that key (Phase 2 Recovery setup).|
 |`signaliaswithtimestamp`|`alias`|`{ signature, timestamp }`|Login challenge signing. Keeper produces `timestamp` (Unix seconds) and signs `alias‖timestamp`.|
+|`auth_signup_prepare`|`alias`|`{ password_wrapped_dek_b64, device_wrapped_dek_b64, recovery_auth_seed, recovery_wrapped_keeper, recovery_key_version, recovery_key_handle, recovery_key_expires_at_ms, signature, publickey }`|App-first signup composite. Prompts for and confirms a new password in the native UI, ensures the DeviceKey exists in the OS Keychain, creates both DEK wraps and the identity keypair, derives RK24 material, and returns only wrapped/public material plus an opaque one-time RK24 display handle. Password, RK24, wrap keys, raw DEK, and private key never cross IPC.|
+|`auth_recovery_key_show`|`recovery_key_handle`|_empty_|Displays the RK24 behind an opaque short-lived handle in the trusted native UI. Successful acknowledgement consumes the handle; cancel leaves it available until expiry for retry. RK24 is never returned over IPC.|
+|`auth_recovery_reissue_prepare`|`alias`, `recovery_key_handle?`|`{ recovery_auth_seed, recovery_wrapped_keeper, recovery_key_version, recovery_key_handle, recovery_key_expires_at_ms? }`|Creates or resumes an authenticated RK24 reissue after a display handle expires. The RK24 and wrap key remain in Keeper; only server-storable wrapped material and an opaque display handle cross IPC. Reusing the handle makes an interrupted server update retryable.|
 |`signchallengetoken`|`challenge_token`, `signature`, `server_key_version?`|`{ signature }`|Re-auth challenge. Verifies server signature on `challenge_token`, then signs with active privkey.|
 |`generatekeypair`|`challenge_token`, `signature`, `server_key_version?`|`{ publickey }`|Generate RSA keypair on this device. Verifies server signature first.|
 |`getpublickey`|_empty_|`{ publickey }`|Read active public key from Keychain.|
@@ -243,6 +248,8 @@ dependency).
 |`generatekeypairwithrecoverywrap`|`challenge_token`, `signature`, `wrap_key_b64`, `server_key_version?`|`{ publickey, wrapped_keeper }`|New keypair + AES-GCM-wrap private key with RK24-derived `wrap_key`. `wrapped_keeper` = Base64(IV‖ciphertext).|
 |`recovery_session_open`|`challenge_token`, `signature`, `wrapped_keeper_b64`, `wrap_key_b64`, `server_key_version?`|`{ recovery_handle, expires_at_ms }`|Verify challenge, decrypt PEM into memguard, return opaque handle. PEM never crosses IPC.|
 |`recovery_session_close`|`recovery_handle`|_empty_|Discard handle. Idempotent (no error if handle absent).|
+|`auth_recovery_begin`|`alias`|`{ recovery_auth_seed, entered_recovery_key_handle, entered_recovery_key_expires_at_ms }`|Prompts for RK24 in the trusted native UI, derives only the server authentication seed, and stores the entered RK24 behind an opaque short-lived handle for the prepare step. RK24 and its wrap key never cross IPC.|
+|`auth_recovery_prepare`|`alias`, `entered_recovery_key_handle`, `challenge_token`, `signature`, `wrapped_keeper_b64`, `recovery_key_version`, `server_key_version?`|`{ old_challenge_signature, recovery_handle, recovery_expires_at_ms, new_publickey, new_recovery_auth_seed, new_recovery_wrapped_keeper, new_recovery_key_version, new_recovery_key_handle, new_recovery_key_expires_at_ms }`|Verifies the server-signed recovery challenge, derives the old wrap key from the entered-key handle, opens the old private key into a recovery session, signs the challenge, generates the replacement identity keypair and RK24, and returns only wrapped/public material plus opaque old-key and new-RK24 handles.|
 
 ### Group DEK
 
@@ -381,10 +388,14 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.10|`group_encrypt`, `group_encrypt_meta`, `group_decrypt_meta`|Encrypt-direction mirror of `group_decrypt_to_clipboard`: `group_encrypt` AES-GCM seals plaintext directly under the raw Group DEK behind the opaque handle (no Item DEK indirection), returning `{ iv_b64, ciphertext_b64 }`. First step of moving drag encryption off client-side AES-GCM onto Keeper handles. The metadata path adds `group_encrypt_meta` / `group_decrypt_meta`: the same batch meta-field contract as `aes_unwrap_and_decrypt_meta` with the Item DEK unwrap step replaced by a direct raw Group DEK use — the encrypt output feeds straight into decrypt, in the combined Base64(IV‖ct) form the Extension stores per meta field. Metadata decrypt keeps the plaintext-metadata carve-out (value plaintext never returned). Also removes the stale `aes_rewrap` row from the Item DEK catalog table: that action was dropped together with the `item_dek_grants` schema before the public version epoch (no `HandleAESRewrap`, not registered), and only the catalog row lingered.|
 |0.0.11|Remove `unwrapgroupdek` / `group_session_open_with_raw`|Raw Group DEK no longer crosses IPC in either direction; all group crypto is handle-based. `unwrapgroupdek` (RSA-OAEP unwrap returning the raw 32B Group DEK) and `group_session_open_with_raw` (register a raw 32B Group DEK directly) are removed from dispatcher / proto / handler. `group_session_open` (unwrap into a Keeper-held opaque handle) is the only Group DEK open path. Removes the last `TestNoRawSecretInResponseTypes` carve-out (`UnwrapGroupDEKResponseData.group_dek_b64`) — the carve-out list is now empty.|
 |0.0.12|Remove `wrapgroupdek` — dead capability; raw Group DEK cannot exist in extension JS, so a raw-input wrap action has no legitimate caller|`wrapgroupdek` RSA-OAEP-wrapped a raw 32B Group DEK supplied in the request. With a raw Group DEK unable to exist in the extension JS heap, this input path had zero live consumers; member grant / rotation wraps are synthesized inside the Keeper (`group_dek_generate_and_open` / `dek_rewrap_for_member` / `dek_unwrap_and_rewrap_for_many`). Removed from dispatcher / proto / handler. Adds the request-direction guard `proto.TestNoRawSecretInRequestTypes` (mirror of `TestNoRawSecretInResponseTypes`): no `*Request` may accept raw key material as input, the only carve-out being encrypt-direction `plaintext_b64`.|
-|0.0.13 (current)|`group_encrypt_with_aad`, `credential_http_request`|AAD-binding variant of `group_encrypt` for the MCP Credential Control Plane. AES-GCM-seals plaintext under the raw Group DEK behind the opaque handle while binding a required caller-supplied AAD (canonical `org_id\|entry_id\|payload_kind\|schema_version\|dek_version`) into the GCM tag, so a sealed credential payload cannot be swapped to a different context without failing to open. Adds sibling crypto `AESGCMSealSplitWithAAD` / `AESGCMOpenWithAAD` (the AAD=nil `group_encrypt` path is unchanged). `plaintext_b64` carved out in `TestNoRawSecretInRequestTypes` like the other encrypt-direction actions; `aad_b64` is public context material. The same release adds `credential_http_request` (PR-K2), the Keeper's first network surface and its own action / registry fragment: a decrypt-to-tool HTTP sink that opens the AAD-bound sealed credential (`AESGCMOpenWithAAD`), injects it into a `{{secret.<key>}}` header template, and performs one guarded outbound request behind eight safeguards — policy host/method re-validation, connect-time SSRF / private-IP blocking (`Dialer.Control` re-checks the resolved IP), HTTPS-only with TLS verification on, all redirects blocked, response size cap + truncation, request timeout, response redaction (`Authorization` / `Set-Cookie` / `Proxy-Authorization` stripped, secret masked if echoed), and payload zeroize after use. No new dependency — `net/http` is stdlib. The plaintext credential never crosses IPC (request, response, or logs); its request fields (`iv_b64` / `ciphertext_b64` / `aad_b64` / `header_template` placeholders) carry no raw secret, so `TestNoRawSecretInRequestTypes` / `TestNoRawSecretInResponseTypes` pass with no new carve-out. Server-signed policy verification (design §5) is a follow-up. `version.go` stays `0.0.13` — both PR-K1 and PR-K2 ship in the one release.|
+|0.0.13|`group_encrypt_with_aad`, `credential_http_request`|AAD-binding variant of `group_encrypt` for the MCP Credential Control Plane. AES-GCM-seals plaintext under the raw Group DEK behind the opaque handle while binding a required caller-supplied AAD (canonical `org_id\|entry_id\|payload_kind\|schema_version\|dek_version`) into the GCM tag, so a sealed credential payload cannot be swapped to a different context without failing to open. Adds sibling crypto `AESGCMSealSplitWithAAD` / `AESGCMOpenWithAAD` (the AAD=nil `group_encrypt` path is unchanged). `plaintext_b64` carved out in `TestNoRawSecretInRequestTypes` like the other encrypt-direction actions; `aad_b64` is public context material. The same release adds `credential_http_request` (PR-K2), the Keeper's first network surface and its own action / registry fragment: a decrypt-to-tool HTTP sink that opens the AAD-bound sealed credential (`AESGCMOpenWithAAD`), injects it into a `{{secret.<key>}}` header template, and performs one guarded outbound request behind eight safeguards — policy host/method re-validation, connect-time SSRF / private-IP blocking (`Dialer.Control` re-checks the resolved IP), HTTPS-only with TLS verification on, all redirects blocked, response size cap + truncation, request timeout, response redaction (`Authorization` / `Set-Cookie` / `Proxy-Authorization` stripped, secret masked if echoed), and payload zeroize after use. No new dependency — `net/http` is stdlib. The plaintext credential never crosses IPC (request, response, or logs); its request fields (`iv_b64` / `ciphertext_b64` / `aad_b64` / `header_template` placeholders) carry no raw secret, so `TestNoRawSecretInRequestTypes` / `TestNoRawSecretInResponseTypes` pass with no new carve-out. Server-signed policy verification (design §5) is a follow-up.|
+|0.0.14|`credential_http_request` response redaction hardened|Redacts encoded and escaped secret echoes in response bodies in addition to literal echoes.|
+|0.0.15|`user_presence_capabilities`, `dek_rotate_to_device_key_prompt`|Introduces the trusted macOS Cocoa password prompt and app-first login composite.|
+|0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
+|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`; `user_presence_capabilities.prompt_new_secret`|Moves signup and recovery password/RK24 input, KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles.|
 
-The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.1"`, the first
-release of the public version epoch). Keeper-down or below-min sets a red
+The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.17"`).
+Keeper-down or below-min sets a red
 `'!'` badge and blocks crypto actions until the user upgrades.
 
 The `error_code` response field (Wave 7 P2 Error Taxonomy) was added without

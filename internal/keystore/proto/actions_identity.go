@@ -8,6 +8,12 @@
 package proto
 
 const (
+	ActionAuthSignupPrepare          = "auth_signup_prepare"
+	ActionAuthRecoveryKeyShow        = "auth_recovery_key_show"
+	ActionAuthRecoveryReissuePrepare = "auth_recovery_reissue_prepare"
+	ActionAuthRecoveryBegin          = "auth_recovery_begin"
+	ActionAuthRecoveryPrepare        = "auth_recovery_prepare"
+
 	// Device key related actions
 	ActionGetDeviceKey    = "getdevicekey"
 	ActionSaveDeviceKey   = "savedevicekey"

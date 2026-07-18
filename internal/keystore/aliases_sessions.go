@@ -8,7 +8,8 @@ package keystore
 import "github.com/dragpass/keeper/internal/keystore/sessions"
 
 var (
-	NewGroupSessionStore              = sessions.NewGroupSessionStore
-	StartDefaultGroupSessionReaper    = sessions.StartDefaultGroupSessionReaper
-	StartDefaultRecoverySessionReaper = sessions.StartDefaultRecoverySessionReaper
+	NewGroupSessionStore                 = sessions.NewGroupSessionStore
+	StartDefaultGroupSessionReaper       = sessions.StartDefaultGroupSessionReaper
+	StartDefaultRecoverySessionReaper    = sessions.StartDefaultRecoverySessionReaper
+	StartDefaultRecoveryKeySessionReaper = sessions.StartDefaultRecoveryKeySessionReaper
 )

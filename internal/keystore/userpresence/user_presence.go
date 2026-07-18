@@ -11,15 +11,17 @@ import (
 )
 
 var (
-	ErrUnavailable = errors.New("user presence is unavailable")
-	ErrDenied      = errors.New("user presence denied")
-	ErrTimedOut    = errors.New("user presence timed out")
-	ErrEmptySecret = errors.New("secret must not be empty")
+	ErrUnavailable    = errors.New("user presence is unavailable")
+	ErrDenied         = errors.New("user presence denied")
+	ErrTimedOut       = errors.New("user presence timed out")
+	ErrEmptySecret    = errors.New("secret must not be empty")
+	ErrSecretMismatch = errors.New("secret confirmation does not match")
 )
 
 type Capabilities struct {
 	Available       bool
 	PromptSecret    bool
+	PromptNewSecret bool
 	Confirm         bool
 	ShowRecoveryKey bool
 	Backend         string
@@ -35,6 +37,14 @@ type SecretPrompt struct {
 type SecretResult struct {
 	// Secret ownership transfers to the caller, which must Destroy it.
 	Secret *memguard.LockedBuffer
+}
+
+type NewSecretPrompt struct {
+	Title             string
+	Message           string
+	Label             string
+	ConfirmationLabel string
+	Timeout           time.Duration
 }
 
 type ConfirmPrompt struct {
@@ -65,6 +75,7 @@ type RecoveryKeyPrompt struct {
 type UserPresence interface {
 	Capabilities() Capabilities
 	PromptSecret(context.Context, SecretPrompt) (SecretResult, error)
+	PromptNewSecret(context.Context, NewSecretPrompt) (SecretResult, error)
 	Confirm(context.Context, ConfirmPrompt) (Decision, error)
 	ShowRecoveryKey(context.Context, RecoveryKeyPrompt) error
 }
@@ -78,6 +89,10 @@ func (Unavailable) Capabilities() Capabilities {
 }
 
 func (Unavailable) PromptSecret(context.Context, SecretPrompt) (SecretResult, error) {
+	return SecretResult{}, ErrUnavailable
+}
+
+func (Unavailable) PromptNewSecret(context.Context, NewSecretPrompt) (SecretResult, error) {
 	return SecretResult{}, ErrUnavailable
 }
 

@@ -37,10 +37,21 @@ func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualReques
 	secure.WipeString(&req.Password)
 	defer pwBuf.Destroy()
 
+	data, response := generateAndWrapDual(d, pwBuf)
+	if !response.Success {
+		return response
+	}
+	d.Logger.Println("dek generate and wrap dual successful")
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+func generateAndWrapDual(d Deps, password *memguard.LockedBuffer) (proto.DEKGenerateAndWrapDualResponseData, proto.BaseResponse) {
+	var empty proto.DEKGenerateAndWrapDualResponseData
+
 	// fetch deviceKey internally — never accept it via the IPC payload
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+		return empty, errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
 	}
 	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 	defer deviceKeyBuf.Destroy()
@@ -48,20 +59,20 @@ func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualReques
 	// generate salt + DEK
 	salt := make([]byte, dekSaltLength)
 	if err := d.FillRandom(salt); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate salt: "+err.Error())
+		return empty, errs.CodeResponse(errs.ErrCodeInternal, "failed to generate salt: "+err.Error())
 	}
 	dek := make([]byte, 32)
 	if err := d.FillRandom(dek); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate dek: "+err.Error())
+		return empty, errs.CodeResponse(errs.ErrCodeInternal, "failed to generate dek: "+err.Error())
 	}
 	defer secure.Zeroize(dek)
 
 	// password wrap
-	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
+	kek := pbkdf2.Key(password.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
 	pwIV, pwCT, err := aesGCMSealSplit(kek, dek)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "password wrap failed: "+err.Error())
+		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "password wrap failed: "+err.Error())
 	}
 	pwOut := make([]byte, 0, len(salt)+len(pwIV)+len(pwCT))
 	pwOut = append(pwOut, salt...)
@@ -71,14 +82,14 @@ func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualReques
 	// device wrap
 	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
+		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
 	}
 
-	d.Logger.Println("dek generate and wrap dual successful")
-	return proto.BaseResponse{Success: true, Data: proto.DEKGenerateAndWrapDualResponseData{
+	data := proto.DEKGenerateAndWrapDualResponseData{
 		PasswordWrappedDEKB64: base64.StdEncoding.EncodeToString(pwOut),
 		DeviceWrappedDEKB64:   devWrapped,
-	}}
+	}
+	return data, proto.BaseResponse{Success: true}
 }
 
 // HandleDEKGenerateAndWrapPassword is the signup flow's generateDEK + wrapDEKWithPassword.

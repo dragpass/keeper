@@ -15,6 +15,7 @@ func (capabilityUserPresence) Capabilities() userpresence.Capabilities {
 	return userpresence.Capabilities{
 		Available:       true,
 		PromptSecret:    true,
+		PromptNewSecret: true,
 		Confirm:         true,
 		ShowRecoveryKey: true,
 		Backend:         "test",
@@ -33,7 +34,7 @@ func TestHandleUserPresenceCapabilities(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected response type %T", resp.Data)
 	}
-	if !data.Available || !data.PromptSecret || !data.Confirm || !data.ShowRecoveryKey {
+	if !data.Available || !data.PromptSecret || !data.PromptNewSecret || !data.Confirm || !data.ShowRecoveryKey {
 		t.Fatalf("capabilities not propagated: %+v", data)
 	}
 	if data.Backend != "test" {

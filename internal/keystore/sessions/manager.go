@@ -10,6 +10,7 @@
 //
 //   - GroupSessionStore   (raw 32B Group DEK)
 //   - RecoverySessionStore (old RSA private key PEM bytes)
+//   - RecoveryKeySessionStore (short-lived RK24 bytes)
 //
 // **Future additions:**
 //
@@ -82,4 +83,5 @@ type SessionManager interface {
 var (
 	_ SessionManager = (*GroupSessionStore)(nil)
 	_ SessionManager = (*RecoverySessionStore)(nil)
+	_ SessionManager = (*RecoveryKeySessionStore)(nil)
 )

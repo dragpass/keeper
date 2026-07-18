@@ -24,12 +24,12 @@ import (
 // type — the caller does not specify it.
 func sessionUseError(err error, context string) proto.BaseResponse {
 	switch err {
-	case sessions.ErrGroupSessionNotFound, sessions.ErrRecoverySessionNotFound:
+	case sessions.ErrGroupSessionNotFound, sessions.ErrRecoverySessionNotFound, sessions.ErrRecoveryKeySessionNotFound:
 		return errs.CodeResponse(
 			errs.ErrCodeNotFound,
 			sessionNotFoundMessage(err),
 		)
-	case sessions.ErrGroupSessionExpired, sessions.ErrRecoverySessionExpired:
+	case sessions.ErrGroupSessionExpired, sessions.ErrRecoverySessionExpired, sessions.ErrRecoveryKeySessionExpired:
 		return errs.CodeResponse(
 			errs.ErrCodeExpiredSession,
 			sessionExpiredMessage(err),
@@ -40,6 +40,9 @@ func sessionUseError(err error, context string) proto.BaseResponse {
 }
 
 func sessionNotFoundMessage(err error) string {
+	if err == sessions.ErrRecoveryKeySessionNotFound {
+		return "recovery key session not found (restart required)"
+	}
 	if err == sessions.ErrRecoverySessionNotFound {
 		return "recovery session not found (re-open required)"
 	}
@@ -47,6 +50,9 @@ func sessionNotFoundMessage(err error) string {
 }
 
 func sessionExpiredMessage(err error) string {
+	if err == sessions.ErrRecoveryKeySessionExpired {
+		return "recovery key session expired (restart required)"
+	}
 	if err == sessions.ErrRecoverySessionExpired {
 		return "recovery session expired (re-open required)"
 	}

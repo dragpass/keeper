@@ -112,9 +112,11 @@ func CodeForError(err error) ErrorCode {
 		errors.Is(err, keychain.ErrServerKeyVersionNotFound),
 		errors.Is(err, keychain.ErrNoActiveServerKey),
 		errors.Is(err, sessions.ErrRecoverySessionNotFound),
+		errors.Is(err, sessions.ErrRecoveryKeySessionNotFound),
 		errors.Is(err, sessions.ErrGroupSessionNotFound):
 		return ErrCodeNotFound
 	case errors.Is(err, sessions.ErrRecoverySessionExpired),
+		errors.Is(err, sessions.ErrRecoveryKeySessionExpired),
 		errors.Is(err, sessions.ErrGroupSessionExpired):
 		return ErrCodeExpiredSession
 	}
