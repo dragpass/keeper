@@ -59,12 +59,12 @@ build-macos: build-macos-amd64 build-macos-arm64
 build-macos-amd64: $(MAC_BIN_AMD64)
 $(MAC_BIN_AMD64): main.go go.mod
 	@echo "Building macOS x86_64 binary: $(MAC_BIN_AMD64)..."
-	@GOOS=darwin GOARCH=amd64 go build -o $(MAC_BIN_AMD64) .
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o $(MAC_BIN_AMD64) .
 
 build-macos-arm64: $(MAC_BIN_ARM64)
 $(MAC_BIN_ARM64): main.go go.mod
 	@echo "Building macOS arm64 binary: $(MAC_BIN_ARM64)..."
-	@GOOS=darwin GOARCH=arm64 go build -o $(MAC_BIN_ARM64) .
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o $(MAC_BIN_ARM64) .
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod
