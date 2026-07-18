@@ -28,6 +28,9 @@ const (
 	// Health check action
 	ActionPing = "ping"
 
+	// Reports whether this Keeper build has a trusted platform UI backend.
+	ActionUserPresenceCapabilities = "user_presence_capabilities"
+
 	// ClipboardGetLastHash: test-only — used by the Extension `pnpm e2e`
 	// flow to verify that the dispatch path
 	// (background → Keeper → Clipboard.Write) sent the correct plaintext.

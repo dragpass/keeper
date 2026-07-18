@@ -12,7 +12,8 @@ import (
 
 func coreActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionPing: wrap(handlers.HandlePing),
+		proto.ActionPing:                     wrap(handlers.HandlePing),
+		proto.ActionUserPresenceCapabilities: wrap(handlers.HandleUserPresenceCapabilities),
 
 		// test-only — query SHA-256 hash recorded in MemoryClipboard under
 		// KEEPER_E2E_MODE.

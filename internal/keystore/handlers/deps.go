@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
+	"github.com/dragpass/keeper/internal/keystore/userpresence"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
 
@@ -43,6 +44,9 @@ type Deps struct {
 	// fills in the OS clipboard backend; unit tests inject an isolated
 	// MemoryClipboard instance.
 	Clipboard clipboard.Clipboard
+	// UserPresence owns trusted OS prompts. Production defaults to a
+	// fail-closed unavailable backend until a platform implementation is wired.
+	UserPresence userpresence.UserPresence
 }
 
 func (d Deps) Now() time.Time {

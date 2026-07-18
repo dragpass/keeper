@@ -105,6 +105,13 @@ types are in `internal/keystore/proto/`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`ping`|_empty_|`{ version, hash, path }`|Liveness + version. Used by Extension health check.|
+|`user_presence_capabilities`|_empty_|`{ available, prompt_secret, confirm, show_recovery_key, backend }`|Reports trusted OS prompt support. All capability fields are false when no native backend is installed.|
+
+The current production backend is macOS Cocoa. Generic confirmation is not
+exposed as a wire action: a domain handler must verify the server-signed
+request before invoking it. Password input is exposed only through composite
+crypto actions that do not return the password. Recovery-key prompts remain
+disabled until their complete auth orchestration is implemented.
 
 ### Device key (per-device wrap layer)
 
@@ -279,6 +286,7 @@ dependency).
 |`dek_generate_and_wrap_password`|`password`|`{ encrypted_dek_b64 }`|PBKDF2 → KEK → AES-wrap new DEK. Signup. Output = Base64(salt(16)‖iv(12)‖ct).|
 |`dek_generate_and_wrap_dual`|`password`|`{ password_wrapped_dek_b64, device_wrapped_dek_b64 }`|Dual wrap (password + deviceKey). Signup. Server form Base64(salt(16)‖iv(12)‖ct); local form Base64(iv(12)‖ct). deviceKey is fetched from Keychain inside Keeper (Keeper 0.0.8 fix-forward — never crosses IPC).|
 |`dek_rotate_to_device_key`|`password`, `encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|Login: re-wrap server password-wrap with deviceKey. deviceKey from Keychain.|
+|`dek_rotate_to_device_key_prompt`|`encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|App-first login: Keeper collects the password in trusted OS UI and performs password-to-device rewrap. Password never crosses Native Messaging.|
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain.|
 |`dek_unwrap_and_decrypt_meta`|`encrypted_dek_b64`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of personal entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times.|
 
