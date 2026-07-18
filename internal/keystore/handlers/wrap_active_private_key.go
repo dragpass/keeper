@@ -42,15 +42,27 @@ func HandleWrapActivePrivateKey(d Deps, req proto.WrapActivePrivateKeyRequest) p
 	}
 	defer secure.Zeroize(wrapKey)
 
+	wrappedB64, response := wrapActivePrivateKeyWithKey(d, wrapKey)
+	if !response.Success {
+		return response
+	}
+
+	d.Logger.Println("wrap active private key: wrapped successfully")
+	return proto.BaseResponse{Success: true, Data: proto.WrapActivePrivateKeyResponseData{
+		WrappedKeeperB64: wrappedB64,
+	}}
+}
+
+func wrapActivePrivateKeyWithKey(d Deps, wrapKey []byte) (string, proto.BaseResponse) {
 	// Fetch current active privkey PEM. If not present in Keychain → 401-ish (user not registered).
 	pemStr, err := keychain.GetPrivateKey(d.Store)
 	if err != nil {
 		d.Logger.Printf("wrap active private key error: keychain lookup: %v", err)
-		return errs.CodeResponse(errs.ErrCodeStorageFailure,
+		return "", errs.CodeResponse(errs.ErrCodeStorageFailure,
 			"active private key not found in keychain: "+err.Error())
 	}
 	if pemStr == "" {
-		return errs.CodeResponse(errs.ErrCodeNotFound,
+		return "", errs.CodeResponse(errs.ErrCodeNotFound,
 			"active private key empty in keychain")
 	}
 
@@ -62,12 +74,8 @@ func HandleWrapActivePrivateKey(d Deps, req proto.WrapActivePrivateKeyRequest) p
 	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey, privKeyBuf.Bytes())
 	if err != nil {
 		d.Logger.Printf("wrap active private key error: AES-GCM wrap failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure,
+		return "", errs.CodeResponse(errs.ErrCodeCryptoFailure,
 			"AES-GCM wrap failed: "+err.Error())
 	}
-
-	d.Logger.Println("wrap active private key: wrapped successfully")
-	return proto.BaseResponse{Success: true, Data: proto.WrapActivePrivateKeyResponseData{
-		WrappedKeeperB64: wrappedB64,
-	}}
+	return wrappedB64, proto.BaseResponse{Success: true}
 }

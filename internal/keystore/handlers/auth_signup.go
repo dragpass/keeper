@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/awnumar/memguard"
 
@@ -47,7 +48,7 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	if err != nil {
 		return authUserPresenceError(err)
 	}
-	if passwordResult.Secret == nil || len(passwordResult.Secret.Bytes()) < signupPasswordMinLength {
+	if passwordResult.Secret == nil || utf8.RuneCount(passwordResult.Secret.Bytes()) < signupPasswordMinLength {
 		if passwordResult.Secret != nil {
 			passwordResult.Secret.Destroy()
 		}
@@ -167,6 +168,66 @@ func HandleAuthRecoveryKeyShow(d Deps, req proto.AuthRecoveryKeyShowRequest) pro
 
 	d.RecoveryKeySessions.Close(req.RecoveryKeyHandle)
 	return proto.BaseResponse{Success: true, Data: proto.AuthRecoveryKeyShowResponseData{}}
+}
+
+// HandleAuthRecoveryReissuePrepare creates or resumes an RK24 reissue. The
+// RK24 and its wrap key remain in Keeper; Native Messaging receives only the
+// verifier seed, wrapped active private key, and an opaque display handle.
+func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepareRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	if d.RecoveryKeySessions == nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "recovery key session store unavailable")
+	}
+
+	handle := req.RecoveryKeyHandle
+	var expiresAtMs int64
+	keepHandle := handle != ""
+	if handle == "" {
+		recoveryKeyBytes, err := recoverykey.Generate(d.Random())
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate recovery key")
+		}
+		openedHandle, expiresAt, err := d.RecoveryKeySessions.Open(recoveryKeyBytes)
+		if err != nil {
+			secure.Zeroize(recoveryKeyBytes)
+			return errs.CodeResponse(errs.ErrCodeInternal, "failed to protect recovery key")
+		}
+		handle = openedHandle
+		expiresAtMs = expiresAt.UnixMilli()
+		defer func() {
+			if !keepHandle {
+				d.RecoveryKeySessions.Close(handle)
+			}
+		}()
+	}
+
+	recoveryKey, response := recoveryKeyHandleBuffer(d, handle)
+	if !response.Success {
+		return response
+	}
+	defer recoveryKey.Destroy()
+
+	authSeed, wrapKey, err := recoverykey.Derive(recoveryKey.Bytes(), req.Alias, recoverykey.Version)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "failed to derive recovery key material")
+	}
+	defer secure.Zeroize(wrapKey)
+
+	wrappedKeeper, response := wrapActivePrivateKeyWithKey(d, wrapKey)
+	if !response.Success {
+		return response
+	}
+
+	keepHandle = true
+	return proto.BaseResponse{Success: true, Data: proto.AuthRecoveryReissuePrepareResponseData{
+		RecoveryAuthSeed:      authSeed,
+		RecoveryWrappedKeeper: wrappedKeeper,
+		RecoveryKeyVersion:    recoverykey.Version,
+		RecoveryKeyHandle:     handle,
+		RecoveryKeyExpiresAt:  expiresAtMs,
+	}}
 }
 
 func authUserPresenceError(err error) proto.BaseResponse {

@@ -268,6 +268,7 @@ static int dragpass_show_recovery_key(
             [alert setInformativeText:[NSString stringWithUTF8String:message]];
             NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 360, 28)];
             [field setStringValue:key_text];
+            [key_text release];
             [field setEditable:NO];
             [field setSelectable:YES];
             [field setBezeled:YES];

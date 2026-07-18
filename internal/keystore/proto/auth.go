@@ -30,6 +30,29 @@ func (r AuthRecoveryKeyShowRequest) Validate() error {
 
 type AuthRecoveryKeyShowResponseData struct{}
 
+type AuthRecoveryReissuePrepareRequest struct {
+	Alias             string `json:"alias"`
+	RecoveryKeyHandle string `json:"recovery_key_handle,omitempty"`
+}
+
+func (r AuthRecoveryReissuePrepareRequest) Validate() error {
+	if err := requireString(r.Alias, "alias"); err != nil {
+		return err
+	}
+	if r.RecoveryKeyHandle == "" {
+		return nil
+	}
+	return requireHandle(r.RecoveryKeyHandle, "recovery_key_handle")
+}
+
+type AuthRecoveryReissuePrepareResponseData struct {
+	RecoveryAuthSeed      string `json:"recovery_auth_seed"`
+	RecoveryWrappedKeeper string `json:"recovery_wrapped_keeper"`
+	RecoveryKeyVersion    uint   `json:"recovery_key_version"`
+	RecoveryKeyHandle     string `json:"recovery_key_handle"`
+	RecoveryKeyExpiresAt  int64  `json:"recovery_key_expires_at_ms,omitempty"`
+}
+
 type AuthRecoveryBeginRequest struct {
 	Alias string `json:"alias"`
 }

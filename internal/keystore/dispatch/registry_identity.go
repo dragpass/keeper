@@ -13,10 +13,11 @@ import (
 
 func identityActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionAuthSignupPrepare:   wrap(handlers.HandleAuthSignupPrepare),
-		proto.ActionAuthRecoveryKeyShow: wrap(handlers.HandleAuthRecoveryKeyShow),
-		proto.ActionAuthRecoveryBegin:   wrap(handlers.HandleAuthRecoveryBegin),
-		proto.ActionAuthRecoveryPrepare: wrap(handlers.HandleAuthRecoveryPrepare),
+		proto.ActionAuthSignupPrepare:          wrap(handlers.HandleAuthSignupPrepare),
+		proto.ActionAuthRecoveryKeyShow:        wrap(handlers.HandleAuthRecoveryKeyShow),
+		proto.ActionAuthRecoveryReissuePrepare: wrap(handlers.HandleAuthRecoveryReissuePrepare),
+		proto.ActionAuthRecoveryBegin:          wrap(handlers.HandleAuthRecoveryBegin),
+		proto.ActionAuthRecoveryPrepare:        wrap(handlers.HandleAuthRecoveryPrepare),
 
 		proto.ActionGenerateKeypair: wrap(handlers.HandleGenerateKeypair),
 

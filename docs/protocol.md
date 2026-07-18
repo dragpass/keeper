@@ -140,6 +140,7 @@ than RK24 text.
 |`signaliaswithtimestamp`|`alias`|`{ signature, timestamp }`|Login challenge signing. Keeper produces `timestamp` (Unix seconds) and signs `alias‖timestamp`.|
 |`auth_signup_prepare`|`alias`|`{ password_wrapped_dek_b64, device_wrapped_dek_b64, recovery_auth_seed, recovery_wrapped_keeper, recovery_key_version, recovery_key_handle, recovery_key_expires_at_ms, signature, publickey }`|App-first signup composite. Prompts for and confirms a new password in the native UI, ensures the DeviceKey exists in the OS Keychain, creates both DEK wraps and the identity keypair, derives RK24 material, and returns only wrapped/public material plus an opaque one-time RK24 display handle. Password, RK24, wrap keys, raw DEK, and private key never cross IPC.|
 |`auth_recovery_key_show`|`recovery_key_handle`|_empty_|Displays the RK24 behind an opaque short-lived handle in the trusted native UI. Successful acknowledgement consumes the handle; cancel leaves it available until expiry for retry. RK24 is never returned over IPC.|
+|`auth_recovery_reissue_prepare`|`alias`, `recovery_key_handle?`|`{ recovery_auth_seed, recovery_wrapped_keeper, recovery_key_version, recovery_key_handle, recovery_key_expires_at_ms? }`|Creates or resumes an authenticated RK24 reissue after a display handle expires. The RK24 and wrap key remain in Keeper; only server-storable wrapped material and an opaque display handle cross IPC. Reusing the handle makes an interrupted server update retryable.|
 |`signchallengetoken`|`challenge_token`, `signature`, `server_key_version?`|`{ signature }`|Re-auth challenge. Verifies server signature on `challenge_token`, then signs with active privkey.|
 |`generatekeypair`|`challenge_token`, `signature`, `server_key_version?`|`{ publickey }`|Generate RSA keypair on this device. Verifies server signature first.|
 |`getpublickey`|_empty_|`{ publickey }`|Read active public key from Keychain.|
@@ -391,7 +392,7 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.14|`credential_http_request` response redaction hardened|Redacts encoded and escaped secret echoes in response bodies in addition to literal echoes.|
 |0.0.15|`user_presence_capabilities`, `dek_rotate_to_device_key_prompt`|Introduces the trusted macOS Cocoa password prompt and app-first login composite.|
 |0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
-|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`; `user_presence_capabilities.prompt_new_secret`|Moves signup and recovery password/RK24 input, KDF, keypair, and wrapping operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles.|
+|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`; `user_presence_capabilities.prompt_new_secret`|Moves signup and recovery password/RK24 input, KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.17"`).
 Keeper-down or below-min sets a red

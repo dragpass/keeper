@@ -103,6 +103,20 @@ func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 	}
 }
 
+func TestHandleAuthSignupPrepareCountsUnicodeCharacters(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
+	deps.UserPresence = &signupUserPresence{password: "가나다라"}
+
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice"})
+	if response.Success || response.ErrorCode != "validation_error" {
+		t.Fatalf("response = %+v", response)
+	}
+	if deps.RecoveryKeySessions.Size() != 0 {
+		t.Fatal("short Unicode password must not leave a recovery key handle")
+	}
+}
+
 func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deps.UserPresence = &signupUserPresence{password: "correct horse battery staple"}
@@ -160,6 +174,67 @@ func TestHandleAuthRecoveryKeyShowKeepsHandleAfterCancel(t *testing.T) {
 	}
 	if err := deps.RecoveryKeySessions.Use(handle, func([]byte) error { return nil }); err != nil {
 		t.Fatalf("cancel must keep handle: %v", err)
+	}
+}
+
+func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	const activePEM = "-----BEGIN PRIVATE KEY-----\nACTIVE-KEY\n-----END PRIVATE KEY-----"
+	if err := keychain.SavePrivateKey(store, activePEM); err != nil {
+		t.Fatalf("SavePrivateKey: %v", err)
+	}
+	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x05}, 128))
+
+	response := HandleAuthRecoveryReissuePrepare(deps, proto.AuthRecoveryReissuePrepareRequest{
+		Alias: "alice",
+	})
+	if !response.Success {
+		t.Fatalf("HandleAuthRecoveryReissuePrepare: %s", response.Error)
+	}
+	data := response.Data.(proto.AuthRecoveryReissuePrepareResponseData)
+	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
+	if data.RecoveryAuthSeed == "" || data.RecoveryWrappedKeeper == "" || data.RecoveryKeyHandle == "" {
+		t.Fatalf("reissue material missing: %+v", data)
+	}
+
+	var wrapKey []byte
+	if err := deps.RecoveryKeySessions.Use(data.RecoveryKeyHandle, func(raw []byte) error {
+		_, derived, deriveErr := recoverykey.Derive(raw, "alice", data.RecoveryKeyVersion)
+		wrapKey = derived
+		return deriveErr
+	}); err != nil {
+		t.Fatalf("derive from handle: %v", err)
+	}
+	decrypted, err := keepercrypto.AESGCMDecryptBase64(wrapKey, data.RecoveryWrappedKeeper)
+	secure.Zeroize(wrapKey)
+	if err != nil {
+		t.Fatalf("decrypt wrapped keeper: %v", err)
+	}
+	if string(decrypted) != activePEM {
+		t.Fatal("wrapped keeper does not contain the active private key")
+	}
+	secure.Zeroize(decrypted)
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, forbidden := range []string{"recovery_key\"", "wrap_key", activePEM} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("reissue response contains forbidden secret field/value %q", forbidden)
+		}
+	}
+
+	resumed := HandleAuthRecoveryReissuePrepare(deps, proto.AuthRecoveryReissuePrepareRequest{
+		Alias:             "alice",
+		RecoveryKeyHandle: data.RecoveryKeyHandle,
+	})
+	if !resumed.Success {
+		t.Fatalf("resume reissue: %s", resumed.Error)
+	}
+	resumedData := resumed.Data.(proto.AuthRecoveryReissuePrepareResponseData)
+	if resumedData.RecoveryKeyHandle != data.RecoveryKeyHandle || resumedData.RecoveryAuthSeed != data.RecoveryAuthSeed {
+		t.Fatal("resumed reissue must reuse the same RK24 handle and verifier seed")
 	}
 }
 
