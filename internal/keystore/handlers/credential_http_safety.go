@@ -123,6 +123,26 @@ func pathAllowed(target string, allowed []string) bool {
 	return false
 }
 
+func requestShapeAllowed(target string, hasBody, allowQuery, allowBody bool) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return (allowQuery || u.RawQuery == "") && (allowBody || !hasBody)
+}
+
+func headerTemplatesEqual(actual, signed map[string]string) bool {
+	if len(actual) != len(signed) {
+		return false
+	}
+	for key, value := range signed {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
 // isBlockedIP reports whether ip is a non-public destination the Keeper must
 // refuse to connect to: RFC1918 private (10/8, 172.16/12, 192.168/16) and IPv6
 // ULA (fc00::/7) via IsPrivate; loopback (127/8, ::1), link-local unicast

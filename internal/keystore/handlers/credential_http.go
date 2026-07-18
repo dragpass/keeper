@@ -86,6 +86,9 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	if ok, resp := verifyCredentialPolicy(d, aad, req.Policy); !ok {
 		return resp
 	}
+	if !executionTargetMatches(req.TargetURL, req.Method, req.Policy) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "request target does not match signed execution target")
+	}
 
 	// The signed policy is trusted only after verification above.
 	if !hostAllowed(host, req.Policy.AllowedHosts) {
@@ -96,6 +99,12 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	}
 	if !pathAllowed(req.TargetURL, req.Policy.AllowedPathPatterns) {
 		return errs.CodeResponse(errs.ErrCodeValidation, "target path is not in policy.allowed_path_patterns")
+	}
+	if !requestShapeAllowed(req.TargetURL, req.BodyB64 != "", req.Policy.AllowQuery, req.Policy.AllowBody) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "query or body is not allowed by credential policy")
+	}
+	if !headerTemplatesEqual(req.HeaderTemplate, req.Policy.HeaderTemplate) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "header_template does not match signed credential policy")
 	}
 	var body []byte
 	if req.BodyB64 != "" {

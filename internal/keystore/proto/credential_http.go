@@ -22,16 +22,22 @@ package proto
 // version, host/method allowlists, and expiry. Limits remain Keeper-owned constants
 // so an untrusted MCP process cannot widen them through unsigned request fields.
 type CredentialPolicy struct {
-	EntryID             string   `json:"entry_id"`
-	DekVersion          int      `json:"dek_version"`
-	AllowedHosts        []string `json:"allowed_hosts"`
-	AllowedMethods      []string `json:"allowed_methods"`
-	AllowedPathPatterns []string `json:"allowed_path_patterns"`
-	ApprovalMode        string   `json:"approval_mode"`
-	Expiry              string   `json:"expiry"`
-	Signature           string   `json:"signature"`
-	ServerKeyVersion    uint     `json:"server_key_version"`
-	SignatureAlg        string   `json:"signature_alg"`
+	EntryID             string            `json:"entry_id"`
+	DekVersion          int               `json:"dek_version"`
+	AllowedHosts        []string          `json:"allowed_hosts"`
+	AllowedMethods      []string          `json:"allowed_methods"`
+	AllowedPathPatterns []string          `json:"allowed_path_patterns"`
+	HeaderTemplate      map[string]string `json:"header_template"`
+	AllowQuery          bool              `json:"allow_query"`
+	AllowBody           bool              `json:"allow_body"`
+	TargetHost          string            `json:"target_host"`
+	TargetPath          string            `json:"target_path"`
+	Method              string            `json:"method"`
+	ApprovalMode        string            `json:"approval_mode"`
+	Expiry              string            `json:"expiry"`
+	Signature           string            `json:"signature"`
+	ServerKeyVersion    uint              `json:"server_key_version"`
+	SignatureAlg        string            `json:"signature_alg"`
 }
 
 // CredentialHTTPRequest is the decrypt-to-tool request. RequestID correlation is
@@ -89,6 +95,12 @@ func (r CredentialHTTPRequest) Validate() error {
 	}
 	if len(r.Policy.AllowedPathPatterns) == 0 {
 		return newValidationError("policy.allowed_path_patterns", "must list at least one path pattern")
+	}
+	if len(r.Policy.HeaderTemplate) == 0 {
+		return newValidationError("policy.header_template", "must not be empty")
+	}
+	if r.Policy.TargetHost == "" || r.Policy.TargetPath == "" || r.Policy.Method == "" {
+		return newValidationError("policy.target", "host, path, and method must not be empty")
 	}
 	if r.Policy.EntryID == "" {
 		return newValidationError("policy.entry_id", "must not be empty")

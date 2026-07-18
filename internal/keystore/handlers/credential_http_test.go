@@ -38,12 +38,24 @@ import (
 const credTestAAD = "org_9|entry_3|credential|1|1"
 
 func credTestPolicy(hosts, methods []string) proto.CredentialPolicy {
+	targetHost := ""
+	if len(hosts) > 0 {
+		targetHost = hosts[0]
+	}
+	method := ""
+	if len(methods) > 0 {
+		method = methods[0]
+	}
 	return proto.CredentialPolicy{
 		EntryID:             "entry_3",
 		DekVersion:          1,
 		AllowedHosts:        hosts,
 		AllowedMethods:      methods,
 		AllowedPathPatterns: []string{"/*"},
+		HeaderTemplate:      map[string]string{"Authorization": "Bearer {{secret.token}}"},
+		TargetHost:          targetHost,
+		TargetPath:          "/x",
+		Method:              method,
 		ApprovalMode:        "always_ask",
 		Expiry:              "2100-01-01T00:00:00Z",
 		Signature:           "test-signature",

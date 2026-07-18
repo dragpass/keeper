@@ -14,7 +14,7 @@ import (
 func TestCanonicalCredentialPolicyMatchesServerFormat(t *testing.T) {
 	p := credTestPolicy([]string{"z.example", "a.example"}, []string{"POST", "GET"})
 	got := canonicalCredentialPolicy(p)
-	want := "entry_3|1|a.example,z.example|GET,POST|/*|2100-01-01T00:00:00Z"
+	want := "entry_3|1|a.example,z.example|GET,POST|/*|13:Authorization23:Bearer {{secret.token}}|false|false|z.example|/x|POST|2100-01-01T00:00:00Z"
 	if got != want {
 		t.Fatalf("canonical policy = %q, want %q", got, want)
 	}
@@ -39,6 +39,25 @@ func TestPathAllowed(t *testing.T) {
 				t.Fatalf("pathAllowed()=%v want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCredentialRequestShapeAndHeaders(t *testing.T) {
+	if requestShapeAllowed("https://api.example/v1?token=x", false, false, false) {
+		t.Fatal("query must be denied when allow_query=false")
+	}
+	if requestShapeAllowed("https://api.example/v1", true, false, false) {
+		t.Fatal("body must be denied when allow_body=false")
+	}
+	if !requestShapeAllowed("https://api.example/v1?scope=read", true, true, true) {
+		t.Fatal("explicitly allowed query and body should pass")
+	}
+	signed := map[string]string{"Authorization": "Bearer {{secret.token}}"}
+	if !headerTemplatesEqual(map[string]string{"Authorization": "Bearer {{secret.token}}"}, signed) {
+		t.Fatal("identical signed header template should pass")
+	}
+	if headerTemplatesEqual(map[string]string{"Authorization": "Bearer {{secret.token}}", "X-Evil": "x"}, signed) {
+		t.Fatal("additional header must fail closed")
 	}
 }
 
@@ -84,6 +103,10 @@ func TestCredentialPolicyValidateRequiresSignatureEnvelope(t *testing.T) {
 			EntryID: "entry_3", DekVersion: 1,
 			AllowedHosts: []string{"api.example"}, AllowedMethods: []string{"GET"},
 			AllowedPathPatterns: []string{"/v1/*"},
+			HeaderTemplate:      map[string]string{"Authorization": "Bearer {{secret.token}}"},
+			TargetHost:          "api.example",
+			TargetPath:          "/x",
+			Method:              "GET",
 			Expiry:              "2100-01-01T00:00:00Z", ServerKeyVersion: 1,
 			SignatureAlg: credentialPolicySignatureAlg,
 		},

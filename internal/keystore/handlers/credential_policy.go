@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +27,41 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		strings.Join(hosts, ","),
 		strings.Join(methods, ","),
 		strings.Join(paths, ","),
+		canonicalCredentialHeaders(p.HeaderTemplate),
+		strconv.FormatBool(p.AllowQuery),
+		strconv.FormatBool(p.AllowBody),
+		p.TargetHost,
+		p.TargetPath,
+		p.Method,
 		p.Expiry,
 	}, "|")
+}
+
+func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) bool {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return false
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return normalizeHost(u.Host) == normalizeHost(p.TargetHost) &&
+		path == p.TargetPath && strings.EqualFold(strings.TrimSpace(method), strings.TrimSpace(p.Method))
+}
+
+func canonicalCredentialHeaders(headers map[string]string) string {
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := headers[key]
+		parts = append(parts, strconv.Itoa(len(key))+":"+key+strconv.Itoa(len(value))+":"+value)
+	}
+	return strings.Join(parts, ",")
 }
 
 func validateCredentialPolicyBinding(aad []byte, p proto.CredentialPolicy) error {
