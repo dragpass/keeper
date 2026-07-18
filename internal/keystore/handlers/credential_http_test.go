@@ -20,13 +20,16 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -378,6 +381,41 @@ func TestCredentialHTTP_ResponseRedaction(t *testing.T) {
 	}
 	if !strings.Contains(string(body), redactionMask) {
 		t.Fatalf("expected the redaction mask in the body, got: %s", body)
+	}
+}
+
+func TestRedactBody_MasksCommonSecretEncodings(t *testing.T) {
+	secret := "token-테스트-秘密"
+	latin1JSONEscaped := strings.Builder{}
+	for _, b := range []byte(secret) {
+		if b < 0x80 {
+			latin1JSONEscaped.WriteByte(b)
+			continue
+		}
+		fmt.Fprintf(&latin1JSONEscaped, `\u%04x`, b)
+	}
+
+	cases := map[string]string{
+		"plain":               secret,
+		"query escaped":       url.QueryEscape(secret),
+		"path escaped":        url.PathEscape(secret),
+		"base64":              base64.StdEncoding.EncodeToString([]byte(secret)),
+		"base64url":           base64.RawURLEncoding.EncodeToString([]byte(secret)),
+		"hex":                 hex.EncodeToString([]byte(secret)),
+		"latin1 json escaped": latin1JSONEscaped.String(),
+	}
+
+	for name, encoded := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := []byte(`{"echo":"` + encoded + `"}`)
+			got := redactBody(body, []string{secret})
+			if bytes.Contains(got, []byte(encoded)) {
+				t.Fatalf("encoded secret was not masked: %s", got)
+			}
+			if !bytes.Contains(got, []byte(redactionMask)) {
+				t.Fatalf("redaction mask missing: %s", got)
+			}
+		})
 	}
 }
 
