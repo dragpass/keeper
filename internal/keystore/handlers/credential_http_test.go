@@ -20,13 +20,16 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -36,6 +39,33 @@ import (
 )
 
 const credTestAAD = "org_9|entry_3|credential|1|1"
+
+func credTestPolicy(hosts, methods []string) proto.CredentialPolicy {
+	targetHost := ""
+	if len(hosts) > 0 {
+		targetHost = hosts[0]
+	}
+	method := ""
+	if len(methods) > 0 {
+		method = methods[0]
+	}
+	return proto.CredentialPolicy{
+		EntryID:             "entry_3",
+		DekVersion:          1,
+		AllowedHosts:        hosts,
+		AllowedMethods:      methods,
+		AllowedPathPatterns: []string{"/*"},
+		HeaderTemplate:      map[string]string{"Authorization": "Bearer {{secret.token}}"},
+		TargetHost:          targetHost,
+		TargetPath:          "/x",
+		Method:              method,
+		ApprovalMode:        "always_ask",
+		Expiry:              "2100-01-01T00:00:00Z",
+		Signature:           "test-signature",
+		ServerKeyVersion:    1,
+		SignatureAlg:        credentialPolicySignatureAlg,
+	}
+}
 
 // sealCredentialForTest seals a credential JSON payload under the fresh Group
 // DEK behind handle, using the canonical test AAD, and returns the IV /
@@ -109,10 +139,7 @@ func credTestRoundTrip(t *testing.T, method string, serverHandler http.HandlerFu
 		TargetURL:      ts.URL + "/x",
 		Method:         method,
 		HeaderTemplate: headerTemplate,
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{hostOf(t, ts.URL)},
-			AllowedMethods: allowedMethods,
-		},
+		Policy:         credTestPolicy([]string{hostOf(t, ts.URL)}, allowedMethods),
 	})
 	if !resp.Success {
 		return proto.CredentialHTTPResponseData{}, obs, resp, log
@@ -172,10 +199,7 @@ func TestCredentialHTTP_HostNotAllowed_Rejected(t *testing.T) {
 		TargetURL:      "https://evil.example.com/x",
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{"api.github.com"},
-			AllowedMethods: []string{"GET"},
-		},
+		Policy:         credTestPolicy([]string{"api.github.com"}, []string{"GET"}),
 	})
 	if resp.Success {
 		t.Fatalf("expected rejection for host not in allowed_hosts")
@@ -213,10 +237,7 @@ func TestCredentialHTTP_NonHTTPS_Rejected(t *testing.T) {
 		TargetURL:      "http://api.github.com/x", // http, not https
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{"api.github.com"},
-			AllowedMethods: []string{"GET"},
-		},
+		Policy:         credTestPolicy([]string{"api.github.com"}, []string{"GET"}),
 	})
 	if resp.Success {
 		t.Fatalf("expected rejection for non-https target")
@@ -252,10 +273,7 @@ func TestCredentialHTTP_PrivateIP_Blocked(t *testing.T) {
 		TargetURL:      "https://" + host + "/x",
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{host},
-			AllowedMethods: []string{"GET"},
-		},
+		Policy:         credTestPolicy([]string{host}, []string{"GET"}),
 	})
 	if resp.Success {
 		t.Fatalf("expected the loopback connection to be blocked by the Control hook")
@@ -290,7 +308,7 @@ func TestCredentialHTTP_RedirectNotFollowed(t *testing.T) {
 }
 
 func TestCredentialHTTP_ResponseTruncated(t *testing.T) {
-	big := strings.Repeat("A", 5000)
+	big := strings.Repeat("A", defaultMaxRespBytes+5000)
 	deps, _, _ := newTestDeps(t)
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, big)
@@ -317,11 +335,7 @@ func TestCredentialHTTP_ResponseTruncated(t *testing.T) {
 		TargetURL:      ts.URL + "/x",
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{hostOf(t, ts.URL)},
-			AllowedMethods: []string{"GET"},
-			MaxRespBytes:   1000,
-		},
+		Policy:         credTestPolicy([]string{hostOf(t, ts.URL)}, []string{"GET"}),
 	})
 	if !resp.Success {
 		t.Fatalf("expected success, got: %s", resp.Error)
@@ -331,8 +345,8 @@ func TestCredentialHTTP_ResponseTruncated(t *testing.T) {
 		t.Fatalf("expected Truncated=true for an oversized body")
 	}
 	body, _ := base64.StdEncoding.DecodeString(data.BodyB64)
-	if len(body) != 1000 {
-		t.Fatalf("truncated body length = %d, want 1000", len(body))
+	if len(body) != defaultMaxRespBytes {
+		t.Fatalf("truncated body length = %d, want %d", len(body), defaultMaxRespBytes)
 	}
 }
 
@@ -370,6 +384,41 @@ func TestCredentialHTTP_ResponseRedaction(t *testing.T) {
 	}
 }
 
+func TestRedactBody_MasksCommonSecretEncodings(t *testing.T) {
+	secret := "token-테스트-秘密"
+	latin1JSONEscaped := strings.Builder{}
+	for _, b := range []byte(secret) {
+		if b < 0x80 {
+			latin1JSONEscaped.WriteByte(b)
+			continue
+		}
+		fmt.Fprintf(&latin1JSONEscaped, `\u%04x`, b)
+	}
+
+	cases := map[string]string{
+		"plain":               secret,
+		"query escaped":       url.QueryEscape(secret),
+		"path escaped":        url.PathEscape(secret),
+		"base64":              base64.StdEncoding.EncodeToString([]byte(secret)),
+		"base64url":           base64.RawURLEncoding.EncodeToString([]byte(secret)),
+		"hex":                 hex.EncodeToString([]byte(secret)),
+		"latin1 json escaped": latin1JSONEscaped.String(),
+	}
+
+	for name, encoded := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := []byte(`{"echo":"` + encoded + `"}`)
+			got := redactBody(body, []string{secret})
+			if bytes.Contains(got, []byte(encoded)) {
+				t.Fatalf("encoded secret was not masked: %s", got)
+			}
+			if !bytes.Contains(got, []byte(redactionMask)) {
+				t.Fatalf("redaction mask missing: %s", got)
+			}
+		})
+	}
+}
+
 func TestCredentialHTTP_NoSecretInLogger(t *testing.T) {
 	_, _, resp, logCap := credTestRoundTrip(t, "GET",
 		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) },
@@ -400,10 +449,7 @@ func TestCredentialHTTP_AADSwap_FailsOpen(t *testing.T) {
 		TargetURL:      "https://api.github.com/x",
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{"api.github.com"},
-			AllowedMethods: []string{"GET"},
-		},
+		Policy:         credTestPolicy([]string{"api.github.com"}, []string{"GET"}),
 	})
 	if resp.Success {
 		t.Fatalf("expected open failure for a swapped AAD")
@@ -437,10 +483,7 @@ func TestCredentialHTTP_BadHandle_NotFound(t *testing.T) {
 		TargetURL:      "https://api.github.com/x",
 		Method:         "GET",
 		HeaderTemplate: map[string]string{"Authorization": "Bearer {{secret.token}}"},
-		Policy: proto.CredentialPolicy{
-			AllowedHosts:   []string{"api.github.com"},
-			AllowedMethods: []string{"GET"},
-		},
+		Policy:         credTestPolicy([]string{"api.github.com"}, []string{"GET"}),
 	})
 	if resp.Success {
 		t.Fatalf("expected not_found for a missing group session")

@@ -17,12 +17,15 @@ package handlers
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -95,6 +98,52 @@ func methodAllowed(method string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// pathAllowed matches the URL's escaped path against exact paths or a single
+// trailing /* prefix pattern. Matching the escaped representation avoids path
+// decoding ambiguities between policy evaluation and the outbound request.
+func pathAllowed(target string, allowed []string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	for _, pattern := range allowed {
+		if pattern == path {
+			return true
+		}
+		if strings.HasSuffix(pattern, "/*") {
+			prefix := strings.TrimSuffix(pattern, "*")
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requestShapeAllowed(target string, hasBody, allowQuery, allowBody bool) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return (allowQuery || u.RawQuery == "") && (allowBody || !hasBody)
+}
+
+func headerTemplatesEqual(actual, signed map[string]string) bool {
+	if len(actual) != len(signed) {
+		return false
+	}
+	for key, value := range signed {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 // isBlockedIP reports whether ip is a non-public destination the Keeper must
@@ -242,15 +291,65 @@ func redactResponseHeaders(h http.Header) map[string]string {
 	return out
 }
 
-// redactBody masks any echo of an injected secret in the response body. The
-// injected values are pre-sorted longest-first by the caller so overlapping
-// secrets mask deterministically.
+// redactionVariants returns common representations an HTTP endpoint can use
+// when echoing a credential. In particular, HTTP/1 header bytes are sometimes
+// decoded as Latin-1 and then JSON-escaped ("\\u00ed..."); literal-only
+// replacement misses that reversible form. This is defense-in-depth for
+// accidental echoes, not a claim that arbitrary transformations are detectable.
+func redactionVariants(secret string) []string {
+	raw := []byte(secret)
+	set := map[string]struct{}{}
+	add := func(value string) {
+		if value != "" {
+			set[value] = struct{}{}
+		}
+	}
+
+	add(secret)
+	add(url.QueryEscape(secret))
+	add(url.PathEscape(secret))
+	add(base64.StdEncoding.EncodeToString(raw))
+	add(base64.RawStdEncoding.EncodeToString(raw))
+	add(base64.URLEncoding.EncodeToString(raw))
+	add(base64.RawURLEncoding.EncodeToString(raw))
+	hexValue := hex.EncodeToString(raw)
+	add(hexValue)
+	add(strings.ToUpper(hexValue))
+
+	// QuoteToASCII covers JSON-style Unicode escapes of the original string.
+	add(strings.Trim(strconv.QuoteToASCII(secret), `"`))
+
+	// Reproduce the common HTTP/1 bridge behaviour where each UTF-8 byte is
+	// interpreted as a Latin-1 code point before JSON serialization.
+	latin1Runes := make([]rune, len(raw))
+	for i, b := range raw {
+		latin1Runes[i] = rune(b)
+	}
+	latin1 := string(latin1Runes)
+	add(latin1)
+	add(strings.Trim(strconv.QuoteToASCII(latin1), `"`))
+
+	variants := make([]string, 0, len(set))
+	for value := range set {
+		variants = append(variants, value)
+	}
+	sort.Slice(variants, func(i, j int) bool {
+		if len(variants[i]) == len(variants[j]) {
+			return variants[i] < variants[j]
+		}
+		return len(variants[i]) > len(variants[j])
+	})
+	return variants
+}
+
+// redactBody masks literal and common encoded echoes of injected secrets in
+// the response body. Variants are longest-first so overlapping values redact
+// deterministically.
 func redactBody(body []byte, injected []string) []byte {
 	for _, s := range injected {
-		if s == "" {
-			continue
+		for _, variant := range redactionVariants(s) {
+			body = bytes.ReplaceAll(body, []byte(variant), []byte(redactionMask))
 		}
-		body = bytes.ReplaceAll(body, []byte(s), []byte(redactionMask))
 	}
 	return body
 }
