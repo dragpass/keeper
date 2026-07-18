@@ -36,15 +36,16 @@ func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
 // cross the package boundary.
 func (a *App) HandlersDeps() handlers.Deps {
 	return handlers.Deps{
-		Logger:            a.Logger,
-		Store:             a.Store,
-		Clock:             a.Clock,
-		Rand:              a.Rand,
-		ServerKeyVerifier: a.ServerKeyVerifier,
-		GroupSessions:     a.GroupSessions,
-		RecoverySessions:  a.RecoverySessions,
-		Clipboard:         a.Clipboard,
-		UserPresence:      a.UserPresence,
+		Logger:              a.Logger,
+		Store:               a.Store,
+		Clock:               a.Clock,
+		Rand:                a.Rand,
+		ServerKeyVerifier:   a.ServerKeyVerifier,
+		GroupSessions:       a.GroupSessions,
+		RecoverySessions:    a.RecoverySessions,
+		RecoveryKeySessions: a.RecoveryKeySessions,
+		Clipboard:           a.Clipboard,
+		UserPresence:        a.UserPresence,
 	}
 }
 

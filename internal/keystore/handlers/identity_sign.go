@@ -47,6 +47,11 @@ func HandleSignAlias(d Deps, req proto.SignAliasRequest) proto.BaseResponse {
 		defer secure.Zeroize(wrapKey)
 	}
 
+	return signAliasWithWrapKey(d, req.Alias, wrapKey)
+}
+
+func signAliasWithWrapKey(d Deps, alias string, wrapKey []byte) proto.BaseResponse {
+
 	_, keyErr := keychain.GetPrivateKey(d.Store)
 	_, sessionErr := keychain.GetSessionCode(d.Store)
 
@@ -91,7 +96,7 @@ func HandleSignAlias(d Deps, req proto.SignAliasRequest) proto.BaseResponse {
 	defer pendingPrivBuf.Destroy()
 
 	// Sign the alias using the pending private key (from protected memory)
-	signatureBase64, err := signDataSecure(pendingPrivBuf, req.Alias)
+	signatureBase64, err := signDataSecure(pendingPrivBuf, alias)
 	if err != nil {
 		d.Logger.Printf("alias signing error: failed to sign alias: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to sign alias: "+err.Error())

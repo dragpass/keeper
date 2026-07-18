@@ -137,6 +137,7 @@ func main() {
 
 	// Recovery PEM opaque handle reaper.
 	keystore.StartDefaultRecoverySessionReaper()
+	keystore.StartDefaultRecoveryKeySessionReaper()
 
 	logger.Println("DragPass extension helper started")
 	defer func() {

@@ -32,13 +32,14 @@ import (
 // the default singleton; tests inject isolated instances via
 // `sessions.NewGroupSessionStore(TTL)` / `NewRecoverySessionStore(TTL)`.
 type Deps struct {
-	Logger            logger.Logger
-	Store             keychain.SecretStore
-	Clock             func() time.Time
-	Rand              io.Reader
-	ServerKeyVerifier verifier.ServerKeyVerifier
-	GroupSessions     *sessions.GroupSessionStore
-	RecoverySessions  *sessions.RecoverySessionStore
+	Logger              logger.Logger
+	Store               keychain.SecretStore
+	Clock               func() time.Time
+	Rand                io.Reader
+	ServerKeyVerifier   verifier.ServerKeyVerifier
+	GroupSessions       *sessions.GroupSessionStore
+	RecoverySessions    *sessions.RecoverySessionStore
+	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	// Clipboard is the OS clipboard abstraction that the decrypt-to-clipboard
 	// action writes plaintext to. If nil, writeClipboard fails. Production App
 	// fills in the OS clipboard backend; unit tests inject an isolated

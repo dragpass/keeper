@@ -45,9 +45,13 @@ func HandleRecoverySessionOpen(d Deps, req proto.RecoverySessionOpenRequest) pro
 	}
 	wrapKeyBuf := memguard.NewBufferFromBytes(wrapKey)
 	defer wrapKeyBuf.Destroy()
+	return openRecoverySessionWithWrapKey(d, req.WrappedKeeperB64, wrapKeyBuf)
+}
+
+func openRecoverySessionWithWrapKey(d Deps, wrappedKeeperB64 string, wrapKey *memguard.LockedBuffer) proto.BaseResponse {
 
 	// AES-GCM decrypt wrappedKeeper → raw PEM bytes
-	pemBytes, err := crypto.AESGCMDecryptBase64(wrapKeyBuf.Bytes(), req.WrappedKeeperB64)
+	pemBytes, err := crypto.AESGCMDecryptBase64(wrapKey.Bytes(), wrappedKeeperB64)
 	if err != nil {
 		d.Logger.Printf("recovery session open error: AES-GCM unwrap failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrapped keeper decrypt failed (wrong wrap key?): "+err.Error())

@@ -65,6 +65,9 @@ func TestNewApp_FillsProductionDefaults(t *testing.T) {
 	if app.RecoverySessions != sessions.DefaultRecoverySessionStore() {
 		t.Fatalf("RecoverySessions default must be the process-wide singleton")
 	}
+	if app.RecoveryKeySessions != sessions.DefaultRecoveryKeySessionStore() {
+		t.Fatalf("RecoveryKeySessions default must be the process-wide singleton")
+	}
 	if _, ok := app.UserPresence.(userpresence.Unavailable); !ok {
 		t.Fatalf("UserPresence default must fail closed, got %T", app.UserPresence)
 	}
@@ -111,15 +114,20 @@ func TestNewApp_RespectsInjection(t *testing.T) {
 func TestNewApp_RespectsSessionStoreInjection(t *testing.T) {
 	groupStore := sessions.NewGroupSessionStore(15 * time.Minute)
 	recoveryStore := sessions.NewRecoverySessionStore(5 * time.Minute)
+	recoveryKeyStore := sessions.NewRecoveryKeySessionStore(5 * time.Minute)
 	app := NewApp(Deps{
-		GroupSessions:    groupStore,
-		RecoverySessions: recoveryStore,
+		GroupSessions:       groupStore,
+		RecoverySessions:    recoveryStore,
+		RecoveryKeySessions: recoveryKeyStore,
 	})
 	if app.GroupSessions != groupStore {
 		t.Fatalf("GroupSessions injection ignored")
 	}
 	if app.RecoverySessions != recoveryStore {
 		t.Fatalf("RecoverySessions injection ignored")
+	}
+	if app.RecoveryKeySessions != recoveryKeyStore {
+		t.Fatalf("RecoveryKeySessions injection ignored")
 	}
 	if app.GroupSessions == sessions.DefaultGroupSessionStore() {
 		t.Fatalf("injected GroupSessions must not collapse to default singleton")

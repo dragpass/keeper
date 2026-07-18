@@ -44,16 +44,20 @@ func HandleRecoverySign(d Deps, req proto.RecoverySignRequest) proto.BaseRespons
 	if ok, resp := verifyServerSig(d, req.ChallengeToken, req.Signature, req.ServerKeyVersion, "recovery sign"); !ok {
 		return resp
 	}
+	return signRecoveryChallenge(d, req.ChallengeToken, req.RecoveryHandle)
+}
+
+func signRecoveryChallenge(d Deps, challengeToken, recoveryHandle string) proto.BaseResponse {
 
 	var challengeSignatureBase64 string
-	useErr := d.RecoverySessions.Use(req.RecoveryHandle, func(rawPEM []byte) error {
+	useErr := d.RecoverySessions.Use(recoveryHandle, func(rawPEM []byte) error {
 		// rawPEM is the LockedBuffer.Bytes() slice owned by the store. While
 		// Use holds the mutex, ParsePrivateKey + signing run.
 		privKey, err := crypto.ParsePrivateKey(string(rawPEM))
 		if err != nil {
 			return errors.New("failed to parse private key: " + err.Error())
 		}
-		sigBytes, err := crypto.SignData(privKey, req.ChallengeToken)
+		sigBytes, err := crypto.SignData(privKey, challengeToken)
 		if err != nil {
 			return errors.New("failed to sign challenge token: " + err.Error())
 		}
@@ -101,7 +105,12 @@ func HandleGenerateKeypairWithRecoveryWrap(d Deps, req proto.GenerateKeypairWith
 		d.Logger.Printf("recovery wrap error: %s", resp.Error)
 		return resp
 	}
-	defer secure.Zeroize(wrapKey)
+	wrapKeyBuf := memguard.NewBufferFromBytes(wrapKey)
+	defer wrapKeyBuf.Destroy()
+	return generateKeypairWithRecoveryWrapKey(d, wrapKeyBuf)
+}
+
+func generateKeypairWithRecoveryWrapKey(d Deps, wrapKey *memguard.LockedBuffer) proto.BaseResponse {
 
 	// generate new RSA keypair
 	keyPair, err := crypto.GenerateRSAKeyPair()
@@ -116,7 +125,7 @@ func HandleGenerateKeypairWithRecoveryWrap(d Deps, req proto.GenerateKeypairWith
 	defer privKeyBuf.Destroy()
 
 	// wrap private key with AES-GCM
-	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey, privKeyBuf.Bytes())
+	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey.Bytes(), privKeyBuf.Bytes())
 	if err != nil {
 		d.Logger.Printf("recovery wrap error: AES-GCM wrap failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "AES-GCM wrap failed: "+err.Error())

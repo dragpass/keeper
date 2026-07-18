@@ -1,7 +1,7 @@
 // SessionManager interface contract — polymorphic regression guard.
 //
-// Asserts in a single table that both implementations (GroupSessionStore,
-// RecoverySessionStore) satisfy the same contract. When a new implementation
+// Asserts in a single table that all implementations (GroupSessionStore,
+// RecoverySessionStore, RecoveryKeySessionStore) satisfy the same contract. When a new implementation
 // (e.g. SecureViewerSessionStore) is added, registering one more line in
 // makeManagers automatically applies every case.
 //
@@ -67,6 +67,21 @@ func makeManagers() []managerCase {
 			payload: func() []byte {
 				// PEM is variable-length bytes — use an arbitrary payload.
 				return []byte("-----BEGIN FAKE-----\nABC\n-----END FAKE-----\n")
+			},
+		},
+		{
+			name: "RecoveryKeySessionStore",
+			make: func(now func() time.Time, ttl time.Duration) SessionManager {
+				s := NewRecoveryKeySessionStore(ttl)
+				if now != nil {
+					s.SetClock(now)
+				}
+				return s
+			},
+			notFoundErr: ErrRecoveryKeySessionNotFound,
+			expiredErr:  ErrRecoveryKeySessionExpired,
+			payload: func() []byte {
+				return []byte("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ")
 			},
 		},
 	}

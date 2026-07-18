@@ -30,11 +30,12 @@ func newTestDeps(t *testing.T) (Deps, *logger.MemoryLogger, *keychain.MemorySecr
 	log := logger.NewMemoryLogger()
 	store := keychain.NewMemorySecretStore()
 	return Deps{
-		Logger:            log,
-		Store:             store,
-		ServerKeyVerifier: verifier.AlwaysOKVerifier{},
-		GroupSessions:     sessions.NewGroupSessionStore(sessions.GroupSessionTTL),
-		RecoverySessions:  sessions.NewRecoverySessionStore(sessions.RecoverySessionTTL),
+		Logger:              log,
+		Store:               store,
+		ServerKeyVerifier:   verifier.AlwaysOKVerifier{},
+		GroupSessions:       sessions.NewGroupSessionStore(sessions.GroupSessionTTL),
+		RecoverySessions:    sessions.NewRecoverySessionStore(sessions.RecoverySessionTTL),
+		RecoveryKeySessions: sessions.NewRecoveryKeySessionStore(sessions.RecoveryKeySessionTTL),
 	}, log, store
 }
 
