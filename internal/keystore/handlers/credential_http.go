@@ -39,13 +39,10 @@ import (
 )
 
 const (
-	// defaultCredentialTimeout is used when policy.timeout_ms is non-positive.
+	// These limits are Keeper-owned and are not caller-configurable because the
+	// server policy signature does not cover resource-limit fields.
 	defaultCredentialTimeout = 30 * time.Second
-	// maxCredentialTimeout caps policy.timeout_ms so a hostile / buggy caller
-	// cannot pin an outbound connection open indefinitely.
-	maxCredentialTimeout = 120 * time.Second
-	// defaultMaxRespBytes is used when policy.max_resp_bytes is non-positive.
-	defaultMaxRespBytes = 1 << 20 // 1 MiB
+	defaultMaxRespBytes      = 1 << 20 // 1 MiB
 )
 
 // sealedCredential is the decrypted payload shape. Only the fields the Keeper
@@ -73,14 +70,6 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
 
-	// Safeguard 1: policy re-validation — host exact-match + method allowlist.
-	if !hostAllowed(host, req.Policy.AllowedHosts) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "target host is not in policy.allowed_hosts")
-	}
-	if !methodAllowed(req.Method, req.Policy.AllowedMethods) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "method is not in policy.allowed_methods")
-	}
-
 	// Decode the public material (IV / ciphertext / AAD / optional body).
 	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
 	if !ok {
@@ -93,6 +82,20 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	aad, resp, ok := decodeBase64(req.AADB64, "aad_b64")
 	if !ok {
 		return resp
+	}
+	if ok, resp := verifyCredentialPolicy(d, aad, req.Policy); !ok {
+		return resp
+	}
+
+	// The signed policy is trusted only after verification above.
+	if !hostAllowed(host, req.Policy.AllowedHosts) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "target host is not in policy.allowed_hosts")
+	}
+	if !methodAllowed(req.Method, req.Policy.AllowedMethods) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "method is not in policy.allowed_methods")
+	}
+	if !pathAllowed(req.TargetURL, req.Policy.AllowedPathPatterns) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "target path is not in policy.allowed_path_patterns")
 	}
 	var body []byte
 	if req.BodyB64 != "" {
@@ -138,7 +141,7 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	}
 
 	data, reqErr := doCredentialRequest(req.Method, req.TargetURL, headers, body, injected,
-		resolveTimeout(req.Policy.TimeoutMs), resolveMaxRespBytes(req.Policy.MaxRespBytes))
+		defaultCredentialTimeout, defaultMaxRespBytes)
 
 	// Safeguard 8 (part): drop references to the assembled secret strings and the
 	// parsed secret map now that the request is done. (Go strings are immutable,
@@ -201,27 +204,6 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 		BodyB64:    base64.StdEncoding.EncodeToString(raw),
 		Truncated:  truncated,
 	}, nil
-}
-
-// resolveTimeout returns the client timeout, defaulting when non-positive and
-// clamping to the ceiling.
-func resolveTimeout(timeoutMs int64) time.Duration {
-	if timeoutMs <= 0 {
-		return defaultCredentialTimeout
-	}
-	t := time.Duration(timeoutMs) * time.Millisecond
-	if t > maxCredentialTimeout {
-		return maxCredentialTimeout
-	}
-	return t
-}
-
-// resolveMaxRespBytes returns the response size cap, defaulting when non-positive.
-func resolveMaxRespBytes(maxRespBytes int64) int64 {
-	if maxRespBytes <= 0 {
-		return defaultMaxRespBytes
-	}
-	return maxRespBytes
 }
 
 // wipeSecretStrings drops references to secret-bearing map values. Go strings

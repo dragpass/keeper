@@ -97,6 +97,32 @@ func methodAllowed(method string, allowed []string) bool {
 	return false
 }
 
+// pathAllowed matches the URL's escaped path against exact paths or a single
+// trailing /* prefix pattern. Matching the escaped representation avoids path
+// decoding ambiguities between policy evaluation and the outbound request.
+func pathAllowed(target string, allowed []string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	for _, pattern := range allowed {
+		if pattern == path {
+			return true
+		}
+		if strings.HasSuffix(pattern, "/*") {
+			prefix := strings.TrimSuffix(pattern, "*")
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isBlockedIP reports whether ip is a non-public destination the Keeper must
 // refuse to connect to: RFC1918 private (10/8, 172.16/12, 192.168/16) and IPv6
 // ULA (fc00::/7) via IsPrivate; loopback (127/8, ::1), link-local unicast
