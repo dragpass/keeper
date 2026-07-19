@@ -248,7 +248,7 @@ dependency).
 |`generatekeypairwithrecoverywrap`|`challenge_token`, `signature`, `wrap_key_b64`, `server_key_version?`|`{ publickey, wrapped_keeper }`|New keypair + AES-GCM-wrap private key with RK24-derived `wrap_key`. `wrapped_keeper` = Base64(IV‖ciphertext).|
 |`recovery_session_open`|`challenge_token`, `signature`, `wrapped_keeper_b64`, `wrap_key_b64`, `server_key_version?`|`{ recovery_handle, expires_at_ms }`|Verify challenge, decrypt PEM into memguard, return opaque handle. PEM never crosses IPC.|
 |`recovery_session_close`|`recovery_handle`|_empty_|Discard handle. Idempotent (no error if handle absent).|
-|`auth_recovery_begin`|`alias`|`{ recovery_auth_seed, entered_recovery_key_handle, entered_recovery_key_expires_at_ms }`|Prompts for RK24 in the trusted native UI, derives only the server authentication seed, and stores the entered RK24 behind an opaque short-lived handle for the prepare step. RK24 and its wrap key never cross IPC.|
+|`auth_recovery_begin`|`alias`, `recovery_key`|`{ recovery_auth_seed, entered_recovery_key_handle, entered_recovery_key_expires_at_ms }`|Accepts the RK24 entered in the App, derives only the server authentication seed, and immediately stores the RK24 behind an opaque short-lived handle for the prepare step. The response never contains RK24 or its wrap key.|
 |`auth_recovery_prepare`|`alias`, `entered_recovery_key_handle`, `challenge_token`, `signature`, `wrapped_keeper_b64`, `recovery_key_version`, `server_key_version?`|`{ old_challenge_signature, recovery_handle, recovery_expires_at_ms, new_publickey, new_recovery_auth_seed, new_recovery_wrapped_keeper, new_recovery_key_version, new_recovery_key_handle, new_recovery_key_expires_at_ms }`|Verifies the server-signed recovery challenge, derives the old wrap key from the entered-key handle, opens the old private key into a recovery session, signs the challenge, generates the replacement identity keypair and RK24, and returns only wrapped/public material plus opaque old-key and new-RK24 handles.|
 
 ### Group DEK
@@ -391,7 +391,7 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.14|`credential_http_request` response redaction hardened|Redacts encoded and escaped secret echoes in response bodies in addition to literal echoes.|
 |0.0.15|`user_presence_capabilities`|Introduces trusted macOS user presence for recovery-key handling and approval confirmation.|
 |0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
-|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery password/RK24 input, KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles. Signup password input is app-owned; Keeper no longer exposes an OS new-password prompt.|
+|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Password and RK24 input are app-owned and sent only in request fields; Keeper no longer exposes OS secret-input prompts. Native Messaging responses return only wrapped/public material and opaque short-lived handles.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.17"`).
 Keeper-down or below-min sets a red

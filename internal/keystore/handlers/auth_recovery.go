@@ -1,52 +1,32 @@
 package handlers
 
 import (
-	"context"
-	"time"
-
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
 	"github.com/dragpass/keeper/internal/keystore/secure"
-	"github.com/dragpass/keeper/internal/keystore/userpresence"
 )
 
 func HandleAuthRecoveryBegin(d Deps, req proto.AuthRecoveryBeginRequest) proto.BaseResponse {
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	if d.UserPresence == nil || !d.UserPresence.Capabilities().PromptSecret {
-		return errs.CodeResponse(errs.ErrCodeUnsupported, userpresence.ErrUnavailable.Error())
-	}
 	if d.RecoveryKeySessions == nil {
 		return errs.CodeResponse(errs.ErrCodeInternal, "recovery key session store unavailable")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	result, err := d.UserPresence.PromptSecret(ctx, userpresence.SecretPrompt{
-		Title:   "Recover DragPass Account",
-		Message: "Enter the recovery key for this DragPass account.",
-		Label:   "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
-		Timeout: 2 * time.Minute,
-	})
-	if err != nil {
-		return authUserPresenceError(err)
-	}
-	if result.Secret == nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, userpresence.ErrEmptySecret.Error())
-	}
-	defer result.Secret.Destroy()
+	keyBytes := []byte(req.RecoveryKey)
+	defer secure.Zeroize(keyBytes)
 
-	authSeed, wrapKey, err := recoverykey.Derive(result.Secret.Bytes(), req.Alias, recoverykey.Version)
+	authSeed, wrapKey, err := recoverykey.Derive(keyBytes, req.Alias, recoverykey.Version)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid recovery key")
 	}
 	secure.Zeroize(wrapKey)
 
-	keyCopy := append([]byte(nil), result.Secret.Bytes()...)
+	keyCopy := append([]byte(nil), keyBytes...)
 	handle, expiresAt, err := d.RecoveryKeySessions.Open(keyCopy)
 	if err != nil {
 		secure.Zeroize(keyCopy)
