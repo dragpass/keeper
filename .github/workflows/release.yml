@@ -17,15 +17,16 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   verify:
     name: tag matches version.go
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: check version consistency
         run: |
           TAG_VER="${GITHUB_REF_NAME#v}"
@@ -36,25 +37,91 @@ jobs:
             exit 1
           fi
 
+  sbom:
+    name: generate SPDX SBOM
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: generate source dependency SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: go.mod
+          format: spdx-json
+          output-file: dragpass-keeper.spdx.json
+          syft-version: v1.48.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+      - name: validate SBOM
+        run: |
+          jq -e '.spdxVersion | startswith("SPDX-")' dragpass-keeper.spdx.json
+          jq -e '.packages | length > 0' dragpass-keeper.spdx.json
+          jq -e '[.packages[].name] | any(. == "github.com/awnumar/memguard")' \
+            dragpass-keeper.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-sbom
+          path: dragpass-keeper.spdx.json
+          if-no-files-found: error
+
   build-macos:
     name: build macOS packages
-    needs: verify
+    needs: [verify, sbom]
     runs-on: macos-14
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
       - name: build + package (x86_64, arm64)
         run: make pkg-macos VERSION="${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-sbom
+          path: supply-chain
+      - name: attest macOS build provenance
+        id: macos_provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            output/macos/*.pkg
+            dragpass-keeper-macos-*
+      - name: attest macOS SBOM
+        id: macos_sbom
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            output/macos/*.pkg
+            dragpass-keeper-macos-*
+          sbom-path: supply-chain/dragpass-keeper.spdx.json
+      - name: collect offline attestation bundles
+        run: |
+          mkdir -p attestations
+          cp "${{ steps.macos_provenance.outputs.bundle-path }}" \
+            attestations/macos-provenance.sigstore.json
+          cp "${{ steps.macos_sbom.outputs.bundle-path }}" \
+            attestations/macos-sbom.sigstore.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: macos-packages
           path: output/macos/*.pkg
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-attestations
+          path: attestations/*.sigstore.json
+          if-no-files-found: error
       # bare 바이너리 해시는 릴리스 노트 체크섬 표에 필요 — extension 의
       # release-hash 검증이 Keeper self-hash (설치된 바이너리) 와 대조한다.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: macos-binaries
           path: dragpass-keeper-macos-*
@@ -62,11 +129,16 @@ jobs:
 
   build-linux-windows:
     name: build Linux debs + Windows installer
-    needs: verify
+    needs: [verify, sbom]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
       - name: install mingw cross-compiler
@@ -82,16 +154,51 @@ jobs:
           mkdir -p output/windows
           chmod a+rwX output output/windows
           make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-sbom
+          path: supply-chain
+      - name: attest Linux and Windows build provenance
+        id: linux_windows_provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            output/linux/*.deb
+            output/windows/*.exe
+            dragpass-keeper-linux-*
+            dragpass-keeper.exe
+      - name: attest Linux and Windows SBOM
+        id: linux_windows_sbom
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            output/linux/*.deb
+            output/windows/*.exe
+            dragpass-keeper-linux-*
+            dragpass-keeper.exe
+          sbom-path: supply-chain/dragpass-keeper.spdx.json
+      - name: collect offline attestation bundles
+        run: |
+          mkdir -p attestations
+          cp "${{ steps.linux_windows_provenance.outputs.bundle-path }}" \
+            attestations/linux-windows-provenance.sigstore.json
+          cp "${{ steps.linux_windows_sbom.outputs.bundle-path }}" \
+            attestations/linux-windows-sbom.sigstore.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-windows-packages
           path: |
             output/linux/*.deb
             output/windows/*.exe
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-windows-attestations
+          path: attestations/*.sigstore.json
+          if-no-files-found: error
       # bare 바이너리 (repo 루트) — 릴리스 노트 체크섬 표용. Windows 는 bare
       # 바이너리와 인스톨러가 같은 파일명이라 별 아티팩트로 분리해 충돌 방지.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-windows-binaries
           path: |
@@ -103,32 +210,72 @@ jobs:
     name: sign + checksums + publish
     needs: [build-macos, build-linux-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       # step-level if 에서는 secrets 컨텍스트를 못 쓴다 — job env 로 승격 후
       # env 로 존재 여부를 검사한다.
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           # changelog 생성에 이전 태그까지의 커밋 이력이 필요하다.
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: '*-packages'
           path: pkgs
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: '*-binaries'
           path: bins
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-sbom
+          path: supply-chain
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: '*-attestations'
+          path: supply-chain
           merge-multiple: true
       - name: flatten assets
         run: |
           mkdir -p dist
           find pkgs -type f \( -name '*.pkg' -o -name '*.deb' -o -name '*.exe' \) -exec mv {} dist/ \;
+          find supply-chain -type f \
+            \( -name '*.spdx.json' -o -name '*.sigstore.json' \) \
+            -exec cp {} dist/ \;
           echo "--- release assets (dist) ---" && ls -la dist
           echo "--- bare binaries (checksum only) ---" && find bins -type f
+      - name: generate checksums
+        run: |
+          {
+            echo "# Hashes:"
+            echo ""
+            echo "| Filename | SHA256 |"
+            echo "|----------|--------|"
+            find bins -type f | sort | while read -r f; do
+              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
+            done
+            find dist -maxdepth 1 -type f | sort | while read -r f; do
+              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
+            done
+          } > /tmp/checksums.txt
+          mv /tmp/checksums.txt dist/checksums.txt
+
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum \
+              | sed 's#  \./#  #'
+          ) > /tmp/SHA256SUMS
+          mv /tmp/SHA256SUMS dist/SHA256SUMS
+
+          cat dist/SHA256SUMS
       - name: gpg sign assets
         if: ${{ env.GPG_PRIVATE_KEY != '' }}
         run: |
@@ -146,30 +293,13 @@ jobs:
           fi
           rm -f /tmp/guard.sig
           for f in dist/*; do
+            [ "$(basename "$f")" = "SHA256SUMS" ] && continue
             gpg --batch --yes --pinentry-mode loopback \
               ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
               --detach-sign --output "$f.sig" "$f"
             # 서명 자가검증 — 깨진 .sig 가 릴리스에 올라가지 않게.
             gpg --verify "$f.sig" "$f"
           done
-      # bare 바이너리를 먼저, 패키지를 다음에 — extension 의 release-hash 검증이
-      # 이 표에서 Keeper self-hash (bare 바이너리) 를 찾는다.
-      - name: generate checksums
-        run: |
-          {
-            echo "# Hashes:"
-            echo ""
-            echo "| Filename | SHA256 |"
-            echo "|----------|--------|"
-            find bins -type f | sort | while read -r f; do
-              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
-            done
-            for f in dist/*; do
-              case "$f" in *.sig) continue ;; esac
-              echo "| $(basename "$f") | $(sha256sum "$f" | awk '{print $1}') |"
-            done
-          } > dist/checksums.txt
-          cat dist/checksums.txt
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -188,7 +318,15 @@ jobs:
               git log --no-merges --pretty='- %s' "${GITHUB_REF_NAME}"
             fi
             echo ""
-            echo "See the README's \"Verifying Downloads\" section for GPG verification steps."
+            echo "## Verify"
+            echo ""
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo "gh attestation verify <artifact> --repo dragpass/keeper --signer-workflow dragpass/keeper/.github/workflows/release.yml --source-ref ${GITHUB_REF} --deny-self-hosted-runners"
+            echo "gh attestation verify <artifact> --repo dragpass/keeper --predicate-type https://spdx.dev/Document/v2.3 --signer-workflow dragpass/keeper/.github/workflows/release.yml --source-ref ${GITHUB_REF} --deny-self-hosted-runners"
+            echo '```'
+            echo ""
+            echo "See the README's \"Verifying Downloads\" section for provenance, SBOM, and GPG verification."
             echo ""
             cat dist/checksums.txt
           } > /tmp/notes.md
@@ -203,14 +341,23 @@ jobs:
     name: goreleaser brew tap
     needs: release
     runs-on: macos-14
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-sbom
+          path: supply-chain
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
         with:
           distribution: goreleaser
           version: '~> v2'
@@ -218,6 +365,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - name: attest Homebrew archive provenance
+        id: brew_provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: dist/*.tar.gz
+      - name: attest Homebrew archive SBOM
+        id: brew_sbom
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: dist/*.tar.gz
+          sbom-path: supply-chain/dragpass-keeper.spdx.json
+      - name: publish offline attestation bundles and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p attestations /tmp/keeper-release
+          cp "${{ steps.brew_provenance.outputs.bundle-path }}" \
+            attestations/homebrew-provenance.sigstore.json
+          cp "${{ steps.brew_sbom.outputs.bundle-path }}" \
+            attestations/homebrew-sbom.sigstore.json
+
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir /tmp/keeper-release
+          cp /tmp/keeper-release/SHA256SUMS /tmp/SHA256SUMS
+          for f in dist/*.tar.gz attestations/*.sigstore.json; do
+            name=$(basename "$f")
+            grep -v "  ${name}$" /tmp/SHA256SUMS > /tmp/SHA256SUMS.next || true
+            mv /tmp/SHA256SUMS.next /tmp/SHA256SUMS
+            printf '%s  %s\n' "$(shasum -a 256 "$f" | awk '{print $1}')" "$name" \
+              >> /tmp/SHA256SUMS
+          done
+          LC_ALL=C sort -k2,2 /tmp/SHA256SUMS \
+            > /tmp/keeper-release/SHA256SUMS
+
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            attestations/*.sigstore.json \
+            /tmp/keeper-release/SHA256SUMS \
+            --clobber
       # brew(tar.gz) 바이너리는 GoReleaser 빌드라 Makefile 빌드와 해시가 다르다
       # (-trimpath/ldflags 차이). extension 의 Keeper self-hash 검증이 릴리스
       # 노트의 체크섬 표를 파싱하므로, brew 바이너리 해시도 노트에 append 해야

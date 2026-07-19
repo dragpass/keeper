@@ -28,9 +28,59 @@ Download the latest release from the [Releases page](https://github.com/dragpass
 
 ## Verifying Downloads
 
-All release packages are signed with GPG for security. We strongly recommend verifying the integrity of downloaded files.
+Every release publishes `SHA256SUMS`, `dragpass-keeper.spdx.json`, and GitHub
+Artifact Attestations. These bind each package to the public Keeper repository,
+tagged source, build workflow, and dependency inventory.
 
-### 1. Import the Public Key
+### 1. Verify the SHA-256 digest
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+### 2. Verify build provenance
+
+With the GitHub CLI installed:
+
+```bash
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+Replace the filename with the downloaded macOS or Linux package as needed. For
+offline verification, download the matching provenance bundle and cache
+GitHub's trusted root while online:
+
+```bash
+gh attestation trusted-root > trusted_root.jsonl
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-provenance.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-sbom.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+The release also contains `dragpass-keeper.spdx.json`. It is an SPDX JSON SBOM
+generated from the tagged source and attached to every release artifact through
+a separate SBOM attestation.
+
+### 3. Optional GPG verification
+
+Releases produced with the Keeper GPG signing secret also include detached
+`.sig` files for release assets other than the final `SHA256SUMS` manifest.
+
+#### Import the Public Key
 
 ```bash
 # Download and import the public key
@@ -41,7 +91,7 @@ Or import manually from [GPG_PUBLIC_KEY.asc](GPG_PUBLIC_KEY.asc).
 
 **Key Fingerprint**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
-### 2. Verify the Signature
+#### Verify the Signature
 
 ```bash
 # For macOS (Intel)
