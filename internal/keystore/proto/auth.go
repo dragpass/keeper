@@ -1,7 +1,8 @@
 package proto
 
 type AuthSignupPrepareRequest struct {
-	Alias string `json:"alias"`
+	Alias    string `json:"alias"`
+	Password string `json:"password,omitempty"`
 }
 
 func (r AuthSignupPrepareRequest) Validate() error {

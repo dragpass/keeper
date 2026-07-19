@@ -89,6 +89,27 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	}
 }
 
+func TestHandleAuthSignupPrepareUsesAppPasswordWithoutPrompt(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x55}, 32))
+	presence := &signupUserPresence{password: "prompt-password-should-not-be-used"}
+	deps.UserPresence = presence
+	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x02}, 128))
+
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{
+		Alias:    "alice",
+		Password: "correct horse battery staple",
+	})
+	if !response.Success {
+		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
+	}
+	data := response.Data.(proto.AuthSignupPrepareResponseData)
+	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
+	if presence.newPrompts != 0 {
+		t.Fatalf("new password prompts = %d, want 0", presence.newPrompts)
+	}
+}
+
 func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
