@@ -21,28 +21,21 @@ import (
 
 type signupUserPresence struct {
 	userpresence.Unavailable
-	password   string
-	shownKey   string
-	showErr    error
-	newPrompts int
+	password string
+	shownKey string
+	showErr  error
 }
 
 func (p *signupUserPresence) Capabilities() userpresence.Capabilities {
 	return userpresence.Capabilities{
 		Available:       true,
 		PromptSecret:    true,
-		PromptNewSecret: true,
 		ShowRecoveryKey: true,
 		Backend:         "test",
 	}
 }
 
 func (p *signupUserPresence) PromptSecret(context.Context, userpresence.SecretPrompt) (userpresence.SecretResult, error) {
-	return userpresence.SecretResult{Secret: memguard.NewBufferFromBytes([]byte(p.password))}, nil
-}
-
-func (p *signupUserPresence) PromptNewSecret(context.Context, userpresence.NewSecretPrompt) (userpresence.SecretResult, error) {
-	p.newPrompts++
 	return userpresence.SecretResult{Secret: memguard.NewBufferFromBytes([]byte(p.password))}, nil
 }
 
@@ -84,9 +77,6 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 			t.Fatalf("response contains forbidden secret field/value %q", forbidden)
 		}
 	}
-	if presence.newPrompts != 0 {
-		t.Fatalf("new password prompts = %d, want 0", presence.newPrompts)
-	}
 }
 
 func TestHandleAuthSignupPrepareUsesAppPasswordWithoutPrompt(t *testing.T) {
@@ -105,9 +95,6 @@ func TestHandleAuthSignupPrepareUsesAppPasswordWithoutPrompt(t *testing.T) {
 	}
 	data := response.Data.(proto.AuthSignupPrepareResponseData)
 	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
-	if presence.newPrompts != 0 {
-		t.Fatalf("new password prompts = %d, want 0", presence.newPrompts)
-	}
 }
 
 func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
