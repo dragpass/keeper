@@ -126,7 +126,7 @@ $(MAC_PKG_ARM64): $(MAC_BIN_ARM64)
 pkg-windows: $(WIN_PKG)
 $(WIN_PKG): $(WIN_BIN) setup.iss
 	@echo "Building Windows installer via Docker: $(WIN_PKG)..."
-	@docker run --rm -v "$$PWD:/work" amake/innosetup setup.iss
+	@docker run --rm -v "$$PWD:/work" amake/innosetup "/DMyAppVersion=$(VERSION)" setup.iss
 	@echo "Successfully built Windows installer."
 
 pkg-linux: pkg-linux-amd64 pkg-linux-arm64
