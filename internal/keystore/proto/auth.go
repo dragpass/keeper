@@ -55,11 +55,15 @@ type AuthRecoveryReissuePrepareResponseData struct {
 }
 
 type AuthRecoveryBeginRequest struct {
-	Alias string `json:"alias"`
+	Alias       string `json:"alias"`
+	RecoveryKey string `json:"recovery_key"`
 }
 
 func (r AuthRecoveryBeginRequest) Validate() error {
-	return requireString(r.Alias, "alias")
+	if err := requireString(r.Alias, "alias"); err != nil {
+		return err
+	}
+	return requireString(r.RecoveryKey, "recovery_key")
 }
 
 type AuthRecoveryBeginResponseData struct {

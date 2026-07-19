@@ -1,11 +1,22 @@
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
+
 [Setup]
 AppId={{38599DE5-0295-498E-94DA-EFC66F72F6EB}}
-AppName=Dragpass Keeper
-AppVersion=1.0
-; C:\Program Files\Dragpass
-DefaultDirName={commonpf}\Dragpass
+AppName=DragPass Keeper
+AppVersion={#MyAppVersion}
+AppPublisher=DragPass
+AppPublisherURL=https://github.com/dragpass/keeper
+AppSupportURL=https://github.com/dragpass/keeper/issues
+AppUpdatesURL=https://github.com/dragpass/keeper/releases
+UninstallDisplayName=DragPass Keeper
+; C:\Program Files\DragPass
+DefaultDirName={commonpf}\DragPass
 OutputBaseFilename=dragpass-keeper
 PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=output\windows
@@ -40,7 +51,7 @@ begin
     try
       JsonContent.Add('{');
       JsonContent.Add('  "name": "com.dragpass.keeper",');
-      JsonContent.Add('  "description": "Dragpass Device Key Storage",');
+      JsonContent.Add('  "description": "DragPass Device Key Storage",');
       JsonContent.Add('  "path": "' + AppPath + '\\dragpass-keeper.exe",');
       JsonContent.Add('  "type": "stdio",');
       JsonContent.Add('  "allowed_origins": [');

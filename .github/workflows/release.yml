@@ -245,3 +245,23 @@ jobs:
           cat /tmp/rows.md >> /tmp/body-trimmed.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --notes-file /tmp/body-trimmed.md
+
+  winget:
+    name: submit WinGet update
+    needs: release
+    runs-on: windows-latest
+    env:
+      WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+    steps:
+      - name: update WinGet manifest and open submission PR
+        if: ${{ env.WINGET_GITHUB_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $url = "https://github.com/dragpass/keeper/releases/download/$env:GITHUB_REF_NAME/dragpass-keeper.exe"
+          ./wingetcreate.exe update DragPass.Keeper `
+            --urls $url `
+            --version $version `
+            --token $env:WINGET_GITHUB_TOKEN `
+            --submit

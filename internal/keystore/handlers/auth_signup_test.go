@@ -255,7 +255,6 @@ func TestRecoveryKeySessionErrorsMapToSessionCodes(t *testing.T) {
 func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	enteredRecoveryKey := "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
-	deps.UserPresence = &signupUserPresence{password: enteredRecoveryKey}
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x02}, 256))
 
 	oldKeypair, err := keepercrypto.GenerateRSAKeyPair()
@@ -272,7 +271,10 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 		t.Fatalf("AESGCMEncryptBase64: %v", err)
 	}
 
-	beginResponse := HandleAuthRecoveryBegin(deps, proto.AuthRecoveryBeginRequest{Alias: "alice"})
+	beginResponse := HandleAuthRecoveryBegin(deps, proto.AuthRecoveryBeginRequest{
+		Alias:       "alice",
+		RecoveryKey: enteredRecoveryKey,
+	})
 	if !beginResponse.Success {
 		t.Fatalf("HandleAuthRecoveryBegin: %s", beginResponse.Error)
 	}
