@@ -22,6 +22,7 @@ import (
 //
 // Must never be enabled in production. Fixtures inject the env var explicitly.
 const e2eEnvVar = "KEEPER_E2E_MODE"
+const e2eUserPresenceFileEnvVar = "KEEPER_E2E_USER_PRESENCE_FILE"
 
 // Items stored in the keystore:
 // - Server public key (saved on init)
@@ -76,7 +77,11 @@ func init() {
 		// clipboard_get_last_hash action can query the SHA-256 hash.
 		// SetDefaultDeps must run before the first DefaultApp() call.
 		deps.Clipboard = clipboard.NewMemoryClipboard()
-		deps.UserPresence = userpresence.Unavailable{}
+		if path := os.Getenv(e2eUserPresenceFileEnvVar); path != "" {
+			deps.UserPresence = userpresence.NewE2EFile(path)
+		} else {
+			deps.UserPresence = userpresence.Unavailable{}
+		}
 		keystore.SetDefaultDeps(deps)
 		app := keystore.DefaultApp()
 		app.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
