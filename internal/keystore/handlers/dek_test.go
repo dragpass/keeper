@@ -291,44 +291,6 @@ func TestDEKRotateToDeviceKey_Roundtrip(t *testing.T) {
 	}
 }
 
-func TestDEKRotateToDeviceKeyPrompt_Roundtrip(t *testing.T) {
-	deps, _, store := newTestDeps(t)
-	deviceKey := make([]byte, 32)
-	setKeychainDeviceKey(t, store, deviceKey)
-	password := "prompt-password"
-	signup := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
-	if !signup.Success {
-		t.Fatalf("signup setup: %s", signup.Error)
-	}
-	wrapped := signup.Data.(proto.DEKGenerateAndWrapDualResponseData).PasswordWrappedDEKB64
-	presence := &promptSecretPresence{secret: password}
-	deps.UserPresence = presence
-
-	resp := HandleDEKRotateToDeviceKeyPrompt(deps, proto.DEKRotateToDeviceKeyPromptRequest{
-		EncryptedDEKB64: wrapped,
-	})
-	if !resp.Success {
-		t.Fatalf("prompt rotate failed: %s", resp.Error)
-	}
-	if presence.calls != 1 {
-		t.Fatalf("prompt calls = %d, want 1", presence.calls)
-	}
-	if resp.Data.(proto.DEKRotateToDeviceKeyResponseData).DeviceWrappedDEKB64 == "" {
-		t.Fatal("device wrapped DEK missing")
-	}
-}
-
-func TestDEKRotateToDeviceKeyPrompt_RequiresTrustedBackend(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	deps.UserPresence = userpresence.Unavailable{}
-	resp := HandleDEKRotateToDeviceKeyPrompt(deps, proto.DEKRotateToDeviceKeyPromptRequest{
-		EncryptedDEKB64: base64.StdEncoding.EncodeToString(make([]byte, 44)),
-	})
-	if resp.Success || resp.ErrorCode != "unsupported" {
-		t.Fatalf("expected unsupported fail-closed response, got %+v", resp)
-	}
-}
-
 func TestDEKRotateToDeviceKey_WrongPasswordRejected(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deviceKey := make([]byte, 32)

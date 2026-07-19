@@ -182,11 +182,6 @@ const (
 	// round-trip.
 	ActionDEKRotateToDeviceKey = "dek_rotate_to_device_key"
 
-	// App-first login variant. Keeper obtains the password from its trusted
-	// platform prompt and performs the same password-to-device rewrap without
-	// returning the password through Native Messaging.
-	ActionDEKRotateToDeviceKeyPrompt = "dek_rotate_to_device_key_prompt"
-
 	// DEKUnwrapAndEncrypt: unwraps the device-wrapped personal DEK and
 	// AES-GCM-encrypts plaintext with it.
 	//   Inputs: encrypted_dek_b64(iv(12)||ct), plaintext_b64
