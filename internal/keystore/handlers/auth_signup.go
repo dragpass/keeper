@@ -35,37 +35,15 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	}
 
 	var passwordBuffer *memguard.LockedBuffer
-	if req.Password != "" {
-		if utf8.RuneCountInString(req.Password) < signupPasswordMinLength {
-			secure.WipeString(&req.Password)
-			return errs.CodeResponse(errs.ErrCodeValidation, "password must be at least 12 characters")
-		}
-		passwordBuffer = memguard.NewBufferFromBytes([]byte(req.Password))
-		secure.WipeString(&req.Password)
-	} else {
-		if d.UserPresence == nil || !d.UserPresence.Capabilities().PromptNewSecret {
-			return errs.CodeResponse(errs.ErrCodeUnsupported, userpresence.ErrUnavailable.Error())
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		passwordResult, err := d.UserPresence.PromptNewSecret(ctx, userpresence.NewSecretPrompt{
-			Title:             "Create DragPass Password",
-			Message:           "Create a password for encrypting this DragPass account.",
-			Label:             "New password",
-			ConfirmationLabel: "Confirm password",
-			Timeout:           2 * time.Minute,
-		})
-		if err != nil {
-			return authUserPresenceError(err)
-		}
-		if passwordResult.Secret == nil || utf8.RuneCount(passwordResult.Secret.Bytes()) < signupPasswordMinLength {
-			if passwordResult.Secret != nil {
-				passwordResult.Secret.Destroy()
-			}
-			return errs.CodeResponse(errs.ErrCodeValidation, "password must be at least 12 characters")
-		}
-		passwordBuffer = passwordResult.Secret
+	if req.Password == "" {
+		return errs.CodeResponse(errs.ErrCodeValidation, "password is required in the app")
 	}
+	if utf8.RuneCountInString(req.Password) < signupPasswordMinLength {
+		secure.WipeString(&req.Password)
+		return errs.CodeResponse(errs.ErrCodeValidation, "password must be at least 12 characters")
+	}
+	passwordBuffer = memguard.NewBufferFromBytes([]byte(req.Password))
+	secure.WipeString(&req.Password)
 	defer passwordBuffer.Destroy()
 
 	dekData, response := generateAndWrapDual(d, passwordBuffer)

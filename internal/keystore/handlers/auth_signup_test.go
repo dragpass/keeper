@@ -59,7 +59,7 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	deps.UserPresence = presence
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x01}, 128))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: password})
 	if !response.Success {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
@@ -84,8 +84,8 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 			t.Fatalf("response contains forbidden secret field/value %q", forbidden)
 		}
 	}
-	if presence.newPrompts != 1 {
-		t.Fatalf("new password prompts = %d, want 1", presence.newPrompts)
+	if presence.newPrompts != 0 {
+		t.Fatalf("new password prompts = %d, want 0", presence.newPrompts)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
 	deps.UserPresence = &signupUserPresence{password: "short"}
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "short"})
 	if response.Success || response.ErrorCode != "validation_error" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -129,7 +129,7 @@ func TestHandleAuthSignupPrepareCountsUnicodeCharacters(t *testing.T) {
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
 	deps.UserPresence = &signupUserPresence{password: "가나다라"}
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "가나다라"})
 	if response.Success || response.ErrorCode != "validation_error" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -143,7 +143,7 @@ func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 	deps.UserPresence = &signupUserPresence{password: "correct horse battery staple"}
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x03}, 256))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "correct horse battery staple"})
 	if !response.Success {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
