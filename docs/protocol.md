@@ -106,7 +106,7 @@ types are in `internal/keystore/proto/`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`ping`|_empty_|`{ version, hash, path }`|Liveness + version. Used by Extension health check.|
-|`user_presence_capabilities`|_empty_|`{ available, prompt_secret, prompt_new_secret, confirm, show_recovery_key, backend }`|Reports trusted OS prompt support. All capability fields are false when no native backend is installed.|
+|`user_presence_capabilities`|_empty_|`{ available, prompt_secret, confirm, show_recovery_key, backend }`|Reports trusted OS prompt support. All capability fields are false when no native backend is installed.|
 
 The current production backend is macOS Cocoa. Generic confirmation is not
 exposed as a wire action: a domain handler must verify the server-signed
@@ -392,7 +392,7 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.14|`credential_http_request` response redaction hardened|Redacts encoded and escaped secret echoes in response bodies in addition to literal echoes.|
 |0.0.15|`user_presence_capabilities`, `dek_rotate_to_device_key_prompt`|Introduces the trusted macOS Cocoa password prompt and app-first login composite.|
 |0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
-|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`; `user_presence_capabilities.prompt_new_secret`|Moves signup and recovery password/RK24 input, KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles.|
+|0.0.17 (current)|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery password/RK24 input, KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Native Messaging returns only wrapped/public material and opaque short-lived handles. Signup password input is app-owned; Keeper no longer exposes an OS new-password prompt.|
 
 The Extension enforces `MIN_KEEPER_VERSION` (currently `"0.0.17"`).
 Keeper-down or below-min sets a red
