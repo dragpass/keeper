@@ -34,6 +34,9 @@ an existing package.
 - The Inno Setup `AppVersion` is supplied from the `vX.Y.Z` tag.
 - The GitHub release must be public before the WinGet Community Repository
   validates the installer URL.
+- Every Windows installer is covered by GitHub build provenance and SBOM
+  attestations. The release also publishes `SHA256SUMS`, the SPDX JSON SBOM, and
+  offline Sigstore bundles.
 - Public Windows releases should be Authenticode signed. Detached GPG signatures
   verify downloads but do not establish Windows publisher reputation or avoid
   SmartScreen warnings.

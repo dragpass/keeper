@@ -26,11 +26,60 @@
   - `dragpass-keeper-linux-arm64.deb` (ARM64)
 - **Windows**: `dragpass-keeper.exe` (x64 installer)
 
-## Verifying Downloads
+## 다운로드 검증
 
-모든 릴리스 패키지는 보안을 위해 GPG로 서명되어 있습니다. 내려받은 파일의 무결성을 반드시 검증하시길 강력히 권장합니다.
+모든 릴리스는 `SHA256SUMS`, `dragpass-keeper.spdx.json`, GitHub Artifact
+Attestation을 제공합니다. 이를 통해 패키지가 공개 Keeper 저장소의 태그 소스와
+빌드 워크플로에서 생성됐는지, 어떤 의존성을 포함하는지 검증할 수 있습니다.
 
-### 1. Import the Public Key
+### 1. SHA-256 검증
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+### 2. 빌드 출처 검증
+
+GitHub CLI가 설치된 환경에서 실행합니다.
+
+```bash
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+macOS나 Linux에서는 파일명을 내려받은 패키지명으로 바꿉니다. 오프라인 검증이
+필요하면 온라인 상태에서 GitHub trusted root를 저장하고, 릴리스의 해당 provenance
+bundle을 함께 보관합니다.
+
+```bash
+gh attestation trusted-root > trusted_root.jsonl
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-provenance.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-sbom.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+릴리스의 `dragpass-keeper.spdx.json`은 태그 소스에서 생성한 SPDX JSON SBOM이며,
+별도의 SBOM attestation으로 각 릴리스 산출물에 연결됩니다.
+
+### 3. 선택적 GPG 검증
+
+Keeper GPG 서명 secret이 설정된 릴리스는 최종 `SHA256SUMS`를 제외한 릴리스
+산출물에 detached `.sig` 파일도 제공합니다.
+
+#### 공개키 가져오기
 
 ```bash
 # Download and import the public key
@@ -41,7 +90,7 @@ curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc |
 
 **Key Fingerprint**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
-### 2. Verify the Signature
+#### 서명 검증
 
 ```bash
 # For macOS (Intel)

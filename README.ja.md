@@ -28,9 +28,59 @@
 
 ## ダウンロードの検証
 
-すべてのリリースパッケージは、セキュリティのため GPG で署名されています。ダウンロードしたファイルの完全性を検証することを強く推奨します。
+すべてのリリースには `SHA256SUMS`、`dragpass-keeper.spdx.json`、GitHub
+Artifact Attestation が含まれます。これにより、パッケージが公開 Keeper
+リポジトリのタグ付きソースとビルドワークフローから生成されたこと、および
+依存関係を検証できます。
 
-### 1. 公開鍵のインポート
+### 1. SHA-256 の検証
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+### 2. ビルド来歴の検証
+
+GitHub CLI がインストールされた環境で実行します。
+
+```bash
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+macOS または Linux では、ファイル名をダウンロードしたパッケージ名に置き換えて
+ください。オフライン検証には、オンライン時に GitHub trusted root を保存し、
+リリースの対応する provenance bundle も保管します。
+
+```bash
+gh attestation trusted-root > trusted_root.jsonl
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-provenance.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify dragpass-keeper.exe --repo dragpass/keeper \
+  --bundle linux-windows-sbom.sigstore.json \
+  --custom-trusted-root trusted_root.jsonl \
+  --predicate-type https://spdx.dev/Document/v2.3 \
+  --signer-workflow dragpass/keeper/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+リリースの `dragpass-keeper.spdx.json` は、タグ付きソースから生成された SPDX
+JSON SBOM です。各リリース成果物には、個別の SBOM attestation で関連付けられます。
+
+### 3. オプションの GPG 検証
+
+Keeper の GPG 署名 secret が設定されたリリースでは、最終版 `SHA256SUMS` を
+除くリリース成果物に detached `.sig` ファイルも含まれます。
+
+#### 公開鍵のインポート
 
 ```bash
 # Download and import the public key
@@ -41,7 +91,7 @@ curl https://raw.githubusercontent.com/dragpass/keeper/main/GPG_PUBLIC_KEY.asc |
 
 **鍵のフィンガープリント**: `66DF 4017 8A5F 6F66 EAAF 318A 3FC4 1856 9192 8FDC`
 
-### 2. 署名の検証
+#### 署名の検証
 
 ```bash
 # For macOS (Intel)
