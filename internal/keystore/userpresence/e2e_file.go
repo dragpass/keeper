@@ -14,7 +14,6 @@ import (
 // profile. Production wiring never constructs this backend.
 type E2EFileState struct {
 	Secret           string `json:"secret,omitempty"`
-	NewSecret        string `json:"new_secret,omitempty"`
 	Approve          *bool  `json:"approve,omitempty"`
 	ShownRecoveryKey string `json:"shown_recovery_key,omitempty"`
 }
@@ -34,7 +33,6 @@ func (e *E2EFile) Capabilities() Capabilities {
 	return Capabilities{
 		Available:       true,
 		PromptSecret:    true,
-		PromptNewSecret: true,
 		Confirm:         true,
 		ShowRecoveryKey: true,
 		Backend:         "e2e-file",
@@ -82,19 +80,6 @@ func (e *E2EFile) PromptSecret(ctx context.Context, _ SecretPrompt) (SecretResul
 		return SecretResult{}, err
 	}
 	return lockedSecret(state.Secret)
-}
-
-func (e *E2EFile) PromptNewSecret(ctx context.Context, _ NewSecretPrompt) (SecretResult, error) {
-	if err := ctx.Err(); err != nil {
-		return SecretResult{}, err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state, err := e.readState()
-	if err != nil {
-		return SecretResult{}, err
-	}
-	return lockedSecret(state.NewSecret)
 }
 
 func (e *E2EFile) Confirm(ctx context.Context, _ ConfirmPrompt) (Decision, error) {

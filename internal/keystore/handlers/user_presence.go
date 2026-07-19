@@ -9,7 +9,6 @@ func HandleUserPresenceCapabilities(d Deps, _ proto.UserPresenceCapabilitiesRequ
 		Data: proto.UserPresenceCapabilitiesResponseData{
 			Available:       capabilities.Available,
 			PromptSecret:    capabilities.PromptSecret,
-			PromptNewSecret: capabilities.PromptNewSecret,
 			Confirm:         capabilities.Confirm,
 			ShowRecoveryKey: capabilities.ShowRecoveryKey,
 			Backend:         capabilities.Backend,

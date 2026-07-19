@@ -25,9 +25,8 @@ func TestE2EFilePromptsAndCapturesRecoveryKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "presence.json")
 	approve := true
 	writeE2EState(t, path, E2EFileState{
-		Secret:    "login-secret",
-		NewSecret: "new-secret",
-		Approve:   &approve,
+		Secret:  "login-secret",
+		Approve: &approve,
 	})
 	presence := NewE2EFile(path)
 
@@ -38,15 +37,6 @@ func TestE2EFilePromptsAndCapturesRecoveryKey(t *testing.T) {
 	defer secret.Secret.Destroy()
 	if got := string(secret.Secret.Bytes()); got != "login-secret" {
 		t.Fatalf("secret = %q", got)
-	}
-
-	newSecret, err := presence.PromptNewSecret(context.Background(), NewSecretPrompt{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer newSecret.Secret.Destroy()
-	if got := string(newSecret.Secret.Bytes()); got != "new-secret" {
-		t.Fatalf("new secret = %q", got)
 	}
 
 	key := memguard.NewBufferFromBytes([]byte("ABCD-EFGH-IJKL-MNOP-QRST-UVWX"))

@@ -9,7 +9,7 @@ func TestNewPlatformReportsCocoaConfirm(t *testing.T) {
 	if !capabilities.Available || !capabilities.Confirm {
 		t.Fatalf("Cocoa confirm capability missing: %+v", capabilities)
 	}
-	if !capabilities.PromptSecret || !capabilities.PromptNewSecret || !capabilities.ShowRecoveryKey {
+	if !capabilities.PromptSecret || !capabilities.ShowRecoveryKey {
 		t.Fatalf("unexpected secret capabilities: %+v", capabilities)
 	}
 	if capabilities.Backend != "cocoa" {
