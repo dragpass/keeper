@@ -393,10 +393,10 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.15|`user_presence_capabilities`|Introduces trusted macOS user presence for recovery-key handling and approval confirmation.|
 |0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
 |0.0.17|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Password and RK24 input are app-owned and sent only in request fields; Keeper no longer exposes OS secret-input prompts. Native Messaging responses return only wrapped/public material and opaque short-lived handles.|
-|0.0.18 (current)|`credential_approval_prompt`|Adds server-challenge-bound native approval and device-signed decisions for MCP credential use. Generic request-key signing paths reject this decision namespace.|
+|0.0.19 (current)|`credential_approval_prompt`|Adds server-challenge-bound native approval and device-signed decisions for MCP credential use. Generic request-key signing paths reject this decision namespace.|
 
 The Extension and MCP client enforce their own `MIN_KEEPER_VERSION`; MCP
-credential approval requires `"0.0.18"` or newer.
+credential approval requires `"0.0.19"` or newer.
 Keeper-down or below-min sets a red
 `'!'` badge and blocks crypto actions until the user upgrades.
 
