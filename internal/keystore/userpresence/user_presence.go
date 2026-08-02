@@ -1,5 +1,5 @@
 // Package userpresence defines the trusted local UI boundary used for
-// recovery-key and approval prompts.
+// recovery-key handling and generic user confirmation.
 package userpresence
 
 import (

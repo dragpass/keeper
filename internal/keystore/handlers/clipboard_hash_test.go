@@ -1,4 +1,4 @@
-// clipboard_hash_test.go — HandleClipboardGetLastHash 가드.
+// Tests for HandleClipboardGetLastHash.
 package handlers
 
 import (

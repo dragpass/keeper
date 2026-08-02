@@ -1,6 +1,4 @@
-// Crypto helper aliases — keystore package 내부 (test 포함) 에서 bare name 으로
-// 참조하는 helper 만 보존. 그 외 (KeyPair, AESGCMEncryptBase64, ParsePrivateKey,
-// VerifySignature, SignData, DecryptData) 는 caller 가 없어 제거.
+// Keep the crypto aliases used by the root package and its tests.
 
 package keystore
 

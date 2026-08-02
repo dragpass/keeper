@@ -1,11 +1,11 @@
-// clipboard_group_test.go — HandleGroupDecryptToClipboard 가드.
+// Tests for HandleGroupDecryptToClipboard.
 //
-// Core guarantees (clipboard_unwrap_test 와 동일):
+// Core guarantees:
 //   1. response envelope plaintext-free
 //   2. logger plaintext-free
 //   3. clipboard_ttl_ms range validation
-//   4. d.Clipboard.Write 정확히 1회 호출 + SHA-256 hash 일치
-//   5. plaintext slice 즉시 zeroize
+//   4. d.Clipboard.Write is called exactly once and returns the expected SHA-256 hash
+//   5. plaintext is zeroized immediately
 
 package handlers
 

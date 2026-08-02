@@ -20,7 +20,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -121,16 +120,7 @@ func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	if isCredentialApprovalDecision(req.CanonicalRequest) {
-		return errs.CodeResponse(errs.ErrCodeValidation,
-			"credential approval decisions require trusted user presence")
-	}
 	return signRequestCanonical(d, req.CanonicalRequest)
-}
-
-func isCredentialApprovalDecision(value string) bool {
-	return strings.HasPrefix(value,
-		`{"version":"`+proto.CredentialApprovalDecisionVersion+`",`)
 }
 
 func signRequestCanonical(d Deps, canonical string) proto.BaseResponse {

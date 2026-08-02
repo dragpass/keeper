@@ -1,15 +1,14 @@
-# Release CI — v* 태그 push 시 5개 플랫폼 패키지를 빌드해 GitHub Release 로 게시.
+# Release CI builds platform packages for v* tags and publishes a GitHub Release.
 #
-#   macOS  : macos-14 러너에서 go build(양 아키텍처) + pkgbuild (.pkg)
-#   Linux  : ubuntu 러너에서 CGO_ENABLED=0 크로스 빌드 + docker dpkg-deb (.deb)
-#   Windows: ubuntu 러너에서 mingw 크로스 CGO 빌드 + docker innosetup (.exe)
+#   macOS  : amd64 and arm64 Go builds plus pkgbuild (.pkg)
+#   Linux  : CGO-disabled cross-build plus dpkg-deb (.deb)
+#   Windows: MinGW cross-build plus Inno Setup (.exe)
 #
-# 버전 규약: 태그 vX.Y.Z 는 internal/keystore/version/version.go 의 Version 과
-# 일치해야 한다 (verify job 이 강제). 패키지 메타데이터 버전은 make VERSION= 으로
-# 태그에서 주입한다.
+# The vX.Y.Z tag must match internal/keystore/version/version.go. Package
+# metadata receives the tag version through make VERSION=.
 #
-# GPG 서명: repo secret GPG_PRIVATE_KEY (+ 선택 GPG_PASSPHRASE) 가 있으면 자산별
-# .sig 를 생성한다. 없으면 서명 없이 게시 (다운로드 검증은 checksums 로 가능).
+# GPG_PRIVATE_KEY and optional GPG_PASSPHRASE enable detached signatures.
+# Checksums remain available when signing is not configured.
 name: release
 
 on:

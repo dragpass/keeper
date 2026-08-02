@@ -277,7 +277,6 @@ dependency).
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`credential_http_request`|`group_handle`, `iv_b64`, `ciphertext_b64`, `aad_b64`, `target_url`, `method`, `header_template` (placeholders only), `body_b64?`, signed `policy`|`{ status_code, headers (redacted), body_b64 (redacted), truncated }`|Decrypt-to-tool HTTP sink. Verifies the RSA-PSS server policy, enforces its exact target and request shape, blocks private-network SSRF and redirects, injects the decrypted credential locally, and returns only a bounded redacted response.|
-|`credential_approval_prompt`|server-signed `{ challenge, signature, server_key_version, signature_alg }`|device-signed `{ decision, decided_at, challenge_hash, key_fingerprint, signature }`|Verifies the server challenge before showing a trusted OS approve/deny prompt. The resulting decision is signed with the enrolled request key. Generic request-key signing and rotation reject the approval-decision namespace, preventing a caller from bypassing user presence.|
 
 ### Item DEK / drag (Phase 12b)
 
@@ -394,10 +393,10 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.16|No protocol change|Release packaging enables CGO for the macOS Cocoa user-presence backend.|
 |0.0.17|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Password and RK24 input are app-owned and sent only in request fields; Keeper no longer exposes OS secret-input prompts. Native Messaging responses return only wrapped/public material and opaque short-lived handles.|
 |0.0.20|`credential_approval_prompt`|Adds server-challenge-bound native approval and device-signed decisions for MCP credential use. Generic request-key signing paths reject this decision namespace.|
-|0.0.21 (current)|No protocol change|Keeps release SBOM material outside the checkout so GoReleaser can publish the Homebrew archive and tap update from a clean git tree.|
+|0.0.21|No protocol change|Keeps release SBOM material outside the checkout so GoReleaser can publish the Homebrew archive and tap update from a clean git tree.|
+|0.0.22 (current)|Remove `credential_approval_prompt`|Credential approval is owned by the DragPass browser app. MCP waits for the server approval state, while Keeper remains responsible for cryptographic policy enforcement and credential injection only.|
 
-The Extension and MCP client enforce their own `MIN_KEEPER_VERSION`; MCP
-credential approval requires `"0.0.20"` or newer.
+The Extension and MCP client enforce their own `MIN_KEEPER_VERSION`.
 Keeper-down or below-min sets a red
 `'!'` badge and blocks crypto actions until the user upgrades.
 

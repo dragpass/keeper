@@ -1,5 +1,4 @@
-// rotate_keypair_status_abort_test.go — HandleRotateUserKeypairStatus /
-// HandleRotateUserKeypairAbort 가드 + 양 핸들러 lifecycle 로그 검증.
+// Tests status, abort, and lifecycle logging for keypair rotation.
 package handlers
 
 import (

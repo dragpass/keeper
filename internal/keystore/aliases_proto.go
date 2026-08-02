@@ -1,6 +1,4 @@
-// Proto envelope + ResponseData aliases — keystore root (main.go) 와 일부
-// keystore package 내부 (test 포함) 가 prefix 없이 / keystore.X 로 참조하는
-// 것만 보존.
+// Keep protocol aliases used by the root package and its tests.
 
 package keystore
 

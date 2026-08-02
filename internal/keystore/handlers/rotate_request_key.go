@@ -40,11 +40,6 @@ func HandleRotateRequestKeyPrepare(d Deps, req proto.RotateRequestKeyPrepareRequ
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	if isCredentialApprovalDecision(req.ChallengeToken) {
-		return errs.CodeResponse(errs.ErrCodeValidation,
-			"credential approval decisions require trusted user presence")
-	}
-
 	// 1) OLD priv.
 	oldPrivB64, err := keychain.GetRequestSigningPrivateKey(d.Store)
 	if err != nil || oldPrivB64 == "" {

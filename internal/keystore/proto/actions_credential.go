@@ -40,10 +40,4 @@ const (
 	// against the decrypted payload's secret map — no raw secret is ever supplied
 	// in the request.
 	ActionCredentialHTTPRequest = "credential_http_request"
-
-	// CredentialApprovalPrompt verifies a server-signed approval challenge,
-	// asks through the trusted OS confirmation surface, then signs the decision
-	// with the enrolled request key. Generic sign_request refuses this decision
-	// namespace so callers cannot bypass user presence.
-	ActionCredentialApprovalPrompt = "credential_approval_prompt"
 )
