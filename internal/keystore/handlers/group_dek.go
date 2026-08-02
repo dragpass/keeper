@@ -69,7 +69,7 @@ func HandleDEKRewrapWithOldKey(d Deps, req proto.DEKRewrapWithOldKeyRequest) pro
 		return nil
 	})
 	if useErr != nil {
-		return recoverySessionUseError(useErr, "dek rewrap")
+		return sessionUseError(useErr, "dek rewrap")
 	}
 
 	newEncryptedB64 := base64.StdEncoding.EncodeToString(newEncrypted)

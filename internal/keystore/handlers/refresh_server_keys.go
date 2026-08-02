@@ -123,7 +123,6 @@ func HandleRefreshServerKeys(d Deps, req RefreshServerKeysRequest) proto.BaseRes
 	// Verification passed — batch-refresh the Keychain.
 	updated := make([]uint, 0, len(req.Keys))
 	var activeVersion uint
-	var activeKeyPEM string
 	for _, k := range req.Keys {
 		if err := keychain.SaveServerPublicKeyForVersion(d.Store, k.Version, k.PublicKeyPEM); err != nil {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, fmt.Sprintf("keys[v%d] save: %v", k.Version, err))
@@ -131,15 +130,10 @@ func HandleRefreshServerKeys(d Deps, req RefreshServerKeysRequest) proto.BaseRes
 		updated = append(updated, k.Version)
 		if k.Status == "active" {
 			activeVersion = k.Version
-			activeKeyPEM = k.PublicKeyPEM
 		}
 	}
 	if err := keychain.SaveActiveServerKeyVersion(d.Store, activeVersion); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save active version: "+err.Error())
-	}
-	// Mirror the active key PEM into the legacy single slot (challenge compatibility).
-	if err := keychain.SaveServerPublicKey(d.Store, activeKeyPEM); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mirror legacy slot: "+err.Error())
 	}
 	// fingerprint TOFU pin — store if the response provides one
 	if req.RootPublicKeyFingerprint != "" {

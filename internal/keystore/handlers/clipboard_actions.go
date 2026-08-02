@@ -58,7 +58,7 @@ func HandleAESUnwrapAndDecryptToClipboard(d Deps, req proto.AESUnwrapAndDecryptT
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "unwrap and decrypt to clipboard")
+		return sessionUseError(useErr, "unwrap and decrypt to clipboard")
 	}
 	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "aes unwrap and decrypt to clipboard")
 }
@@ -133,7 +133,7 @@ func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequ
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group decrypt to clipboard")
+		return sessionUseError(useErr, "group decrypt to clipboard")
 	}
 	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "group decrypt to clipboard")
 }

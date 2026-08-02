@@ -181,10 +181,7 @@ func NewApp(deps Deps) *App {
 	return app
 }
 
-// defaultApp is the process-wide singleton — preserves the semantics of
-// the legacy free functions (krSet, etc.) while letting new code use the
-// App pattern. Guarded by sync.Once so it initializes exactly once on
-// the first DefaultApp call.
+// defaultApp is the process-wide application instance.
 var (
 	defaultAppOnce sync.Once
 	defaultApp     *App

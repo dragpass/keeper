@@ -1,18 +1,4 @@
-// item_dek.go — Item DEK handlers (AES-GCM family with opaque GroupHandle).
-//
-// HandleAESUnwrapAndEncrypt.
-//
-// The UNSHARE_REENCRYPT composite action (HandleAESUnshareRewrapMeta) is a
-// 100+ line, 6-step flow in a single function, split out to
-// `item_dek_unshare_rewrap.go`.
-//
-// The old plaintext-returning handler (`HandleAESUnwrapAndDecrypt`) was
-// removed. HandleAESRewrap (cross-group Item DEK rewrap) was removed
-// alongside the item_dek_grants schema. HandleAESGenerateAndWrap (which
-// returned a raw Item DEK over IPC) was removed as a vault-deprecation
-// leftover — no raw Item DEK crosses the IPC boundary. Shared crypto utils
-// (decodeGroupDEK / unwrapItemDEK / aesGCMSeal / aesGCMSealSplit /
-// aesGCMOpen) live in `aes_crypto.go`.
+// Item DEK handlers operate through opaque Group DEK handles.
 
 package handlers
 
@@ -57,7 +43,7 @@ func HandleAESUnwrapAndEncrypt(d Deps, req proto.AESUnwrapAndEncryptRequest) pro
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "unwrap and encrypt")
+		return sessionUseError(useErr, "unwrap and encrypt")
 	}
 
 	d.Logger.Println("aes unwrap and encrypt successful")
@@ -66,18 +52,3 @@ func HandleAESUnwrapAndEncrypt(d Deps, req proto.AESUnwrapAndEncryptRequest) pro
 		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
 	}}
 }
-
-// HandleAESUnwrapAndDecrypt was removed. Available replacement actions:
-//   - aes_unwrap_and_decrypt_to_clipboard: writes plaintext directly to the Keeper-owned OS clipboard
-//   - aes_unwrap_and_decrypt_meta: bulk-decrypts meta fields (UI-display carve-out)
-
-// HandleAESRewrap (cross-group Item DEK rewrap) was removed alongside the
-// item_dek_grants schema. Metadata-only DragLink does not carry a wrapped
-// Item DEK; cross-group share is not possible at the server layer.
-
-// The UNSHARE_REENCRYPT composite action (HandleAESUnshareRewrapMeta) lives
-// in item_dek_unshare_rewrap.go.
-//
-// Shared crypto utils (DecodeGroupDEK / UnwrapItemDEK / AESGCMSeal /
-// AESGCMSealSplit / AESGCMOpen + lowercase aliases) were split into
-// `aes_crypto.go`.

@@ -73,7 +73,7 @@ func HandleGetPublicKey(d Deps, req proto.GetPublicKeyRequest) proto.BaseRespons
 // HandleGetServerPublicKey handles server public key retrieval requests.
 func HandleGetServerPublicKey(d Deps, req proto.GetServerPublicKeyRequest) proto.BaseResponse {
 	d.Logger.Println("server public key retrieval request processing...")
-	serverPublicKeyPEM, err := keychain.GetServerPublicKey(d.Store)
+	serverPublicKeyPEM, err := keychain.GetActiveServerPublicKey(d.Store)
 	if err != nil {
 		d.Logger.Printf("server public key retrieval error: %v", err)
 		return errs.Response(err) // ErrSecretNotFound / ErrServerKeyVersionNotFound → not_found

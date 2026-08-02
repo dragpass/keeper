@@ -1,36 +1,4 @@
-// Package errs — Error Taxonomy.
-//
-// **Goal:** The `error` field in a Native Messaging response was previously
-// just a human-readable message — there was no stable token the Extension
-// could use for branching / UX handling. This layer introduces a **coarse**
-// `ErrorCode` so that the Extension can distinguish (a) messages shown to
-// the user from (b) code-level handling such as automatic retry / cache
-// invalidation.
-//
-// **Design principles:**
-//
-//  1. **Block sensitive-value echo** — codes are short enum-like strings only.
-//     The message (`Error` field) is used as the handler-sanitized result.
-//  2. **Preserve existing compat** — the `ErrorCode` field is optional
-//     (omitempty). Older Extensions can ignore it and still function.
-//  3. **Sentinel error mapping** — instead of defining new error types, decide
-//     the code by checking existing sentinels (`ErrSecretNotFound`,
-//     `ErrRecoverySessionExpired`, etc.) via `errors.Is`. Adopted gradually.
-//  4. **Functional categorization**, **not** security categorization — codes
-//     like `not_found` / `expired_session` describe "how the Extension should
-//     react", not "what information an attacker can learn."
-//
-// **Gradual adoption:** the code enum + mapper + helpers are defined and a
-// few worked examples have been migrated. The package lives outside keystore
-// root as its own subpackage.
-//
-// **Naming choice:** the package name is `errs` — intentionally
-// shortened to avoid shadowing the stdlib `errors` package (`errors.Is` must
-// remain callable). To also avoid stuttering at the call site
-// (`errs.ErrorResponse`), function names were shortened to `Response` /
-// `CodeResponse`. `errs_aliases.go` in keystore root preserves backward
-// compatibility via var aliases (`errorResponse=errs.Response`,
-// `errorCodeResponse=errs.CodeResponse`).
+// Package errs maps internal failures to stable protocol error codes.
 package errs
 
 import (
@@ -46,7 +14,6 @@ import (
 // and uses the message for user-facing copy or diagnostic logs.
 type ErrorCode string
 
-// 7 codes. Defined in keeper-open-source-quality-plan.md per the P2 plan.
 const (
 	// ErrCodeValidation: payload format / length / required-field validation
 	// failed. Extension-side bug or a call to an incompatible action. Retry

@@ -1,28 +1,4 @@
-// decode.go — Base64 decode + length validation helpers.
-//
-// proto.Validate() already performs the same validation (`requireBase64`,
-// `requireBase64Len`), but handlers need the decoded raw bytes for actual
-// processing, so the pattern of repeating decode + length guard per handler
-// is consolidated into a single helper.
-//
-// Old pattern (40+ call sites):
-//
-//	raw, err := base64.StdEncoding.DecodeString(req.SomeB64)
-//	if err != nil {
-//	    return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode some: "+err.Error())
-//	}
-//	if len(raw) != 32 {
-//	    return errs.CodeResponse(errs.ErrCodeValidation, "some must be 32 bytes")
-//	}
-//
-// New pattern:
-//
-//	raw, resp, ok := decodeBase64Len(req.SomeB64, 32, "some_b64")
-//	if !ok { return resp }
-//
-// All length mismatches / decode errors classify as ErrCodeValidation. fieldName
-// is included in the response message but the input value is not echoed
-// (consistent with the validation sentinel).
+// Base64 helpers never include input values in error messages.
 
 package handlers
 

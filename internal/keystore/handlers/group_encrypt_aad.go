@@ -54,7 +54,7 @@ func HandleGroupEncryptWithAAD(d Deps, req proto.GroupEncryptWithAADRequest) pro
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group encrypt with aad")
+		return sessionUseError(useErr, "group encrypt with aad")
 	}
 
 	d.Logger.Println("group encrypt with aad successful")

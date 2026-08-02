@@ -1,30 +1,8 @@
-// personal_dek_models.go — personal DEK generate / wrap / rotate / encrypt /
-// decrypt payloads.
+// Personal DEK payloads.
 
 package proto
 
 import "errors"
-
-// DEKGenerateAndWrapPasswordRequest moves the signup flow's generateDEK +
-// wrapDEKWithPassword into the Keeper. The output EncryptedDEKB64 is
-// Base64(SALT(16) || IV(12) || ciphertext_with_tag); the Extension Braille-
-// encodes it via encodeToVisualBlock before storing on the server.
-//
-// PBKDF2 parameters match the Extension's deriveKeyForWrapping:
-//   - SHA-256, 600,000 iterations, salt 16B, IV 12B, AES-256-GCM
-type DEKGenerateAndWrapPasswordRequest struct {
-	Password string `json:"password"`
-}
-
-func (r DEKGenerateAndWrapPasswordRequest) Validate() error {
-	return requireString(r.Password, "password")
-}
-
-type DEKGenerateAndWrapPasswordResponseData struct {
-	// EncryptedDEKB64 is Base64(salt(16) || iv(12) || ciphertext_with_tag).
-	// The Extension Braille-encodes this value as-is.
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
-}
 
 // DEKGenerateAndWrapDualRequest generates a new DEK at signup and wraps it
 // with both password and deviceKey in one shot. The Extension never sees
@@ -116,10 +94,6 @@ type DEKUnwrapAndEncryptResponseData struct {
 	IVB64         string `json:"iv_b64"`
 	CiphertextB64 string `json:"ciphertext_b64"`
 }
-
-// The DEKUnwrapAndDecrypt action was removed. Replacements:
-// DEKUnwrapAndDecryptToClipboard (clipboard sink) / DEKUnwrapAndDecryptMeta
-// (metadata batch decrypt, carve-out).
 
 // DEKUnwrapAndDecryptMetaRequest is the bulk-decrypt action for personal
 // entry metadata fields.

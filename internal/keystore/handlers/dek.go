@@ -1,17 +1,4 @@
-// dek.go — Personal DEK post-auth flow handlers (encrypt / rotate / password change).
-//
-//   - HandleDEKUnwrapAndEncrypt   : unwraps the device-wrapped DEK and AES-GCM-encrypts plaintext.
-//   - HandleDEKRotateToDeviceKey  : login flow. password unwrap → rewrap with device.
-//   - HandleDEKRotateToNewPassword: master password change.
-//
-// The signup-flow DEK generation/wrap (GenerateAndWrap{Dual,Password}) lives
-// in dek_signup.go. PBKDF2 parameters + helpers
-// (loadDeviceKeyFromKeychain / unwrapDeviceWrappedDEK) live in dek_helpers.go
-// (shared with rotate_device_key.go).
-//
-// HandleDEKUnwrapAndDecrypt was removed. Replacement actions:
-//   - dek_unwrap_and_decrypt_to_clipboard: writes plaintext directly to the Keeper-owned OS clipboard
-//   - dek_unwrap_and_decrypt_meta: bulk-decrypts meta fields (UI-display carve-out)
+// Personal DEK post-authentication handlers.
 
 package handlers
 

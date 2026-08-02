@@ -1,21 +1,4 @@
-// Package keychain — OS Keychain abstraction for the keeper keystore.
-//
-// keeper runs on top of macOS Keychain / Linux Secret Service / Windows
-// Credential Manager (go-keyring abstracts the per-OS backend). Unit tests
-// swap it out for a process-local map via `keyring.MockInit()`.
-//
-// **DI motivation:** "How do you test the OS Keychain dependency?" is the
-// first question in any public review. Introducing the SecretStore interface:
-//
-//   - Standard unit tests can run without macOS Keychain (inject in-memory
-//     store)
-//   - Cleanly separates Linux/Windows implementation branches
-//   - e2e keyring file mode and production mode are handled through the same
-//     interface
-//
-// Exposes SecretStore + KeyringSecretStore + MemorySecretStore on the App
-// struct. Free helper functions (krSet/krGet/krDelete) are also available
-// for callers that don't yet hold an App reference.
+// Package keychain abstracts platform secret storage.
 package keychain
 
 import (
@@ -43,14 +26,7 @@ type SecretStore interface {
 	Delete(service, account string) error
 }
 
-// KeyringSecretStore is the production SecretStore — delegates to
-// `krSet/krGet/krDelete`. This way (1) the e2e KEEPER_E2E_KEYRING_FILE file
-// mirror is applied automatically, and (2) `app.Store.X(...)` and a direct
-// `krX(...)` call have equivalent semantics → storage.go behaves the same
-// whichever path is used.
-//
-// Previously KeyringSecretStore called keyring.* directly and bypassed the
-// file mirror; delegating to kr* lets both paths share the same mirror.
+// KeyringSecretStore uses the platform keyring and the configured e2e mirror.
 type KeyringSecretStore struct{}
 
 func (KeyringSecretStore) Get(service, account string) (string, error) {

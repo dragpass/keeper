@@ -129,7 +129,7 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "credential http request")
+		return sessionUseError(useErr, "credential http request")
 	}
 	if decErr != nil {
 		// Generic message — never echo the decrypt error detail.

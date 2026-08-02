@@ -1,5 +1,4 @@
-// recovery_session.go — Recovery old private key PEM opaque-handle handlers.
-// HandleRecoverySessionOpen / Close — two actions routed by the dispatcher.
+// Recovery private keys stay behind opaque session handles.
 
 package handlers
 
@@ -12,18 +11,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// HandleRecoverySessionOpen takes the wrap_key derived by the Extension via
-// the RK24 wrap branch + wrappedKeeper from the server response, restores the
-// raw PEM inside the Keeper, and registers it with the store.
-//
-// Carve-out resolved: previously the Extension AES-GCM-unwrapped via Web
-// Crypto and held the PEM as a JS string, sending it over IPC on every
-// recoverysign / dek_rewrap_with_old_key call. Now only wrap_key is sent
-// over IPC once, and the PEM stays only inside Keeper memguard. wrap_key
-// is a 32B random AES key, so its exposure surface is smaller than a PEM.
-//
-// Origin verification: the server signature over challenge_token is verified
-// (same pattern as RecoverySign).
+// HandleRecoverySessionOpen unwraps the recovery PEM into memguard after
+// verifying the server challenge signature.
 func HandleRecoverySessionOpen(d Deps, req proto.RecoverySessionOpenRequest) proto.BaseResponse {
 	d.Logger.Println("recovery session open request processing...")
 

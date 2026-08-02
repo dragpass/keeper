@@ -3,7 +3,7 @@
 //
 // **Defects this test catches:**
 //   - a slot that should be wiped is left behind (or vice versa)
-//   - server_public_key (account-independent trust anchor) wrongly wiped
+//   - versioned server key state wrongly wiped
 //   - the cleared list not matching what was actually present (idempotency)
 //   - an empty result serializing as `null` instead of `[]`
 //   - key material echoed to the logger / error string
@@ -21,8 +21,7 @@ import (
 )
 
 // seedAllIdentitySlots writes every account-scoped slot plus the preserved
-// server_public_key, returning the sentinel values so the caller can assert
-// they are not echoed.
+// server key state, returning sentinel values for log assertions.
 func seedAllIdentitySlots(t *testing.T, store keychain.SecretStore) map[string]string {
 	t.Helper()
 	sentinels := map[string]string{
@@ -32,7 +31,6 @@ func seedAllIdentitySlots(t *testing.T, store keychain.SecretStore) map[string]s
 		config.PendingDragPassKeeperPublicKey:  "PENDING_PUB_PEM_DO_NOT_LEAK",
 		config.SessionCode:                     "SESSION_CODE_DO_NOT_LEAK",
 		config.DeviceKey:                       "DEVICE_KEY_B64_DO_NOT_LEAK",
-		config.DragPassServerPublicKey:         "SERVER_PUB_PEM_TRUST_ANCHOR",
 	}
 	save := map[string]func(keychain.SecretStore, string) error{
 		config.DragPassKeeperPrivateKey:        keychain.SavePrivateKey,
@@ -41,13 +39,20 @@ func seedAllIdentitySlots(t *testing.T, store keychain.SecretStore) map[string]s
 		config.PendingDragPassKeeperPublicKey:  keychain.SavePendingPublicKey,
 		config.SessionCode:                     keychain.SaveSessionCode,
 		config.DeviceKey:                       keychain.SaveDeviceKey,
-		config.DragPassServerPublicKey:         keychain.SaveServerPublicKey,
 	}
 	for name, fn := range save {
 		if err := fn(store, sentinels[name]); err != nil {
 			t.Fatalf("test setup: save %s: %v", name, err)
 		}
 	}
+	const serverKey = "SERVER_PUB_PEM_TRUST_ANCHOR"
+	if err := keychain.SaveServerPublicKeyForVersion(store, 1, serverKey); err != nil {
+		t.Fatalf("test setup: save server key: %v", err)
+	}
+	if err := keychain.SaveActiveServerKeyVersion(store, 1); err != nil {
+		t.Fatalf("test setup: save active server key version: %v", err)
+	}
+	sentinels[config.DragPassServerPublicKeyVersionedPrefix+"1"] = serverKey
 	return sentinels
 }
 
@@ -95,9 +100,8 @@ func TestResetDeviceIdentity_AllSlots_ClearsEverythingButServerKey(t *testing.T)
 		}
 	}
 
-	// The trust anchor must survive.
-	if !slotStillPresent(t, store, config.DragPassServerPublicKey) {
-		t.Errorf("server_public_key must be preserved but was wiped")
+	if !slotStillPresent(t, store, config.DragPassServerPublicKeyVersionedPrefix+"1") {
+		t.Errorf("versioned server public key must be preserved but was wiped")
 	}
 
 	// No key material may appear in the log.

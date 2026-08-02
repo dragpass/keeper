@@ -1,4 +1,4 @@
-// item_dek_models.go — Item DEK AES-GCM wrap/unwrap/rewrap payloads.
+// Item DEK AES-GCM payloads.
 
 package proto
 
@@ -15,11 +15,6 @@ import (
 // DEK is held in a memguard.LockedBuffer by the Keeper-side GroupSessionStore,
 // and handlers run AES-GCM directly on top of the buffer via Use(handle, fn).
 // ────────────────────────────────────────────────────────────────────────
-
-// AESGenerateAndWrap (which returned a raw Item DEK over IPC) was removed as
-// a vault-deprecation leftover — the raw Item DEK must not cross the IPC
-// boundary. A wrapped Item DEK is produced client-side / by the
-// UNSHARE_REENCRYPT composite; there is no generate-and-return-raw action.
 
 // AESUnwrapAndEncryptRequest unwraps a wrapped Item DEK with the Group DEK
 // and AES-GCM-encrypts plaintext. Braille encoding is the Extension's job.
@@ -47,14 +42,6 @@ type AESUnwrapAndEncryptResponseData struct {
 	IVB64         string `json:"iv_b64"`         // 12B IV Base64
 	CiphertextB64 string `json:"ciphertext_b64"` // ciphertext + GCM tag Base64
 }
-
-// The AESUnwrapAndDecrypt action was removed. Replacements:
-// AESUnwrapAndDecryptToClipboard (clipboard sink) /
-// AESUnwrapAndDecryptMeta (metadata batch decrypt, carve-out).
-
-// AESRewrap (cross-group Item DEK rewrap) was removed alongside the
-// item_dek_grants schema. Metadata-only DragLink does not carry a wrapped
-// Item DEK; cross-group share is not possible at the server layer.
 
 // AESUnshareRewrapMetaRequest is the input for the composite
 // UNSHARE_REENCRYPT action.

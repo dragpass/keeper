@@ -1,12 +1,4 @@
-// recovery.go — recovery flow handlers.
-// HandleRecoverySign / HandleGenerateKeypairWithRecoveryWrap — two actions
-// routed by the dispatcher. Paired with recovery_session.go (open/close).
-//
-// The recoverySessionUseError helper is also referenced by group_dek.go's
-// HandleDEKRewrapWithOldKey — they share automatically within the same
-// (handlers) package.
-//
-// HandleWrapActivePrivateKey (RK24 reissue) lives in wrap_active_private_key.go.
+// Recovery handlers keep private key material behind opaque session handles.
 
 package handlers
 
@@ -65,17 +57,11 @@ func signRecoveryChallenge(d Deps, challengeToken, recoveryHandle string) proto.
 		return nil
 	})
 	if useErr != nil {
-		return recoverySessionUseError(useErr, "recovery sign")
+		return sessionUseError(useErr, "recovery sign")
 	}
 
 	d.Logger.Println("recovery sign successful (handle-based)")
 	return proto.BaseResponse{Success: true, Data: proto.RecoverySignResponseData{Signature: challengeSignatureBase64}}
-}
-
-// recoverySessionUseError delegates to the single sessionUseError helper.
-// Backward-compat wrapper for caller compatibility — can be removed gradually.
-func recoverySessionUseError(err error, context string) proto.BaseResponse {
-	return sessionUseError(err, context)
 }
 
 // HandleGenerateKeypairWithRecoveryWrap generates a new RSA keypair and

@@ -1,28 +1,8 @@
-// actions_group_dek.go — Wire-protocol Action* constants for Group DEK and
-// Item DEK operations: RSA wrap/unwrap, group session opaque handles, AES-GCM
-// item ops, decrypt-to-clipboard, and guest transcrypt.
-//
-// Split out of actions.go for domain locality. Pure move — see actions.go for
-// the wire-protocol contract note. Constant names / string values are
-// unchanged.
+// Group and Item DEK protocol actions.
 
 package proto
 
 const (
-	// related to team encryption
-	//
-	// (WrapGroupDEK — which RSA-OAEP-SHA256-wrapped a raw 32B Group DEK
-	//  supplied in the request — was removed. A raw Group DEK cannot exist
-	//  in the extension JS heap, so a raw-input wrap action had no legitimate
-	//  caller; member grant / rotation wraps are synthesized inside the Keeper
-	//  by group_dek_generate_and_open / dek_rewrap_for_member /
-	//  dek_unwrap_and_rewrap_for_many.)
-	//
-	// (UnwrapGroupDEK — which RSA-OAEP-decrypted a wrapped Group DEK and
-	//  returned the raw 32B over IPC — was removed. The raw Group DEK no
-	//  longer crosses IPC in the unwrap direction; use group_session_open,
-	//  which unwraps into a Keeper-held opaque handle instead.)
-
 	// DEKRewrapWithOldKey: composite Recovery re-wrap action. Handles the
 	// old unwrap + wrap pair inside the Keeper in one
 	// shot. The raw Group DEK exists only inside a memguard LockedBuffer
@@ -51,10 +31,6 @@ const (
 	// group_dek_b64 and run AES-GCM against the same key material. The raw
 	// Group DEK Base64 does not live in the Extension JS heap.
 	//
-	// (GroupSessionOpenWithRaw — which registered a raw 32B Group DEK Base64
-	//  directly, a DEK-rotation escape hatch — was removed. No raw Group DEK
-	//  crosses IPC in either direction; all group sessions open from a
-	//  wrapped DEK via GroupSessionOpen.)
 	ActionGroupSessionOpen   = "group_session_open"
 	ActionGroupSessionClose  = "group_session_close"
 	ActionGroupSessionStatus = "group_session_status"
@@ -99,13 +75,6 @@ const (
 	//                        and AES-GCM-encrypt plaintext → return
 	//                        {iv_b64, ciphertext_b64}. Braille encoding is
 	//                        the Extension's job.
-	// (The old AESUnwrapAndDecrypt — plaintext-returning action — was
-	//  removed. Replaced by AESUnwrapAndDecryptToClipboard /
-	//  AESUnwrapAndDecryptMeta.)
-	// (AESRewrap — cross-group Item DEK rewrap — was removed alongside
-	//  the item_dek_grants schema.)
-	// (AESGenerateAndWrap — which returned a raw Item DEK over IPC — was
-	//  removed as a vault-deprecation leftover; no raw Item DEK crosses IPC.)
 	ActionAESUnwrapAndEncrypt = "aes_unwrap_and_encrypt"
 	// AESUnshareRewrapMeta: UNSHARE_REENCRYPT composite.
 	ActionAESUnshareRewrapMeta = "aes_unshare_rewrap_meta"

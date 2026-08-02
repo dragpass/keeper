@@ -1,14 +1,5 @@
 package keychain
 
-// pending.go — Pending keypair CRUD + promotion against a SecretStore.
-//
-// The pending-keypair helper bodies from storage.go moved here as exported
-// free functions; the keystore root's thin `*App` wrapper passes `a.Store` as
-// the first argument to delegate — zero change to external signatures.
-//
-// The "pending" slot is the temporary place that holds the new keypair during
-// user-key rotation. At promotion time it moves into the active slot.
-
 import "github.com/dragpass/keeper/config"
 
 // SavePendingPrivateKey stores the pending RSA private key PEM.

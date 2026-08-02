@@ -57,9 +57,6 @@ func installServerKeyForTest(t *testing.T) (*rsa.PrivateKey, keychain.SecretStor
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
 	store := keychain.NewMemorySecretStore()
-	if err := keychain.SaveServerPublicKey(store, string(pubPEM)); err != nil {
-		t.Fatalf("SaveServerPublicKey: %v", err)
-	}
 	if err := keychain.SaveServerPublicKeyForVersion(store, 1, string(pubPEM)); err != nil {
 		t.Fatalf("SaveServerPublicKeyForVersion: %v", err)
 	}

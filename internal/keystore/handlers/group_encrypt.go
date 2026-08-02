@@ -45,7 +45,7 @@ func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseRespons
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group encrypt")
+		return sessionUseError(useErr, "group encrypt")
 	}
 
 	d.Logger.Println("group encrypt successful")

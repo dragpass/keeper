@@ -10,7 +10,6 @@ import (
 
 func resetServerKeySlots(t *testing.T, store SecretStore) {
 	t.Helper()
-	_ = DeleteServerPublicKey(store)
 	_ = DeleteServerPublicKeyForVersion(store, 1)
 	_ = DeleteServerPublicKeyForVersion(store, 2)
 	_ = DeleteServerPublicKeyForVersion(store, 3)
@@ -122,20 +121,12 @@ func TestGetServerPublicKeyForVersion_FallbackToActive(t *testing.T) {
 	}
 }
 
-func TestGetServerPublicKeyForVersion_FallbackToLegacyWhenNoActive(t *testing.T) {
+func TestGetServerPublicKeyForVersion_RequiresActivePointer(t *testing.T) {
 	store := defaultKeyringStore()
 	resetServerKeySlots(t, store)
 
-	// No active pointer; PEM only in the legacy slot.
-	pem := "-----BEGIN PUBLIC KEY-----\nLEGACY\n-----END PUBLIC KEY-----\n"
-	if err := SaveServerPublicKey(store, pem); err != nil {
-		t.Fatalf("save legacy: %v", err)
-	}
-
-	// version=0 + active empty → legacy fallback
-	got, err := GetServerPublicKeyForVersion(store, 0)
-	if err != nil || got != pem {
-		t.Errorf("legacy fallback = %q err=%v, want %q", got, err, pem)
+	if _, err := GetServerPublicKeyForVersion(store, 0); err != ErrNoActiveServerKey {
+		t.Fatalf("version zero without an active pointer returned %v", err)
 	}
 }
 
@@ -184,10 +175,6 @@ func TestBootstrap_PopulatesAllSlots(t *testing.T) {
 		t.Errorf("v1 slot empty after bootstrap: err=%v", err)
 	}
 
-	legacy, err := GetServerPublicKey(store)
-	if err != nil || legacy != v1 {
-		t.Errorf("legacy mirror %q != v1 %q (err=%v)", legacy, v1, err)
-	}
 }
 
 func TestBootstrap_DoesNotOverwriteAfterRefresh(t *testing.T) {
@@ -202,10 +189,6 @@ func TestBootstrap_DoesNotOverwriteAfterRefresh(t *testing.T) {
 	if err := SaveActiveServerKeyVersion(store, 2); err != nil {
 		t.Fatalf("save active=2: %v", err)
 	}
-	if err := SaveServerPublicKey(store, pemV2); err != nil {
-		t.Fatalf("save legacy mirror: %v", err)
-	}
-
 	// Second boot: bootstrap must not roll back to v1.
 	if err := EnsureServerPublicKey(store, logger.NewMemoryLogger()); err != nil {
 		t.Fatalf("EnsureServerPublicKey: %v", err)

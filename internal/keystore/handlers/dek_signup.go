@@ -1,12 +1,4 @@
-// dek_signup.go — signup-flow Personal DEK generation + wrap handlers (two).
-//
-//   - HandleDEKGenerateAndWrapDual     : wraps with both password + deviceKey
-//                                        in one call (composite action used by
-//                                        the Extension signup flow).
-//   - HandleDEKGenerateAndWrapPassword : wraps with password only (legacy single-wrap).
-//
-// Both handlers generate a new 32B DEK via d.FillRandom and wrap with a
-// PBKDF2 KEK. The device wrap uses AES-GCM seal directly with deviceKey.
+// Signup generates one DEK and wraps it for both password and device custody.
 
 package handlers
 
@@ -90,53 +82,4 @@ func generateAndWrapDual(d Deps, password *memguard.LockedBuffer) (proto.DEKGene
 		DeviceWrappedDEKB64:   devWrapped,
 	}
 	return data, proto.BaseResponse{Success: true}
-}
-
-// HandleDEKGenerateAndWrapPassword is the signup flow's generateDEK + wrapDEKWithPassword.
-func HandleDEKGenerateAndWrapPassword(d Deps, req proto.DEKGenerateAndWrapPasswordRequest) proto.BaseResponse {
-	d.Logger.Println("dek generate and wrap password request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// protect password with memguard and zeroize the original string's backing bytes
-	password := req.Password
-	pwBuf := memguard.NewBufferFromBytes([]byte(password))
-	secure.WipeString(&password)
-	secure.WipeString(&req.Password)
-	defer pwBuf.Destroy()
-
-	// generate salt
-	salt := make([]byte, dekSaltLength)
-	if err := d.FillRandom(salt); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate salt: "+err.Error())
-	}
-
-	// generate DEK + protect with memguard
-	dek := make([]byte, 32)
-	if err := d.FillRandom(dek); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate dek: "+err.Error())
-	}
-	defer secure.Zeroize(dek)
-
-	// derive KEK with PBKDF2. Pass the password backing bytes directly as input.
-	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	defer secure.Zeroize(kek)
-
-	iv, ciphertext, err := aesGCMSealSplit(kek, dek)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap dek failed: "+err.Error())
-	}
-
-	// Base64(salt || iv || ciphertext)
-	out := make([]byte, 0, len(salt)+len(iv)+len(ciphertext))
-	out = append(out, salt...)
-	out = append(out, iv...)
-	out = append(out, ciphertext...)
-
-	d.Logger.Println("dek generate and wrap password successful")
-	return proto.BaseResponse{Success: true, Data: proto.DEKGenerateAndWrapPasswordResponseData{
-		EncryptedDEKB64: base64.StdEncoding.EncodeToString(out),
-	}}
 }

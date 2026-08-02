@@ -85,7 +85,7 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group transcrypt for guest")
+		return sessionUseError(useErr, "group transcrypt for guest")
 	}
 
 	// Best-effort wipe of the passphrase now that derivation is done.
