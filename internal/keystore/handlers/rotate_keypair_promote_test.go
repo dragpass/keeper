@@ -1,5 +1,5 @@
 // rotate_keypair_promote_test.go — HandleRotateUserKeypairPromote +
-// integration RoundTrip 가드.
+// Integration round-trip tests.
 package handlers
 
 import (

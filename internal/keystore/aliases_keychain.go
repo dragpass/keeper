@@ -1,5 +1,4 @@
-// Keychain aliases — keystore package 내부 (storage.go / app.go / main.go) 가
-// bare name / keystore.X 로 참조하는 type 과 main.go 가 호출하는 함수만 보존.
+// Keep the keychain aliases used by the root package and main.
 
 package keystore
 

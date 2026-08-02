@@ -1,11 +1,7 @@
-# GoReleaser — Homebrew tap 채널 전용.
+# GoReleaser publishes the Homebrew channel only.
 #
-# 전체 릴리스 파이프라인을 대체하지 않는다: Keeper 는 Native Messaging 호스트라
-# macOS .pkg (시스템 manifest) / Windows Inno Setup (레지스트리 등록) / Linux
-# .deb 은 release.yml 의 기존 job 이 만든다. GoReleaser 는 darwin 바이너리
-# tar.gz 를 기존 릴리스에 append 하고 homebrew-tap 의 formula 를 자동 갱신하는
-# 역할만 한다. brew 설치는 유저 레벨 manifest (post_install) 를 쓰므로 sudo 가
-# 필요 없다.
+# release.yml builds the macOS package, Windows installer, and Linux package.
+# GoReleaser appends Darwin archives and updates the Homebrew tap.
 version: 2
 
 project_name: dragpass-keeper
@@ -31,20 +27,19 @@ archives:
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
-  # 기존 release job 의 checksums.txt (bare 바이너리 + 패키지 표) 와 충돌 방지.
+  # Avoid colliding with checksums.txt produced by release.yml.
   name_template: 'brew_checksums.txt'
 
 changelog:
-  # 릴리스 노트는 release job 이 만든 본문 (체크섬 표 포함) 을 유지한다.
+  # Preserve the release notes produced by release.yml.
   disable: true
 
 release:
-  # 기존 릴리스에 자산만 append — 본문/기존 자산은 건드리지 않는다.
+  # Append assets without replacing existing release content.
   mode: append
 
-# homebrew_casks — brews(formula) 의 후속 (brews 는 v2.10 soft / v2.16 hard
-# deprecated). 무서명 바이너리의 quarantine 은 공식 가이드대로 post install
-# hook 의 xattr 제거로 해제한다.
+# Use a cask because the legacy brews configuration is deprecated. The
+# post-install hook removes quarantine from the unsigned binary.
 homebrew_casks:
   - name: keeper
     ids:
@@ -63,10 +58,8 @@ homebrew_casks:
       - dragpass-keeper
     hooks:
       post:
-        # 1) 무서명 바이너리 quarantine 해제 (goreleaser 공식 가이드 패턴)
-        # 2) Chrome 유저 레벨 Native Messaging manifest 등록 — sudo 불필요.
-        #    binary 스탠자가 HOMEBREW_PREFIX/bin 에 symlink 하므로 그 경로를
-        #    manifest 에 기록한다.
+        # Remove quarantine and install Chrome's user-level Native Messaging
+        # manifest. The binary is linked into HOMEBREW_PREFIX/bin.
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr",

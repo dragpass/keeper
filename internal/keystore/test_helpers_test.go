@@ -31,11 +31,7 @@ func setupAppKeyPair(t *testing.T, app *App) (publicKeyPEM, privateKeyPEM string
 }
 
 func newFacadeTestApp() *App {
-	// MemoryClipboard 주입 — production fallback (`NewProductionClipboard`) 은
-	// Linux 컨테이너 / 헤드리스 CI 에서 `Write` 가 `ErrUnavailable` 반환해
-	// clipboard sink 를 사용하는 AES / DEK→clipboard handler 회귀 테스트가
-	// 실패한다. macOS 로컬은 production clipboard 가 살아있어 통과하지만 CI
-	// 부터 회귀 발견되는 비대칭이 생긴다.
+	// Use an in-memory clipboard so tests behave consistently in headless CI.
 	return NewApp(Deps{
 		Store:     NewMemorySecretStore(),
 		Logger:    NewMemoryLogger(),

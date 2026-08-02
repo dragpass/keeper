@@ -1,5 +1,4 @@
-// clipboard_unwrap_test.go — AES / DEK unwrap-and-decrypt-to-clipboard 핸들러
-// + finalizeClipboardCopy 가드.
+// Tests for AES and DEK unwrap-and-decrypt-to-clipboard handlers.
 //
 // Core guarantees:
 //   1. response envelope contains plaintext / plaintext_b64 / preview / length metadata 0 times
@@ -24,7 +23,7 @@ import (
 )
 
 // withMemoryClipboard wires a MemoryClipboard into newTestDeps.
-// 본 helper 는 clipboard_*_test.go 모든 분할 파일이 공유한다.
+// Shared by the clipboard handler tests.
 func withMemoryClipboard(t *testing.T) (Deps, *clipboard.MemoryClipboard) {
 	t.Helper()
 	deps, _, _ := newTestDeps(t)

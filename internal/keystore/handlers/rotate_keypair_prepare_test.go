@@ -1,4 +1,4 @@
-// rotate_keypair_prepare_test.go — HandleRotateUserKeypairPrepare 가드.
+// Tests for HandleRotateUserKeypairPrepare.
 //
 // **Defects this test catches:**
 //   - regressions where Prepare calls free `VerifyServerSig` directly
