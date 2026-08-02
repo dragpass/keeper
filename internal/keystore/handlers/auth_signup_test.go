@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/awnumar/memguard"
-
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -21,7 +19,6 @@ import (
 
 type signupUserPresence struct {
 	userpresence.Unavailable
-	password string
 	shownKey string
 	showErr  error
 }
@@ -29,14 +26,9 @@ type signupUserPresence struct {
 func (p *signupUserPresence) Capabilities() userpresence.Capabilities {
 	return userpresence.Capabilities{
 		Available:       true,
-		PromptSecret:    true,
 		ShowRecoveryKey: true,
 		Backend:         "test",
 	}
-}
-
-func (p *signupUserPresence) PromptSecret(context.Context, userpresence.SecretPrompt) (userpresence.SecretResult, error) {
-	return userpresence.SecretResult{Secret: memguard.NewBufferFromBytes([]byte(p.password))}, nil
 }
 
 func (p *signupUserPresence) ShowRecoveryKey(_ context.Context, prompt userpresence.RecoveryKeyPrompt) error {
@@ -48,7 +40,7 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x44}, 32))
 	password := "correct horse battery staple"
-	presence := &signupUserPresence{password: password}
+	presence := &signupUserPresence{}
 	deps.UserPresence = presence
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x01}, 128))
 
@@ -79,11 +71,9 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	}
 }
 
-func TestHandleAuthSignupPrepareUsesAppPasswordWithoutPrompt(t *testing.T) {
+func TestHandleAuthSignupPrepareUsesAppPassword(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x55}, 32))
-	presence := &signupUserPresence{password: "prompt-password-should-not-be-used"}
-	deps.UserPresence = presence
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x02}, 128))
 
 	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{
@@ -100,7 +90,6 @@ func TestHandleAuthSignupPrepareUsesAppPasswordWithoutPrompt(t *testing.T) {
 func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
-	deps.UserPresence = &signupUserPresence{password: "short"}
 
 	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "short"})
 	if response.Success || response.ErrorCode != "validation_error" {
@@ -114,7 +103,6 @@ func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 func TestHandleAuthSignupPrepareCountsUnicodeCharacters(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
-	deps.UserPresence = &signupUserPresence{password: "가나다라"}
 
 	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "가나다라"})
 	if response.Success || response.ErrorCode != "validation_error" {
@@ -127,7 +115,6 @@ func TestHandleAuthSignupPrepareCountsUnicodeCharacters(t *testing.T) {
 
 func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 	deps, _, store := newTestDeps(t)
-	deps.UserPresence = &signupUserPresence{password: "correct horse battery staple"}
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x03}, 256))
 
 	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "correct horse battery staple"})

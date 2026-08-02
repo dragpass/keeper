@@ -1,7 +1,3 @@
-// verifier.go unit tests (verifier-package residency).
-//
-// Previous location: internal/keystore/server_key_verifier_test.go.
-//
 // **Defects this test catches:**
 //   - DefaultServerKeyVerifier diverging from VerifyServerSig delegation
 //     (whether key-not-found / parse-failure prefixes are preserved)

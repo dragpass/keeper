@@ -8,8 +8,7 @@
 //   - KeyringSecretStore failing to translate keyring.ErrNotFound into
 //     ErrSecretNotFound.
 //   - Races where DefaultApp singleton initializes twice.
-//   - App.HandleRequest regressing past the Logger boundary (merged in
-//     from the old dispatcher_app_test.go).
+//   - App.HandleRequest regressing past the Logger boundary.
 //   - HandleRequest free function falling off the *App method
 //     delegation.
 //   - Unknown-action responses losing the unsupported ErrorCode.

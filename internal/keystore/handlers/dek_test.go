@@ -13,34 +13,16 @@
 package handlers
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"strings"
 	"testing"
 
-	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/userpresence"
 )
-
-type promptSecretPresence struct {
-	userpresence.Unavailable
-	secret string
-	calls  int
-}
-
-func (p *promptSecretPresence) Capabilities() userpresence.Capabilities {
-	return userpresence.Capabilities{Available: true, PromptSecret: true, Backend: "test"}
-}
-
-func (p *promptSecretPresence) PromptSecret(context.Context, userpresence.SecretPrompt) (userpresence.SecretResult, error) {
-	p.calls++
-	return userpresence.SecretResult{Secret: memguard.NewBufferFromBytes([]byte(p.secret))}, nil
-}
 
 // setKeychainDeviceKey seeds the deviceKey into the test's per-Deps SecretStore
 // so that subsequent dek_* handler calls (which fetch from d.Store) see the

@@ -10,8 +10,7 @@
 //   - Two *App instances with their own stores not actually being
 //     isolated.
 //   - KeyringSecretStore bypassing the file mirror and breaking e2e.
-//   - server key helpers calling free `kr*` directly instead of a.Store
-//     (merged in from the old server_keys_app_test.go).
+//   - server key helpers calling free `kr*` directly instead of a.Store.
 //   - Composite methods (getActiveServerPublicKey /
 //     getServerPublicKeyForVersion) chain-calling free functions
 //     instead of other *App methods.

@@ -1,7 +1,3 @@
-// VerifyServerSig unit tests (verifier-package residency).
-//
-// Previous location: internal/keystore/server_sig_test.go.
-//
 // Each of the 4-step verification branches is guarded independently:
 //  1. success → nil
 //  2. version not found → "failed to get server public key" prefix

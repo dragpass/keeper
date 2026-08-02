@@ -6,15 +6,11 @@ import (
 	"errors"
 	"os"
 	"sync"
-
-	"github.com/awnumar/memguard"
 )
 
 // E2EFileState is test-only plaintext stored under an isolated browser
 // profile. Production wiring never constructs this backend.
 type E2EFileState struct {
-	Secret           string `json:"secret,omitempty"`
-	Approve          *bool  `json:"approve,omitempty"`
 	ShownRecoveryKey string `json:"shown_recovery_key,omitempty"`
 }
 
@@ -32,8 +28,6 @@ func NewE2EFile(path string) *E2EFile {
 func (e *E2EFile) Capabilities() Capabilities {
 	return Capabilities{
 		Available:       true,
-		PromptSecret:    true,
-		Confirm:         true,
 		ShowRecoveryKey: true,
 		Backend:         "e2e-file",
 	}
@@ -57,45 +51,6 @@ func (e *E2EFile) writeState(state E2EFileState) error {
 		return err
 	}
 	return os.WriteFile(e.path, raw, 0o600)
-}
-
-func lockedSecret(value string) (SecretResult, error) {
-	if value == "" {
-		return SecretResult{}, ErrEmptySecret
-	}
-	raw := []byte(value)
-	secret := memguard.NewBufferFromBytes(raw)
-	memguard.WipeBytes(raw)
-	return SecretResult{Secret: secret}, nil
-}
-
-func (e *E2EFile) PromptSecret(ctx context.Context, _ SecretPrompt) (SecretResult, error) {
-	if err := ctx.Err(); err != nil {
-		return SecretResult{}, err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state, err := e.readState()
-	if err != nil {
-		return SecretResult{}, err
-	}
-	return lockedSecret(state.Secret)
-}
-
-func (e *E2EFile) Confirm(ctx context.Context, _ ConfirmPrompt) (Decision, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state, err := e.readState()
-	if err != nil {
-		return "", err
-	}
-	if state.Approve != nil && !*state.Approve {
-		return DecisionDeny, nil
-	}
-	return DecisionApprove, nil
 }
 
 func (e *E2EFile) ShowRecoveryKey(ctx context.Context, prompt RecoveryKeyPrompt) error {

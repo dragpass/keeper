@@ -224,7 +224,7 @@ func authUserPresenceError(err error) proto.BaseResponse {
 	switch {
 	case errors.Is(err, userpresence.ErrUnavailable):
 		return errs.CodeResponse(errs.ErrCodeUnsupported, err.Error())
-	case errors.Is(err, userpresence.ErrEmptySecret), errors.Is(err, userpresence.ErrSecretMismatch):
+	case errors.Is(err, userpresence.ErrEmptySecret):
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	default:
 		return errs.CodeResponse(errs.ErrCodeInternal, err.Error())

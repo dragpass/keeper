@@ -6,8 +6,6 @@
 //   - SendResponse failing to write 4-byte little-endian length + JSON body
 //     in the correct order
 //   - Read/Write roundtrip consistency regressions
-//
-// **Previous location:** internal/keystore/messaging_test.go.
 package dispatch
 
 import (

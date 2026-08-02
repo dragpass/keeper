@@ -1,11 +1,5 @@
 // Package verifier — Server signature verification.
 //
-// Extracted into a dedicated subpackage: the "verify challenge signature
-// using a key identified by server_key_version" helper and its abstraction
-// (`ServerKeyVerifier` interface), separated from the keystore root.
-// Previous location: `internal/keystore/server_sig.go` +
-// `internal/keystore/server_key_verifier.go`.
-//
 // **Why separated (§"verifier boundary"):**
 //
 //   - Server signature verification is a hot path called by 8+ handlers
