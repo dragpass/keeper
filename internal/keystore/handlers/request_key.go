@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -120,6 +121,19 @@ func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	if isCredentialApprovalDecision(req.CanonicalRequest) {
+		return errs.CodeResponse(errs.ErrCodeValidation,
+			"credential approval decisions require trusted user presence")
+	}
+	return signRequestCanonical(d, req.CanonicalRequest)
+}
+
+func isCredentialApprovalDecision(value string) bool {
+	return strings.HasPrefix(value,
+		`{"version":"`+proto.CredentialApprovalDecisionVersion+`",`)
+}
+
+func signRequestCanonical(d Deps, canonical string) proto.BaseResponse {
 
 	privB64, err := keychain.GetRequestSigningPrivateKey(d.Store)
 	if err != nil || privB64 == "" {
@@ -144,7 +158,7 @@ func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse 
 	// discard via defer zeroize.
 	defer secure.Zeroize(rawPriv)
 
-	sig := ed25519.Sign(ed25519.PrivateKey(rawPriv), []byte(req.CanonicalRequest))
+	sig := ed25519.Sign(ed25519.PrivateKey(rawPriv), []byte(canonical))
 	sigB64 := base64.StdEncoding.EncodeToString(sig)
 
 	pubB64, _ := keychain.GetRequestSigningPublicKey(d.Store)
