@@ -1,25 +1,4 @@
-// Package verifier — Server signature verification.
-//
-// **Why separated (§"verifier boundary"):**
-//
-//   - Server signature verification is a hot path called by 8+ handlers
-//     (Recovery, Rotation, Login, server-key-version pass-through, etc.).
-//   - Verification is a 4-step mix of stateful Keychain lookup and crypto
-//     primitives: (a) PEM lookup in Keychain (b) PEM parse (c) Base64 decode
-//     (d) RSA-PSS verify — naturally a distinct "verify surface" boundary.
-//   - Leaving it in the keystore root mixes it with `*App` methods + free
-//     function wrappers, making it hard for reviewers to focus on the verify
-//     contract alone.
-//
-// **External impact:** keystore root's `verifier_aliases.go` exposes this
-// package's types/functions as aliases, so existing call sites
-// (`a.ServerKeyVerifier.Verify(...)`, `keystore.AlwaysOKVerifier{}`,
-// `keystore.VerifyServerSig(...)`) are unchanged.
-//
-// Signature change: `VerifyServerSig` now takes `keychain.SecretStore` as
-// the first argument (previously the `getServerPublicKeyForVersion` free
-// function delegated through `DefaultApp().Store`). The verifier package now
-// declares its SecretStore dependency explicitly.
+// Package verifier validates server signatures against versioned trust keys.
 
 package verifier
 

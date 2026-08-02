@@ -290,7 +290,6 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`dek_generate_and_wrap_password`|`password`|`{ encrypted_dek_b64 }`|PBKDF2 → KEK → AES-wrap new DEK. Signup. Output = Base64(salt(16)‖iv(12)‖ct).|
 |`dek_generate_and_wrap_dual`|`password`|`{ password_wrapped_dek_b64, device_wrapped_dek_b64 }`|Dual wrap (password + deviceKey). Signup. Server form Base64(salt(16)‖iv(12)‖ct); local form Base64(iv(12)‖ct). deviceKey is fetched from Keychain inside Keeper (Keeper 0.0.8 fix-forward — never crosses IPC).|
 |`dek_rotate_to_device_key`|`password`, `encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|Login: re-wrap server password-wrap with deviceKey. deviceKey from Keychain.|
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain.|
@@ -394,7 +393,8 @@ Extension treats absence as `internal_error` for branching purposes.
 |0.0.17|`auth_signup_prepare`, `auth_recovery_key_show`, `auth_recovery_begin`, `auth_recovery_prepare`, `auth_recovery_reissue_prepare`|Moves signup and recovery KDF, keypair, wrapping, and resumable recovery-key reissue operations into Keeper. Password and RK24 input are app-owned and sent only in request fields; Keeper no longer exposes OS secret-input prompts. Native Messaging responses return only wrapped/public material and opaque short-lived handles.|
 |0.0.20|`credential_approval_prompt`|Adds server-challenge-bound native approval and device-signed decisions for MCP credential use. Generic request-key signing paths reject this decision namespace.|
 |0.0.21|No protocol change|Keeps release SBOM material outside the checkout so GoReleaser can publish the Homebrew archive and tap update from a clean git tree.|
-|0.0.22 (current)|Remove unused native prompts|Credential approval is owned by the DragPass browser app. Removes `credential_approval_prompt` and the unused secret-input and confirmation capabilities. Keeper retains native recovery-key display, cryptographic policy enforcement, and credential injection.|
+|0.0.22|Remove unused native prompts|Credential approval is owned by the DragPass browser app. Removes `credential_approval_prompt` and the unused secret-input and confirmation capabilities. Keeper retains native recovery-key display, cryptographic policy enforcement, and credential injection.|
+|0.0.23 (current)|Remove legacy compatibility paths|Removes the unused password-only DEK action, duplicate session error wrappers, and the unversioned server public key slot. Server key reads now resolve through the active version pointer only.|
 
 The Extension and MCP client enforce their own `MIN_KEEPER_VERSION`.
 Keeper-down or below-min sets a red

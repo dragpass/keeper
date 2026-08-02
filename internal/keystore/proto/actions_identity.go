@@ -152,12 +152,6 @@ const (
 	ActionRecoverySessionOpen  = "recovery_session_open"
 	ActionRecoverySessionClose = "recovery_session_close"
 
-	// DEKGenerateAndWrapPassword: moves the signup flow's generateDEK +
-	// wrapDEKWithPassword into the Keeper. PBKDF2(password) → KEK →
-	// AES-GCM(DEK) → returns {encrypted_dek_b64}. Braille encoding stays
-	// in the Extension.
-	ActionDEKGenerateAndWrapPassword = "dek_generate_and_wrap_password"
-
 	// DEKGenerateAndWrapDual: dual wrap for the signup flow. Generates a
 	// new 32B DEK and AES-GCM-wraps it with both (1) the password-derived
 	// KEK and (2) the deviceKey raw bytes, returning both wraps in one
@@ -191,10 +185,6 @@ const (
 	//   via buildTokenFromCiphertext).
 	// Moves dekManager.encryptData into the Keeper.
 	ActionDEKUnwrapAndEncrypt = "dek_unwrap_and_encrypt"
-
-	// (The old DEKUnwrapAndDecrypt — plaintext-returning action — was
-	//  removed. Replaced by DEKUnwrapAndDecryptToClipboard /
-	//  DEKUnwrapAndDecryptMeta.)
 
 	// DEKUnwrapAndDecryptMeta: bulk-decrypt personal entry metadata fields.
 	//   Inputs: encrypted_dek_b64, meta_fields (key→Base64(IV(12)||ct))

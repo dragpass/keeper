@@ -1,9 +1,4 @@
-// secure_bridge.go — secure helpers that depend on Keychain access + crypto.
-//
-// Pure memory-hygiene helpers (zeroize / wipeString / withDecodedSecretB64,
-// etc.) live in the internal/keystore/secure/ subpackage. The functions left
-// in this file depend on Keychain access + crypto primitives, so they were
-// moved into the handlers package (previously the keystore root).
+// Secure Keychain-to-memory bridge helpers.
 
 package handlers
 
@@ -21,9 +16,6 @@ import (
 // GetPrivateKeySecure retrieves the private key from keychain,
 // copies it into a memguard LockedBuffer, and wipes the original Go string copy.
 // Caller MUST call buf.Destroy() when done.
-//
-// Exported (with the lowercase alias `getPrivateKeySecure` in this package)
-// so keystore root tests can drive the bridge directly.
 func GetPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
 	pemStr, err := keychain.GetPrivateKey(store)
 	if err != nil {

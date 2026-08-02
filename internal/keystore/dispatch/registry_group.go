@@ -1,8 +1,4 @@
-// registry_group.go — Group DEK / Item DEK action registrations.
-//
-// Mirrors proto/actions_group_dek.go: Group DEK RSA wrap/unwrap, group session
-// opaque handles, admin raw-free composite re-wraps, AES-GCM item ops,
-// decrypt-to-clipboard, and guest transcrypt.
+// Group and Item DEK action registrations.
 
 package dispatch
 
@@ -25,10 +21,7 @@ func groupActions() map[string]actionHandlerFunc {
 		proto.ActionDEKRewrapForMember:        wrap(handlers.HandleDEKRewrapForMember),
 		proto.ActionDEKUnwrapAndRewrapForMany: wrap(handlers.HandleDEKUnwrapAndRewrapForMany),
 
-		// Item DEK / AES-GCM item ops delegated to Keeper.
-		// The old ActionAESUnwrapAndDecrypt (returning plaintext) was removed in
-		// the plaintext-removal follow-up §A and replaced by *_to_clipboard /
-		// *_meta variants.
+		// Item DEK operations.
 		proto.ActionAESUnwrapAndEncrypt:     wrap(handlers.HandleAESUnwrapAndEncrypt),
 		proto.ActionAESUnshareRewrapMeta:    wrap(handlers.HandleAESUnshareRewrapMeta),
 		proto.ActionAESUnwrapAndDecryptMeta: wrap(handlers.HandleAESUnwrapAndDecryptMeta),

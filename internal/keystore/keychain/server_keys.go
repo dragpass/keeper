@@ -1,20 +1,10 @@
 package keychain
 
-// server_keys.go — Multi-version server public key + Root fingerprint CRUD
-// against a SecretStore.
-//
-// The `*App` method bodies from keystore root server_keys.go moved here as
-// exported free functions; the keystore root's thin `*App` wrapper passes
-// `a.Store` as the first argument to delegate — zero change to external
-// signatures.
-//
-// Storage schema (see config/config.go constants):
+// Server public key storage schema:
 //
 //   server_public_key_v{N}                 PEM (Nth production key)
 //   server_public_key_active_version       "1" / "2" / ... string pointer
 //   server_public_key_root_fingerprint     "sha256:..." TOFU pin (optional)
-//   server_public_key                      active key PEM mirror (legacy
-//                                          compatibility)
 
 import (
 	"errors"
@@ -32,28 +22,8 @@ var ErrServerKeyVersionNotFound = errors.New("server public key version not foun
 // (pre-bootstrap).
 var ErrNoActiveServerKey = errors.New("no active server public key")
 
-// versionedServerKeyAccount returns the SecretStore account for a given
-// versioned server public key slot. Unexported — only used by other functions
-// in this file.
 func versionedServerKeyAccount(version uint) string {
 	return fmt.Sprintf("%s%d", config.DragPassServerPublicKeyVersionedPrefix, version)
-}
-
-// SaveServerPublicKey stores the legacy single-slot active server public key
-// PEM mirror (for pre-13b Extension compatibility).
-func SaveServerPublicKey(store SecretStore, serverPublicKey string) error {
-	return store.Set(config.Service, config.DragPassServerPublicKey, serverPublicKey)
-}
-
-// GetServerPublicKey returns the legacy single-slot server public key PEM
-// mirror (active key mirror for pre-13b Extension compatibility).
-func GetServerPublicKey(store SecretStore) (string, error) {
-	return store.Get(config.Service, config.DragPassServerPublicKey)
-}
-
-// DeleteServerPublicKey removes the legacy single-slot server public key PEM.
-func DeleteServerPublicKey(store SecretStore) error {
-	return store.Delete(config.Service, config.DragPassServerPublicKey)
 }
 
 // SaveServerPublicKeyForVersion stores the PEM for the Nth version into the
@@ -113,8 +83,6 @@ func GetActiveServerKeyVersion(store SecretStore) (uint, error) {
 }
 
 // GetActiveServerPublicKey returns the PEM for the active version.
-// A fallback entry point for older Extensions that do not pass
-// server_key_version.
 func GetActiveServerPublicKey(store SecretStore) (string, error) {
 	version, err := GetActiveServerKeyVersion(store)
 	if err != nil {
@@ -127,19 +95,10 @@ func GetActiveServerPublicKey(store SecretStore) (string, error) {
 	return pem, nil
 }
 
-// GetServerPublicKeyForVersion is the unified entry point used by challenge
-// verification. version == 0 means active fallback; otherwise the exact
-// version.
+// GetServerPublicKeyForVersion resolves zero to the active version.
 func GetServerPublicKeyForVersion(store SecretStore, version uint) (string, error) {
 	if version == 0 {
-		// Older Extensions (no field sent) fall back to active. If bootstrap
-		// has completed, active = v1 is filled.
-		if pem, err := GetActiveServerPublicKey(store); err == nil {
-			return pem, nil
-		}
-		// Abnormal / pre-boot case where the active pointer is empty: fall
-		// back to the legacy single slot.
-		return GetServerPublicKey(store)
+		return GetActiveServerPublicKey(store)
 	}
 	return GetServerPublicKeyByVersion(store, version)
 }

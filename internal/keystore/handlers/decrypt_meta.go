@@ -39,7 +39,7 @@ func HandleAESUnwrapAndDecryptMeta(d Deps, req proto.AESUnwrapAndDecryptMetaRequ
 		})
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "unwrap and decrypt meta")
+		return sessionUseError(useErr, "unwrap and decrypt meta")
 	}
 
 	d.Logger.Println("aes unwrap and decrypt meta successful")

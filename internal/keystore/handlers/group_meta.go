@@ -41,7 +41,7 @@ func HandleGroupDecryptMeta(d Deps, req proto.GroupDecryptMetaRequest) proto.Bas
 		})
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group decrypt meta")
+		return sessionUseError(useErr, "group decrypt meta")
 	}
 
 	d.Logger.Println("group decrypt meta successful")
@@ -80,7 +80,7 @@ func HandleGroupEncryptMeta(d Deps, req proto.GroupEncryptMetaRequest) proto.Bas
 		return nil
 	})
 	if useErr != nil {
-		return groupSessionUseError(useErr, "group encrypt meta")
+		return sessionUseError(useErr, "group encrypt meta")
 	}
 
 	d.Logger.Println("group encrypt meta successful")

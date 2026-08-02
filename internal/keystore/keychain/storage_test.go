@@ -60,11 +60,14 @@ func TestServerPublicKeyOperations(t *testing.T) {
 	store := defaultKeyringStore()
 	expectedKey := "mock-server-public-key-abcde"
 
-	if err := SaveServerPublicKey(store, expectedKey); err != nil {
+	if err := SaveServerPublicKeyForVersion(store, 1, expectedKey); err != nil {
 		t.Fatalf("Failed to save server public key: %v", err)
 	}
+	if err := SaveActiveServerKeyVersion(store, 1); err != nil {
+		t.Fatalf("Failed to save active server key version: %v", err)
+	}
 
-	got, err := GetServerPublicKey(store)
+	got, err := GetActiveServerPublicKey(store)
 	if err != nil {
 		t.Fatalf("Failed to get server public key: %v", err)
 	}

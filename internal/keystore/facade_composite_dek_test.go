@@ -78,26 +78,6 @@ func TestHandleRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 	}
 }
 
-// TestHandleRequest_DEKGenerateAndWrapPassword_JSONDispatch verifies
-// dispatch works and the response includes encrypted_dek_b64.
-func TestHandleRequest_DEKGenerateAndWrapPassword_JSONDispatch(t *testing.T) {
-	app := newFacadeTestApp()
-	msg := `{"action":"dek_generate_and_wrap_password","request_id":"r-dek","payload":{"password":"secret"}}`
-	resp := app.HandleRequest([]byte(msg))
-	if !resp.Success {
-		t.Fatalf("dispatch failed: %s", resp.Error)
-	}
-	if resp.RequestID != "r-dek" {
-		t.Errorf("request_id echo: got %q", resp.RequestID)
-	}
-	raw, _ := json.Marshal(resp.Data)
-	var data DEKGenerateAndWrapPasswordResponseData
-	json.Unmarshal(raw, &data)
-	if data.EncryptedDEKB64 == "" {
-		t.Error("encrypted_dek_b64 should not be empty")
-	}
-}
-
 // TestHandleRequest_DEKGenerateAndWrapDual_JSONDispatch verifies dual
 // wrap JSON envelope dispatch and the two response fields
 // (password_wrapped_dek_b64, device_wrapped_dek_b64).

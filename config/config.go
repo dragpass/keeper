@@ -5,23 +5,11 @@ const (
 	DeviceKey                       = "device_key"
 	DragPassKeeperPrivateKey        = "keeper_private_key"
 	DragPassKeeperPublicKey         = "keeper_public_key"
-	DragPassServerPublicKey         = "server_public_key"
 	SessionCode                     = "session_code"
 	PendingDragPassKeeperPrivateKey = "pending_keeper_private_key"
 	PendingDragPassKeeperPublicKey  = "pending_keeper_public_key"
 
-	// Multi-version server public key infrastructure.
-	//
-	// DragPassServerPublicKeyVersionedPrefix + version number stores v1/v2/...
-	// entries.
-	// DragPassServerPublicKeyActiveVersion is a pointer to the active version
-	// (string, e.g. "1").
-	// DragPassServerRootPublicKeyFingerprint is the Root public key
-	// fingerprint TOFU pin.
-	//
-	// The existing single slot DragPassServerPublicKey is kept as a mirror of
-	// the active key PEM (legacy compat). Once the Extension always specifies
-	// server_key_version on challenge requests, this mirror can be deprecated.
+	// Server public keys are stored by version with an explicit active pointer.
 	DragPassServerPublicKeyVersionedPrefix = "server_public_key_v"
 	DragPassServerPublicKeyActiveVersion   = "server_public_key_active_version"
 	DragPassServerRootPublicKeyFingerprint = "server_public_key_root_fingerprint"

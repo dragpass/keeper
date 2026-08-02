@@ -1,15 +1,5 @@
 package keychain
 
-// keypair.go — Keypair (active) CRUD against a SecretStore.
-//
-// The `*App` method bodies from storage.go moved here as exported free
-// functions; the keystore root's thin `*App` wrapper passes `a.Store` as the
-// first argument to delegate — zero change to external signatures.
-//
-// This layer is a logic-free CRUD pass-through. SecretStore abstracts over
-// the OS Keychain (production) / in-memory map (unit tests) / file mirror
-// (e2e).
-
 import "github.com/dragpass/keeper/config"
 
 // SavePrivateKey stores the active Keeper RSA private key PEM.

@@ -65,7 +65,7 @@ func HandleAESUnshareRewrapMeta(d Deps, req proto.AESUnshareRewrapMetaRequest) p
 		})
 	})
 	if useSrcErr != nil {
-		return groupSessionUseError(useSrcErr, "unshare rewrap meta src")
+		return sessionUseError(useSrcErr, "unshare rewrap meta src")
 	}
 	defer secure.Zeroize(plaintext)
 	defer func() {
@@ -109,7 +109,7 @@ func HandleAESUnshareRewrapMeta(d Deps, req proto.AESUnshareRewrapMetaRequest) p
 			return nil
 		})
 		if useDstErr != nil {
-			return groupSessionUseError(useDstErr, "unshare rewrap meta dst "+handle)
+			return sessionUseError(useDstErr, "unshare rewrap meta dst "+handle)
 		}
 		grants = append(grants, proto.AESUnshareRewrapMetaGrant{
 			GroupHandle:    handle,

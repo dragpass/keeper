@@ -75,7 +75,6 @@ func signRootPayloadForTest(t *testing.T, priv *rsa.PrivateKey, payload []byte) 
 // refresh_server_keys_test cases. Operates on the test's SecretStore directly.
 func resetServerKeySlots(t *testing.T, store keychain.SecretStore) {
 	t.Helper()
-	_ = keychain.DeleteServerPublicKey(store)
 	_ = keychain.DeleteServerPublicKeyForVersion(store, 1)
 	_ = keychain.DeleteServerPublicKeyForVersion(store, 2)
 	_ = keychain.DeleteServerPublicKeyForVersion(store, 3)
@@ -219,10 +218,6 @@ func TestHandleRefreshServerKeys_RootEmbedded_RoundTrip(t *testing.T) {
 	v, _ := keychain.GetActiveServerKeyVersion(store)
 	if v != 2 {
 		t.Errorf("active version pointer = %d, want 2", v)
-	}
-	legacy, _ := keychain.GetServerPublicKey(store)
-	if legacy != pemV2 {
-		t.Errorf("legacy mirror = %q, want active v2 PEM", legacy)
 	}
 	pinned, _ := keychain.GetRootPublicKeyFingerprint(store)
 	if pinned != embeddedFp {

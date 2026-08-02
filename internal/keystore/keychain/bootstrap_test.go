@@ -11,17 +11,16 @@ import (
 
 func TestEnsureServerPublicKey_FirstRun(t *testing.T) {
 	store := defaultKeyringStore()
-	// Clear any existing server public key
-	_ = DeleteServerPublicKey(store)
+	resetServerKeySlots(t, store)
 
 	err := EnsureServerPublicKey(store, logger.NewMemoryLogger())
 	if err != nil {
 		t.Fatalf("EnsureServerPublicKey() error = %v", err)
 	}
 
-	key, err := GetServerPublicKey(store)
+	key, err := GetActiveServerPublicKey(store)
 	if err != nil {
-		t.Fatalf("GetServerPublicKey() error = %v", err)
+		t.Fatalf("GetActiveServerPublicKey() error = %v", err)
 	}
 
 	if !strings.Contains(key, "PUBLIC KEY") {
@@ -31,16 +30,16 @@ func TestEnsureServerPublicKey_FirstRun(t *testing.T) {
 
 func TestEnsureServerPublicKey_Idempotent(t *testing.T) {
 	store := defaultKeyringStore()
-	_ = DeleteServerPublicKey(store)
+	resetServerKeySlots(t, store)
 
 	log := logger.NewMemoryLogger()
 	// First call
 	_ = EnsureServerPublicKey(store, log)
-	key1, _ := GetServerPublicKey(store)
+	key1, _ := GetActiveServerPublicKey(store)
 
 	// Second call should not overwrite
 	_ = EnsureServerPublicKey(store, log)
-	key2, _ := GetServerPublicKey(store)
+	key2, _ := GetActiveServerPublicKey(store)
 
 	if key1 != key2 {
 		t.Error("EnsureServerPublicKey should be idempotent")
@@ -49,10 +48,10 @@ func TestEnsureServerPublicKey_Idempotent(t *testing.T) {
 
 func TestEnsureServerPublicKey_ValidRSAKey(t *testing.T) {
 	store := defaultKeyringStore()
-	_ = DeleteServerPublicKey(store)
+	resetServerKeySlots(t, store)
 	_ = EnsureServerPublicKey(store, logger.NewMemoryLogger())
 
-	key, _ := GetServerPublicKey(store)
+	key, _ := GetActiveServerPublicKey(store)
 
 	// Should be parseable as an RSA public key
 	pub, err := crypto.ParsePublicKey(key)

@@ -642,7 +642,8 @@ OS のキーストアに保存されているサーバーの公開鍵を取得�
 ```
 Service: com.dragpass.keeper
 Items:
-- server_public_key (DragPassServerPublicKey)
+- server_public_key_v{N} (DragPassServerPublicKeyVersionedPrefix)
+- server_public_key_active_version (DragPassServerPublicKeyActiveVersion)
 - keeper_private_key (DragPassKeeperPrivateKey)
 - keeper_public_key (DragPassKeeperPublicKey)
 - pending_keeper_private_key (PendingDragPassKeeperPrivateKey) - Temporary during signup
@@ -656,7 +657,8 @@ Items:
 Collection: default keyring
 Schema: com.dragpass.keeper
 Items:
-- server_public_key (DragPassServerPublicKey)
+- server_public_key_v{N} (DragPassServerPublicKeyVersionedPrefix)
+- server_public_key_active_version (DragPassServerPublicKeyActiveVersion)
 - keeper_private_key (DragPassKeeperPrivateKey)
 - keeper_public_key (DragPassKeeperPublicKey)
 - pending_keeper_private_key (PendingDragPassKeeperPrivateKey) - Temporary during signup
@@ -669,7 +671,8 @@ Items:
 ```
 Target Prefix: com.dragpass.keeper
 Credentials:
-- server_public_key (DragPassServerPublicKey)
+- server_public_key_v{N} (DragPassServerPublicKeyVersionedPrefix)
+- server_public_key_active_version (DragPassServerPublicKeyActiveVersion)
 - keeper_private_key (DragPassKeeperPrivateKey)
 - keeper_public_key (DragPassKeeperPublicKey)
 - pending_keeper_private_key (PendingDragPassKeeperPrivateKey) - Temporary during signup

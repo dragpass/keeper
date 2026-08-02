@@ -6,10 +6,6 @@
 // the keystore root) they used keyring.MockInit() + the global free function
 // (saveDeviceKey); in this package they write directly to the
 // MemorySecretStore bound to deps (instance isolation → safe in parallel).
-//
-// **Additional defects caught:**
-//   - regressions where HandleDEKGenerateAndWrapPassword's input password is
-//     echoed to the logger (core security regression guard)
 package handlers
 
 import (
@@ -32,94 +28,6 @@ func setKeychainDeviceKey(t *testing.T, store keychain.SecretStore, deviceKey []
 	t.Helper()
 	if err := keychain.SaveDeviceKey(store, base64.StdEncoding.EncodeToString(deviceKey)); err != nil {
 		t.Fatalf("SaveDeviceKey: %v", err)
-	}
-}
-
-// TestDEKGenerateAndWrapPassword_FormatAndDecrypt: ensures the output
-// EncryptedDEKB64 is in salt(16) || iv(12) || ciphertext_with_tag format and
-// decrypting with the same password + extracted salt yields a 32B raw DEK.
-// Same convention as the Extension's deriveKeyForWrapping (PBKDF2-SHA256,
-// 600,000 iters, AES-256-GCM).
-func TestDEKGenerateAndWrapPassword_FormatAndDecrypt(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	password := "testpass-12345"
-	resp := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{
-		Password: password,
-	})
-	if !resp.Success {
-		t.Fatalf("dek generate failed: %s", resp.Error)
-	}
-	data := resp.Data.(proto.DEKGenerateAndWrapPasswordResponseData)
-	if data.EncryptedDEKB64 == "" {
-		t.Fatal("encrypted_dek_b64 should not be empty")
-	}
-
-	raw, err := base64.StdEncoding.DecodeString(data.EncryptedDEKB64)
-	if err != nil {
-		t.Fatalf("decode b64: %v", err)
-	}
-	if len(raw) < 16+12+32+16 {
-		t.Fatalf("output too short: %d", len(raw))
-	}
-
-	salt := raw[:16]
-	iv := raw[16 : 16+12]
-	ciphertext := raw[16+12:]
-
-	kek := pbkdf2.Key([]byte(password), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	plaintext, err := AESGCMOpen(kek, iv, ciphertext)
-	if err != nil {
-		t.Fatalf("decrypt failed: %v", err)
-	}
-	if len(plaintext) != 32 {
-		t.Errorf("dek length = %d, want 32", len(plaintext))
-	}
-}
-
-// TestDEKGenerateAndWrapPassword_WrongPasswordRejected: ensures the GCM tag
-// check fails when decrypting with a different password (basis of the
-// zero-knowledge guarantee).
-func TestDEKGenerateAndWrapPassword_WrongPasswordRejected(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	resp := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{
-		Password: "correct-password",
-	})
-	if !resp.Success {
-		t.Fatalf("setup: %s", resp.Error)
-	}
-	data := resp.Data.(proto.DEKGenerateAndWrapPasswordResponseData)
-	raw, _ := base64.StdEncoding.DecodeString(data.EncryptedDEKB64)
-	salt, iv, ciphertext := raw[:16], raw[16:28], raw[28:]
-
-	wrongKEK := pbkdf2.Key([]byte("WRONG-password"), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	if _, err := AESGCMOpen(wrongKEK, iv, ciphertext); err == nil {
-		t.Error("decrypt should fail with wrong password")
-	}
-}
-
-// TestDEKGenerateAndWrapPassword_DistinctOutputs: calling twice with the same
-// password must produce different salt/IV/DEK each time (no determinism).
-func TestDEKGenerateAndWrapPassword_DistinctOutputs(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	password := "samepass"
-	r1 := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{Password: password})
-	r2 := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{Password: password})
-
-	o1 := r1.Data.(proto.DEKGenerateAndWrapPasswordResponseData).EncryptedDEKB64
-	o2 := r2.Data.(proto.DEKGenerateAndWrapPasswordResponseData).EncryptedDEKB64
-	if o1 == o2 {
-		t.Error("two calls with same password should produce distinct outputs (different salt/iv/dek)")
-	}
-	if !strings.HasPrefix(o1, "") {
-		t.Fatal("unreachable")
-	}
-}
-
-func TestDEKGenerateAndWrapPassword_EmptyRejected(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	resp := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{Password: ""})
-	if resp.Success {
-		t.Error("expected failure for empty password")
 	}
 }
 
@@ -370,31 +278,3 @@ func TestDEKGenerateAndWrapDual_Validation(t *testing.T) {
 }
 
 // --- App receiver method DI guard --------
-
-func TestApp_HandleDEKGenerateAndWrapPassword_LogsLifecycle(t *testing.T) {
-	deps, log, _ := newTestDeps(t)
-
-	resp := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{Password: "pw"})
-	if !resp.Success {
-		t.Fatalf("password wrap should succeed: %s", resp.Error)
-	}
-	if !log.Contains("dek generate and wrap password request processing") {
-		t.Fatalf("expected processing log")
-	}
-	if !log.Contains("dek generate and wrap password successful") {
-		t.Fatalf("expected success log")
-	}
-}
-
-func TestApp_HandleDEKGenerateAndWrapPassword_DoesNotEchoPassword(t *testing.T) {
-	deps, log, _ := newTestDeps(t)
-
-	const sentinel = "SUPER_SECRET_USER_PASSWORD_DO_NOT_LEAK"
-	resp := HandleDEKGenerateAndWrapPassword(deps, proto.DEKGenerateAndWrapPasswordRequest{Password: sentinel})
-	if !resp.Success {
-		t.Fatalf("password wrap should succeed: %s", resp.Error)
-	}
-	if log.Contains(sentinel) {
-		t.Fatalf("logger leaked password: %v", log.Messages())
-	}
-}

@@ -1,17 +1,4 @@
-// verifier.go — ServerKeyVerifier interface + production/test impls.
-//
-// **DI motivation:** challenge_token + signature verification is a hot path
-// called by 8+ handlers (Recovery, Rotation, Login, server-key-version
-// pass-through). Today the free function `VerifyServerSig` (a unified helper)
-// handles stateful Keychain lookup + RSA-PSS verification in one call.
-//
-// Splitting it into the ServerKeyVerifier interface lets:
-//
-//   - Unit tests stub the verify behavior without seeding a PEM Keychain.
-//   - active/deprecated/grace-period server-key policy be encapsulated in
-//     the verifier implementation — handlers see only the "verify result".
-//   - Future root-signature verification (Apocalypse scenario) extend the
-//     same interface.
+// Server signature verification boundary.
 
 package verifier
 
@@ -35,21 +22,11 @@ type ServerKeyVerifier interface {
 	Verify(token string, sigB64 string, serverKeyVersion uint) error
 }
 
-// DefaultServerKeyVerifier is the production verifier — delegates to the
-// `VerifyServerSig` free function with the SecretStore.
-//
-// Holds a Store field. It was previously a stateless struct and
-// `VerifyServerSig` delegated automatically through `DefaultApp().Store`.
-// Making the SecretStore dependency explicit removes the verifier package's
-// dependency on the keystore root's App singleton — inject via
-// `NewDefaultServerKeyVerifier(store)`.
+// DefaultServerKeyVerifier reads versioned keys from the secret store.
 type DefaultServerKeyVerifier struct {
 	Store keychain.SecretStore
 }
 
-// NewDefaultServerKeyVerifier builds a production verifier that encapsulates
-// the SecretStore. Production wiring is one line:
-// `NewDefaultServerKeyVerifier(deps.Store)`.
 func NewDefaultServerKeyVerifier(store keychain.SecretStore) DefaultServerKeyVerifier {
 	return DefaultServerKeyVerifier{Store: store}
 }

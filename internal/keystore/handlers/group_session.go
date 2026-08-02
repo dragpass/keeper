@@ -1,10 +1,5 @@
 // group_session.go — Group DEK opaque handle handlers.
 // HandleGroupSessionOpen / Close / Status — three actions routed by the dispatcher.
-//
-// The groupSessionUseError helper is also referenced by item_dek.go's AES
-// family handlers — they share automatically within the same (handlers)
-// package.
-
 package handlers
 
 import (
@@ -96,10 +91,4 @@ func HandleGroupSessionStatus(d Deps, req proto.GroupSessionStatusRequest) proto
 		Exists:      exists,
 		RemainingMs: remaining,
 	}}
-}
-
-// groupSessionUseError delegates to the single sessionUseError helper.
-// Backward-compat wrapper for caller compatibility — can be removed gradually.
-func groupSessionUseError(err error, context string) proto.BaseResponse {
-	return sessionUseError(err, context)
 }
