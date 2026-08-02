@@ -14,6 +14,7 @@ import (
 
 func credentialActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionCredentialHTTPRequest: wrap(handlers.HandleCredentialHTTPRequest),
+		proto.ActionCredentialHTTPRequest:    wrap(handlers.HandleCredentialHTTPRequest),
+		proto.ActionCredentialApprovalPrompt: wrap(handlers.HandleCredentialApprovalPrompt),
 	}
 }
