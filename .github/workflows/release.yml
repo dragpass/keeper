@@ -356,7 +356,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-sbom
-          path: supply-chain
+          path: ${{ runner.temp }}/supply-chain
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
         with:
           distribution: goreleaser
@@ -375,7 +375,7 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: dist/*.tar.gz
-          sbom-path: supply-chain/dragpass-keeper.spdx.json
+          sbom-path: ${{ runner.temp }}/supply-chain/dragpass-keeper.spdx.json
       - name: publish offline attestation bundles and checksums
         env:
           GH_TOKEN: ${{ github.token }}
