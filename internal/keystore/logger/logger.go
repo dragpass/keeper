@@ -1,23 +1,4 @@
-// Package logger — Logger: structured-log abstraction.
-//
-// **DI motivation:** keeper handlers call `log.Println` / `log.Printf`
-// directly. For unit tests to assert "this handler did not leave sensitive
-// values in the log," they would have to capture stderr / stdout and inspect
-// it with regex — that has high coupling and is process-global, which breaks
-// parallel testing.
-//
-// Introducing a Logger interface allows:
-//
-//   - tests to inject MemoryLogger and collect messages into an isolated slice.
-//   - expressing "the secret was not echoed into the log" regression guards
-//     as assertions.
-//   - swapping to a structured logger (zerolog/slog) later by changing only
-//     one place.
-//
-// **Current phase scope:** define the Logger interface + StdLogger /
-// MemoryLogger + expose the App.Logger field. Migration of the 167+ log.*
-// calls in handlers is staged in follow-up phases — this phase only adds
-// the wiring infrastructure.
+// Package logger provides injectable logging for secret-leak regression tests.
 package logger
 
 import (

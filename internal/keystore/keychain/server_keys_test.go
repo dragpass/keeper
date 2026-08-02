@@ -1,7 +1,4 @@
-// server_keys_test.go — multi-version server public key Keychain save / lookup
-// / active pointer.
-//
-// **Previous location:** internal/keystore/server_keys_test.go.
+// Tests multi-version server public-key storage and active-key selection.
 package keychain
 
 import (

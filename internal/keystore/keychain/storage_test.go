@@ -7,8 +7,6 @@
 //
 // This file verifies round-trips on KeyringSecretStore (production path).
 // Unit tests over MemorySecretStore live separately in store_test.go.
-//
-// **Previous location:** internal/keystore/storage_test.go.
 package keychain
 
 import (

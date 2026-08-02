@@ -1,7 +1,4 @@
-// bootstrap_test.go — EnsureServerPublicKey first-boot / idempotency /
-// valid RSA key checks.
-//
-// **Previous location:** internal/keystore/bootstrap_test.go.
+// Tests server public-key bootstrap and idempotency.
 package keychain
 
 import (

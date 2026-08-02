@@ -1,11 +1,4 @@
-// Package clipboard — Keeper-owned OS clipboard abstraction.
-//
-// Initial wiring: interface + Noop (production default) + Memory (test fake).
-// The real OS clipboard impl (`golang.design/x/clipboard`, etc.) is
-// introduced in a follow-up phase. This phase only sets up Deps injection +
-// handler dispatch + regression guards.
-//
-// See security/keeper-plaintext-command-api-plan.md "Design decisions".
+// Package clipboard provides Keeper-owned OS clipboard access.
 package clipboard
 
 import (

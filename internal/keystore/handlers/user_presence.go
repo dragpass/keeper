@@ -8,8 +8,6 @@ func HandleUserPresenceCapabilities(d Deps, _ proto.UserPresenceCapabilitiesRequ
 		Success: true,
 		Data: proto.UserPresenceCapabilitiesResponseData{
 			Available:       capabilities.Available,
-			PromptSecret:    capabilities.PromptSecret,
-			Confirm:         capabilities.Confirm,
 			ShowRecoveryKey: capabilities.ShowRecoveryKey,
 			Backend:         capabilities.Backend,
 		},
