@@ -39,13 +39,3 @@ func requireRecoveryKey(raw []byte) error {
 	}
 	return err
 }
-
-var defaultRecoveryKeySessionStore = NewRecoveryKeySessionStore(RecoveryKeySessionTTL)
-
-func DefaultRecoveryKeySessionStore() *RecoveryKeySessionStore {
-	return defaultRecoveryKeySessionStore
-}
-
-func StartDefaultRecoveryKeySessionReaper() {
-	defaultRecoveryKeySessionStore.StartReaper(RecoveryKeySessionReaperInterval)
-}

@@ -21,7 +21,6 @@ package keystore
 import (
 	"crypto/rand"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
@@ -65,14 +64,9 @@ type Deps struct {
 	// Defaults to DefaultServerKeyVerifier (wraps VerifyServerSig) if
 	// nil.
 	ServerKeyVerifier ServerKeyVerifier
-	// GroupSessions is the in-memory store that protects raw Group DEKs
-	// with memguard. Defaults to sessions.DefaultGroupSessionStore() — the
-	// singleton main.go starts the reaper against. Tests inject an
-	// isolated instance via sessions.NewGroupSessionStore(TTL).
+	// GroupSessions is the in-memory store that protects raw Group DEKs.
 	GroupSessions *sessions.GroupSessionStore
-	// RecoverySessions is the store that protects restored OLD private
-	// key PEM bytes with memguard. Defaults to
-	// sessions.DefaultRecoverySessionStore() singleton if nil.
+	// RecoverySessions protects restored old private key PEM bytes.
 	RecoverySessions *sessions.RecoverySessionStore
 	// RecoveryKeySessions protects short-lived RK24 values behind opaque
 	// handles. Native Messaging carries only the handle.
@@ -145,15 +139,13 @@ func NewApp(deps Deps) *App {
 		app.ServerKeyVerifier = verifier.NewDefaultServerKeyVerifier(app.Store)
 	}
 	if app.GroupSessions == nil {
-		// Production fallback: the singleton that main.go starts the
-		// reaper against.
-		app.GroupSessions = sessions.DefaultGroupSessionStore()
+		app.GroupSessions = sessions.NewGroupSessionStore(sessions.GroupSessionTTL)
 	}
 	if app.RecoverySessions == nil {
-		app.RecoverySessions = sessions.DefaultRecoverySessionStore()
+		app.RecoverySessions = sessions.NewRecoverySessionStore(sessions.RecoverySessionTTL)
 	}
 	if app.RecoveryKeySessions == nil {
-		app.RecoveryKeySessions = sessions.DefaultRecoveryKeySessionStore()
+		app.RecoveryKeySessions = sessions.NewRecoveryKeySessionStore(sessions.RecoveryKeySessionTTL)
 	}
 	if app.Clipboard == nil {
 		if testing.Testing() {
@@ -179,44 +171,4 @@ func NewApp(deps Deps) *App {
 		app.UserPresence = userpresence.Unavailable{}
 	}
 	return app
-}
-
-// defaultApp is the process-wide application instance.
-var (
-	defaultAppOnce sync.Once
-	defaultApp     *App
-	defaultDepsMu  sync.Mutex
-	defaultDeps    Deps
-)
-
-// SetDefaultDeps pre-registers the Deps to use for DefaultApp's first
-// sync.Once initialization.
-//
-// **When to call:** before the first DefaultApp() call. Used as a hook
-// by main.go init() when it detects KEEPER_E2E_MODE, so e2e-only
-// dependencies (MemoryClipboard, etc.) can be injected. Changes after
-// the first DefaultApp() call are ignored and do not panic — the caller
-// doesn't need to worry about races (production wiring calls init()
-// exactly once).
-func SetDefaultDeps(d Deps) {
-	defaultDepsMu.Lock()
-	defaultDeps = d
-	defaultDepsMu.Unlock()
-}
-
-// DefaultApp returns the process singleton App. On first call,
-// initializes via NewApp(<deps registered with SetDefaultDeps>). When no
-// Deps are registered, NewApp(Deps{}) — all dependencies use production
-// defaults.
-//
-// Tests should avoid this function and prefer NewApp for an isolated
-// App.
-func DefaultApp() *App {
-	defaultAppOnce.Do(func() {
-		defaultDepsMu.Lock()
-		d := defaultDeps
-		defaultDepsMu.Unlock()
-		defaultApp = NewApp(d)
-	})
-	return defaultApp
 }

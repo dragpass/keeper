@@ -8,16 +8,8 @@ package keystore
 // SecretStore as the first arg) in `internal/keystore/keychain/`. This file
 // holds only one kind of thin adapter:
 //
-//   - `*App` methods — delegate to `keychain.X(a.Store, ...)`. Every
-//     caller grabs an App instance (DefaultApp() in production, helpers
-//     like newFacadeTestApp in tests) explicitly, so the SecretStore
-//     lifecycle is traceable from one place.
-//
-// The lowercase free-function shims (`saveDeviceKey()`, etc.) that used
-// to sit alongside auto-delegated to `DefaultApp()` at call time, which
-// bound them to the process-wide singleton and made it impossible to
-// tell which store was being used from the call site alone. Callers
-// have been cleaned up to delegate via `DefaultApp().X(...)`.
+//   - `*App` methods delegate to `keychain.X(a.Store, ...)`. Callers receive
+//     an App explicitly, so the SecretStore lifecycle is traceable.
 //
 // The multi-version server pubkey + Root fingerprint wrappers that used to
 // live in server_keys.go are merged into this file. Both follow the same
@@ -25,8 +17,7 @@ package keystore
 //
 // `ErrServerKeyVersionNotFound` / `ErrNoActiveServerKey` /
 // `ErrSecretNotFound` sentinels live in the keychain package and are
-// exposed at keystore root as var aliases in `aliases.go` — `errors.Is`
-// semantics preserved.
+// exposed at keystore root as aliases with `errors.Is` semantics preserved.
 
 import "github.com/dragpass/keeper/internal/keystore/keychain"
 

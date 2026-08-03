@@ -7,7 +7,6 @@
 //   - MemorySecretStore failing to return ErrSecretNotFound.
 //   - KeyringSecretStore failing to translate keyring.ErrNotFound into
 //     ErrSecretNotFound.
-//   - Races where DefaultApp singleton initializes twice.
 //   - App.HandleRequest regressing past the Logger boundary.
 //   - HandleRequest free function falling off the *App method
 //     delegation.
@@ -53,19 +52,13 @@ func TestNewApp_FillsProductionDefaults(t *testing.T) {
 		t.Fatalf("ServerKeyVerifier default must be DefaultServerKeyVerifier, got %T", app.ServerKeyVerifier)
 	}
 	if app.GroupSessions == nil {
-		t.Fatalf("GroupSessions must default to sessions.DefaultGroupSessionStore()")
-	}
-	if app.GroupSessions != sessions.DefaultGroupSessionStore() {
-		t.Fatalf("GroupSessions default must be the process-wide singleton (main.go reaper attaches to same instance)")
+		t.Fatalf("GroupSessions must have a default store")
 	}
 	if app.RecoverySessions == nil {
-		t.Fatalf("RecoverySessions must default to sessions.DefaultRecoverySessionStore()")
+		t.Fatalf("RecoverySessions must have a default store")
 	}
-	if app.RecoverySessions != sessions.DefaultRecoverySessionStore() {
-		t.Fatalf("RecoverySessions default must be the process-wide singleton")
-	}
-	if app.RecoveryKeySessions != sessions.DefaultRecoveryKeySessionStore() {
-		t.Fatalf("RecoveryKeySessions default must be the process-wide singleton")
+	if app.RecoveryKeySessions == nil {
+		t.Fatalf("RecoveryKeySessions must have a default store")
 	}
 	if _, ok := app.UserPresence.(userpresence.Unavailable); !ok {
 		t.Fatalf("UserPresence default must fail closed, got %T", app.UserPresence)
@@ -108,8 +101,7 @@ func TestNewApp_RespectsInjection(t *testing.T) {
 
 // TestNewApp_RespectsSessionStoreInjection: an explicitly injected
 // GroupSessionStore / RecoverySessionStore instance must end up on
-// *App as-is and not get overwritten by the default singleton. Parallel
-// unit tests need to be able to inject fresh stores.
+// *App as-is. Parallel unit tests need to be able to inject fresh stores.
 func TestNewApp_RespectsSessionStoreInjection(t *testing.T) {
 	groupStore := sessions.NewGroupSessionStore(15 * time.Minute)
 	recoveryStore := sessions.NewRecoverySessionStore(5 * time.Minute)
@@ -128,17 +120,11 @@ func TestNewApp_RespectsSessionStoreInjection(t *testing.T) {
 	if app.RecoveryKeySessions != recoveryKeyStore {
 		t.Fatalf("RecoveryKeySessions injection ignored")
 	}
-	if app.GroupSessions == sessions.DefaultGroupSessionStore() {
-		t.Fatalf("injected GroupSessions must not collapse to default singleton")
-	}
 }
 
 // TestApp_SessionStores_AreIsolated: when two *App instances each get
 // their own GroupSessionStore, a handle registered in one must not be
-// visible in the other (parallel-test isolation regression guard — if
-// handlers regress to calling sessions.Default*SessionStore() directly,
-// both *App instances would see the same process-wide store and the
-// handle would leak across).
+// visible in the other.
 func TestApp_SessionStores_AreIsolated(t *testing.T) {
 	store1 := sessions.NewGroupSessionStore(15 * time.Minute)
 	store2 := sessions.NewGroupSessionStore(15 * time.Minute)
@@ -163,17 +149,6 @@ func TestApp_SessionStores_AreIsolated(t *testing.T) {
 	}
 	if exists, _ := store2.Status(handle); exists {
 		t.Fatalf("handle from store1 must NOT be visible in store2 (process-wide leak)")
-	}
-}
-
-func TestDefaultApp_Singleton(t *testing.T) {
-	a := DefaultApp()
-	b := DefaultApp()
-	if a != b {
-		t.Fatalf("DefaultApp must return same instance, got distinct pointers")
-	}
-	if a.Store == nil || a.Clock == nil || a.Rand == nil || a.Logger == nil || a.ServerKeyVerifier == nil {
-		t.Fatalf("DefaultApp must have all fields populated")
 	}
 }
 
@@ -359,7 +334,7 @@ func TestApp_HandleRequest_InvalidJSONLoggedNotPanic(t *testing.T) {
 }
 
 // TestApp_NewMessenger_UsesAppLogger: native messaging also injects the
-// App instance's logger explicitly rather than via a DefaultApp()
+// App instance's logger explicitly
 // wrapper.
 func TestApp_NewMessenger_UsesAppLogger(t *testing.T) {
 	app := NewApp(Deps{Logger: NewMemoryLogger()})

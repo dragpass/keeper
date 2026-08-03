@@ -131,7 +131,7 @@ func TestSessionCodeOperations(t *testing.T) {
 
 // defaultKeyringStore returns a KeyringSecretStore wired to the mocked keyring
 // backend (set up by TestMain). Production callers use this same store via
-// keystore.DefaultApp().Store; tests bypass the *App layer to call keychain
+// an App store; tests bypass the *App layer to call keychain
 // helpers directly.
 func defaultKeyringStore() SecretStore {
 	return KeyringSecretStore{}

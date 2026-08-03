@@ -55,21 +55,3 @@ func NewRecoverySessionStore(ttl time.Duration) *RecoverySessionStore {
 		),
 	}
 }
-
-// ────────────────────────────────────────────────────────────────────────
-// Global singleton — used by the dispatcher in the Keeper main process.
-// ────────────────────────────────────────────────────────────────────────
-
-var defaultRecoverySessionStore = NewRecoverySessionStore(RecoverySessionTTL)
-
-// DefaultRecoverySessionStore returns the singleton store inside the Keeper
-// process.
-func DefaultRecoverySessionStore() *RecoverySessionStore {
-	return defaultRecoverySessionStore
-}
-
-// StartDefaultRecoverySessionReaper is invoked from main.go to start the
-// reaper goroutine.
-func StartDefaultRecoverySessionReaper() {
-	defaultRecoverySessionStore.StartReaper(RecoverySessionReaperInterval)
-}

@@ -10,6 +10,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proc"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/userpresence"
 	"github.com/zalando/go-keyring"
 )
@@ -23,6 +24,8 @@ import (
 // Must never be enabled in production. Fixtures inject the env var explicitly.
 const e2eEnvVar = "KEEPER_E2E_MODE"
 const e2eUserPresenceFileEnvVar = "KEEPER_E2E_USER_PRESENCE_FILE"
+
+var processApp *keystore.App
 
 // Items stored in the keystore:
 // - Server public key (saved on init)
@@ -75,17 +78,15 @@ func init() {
 		// In E2E mode, use the in-memory MemoryClipboard instead of the OS
 		// clipboard. User clipboard is unaffected, and the
 		// clipboard_get_last_hash action can query the SHA-256 hash.
-		// SetDefaultDeps must run before the first DefaultApp() call.
 		deps.Clipboard = clipboard.NewMemoryClipboard()
 		if path := os.Getenv(e2eUserPresenceFileEnvVar); path != "" {
 			deps.UserPresence = userpresence.NewE2EFile(path)
 		} else {
 			deps.UserPresence = userpresence.Unavailable{}
 		}
-		keystore.SetDefaultDeps(deps)
-		app := keystore.DefaultApp()
-		app.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
-		app.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
+		processApp = keystore.NewApp(deps)
+		processApp.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
+		processApp.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
 
 		// Optional: if KEEPER_E2E_KEYRING_FILE is set, load the file into
 		// the mock. Used so fixtures can share keyring entries between the
@@ -93,18 +94,17 @@ func init() {
 		// comments for details.
 		if filePath := os.Getenv("KEEPER_E2E_KEYRING_FILE"); filePath != "" {
 			if err := keystore.LoadE2EKeyringFile(filePath); err != nil {
-				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE load failed (continuing): %v", err)
+				processApp.Logger.Printf("KEEPER_E2E_KEYRING_FILE load failed (continuing): %v", err)
 			} else {
-				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
+				processApp.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
 			}
 		}
 	}
 	if os.Getenv(e2eEnvVar) != "1" {
-		keystore.SetDefaultDeps(deps)
+		processApp = keystore.NewApp(deps)
 	}
 
-	app := keystore.DefaultApp()
-	if err := keychain.EnsureServerPublicKey(app.Store, app.Logger); err != nil {
+	if err := keychain.EnsureServerPublicKey(processApp.Store, processApp.Logger); err != nil {
 		log.Fatalf("Critical: Failed to ensure server public key: %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func main() {
 	// Stdout is sent to the Chrome extension, so we log to Stderr
 	log.SetOutput(os.Stderr)
 
-	app := keystore.DefaultApp()
+	app := processApp
 	logger := app.Logger
 
 	// Process hardening — disable core dumps. Closes the surface where
@@ -138,11 +138,11 @@ func main() {
 	// LockedBuffers, even for handles that the Extension forgot to close
 	// explicitly. Started identically in tests (KEEPER_E2E_MODE) — keeps flow
 	// consistent with production.
-	keystore.StartDefaultGroupSessionReaper()
+	app.GroupSessions.StartReaper(sessions.GroupSessionReaperInterval)
 
 	// Recovery PEM opaque handle reaper.
-	keystore.StartDefaultRecoverySessionReaper()
-	keystore.StartDefaultRecoveryKeySessionReaper()
+	app.RecoverySessions.StartReaper(sessions.RecoverySessionReaperInterval)
+	app.RecoveryKeySessions.StartReaper(sessions.RecoveryKeySessionReaperInterval)
 
 	logger.Println("DragPass extension helper started")
 	defer func() {

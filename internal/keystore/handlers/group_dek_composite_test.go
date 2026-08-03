@@ -30,7 +30,7 @@ import (
 // setupHandlerKeyPair creates a temporary RSA keypair and stores it in deps's
 // SecretStore. Needed because HandleDEKRewrapForMember reads the private key
 // via keychain.GetPrivateKey(deps.Store). The earlier root location used
-// keyring.MockInit + DefaultApp.Store; this package writes directly to
+// keyring.MockInit; this package writes directly to
 // deps.Store (= MemorySecretStore).
 func setupHandlerKeyPair(t *testing.T, store keychain.SecretStore) (publicKeyPEM, privateKeyPEM string) {
 	t.Helper()

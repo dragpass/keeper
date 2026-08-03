@@ -24,13 +24,8 @@ import (
 // Deps is the minimal contract handlers depend on. App wraps its own fields
 // in this struct and passes it along the dispatcher path.
 //
-// **Session stores:** GroupSessions / RecoverySessions are handles to in-memory
-// session stores that protect raw Group DEK / recovery PEM with memguard. If
-// handlers called the `sessions.Default*SessionStore()` singleton directly,
-// parallel unit tests would share process-wide state and interfere with each
-// other, so this is injected explicitly. Production wiring has NewApp fill in
-// the default singleton; tests inject isolated instances via
-// `sessions.NewGroupSessionStore(TTL)` / `NewRecoverySessionStore(TTL)`.
+// Session stores are injected so App owns their lifetime and tests remain
+// isolated.
 type Deps struct {
 	Logger              logger.Logger
 	Store               keychain.SecretStore

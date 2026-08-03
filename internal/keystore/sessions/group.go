@@ -57,22 +57,3 @@ func NewGroupSessionStore(ttl time.Duration) *GroupSessionStore {
 		),
 	}
 }
-
-// ────────────────────────────────────────────────────────────────────────
-// Global singleton — used by the dispatcher in the Keeper main process.
-// ────────────────────────────────────────────────────────────────────────
-
-var defaultGroupSessionStore = NewGroupSessionStore(GroupSessionTTL)
-
-// DefaultGroupSessionStore returns the singleton store inside the Keeper
-// process. Used by dispatcher handlers. Tests should prefer
-// NewGroupSessionStore to obtain an isolated instance.
-func DefaultGroupSessionStore() *GroupSessionStore {
-	return defaultGroupSessionStore
-}
-
-// StartDefaultGroupSessionReaper is invoked from main.go to start the reaper
-// goroutine. Do not call from tests (prevents goroutine leaks).
-func StartDefaultGroupSessionReaper() {
-	defaultGroupSessionStore.StartReaper(GroupSessionReaperInterval)
-}

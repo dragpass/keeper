@@ -109,7 +109,7 @@ func TestApp_HandleRecoverySessionClose_LogsLifecycle(t *testing.T) {
 
 // TestHandleRecoverySessionOpen_ValidationDelegation: ensures the
 // validate-failure branch produces a dispatcher-compatible response envelope.
-// Earlier tests called the free function (DefaultApp delegation); this
+// Earlier tests called the free function; this
 // package calls the same free function directly — the result is the same.
 func TestHandleRecoverySessionOpen_ValidationDelegation(t *testing.T) {
 	deps, _, _ := newTestDeps(t)

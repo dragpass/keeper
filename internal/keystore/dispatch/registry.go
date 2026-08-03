@@ -14,6 +14,7 @@ package dispatch
 
 import (
 	"encoding/json"
+	"sort"
 
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -53,6 +54,16 @@ var actionFragments = []actionFragment{
 // actionRegistry maps action strings to handler functions, assembled from the
 // domain fragments at package init.
 var actionRegistry = buildRegistry(actionFragments)
+
+// RegisteredActionNames returns the sorted Native Messaging action surface.
+func RegisteredActionNames() []string {
+	actions := make([]string, 0, len(actionRegistry))
+	for action := range actionRegistry {
+		actions = append(actions, action)
+	}
+	sort.Strings(actions)
+	return actions
+}
 
 // buildRegistry merges the domain fragments into one map, panicking if two
 // fragments register the same action string. A single map literal caught
