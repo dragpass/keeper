@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrUnavailable = errors.New("user presence is unavailable")
-	ErrDenied      = errors.New("user presence denied")
+	ErrDismissed   = errors.New("recovery key display dismissed")
 	ErrTimedOut    = errors.New("user presence timed out")
 	ErrEmptySecret = errors.New("secret must not be empty")
 )

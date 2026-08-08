@@ -70,8 +70,7 @@ static int dragpass_show_recovery_key(
             [field setAlignment:NSTextAlignmentCenter];
             [field setFont:[NSFont monospacedSystemFontOfSize:14 weight:NSFontWeightMedium]];
             [alert setAccessoryView:field];
-            [alert addButtonWithTitle:@"I Saved It"];
-            [alert addButtonWithTitle:@"Cancel"];
+            [alert addButtonWithTitle:@"Close"];
 
             __block BOOL timed_out = NO;
             if (timeout_ms > 0) {
@@ -182,7 +181,7 @@ func (cocoaUserPresence) ShowRecoveryKey(ctx context.Context, prompt RecoveryKey
 	case 1:
 		return nil
 	case 0:
-		return ErrDenied
+		return ErrDismissed
 	case -1:
 		return ErrTimedOut
 	default:
