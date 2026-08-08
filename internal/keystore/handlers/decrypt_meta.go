@@ -1,4 +1,4 @@
-// decrypt_meta.go — bulk meta-fields decrypt handler.
+// Personal DEK bulk metadata decrypt handler.
 //
 // Carve-out: response includes plaintext metadata — value (secret) plaintext
 // is separated and never returned through this action.
@@ -12,41 +12,6 @@ import (
 
 	"github.com/awnumar/memguard"
 )
-
-// HandleAESUnwrapAndDecryptMeta bulk-decrypts the meta fields of a group entry.
-// Item DEK unwrap → AES-GCM open each meta field → plaintext metadata in
-// response. The value plaintext is never returned by this action — value goes
-// through *_to_clipboard.
-func HandleAESUnwrapAndDecryptMeta(d Deps, req proto.AESUnwrapAndDecryptMetaRequest) proto.BaseResponse {
-	d.Logger.Println("aes unwrap and decrypt meta request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	plaintextFields := map[string]string{}
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		itemDEK, err := unwrapItemDEK(groupDEK, req.WrappedItemDEK)
-		if err != nil {
-			return err
-		}
-		defer secure.Zeroize(itemDEK)
-
-		return decryptMetaFields(itemDEK, req.MetaFields, func(name string, pt []byte) error {
-			plaintextFields[name] = string(pt)
-			secure.Zeroize(pt) // wipe immediately after string copy
-			return nil
-		})
-	})
-	if useErr != nil {
-		return sessionUseError(useErr, "unwrap and decrypt meta")
-	}
-
-	d.Logger.Println("aes unwrap and decrypt meta successful")
-	return proto.BaseResponse{Success: true, Data: proto.AESUnwrapAndDecryptMetaResponseData{
-		Fields: plaintextFields,
-	}}
-}
 
 // HandleDEKUnwrapAndDecryptMeta bulk-decrypts the meta fields of a personal entry.
 // deviceKey is fetched inside the Keeper Keychain — never via the IPC payload.

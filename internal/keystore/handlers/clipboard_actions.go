@@ -1,8 +1,6 @@
 // clipboard_actions.go — decrypt-to-clipboard handlers.
-// HandleAESUnwrapAndDecryptToClipboard / HandleDEKUnwrapAndDecryptToClipboard.
 //
-// Both handlers take the same input as the existing AES/DEK unwrap+decrypt,
-// decrypt the plaintext inside Keeper memory, and immediately delegate to the
+// Handlers decrypt plaintext inside Keeper memory and immediately delegate to the
 // OS clipboard via d.Clipboard.Write. The response carries no plaintext — it
 // only returns {copied, clipboard_ttl_ms}.
 //
@@ -23,45 +21,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// HandleAESUnwrapAndDecryptToClipboard writes the group entry plaintext
-// directly to the OS clipboard. The response contains no plaintext.
-func HandleAESUnwrapAndDecryptToClipboard(d Deps, req proto.AESUnwrapAndDecryptToClipboardRequest) proto.BaseResponse {
-	d.Logger.Println("aes unwrap and decrypt to clipboard request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
-	if !ok {
-		return resp
-	}
-	ciphertext, resp, ok := decodeBase64(req.CiphertextB64, "ciphertext_b64")
-	if !ok {
-		return resp
-	}
-
-	var plaintext []byte
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		itemDEK, err := unwrapItemDEK(groupDEK, req.WrappedItemDEK)
-		if err != nil {
-			return err
-		}
-		defer secure.Zeroize(itemDEK)
-
-		pt, err := aesGCMOpen(itemDEK, iv, ciphertext)
-		if err != nil {
-			return errors.New("decrypt failed: " + err.Error())
-		}
-		plaintext = pt
-		return nil
-	})
-	if useErr != nil {
-		return sessionUseError(useErr, "unwrap and decrypt to clipboard")
-	}
-	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "aes unwrap and decrypt to clipboard")
-}
 
 // HandleDEKUnwrapAndDecryptToClipboard writes the personal DEK plaintext
 // directly to the OS clipboard. The response contains no plaintext.
@@ -103,8 +62,7 @@ func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptT
 
 // HandleGroupDecryptToClipboard writes the plaintext of a drag / audit token
 // (encrypted directly with the raw Group DEK) to the OS clipboard. There is
-// no Item DEK indirection (unlike DragLink Item DEK tokens), so aesGCMOpen is
-// called directly inside GroupSessions.Use.
+// no key indirection, so aesGCMOpen is called directly inside GroupSessions.Use.
 //
 // Plaintext appears zero times in the response — only {copied, ttl}.
 func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequest) proto.BaseResponse {

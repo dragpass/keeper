@@ -6,7 +6,6 @@ import "github.com/dragpass/keeper/internal/keystore/proto"
 
 type (
 	BaseResponse                        = proto.BaseResponse
-	AESUnwrapAndEncryptResponseData     = proto.AESUnwrapAndEncryptResponseData
 	ClipboardCopyResponseData           = proto.ClipboardCopyResponseData
 	DEKGenerateAndWrapDualResponseData  = proto.DEKGenerateAndWrapDualResponseData
 	DEKRewrapForMemberResponseData      = proto.DEKRewrapForMemberResponseData

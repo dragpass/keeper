@@ -15,7 +15,7 @@ import (
 
 // Update together. Bump this number inside the same handler-change PR so
 // add/remove intent is obvious during review.
-const ExpectedRegisteredActionCount = 74
+const ExpectedRegisteredActionCount = 70
 
 func TestActionRegistry_Count(t *testing.T) {
 	if got := len(actionRegistry); got != ExpectedRegisteredActionCount {
@@ -33,6 +33,20 @@ func TestActionRegistry_AllEntriesNonNil(t *testing.T) {
 	for action, fn := range actionRegistry {
 		if fn == nil {
 			t.Errorf("action %q maps to nil handler", action)
+		}
+	}
+}
+
+func TestActionRegistry_RetiredGroupItemDEKActionsRemainRemoved(t *testing.T) {
+	retired := []string{
+		"aes_unwrap_and_encrypt",
+		"aes_unshare_rewrap_meta",
+		"aes_unwrap_and_decrypt_meta",
+		"aes_unwrap_and_decrypt_to_clipboard",
+	}
+	for _, action := range retired {
+		if _, exists := actionRegistry[action]; exists {
+			t.Errorf("retired action %q is registered", action)
 		}
 	}
 }

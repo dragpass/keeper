@@ -1,10 +1,8 @@
 // group_meta.go — raw Group DEK direct batch metadata encrypt/decrypt payloads.
 //
-// These are the metadata-path counterparts of group_encrypt: the Item DEK
-// unwrap step of aes_unwrap_and_decrypt_meta is replaced by a direct use of
-// the raw Group DEK behind the opaque GroupHandle. The contracts are the
-// mirror image of each other so a GroupEncryptMeta output can be fed straight
-// back into GroupDecryptMeta:
+// These are the metadata-path counterparts of group_encrypt. They use the raw
+// Group DEK behind the opaque GroupHandle, and GroupEncryptMeta output can be
+// fed directly into GroupDecryptMeta:
 //
 //	GroupEncryptMeta:  {group_handle, fields}       → {meta_fields}
 //	GroupDecryptMeta:  {group_handle, meta_fields}  → {fields}
@@ -13,15 +11,14 @@
 //	meta_fields: key → Base64(IV(12) || ciphertext_with_tag)
 //
 // The combined Base64(IV||ct) meta-field encoding matches the Extension's
-// per-field storage format (packages/crypto meta.mts) and the existing
-// aes_unwrap_and_decrypt_meta / dek_unwrap_and_decrypt_meta actions.
+// per-field storage format (packages/crypto meta.mts).
 
 package proto
 
 import "errors"
 
 // GroupDecryptMetaRequest bulk-decrypts group entry metadata fields directly
-// with the raw Group DEK behind the opaque handle (no Item DEK indirection).
+// with the raw Group DEK behind the opaque handle.
 //
 // **Carve-out:** the response carries plaintext metadata (label/url/
 // hostname/...). Value (secret) plaintext is never returned by this action.

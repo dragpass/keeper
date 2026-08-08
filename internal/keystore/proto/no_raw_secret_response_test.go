@@ -59,7 +59,6 @@ var rawSecretResponseCarveOuts = map[string]string{}
 var rawSecretRequestCarveOuts = map[string]string{
 	"GroupEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"GroupEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
-	"AESUnwrapAndEncryptRequest.plaintext_b64": "encrypt direction: plaintext to seal under the Item DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
 }
 

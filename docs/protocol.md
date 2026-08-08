@@ -256,10 +256,10 @@ dependency).
 |`group_dek_generate_and_open`|`my_public_key`|`{ group_handle, expires_at_ms, encrypted_for_me_b64 }`|Generate new 32B Group DEK + register as session + RSA-wrap with caller pubkey. raw never leaves.|
 |`dek_rewrap_for_member`|`wrapped_for_me_b64`, `other_public_key`|`{ encrypted_for_other_b64 }`|Synthetic unwrap+wrap. raw stays in Keeper memory only.|
 |`dek_unwrap_and_rewrap_for_many`|`wrapped_for_me_b64`, `recipient_public_keys[]`|`{ encrypted_for_recipients_b64[] }`|Multi-recipient variant of `dek_rewrap_for_member`. Unwrap my wrapped Group DEK once, RSA-OAEP re-wrap to each recipient key; response list is parallel to the request keys. raw unwrapped once, stays in Keeper memory only. Used by `adminRotateDek` to wrap the OLD Group DEK to every member + the archive key without the raw entering the JS heap.|
-|`group_encrypt`|`group_handle`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|AES-GCM seal plaintext directly under the raw Group DEK behind the handle (no Item DEK indirection). Encrypt-direction mirror of `group_decrypt_to_clipboard`. `plaintext_b64` is `secret`; the `iv_b64` / `ciphertext_b64` response is public material. plaintext / raw Group DEK echoed 0 times.|
+|`group_encrypt`|`group_handle`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|AES-GCM seal plaintext directly under the raw Group DEK behind the handle. Encrypt-direction mirror of `group_decrypt_to_clipboard`. `plaintext_b64` is `secret`; the `iv_b64` / `ciphertext_b64` response is public material. plaintext / raw Group DEK echoed 0 times.|
 |`group_encrypt_with_aad`|`group_handle`, `plaintext_b64`, `aad_b64`|`{ iv_b64, ciphertext_b64 }`|AAD-binding variant of `group_encrypt`. Binds the caller-supplied `aad_b64` (canonical context `org_id\|entry_id\|payload_kind\|schema_version\|dek_version`) into the GCM tag, so a ciphertext cannot be opened under a different context — a swap guard for sealed credential payloads. `aad_b64` is **required** (empty is what `group_encrypt` covers) and is public context material, not secret. Open with the byte-identical AAD to decrypt. `plaintext_b64` is `secret`; response is public material. plaintext / raw Group DEK echoed 0 times.|
-|`group_encrypt_meta`|`group_handle`, `fields` (key→plaintext UTF-8)|`{ meta_fields }` (key→Base64(IV(12)‖ct))|Batch metadata encrypt directly under the raw Group DEK (no Item DEK indirection). Metadata-path mirror of `group_encrypt`. Empty plaintext values are skipped (no ciphertext). Output `meta_fields` is directly feedable into `group_decrypt_meta` and uses the combined form the Extension stores per meta field. `fields` are `secret` in the request only; plaintext / raw Group DEK echoed 0 times.|
-|`group_decrypt_meta`|`group_handle`, `meta_fields` (key→Base64(IV(12)‖ct))|`{ fields }` (key→plaintext UTF-8)|Batch metadata decrypt directly under the raw Group DEK (no Item DEK indirection). Same shape as `aes_unwrap_and_decrypt_meta` minus `wrapped_item_dek`. plaintext metadata carve-out — value plaintext echoed 0 times (use `group_decrypt_to_clipboard`). Empty ciphertext values are skipped; a single bad ciphertext fails the whole batch.|
+|`group_encrypt_meta`|`group_handle`, `fields` (key→plaintext UTF-8)|`{ meta_fields }` (key→Base64(IV(12)‖ct))|Batch metadata encrypt directly under the raw Group DEK. Metadata-path mirror of `group_encrypt`. Empty plaintext values are skipped (no ciphertext). Output `meta_fields` is directly feedable into `group_decrypt_meta` and uses the combined form the Extension stores per meta field. `fields` are `secret` in the request only; plaintext / raw Group DEK echoed 0 times.|
+|`group_decrypt_meta`|`group_handle`, `meta_fields` (key→Base64(IV(12)‖ct))|`{ fields }` (key→plaintext UTF-8)|Batch metadata decrypt directly under the raw Group DEK. Plaintext metadata carve-out; value plaintext echoed 0 times (use `group_decrypt_to_clipboard`). Empty ciphertext values are skipped; a single bad ciphertext fails the whole batch.|
 
 ### Group session (Phase 12c)
 
@@ -275,14 +275,6 @@ dependency).
 |---|---|---|---|
 |`credential_http_request`|`group_handle`, `iv_b64`, `ciphertext_b64`, `aad_b64`, `target_url`, `method`, `header_template` (placeholders only), `body_b64?`, signed `policy`|`{ status_code, headers (redacted), body_b64 (redacted), truncated }`|Decrypt-to-tool HTTP sink. Verifies the RSA-PSS server policy, enforces its exact target and request shape, blocks private-network SSRF and redirects, injects the decrypted credential locally, and returns only a bounded redacted response.|
 
-### Item DEK / drag (Phase 12b)
-
-|Action|Request fields|Response fields|Description|
-|---|---|---|---|
-|`aes_unwrap_and_encrypt`|`wrapped_item_dek`, `group_handle`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Decrypt Item DEK in Keeper, AES-GCM encrypt plaintext.|
-|`aes_unshare_rewrap_meta`|`wrapped_item_dek`, `src_group_handle`, `iv_b64`, `ciphertext_b64`, `meta_fields` (key→Base64(IV‖ct)), `extra_dst_group_handles[]`|`{ new_encrypted_value, new_encrypted_fields, new_grants[] }`|UNSHARE_REENCRYPT synthetic — OLD Item DEK unwrap → decrypt value/meta → generate new Item DEK → re-encrypt + wrap to N groups. plaintext echoed 0 times.|
-|`aes_unwrap_and_decrypt_meta`|`wrapped_item_dek`, `group_handle`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of group entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times (use the separate *_to_clipboard action).|
-
 ### Personal DEK (Phase 12d)
 
 |Action|Request fields|Response fields|Description|
@@ -292,7 +284,9 @@ dependency).
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain.|
 |`dek_unwrap_and_decrypt_meta`|`encrypted_dek_b64`, `meta_fields` (key→Base64(IV‖ct))|`{ fields }` (key→plaintext UTF-8)|Bulk decrypt of personal entry meta fields. plaintext metadata carve-out — value plaintext echoed 0 times.|
 
-> **Removed (Keeper 0.0.21):** `aes_unwrap_and_decrypt` / `dek_unwrap_and_decrypt` — the plaintext-returning actions have been removed from dispatcher / proto / handler entirely. User-visible decryption uses `*_unwrap_and_decrypt_to_clipboard` (clipboard sink), and UI meta display uses `*_unwrap_and_decrypt_meta` (metadata carve-out). Follow-up to
+The retired Group Item DEK actions are not part of the current protocol. Group
+DragLink tokens use the direct Group DEK actions above. Personal entries use
+the Personal DEK actions below.
 
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
@@ -300,9 +294,8 @@ Keeper owns the plaintext sink: it decrypts in process memory and writes the pla
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`aes_unwrap_and_decrypt_to_clipboard`|`wrapped_item_dek`, `group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Group decrypt → Keeper clipboard. No plaintext echoed.|
 |`dek_unwrap_and_decrypt_to_clipboard`|`encrypted_dek_b64`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Personal decrypt → Keeper clipboard. deviceKey from Keychain. No plaintext echoed.|
-|`group_decrypt_to_clipboard`|`group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Drag/audit token (raw Group DEK direct) → Keeper clipboard. No Item DEK indirection. No plaintext echoed. Follow-up to|
+|`group_decrypt_to_clipboard`|`group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|Drag/audit token → Keeper clipboard. No plaintext echoed.|
 
 Default `Deps.Clipboard` is the production OS clipboard backend. If backend initialization fails, Keeper uses an explicit unavailable clipboard fallback whose writes fail; copy actions must not report `{ copied: true }` unless the clipboard write succeeded. Tests inject `clipboard.MemoryClipboard` for SHA-256-hash-based assertions without storing plaintext in the fake.
 

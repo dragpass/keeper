@@ -1,9 +1,7 @@
 // group_meta.go — raw Group DEK direct batch metadata encrypt/decrypt handlers.
 //
-// Metadata-path counterparts of HandleGroupEncrypt: the Item DEK unwrap step
-// of HandleAESUnwrapAndDecryptMeta is replaced by a direct AES-GCM run against
-// the raw Group DEK behind the opaque handle (GroupSessions.Use), with no Item
-// DEK indirection. Used by the DragLink page to batch-encrypt / batch-decrypt
+// Metadata-path counterparts of HandleGroupEncrypt. They run AES-GCM against
+// the raw Group DEK behind the opaque handle and let the DragLink page process
 // entry metadata without client-side AES-GCM.
 //
 // Carve-out: HandleGroupDecryptMeta's response carries plaintext metadata —

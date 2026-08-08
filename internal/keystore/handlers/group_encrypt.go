@@ -2,9 +2,8 @@
 //
 // HandleGroupEncrypt is the encrypt-direction mirror of
 // HandleGroupDecryptToClipboard (clipboard_actions.go): it seals plaintext
-// directly under the raw Group DEK behind the opaque handle, with no Item DEK
-// indirection (unlike HandleAESUnwrapAndEncrypt in item_dek.go). The plaintext
-// is decoded, sealed inside GroupSessions.Use, and zeroized; the response
+// directly under the raw Group DEK behind the opaque handle. The plaintext is
+// decoded, sealed inside GroupSessions.Use, and zeroized; the response
 // carries only {iv_b64, ciphertext_b64}. Plaintext / raw Group DEK appear zero
 // times in the response and logs.
 
