@@ -15,7 +15,7 @@ import (
 const MaxMessageSize uint32 = 10 * 1024 * 1024 // 10MB
 
 // Messenger is the Native Messaging length-prefixed framing transport.
-// Logger is passed as an explicit argument, removing DefaultApp() dependency.
+// Logger is passed as an explicit argument.
 type Messenger struct {
 	in  io.Reader
 	out io.Writer
@@ -25,7 +25,7 @@ type Messenger struct {
 // NewMessenger constructs a length-prefixed framing messenger. log is used for
 // response-masking logging (logSafeResponse); if nil, the caller of
 // NewMessenger is responsible. Production callers inject App.Logger explicitly
-// via app.NewMessenger (aliases.go).
+// via app.NewMessenger.
 func NewMessenger(in io.Reader, out io.Writer, log logger.Logger) *Messenger {
 	return &Messenger{
 		in:  in,
@@ -87,9 +87,7 @@ func (m *Messenger) SendResponse(resp proto.BaseResponse) error {
 // The Data field may contain sensitive payloads, so it is replaced with
 // "[DATA_MASKED]"; only Success/Error/ErrorCode are kept as-is.
 //
-// Uses Messenger.log instead of DefaultApp().Logger so tests can capture via
-// NewMessenger(_, _, MemoryLogger{}). If Messenger.log is nil, logging is
-// skipped (defensive).
+// Tests can capture logs by passing MemoryLogger. A nil logger disables logs.
 func (m *Messenger) logSafeResponse(resp proto.BaseResponse) {
 	if m.log == nil {
 		return

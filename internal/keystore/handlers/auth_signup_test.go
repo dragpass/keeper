@@ -156,7 +156,7 @@ func TestHandleAuthRecoveryKeyShowConsumesHandleOnSuccess(t *testing.T) {
 
 func TestHandleAuthRecoveryKeyShowKeepsHandleAfterCancel(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	deps.UserPresence = &signupUserPresence{showErr: userpresence.ErrDenied}
+	deps.UserPresence = &signupUserPresence{showErr: userpresence.ErrDismissed}
 	handle, _, err := deps.RecoveryKeySessions.Open([]byte("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)

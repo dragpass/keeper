@@ -108,12 +108,9 @@ types are in `internal/keystore/proto/`.
 |`ping`|_empty_|`{ version, hash, path }`|Liveness + version. Used by Extension health check.|
 |`user_presence_capabilities`|_empty_|`{ available, show_recovery_key, backend }`|Reports trusted recovery-key display support. Capability fields are false when no native backend is installed.|
 
-The current production backend is macOS Cocoa. Generic confirmation is not
-exposed as a wire action: a domain handler must verify the server-signed
-request before invoking it. Password input is exposed only through composite
-crypto actions that do not return the password. Recovery-key prompts remain
-available only through composite auth actions that return opaque handles rather
-than RK24 text.
+The current production backend is macOS Cocoa. Keeper exposes no approval or
+confirmation action. Native UI is limited to recovery-key display through
+composite auth actions that return opaque handles rather than RK24 text.
 
 ### Device key (per-device wrap layer)
 
