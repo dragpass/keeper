@@ -1,20 +1,4 @@
-// aes_crypto.go — shared helpers for AES-GCM key handling + Item DEK wrap/unwrap.
-//
-// item_dek.go used to be 358 lines with four handler bodies plus five crypto
-// util functions mixed in. This file pulls out only the crypto utilities,
-// separating handler responsibilities from pure-crypto ones.
-//
-// **No change to external signatures / behavior / messages — pure code move.**
-//
-// Resident functions (called within the handlers package + by other handler
-// files via lowercase aliases):
-//   - UnwrapItemDEK / unwrapItemDEK — wrapped Item DEK (with Group DEK) → 32B Item DEK
-//   - AESGCMSeal / aesGCMSeal — raw key + plaintext → Base64(IV||ct)
-//   - AESGCMSealSplit / aesGCMSealSplit — returns IV / ciphertext separately
-//   - AESGCMOpen / aesGCMOpen — raw key + iv + ct → plaintext
-//
-// Call sites: item_dek.go / dek.go / clipboard_actions.go / decrypt_meta.go /
-// group_session.go / group_dek_composite.go, etc.
+// Shared AES-GCM helpers.
 
 package handlers
 
@@ -24,35 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-
-	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// UnwrapItemDEK unwraps a wrapped Item DEK Base64(IV || ciphertext) with the
-// Group DEK and returns the raw 32B Item DEK. The caller must zeroize the
-// returned slice after use.
-func UnwrapItemDEK(groupDEK []byte, wrappedB64 string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(wrappedB64)
-	if err != nil {
-		return nil, errors.New("failed to decode wrapped_item_dek: " + err.Error())
-	}
-	if len(raw) < 12+16 { // IV + minimum GCM tag
-		return nil, errors.New("wrapped_item_dek too short")
-	}
-
-	iv := raw[:12]
-	ciphertext := raw[12:]
-
-	plaintext, err := aesGCMOpen(groupDEK, iv, ciphertext)
-	if err != nil {
-		return nil, errors.New("unwrap item dek failed: " + err.Error())
-	}
-	if len(plaintext) != 32 {
-		secure.Zeroize(plaintext)
-		return nil, errors.New("unwrapped item dek must be 32 bytes")
-	}
-	return plaintext, nil
-}
 
 // AESGCMSeal takes raw key + plaintext and returns Base64(IV(12) || ciphertext_with_tag).
 func AESGCMSeal(key, plaintext []byte) (string, error) {
@@ -158,8 +114,7 @@ func AESGCMOpenWithAAD(key, iv, ciphertext, aad []byte) ([]byte, error) {
 // Lowercase aliases — used by callers inside the handlers/ package via shorter names.
 // ────────────────────────────────────────────────────────────────────────
 
-func unwrapItemDEK(g []byte, w string) ([]byte, error) { return UnwrapItemDEK(g, w) }
-func aesGCMSeal(k, p []byte) (string, error)           { return AESGCMSeal(k, p) }
+func aesGCMSeal(k, p []byte) (string, error) { return AESGCMSeal(k, p) }
 func aesGCMSealSplit(k, p []byte) ([]byte, []byte, error) {
 	return AESGCMSealSplit(k, p)
 }

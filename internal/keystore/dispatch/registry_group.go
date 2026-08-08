@@ -1,4 +1,4 @@
-// Group and Item DEK action registrations.
+// Group DEK action registrations.
 
 package dispatch
 
@@ -21,14 +21,8 @@ func groupActions() map[string]actionHandlerFunc {
 		proto.ActionDEKRewrapForMember:        wrap(handlers.HandleDEKRewrapForMember),
 		proto.ActionDEKUnwrapAndRewrapForMany: wrap(handlers.HandleDEKUnwrapAndRewrapForMany),
 
-		// Item DEK operations.
-		proto.ActionAESUnwrapAndEncrypt:     wrap(handlers.HandleAESUnwrapAndEncrypt),
-		proto.ActionAESUnshareRewrapMeta:    wrap(handlers.HandleAESUnshareRewrapMeta),
-		proto.ActionAESUnwrapAndDecryptMeta: wrap(handlers.HandleAESUnwrapAndDecryptMeta),
-
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
-		proto.ActionAESUnwrapAndDecryptToClipboard: wrap(handlers.HandleAESUnwrapAndDecryptToClipboard),
-		proto.ActionGroupDecryptToClipboard:        wrap(handlers.HandleGroupDecryptToClipboard),
+		proto.ActionGroupDecryptToClipboard: wrap(handlers.HandleGroupDecryptToClipboard),
 
 		// raw Group DEK direct AES-GCM encrypt (mirror of group_decrypt_to_clipboard).
 		proto.ActionGroupEncrypt: wrap(handlers.HandleGroupEncrypt),
@@ -37,8 +31,7 @@ func groupActions() map[string]actionHandlerFunc {
 		// into the GCM tag to prevent ciphertext swap across contexts.
 		proto.ActionGroupEncryptWithAAD: wrap(handlers.HandleGroupEncryptWithAAD),
 
-		// raw Group DEK direct batch metadata encrypt/decrypt (mirror of
-		// aes_unwrap_and_decrypt_meta without Item DEK indirection).
+		// raw Group DEK direct batch metadata encrypt/decrypt.
 		proto.ActionGroupEncryptMeta: wrap(handlers.HandleGroupEncryptMeta),
 		proto.ActionGroupDecryptMeta: wrap(handlers.HandleGroupDecryptMeta),
 

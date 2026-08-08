@@ -1,4 +1,4 @@
-// Group and Item DEK protocol actions.
+// Group DEK protocol actions.
 
 package proto
 
@@ -63,38 +63,9 @@ const (
 	ActionDEKRewrapForMember        = "dek_rewrap_for_member"
 	ActionDEKUnwrapAndRewrapForMany = "dek_unwrap_and_rewrap_for_many"
 
-	// Zero-Extractable: Item DEK operations delegated to the Keeper.
-	//
-	// All actions take group_handle + a wrapped Item DEK and temporarily
-	// unwrap the Item DEK inside the Keeper to run AES-GCM. The raw Group
-	// DEK lives behind the GroupSessionStore opaque handle; on the normal
-	// operational path the raw Group DEK Base64 does not live in the
-	// Extension JS heap.
-	//
-	// AESUnwrapAndEncrypt:   unwrap the wrapped Item DEK with the Group DEK
-	//                        and AES-GCM-encrypt plaintext → return
-	//                        {iv_b64, ciphertext_b64}. Braille encoding is
-	//                        the Extension's job.
-	ActionAESUnwrapAndEncrypt = "aes_unwrap_and_encrypt"
-	// AESUnshareRewrapMeta: UNSHARE_REENCRYPT composite.
-	ActionAESUnshareRewrapMeta = "aes_unshare_rewrap_meta"
-	// AESUnwrapAndDecryptMeta: bulk-decrypt group entry metadata fields.
-	// Carve-out for plaintext metadata in response — value (secret) is
-	// split off.
-	ActionAESUnwrapAndDecryptMeta = "aes_unwrap_and_decrypt_meta"
-
-	// AESUnwrapAndDecryptToClipboard: decrypt-to-clipboard. After AES
-	// unwrap+decrypt, the Keeper writes the plaintext directly to the OS
-	// clipboard. The response does not contain the plaintext — only
-	// {copied, clipboard_ttl_ms}. Prevents the plaintext from living in the
-	// Extension JS heap / Native Messaging response / React state
-	// (security/keeper-plaintext-command-api-plan.md).
-	ActionAESUnwrapAndDecryptToClipboard = "aes_unwrap_and_decrypt_to_clipboard"
-
 	// GroupDecryptToClipboard: action where the Keeper unwraps a drag /
 	// audit token (raw Group DEK direct encryption) and writes the
-	// plaintext directly to the OS clipboard. For raw Group DEK tokens
-	// only — not DragLink Item DEK tokens (which use Item DEK indirection).
+	// plaintext directly to the OS clipboard.
 	//   Inputs: group_handle, iv_b64(12B), ciphertext_b64,
 	//           clipboard_ttl_ms
 	//   Output: {copied, clipboard_ttl_ms}
@@ -126,9 +97,7 @@ const (
 	ActionGroupEncryptWithAAD = "group_encrypt_with_aad"
 
 	// GroupEncryptMeta / GroupDecryptMeta: raw Group DEK direct batch metadata
-	// crypto. Same shape as aes_unwrap_and_decrypt_meta but with the Item DEK
-	// unwrap step replaced by a direct raw Group DEK use behind the opaque
-	// handle (mirror of group_encrypt vs aes_unwrap_and_encrypt).
+	// crypto behind the opaque handle.
 	//
 	// GroupDecryptMeta: group_handle + meta_fields (key→Base64(IV(12)||ct)) →
 	//                   {fields} (key→plaintext UTF-8). Batch decrypt for the

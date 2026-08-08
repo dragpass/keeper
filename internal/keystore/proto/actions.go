@@ -16,7 +16,7 @@
 //                              request-signing keys.
 //   actions_server_keys.go   — server public-key trust anchor & multi-version
 //                              server-key infrastructure.
-//   actions_group_dek.go     — Group DEK / Item DEK ops, group sessions,
+//   actions_group_dek.go     — Group DEK ops and group sessions,
 //                              decrypt-to-clipboard, guest transcrypt.
 //   actions_archive.go       — per-org / per-account archive keypairs +
 //                              break-glass re-grant.

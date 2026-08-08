@@ -93,7 +93,7 @@ func TestHandleGroupMeta_RoundTrip(t *testing.T) {
 }
 
 // TestHandleGroupDecryptMeta_BatchPartialFailure — a single bad ciphertext
-// fails the whole batch (fail-fast), mirroring aes_unwrap_and_decrypt_meta.
+// fails the whole batch (fail-fast).
 func TestHandleGroupDecryptMeta_BatchPartialFailure(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	handle, _ := openSessionForFreshKey(t, deps)
