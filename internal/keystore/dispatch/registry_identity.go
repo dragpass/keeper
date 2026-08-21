@@ -49,9 +49,6 @@ func identityActions() map[string]actionHandlerFunc {
 
 		proto.ActionRecoverySign:                    wrap(handlers.HandleRecoverySign),
 		proto.ActionGenerateKeypairWithRecoveryWrap: wrap(handlers.HandleGenerateKeypairWithRecoveryWrap),
-		// Re-wrap the active privkey when a new RK24 is issued (the keypair
-		// itself is unchanged).
-		proto.ActionWrapActivePrivateKey: wrap(handlers.HandleWrapActivePrivateKey),
 
 		proto.ActionRecoverySessionOpen:  wrap(handlers.HandleRecoverySessionOpen),
 		proto.ActionRecoverySessionClose: wrap(handlers.HandleRecoverySessionClose),

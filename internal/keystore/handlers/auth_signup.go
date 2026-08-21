@@ -7,6 +7,7 @@ import (
 
 	"github.com/awnumar/memguard"
 
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -124,4 +125,35 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 		RecoveryWrappedKeeper: wrappedKeeper,
 		RecoveryKeyVersion:    recoverykey.Version,
 	}}
+}
+
+// wrapActivePrivateKeyWithKey AES-GCM-wraps the current active Keeper privkey
+// with wrapKey and returns the Base64 result. The keypair itself is unchanged
+// — only the wrap key is swapped, which is what an RK24 re-issue needs.
+//
+// The plaintext PEM is moved into memguard and the original string wiped, so
+// it lives on the Go heap as briefly as possible.
+func wrapActivePrivateKeyWithKey(d Deps, wrapKey []byte) (string, proto.BaseResponse) {
+	pemStr, err := keychain.GetPrivateKey(d.Store)
+	if err != nil {
+		d.Logger.Printf("wrap active private key error: keychain lookup: %v", err)
+		return "", errs.CodeResponse(errs.ErrCodeStorageFailure,
+			"active private key not found in keychain: "+err.Error())
+	}
+	if pemStr == "" {
+		return "", errs.CodeResponse(errs.ErrCodeNotFound,
+			"active private key empty in keychain")
+	}
+
+	privKeyBuf := memguard.NewBufferFromBytes([]byte(pemStr))
+	secure.WipeString(&pemStr)
+	defer privKeyBuf.Destroy()
+
+	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey, privKeyBuf.Bytes())
+	if err != nil {
+		d.Logger.Printf("wrap active private key error: AES-GCM wrap failed: %v", err)
+		return "", errs.CodeResponse(errs.ErrCodeCryptoFailure,
+			"AES-GCM wrap failed: "+err.Error())
+	}
+	return wrappedB64, proto.BaseResponse{Success: true}
 }

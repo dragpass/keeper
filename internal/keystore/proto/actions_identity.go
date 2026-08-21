@@ -119,14 +119,6 @@ const (
 	ActionRecoverySign                    = "recoverysign"
 	ActionGenerateKeypairWithRecoveryWrap = "generatekeypairwithrecoverywrap"
 
-	// Recovery key re-issue — admin SPA Settings · Security modal.
-	// Issues a new RK24 only, while the user is already authenticated.
-	// Re-wraps the existing active Keeper privkey with the new RK24 wrap_key
-	// to produce a wrappedKeeper for server update.
-	// The keypair itself does not change (this is the difference vs
-	// RecoverySign / GenerateKeypair... ).
-	ActionWrapActivePrivateKey = "wrap_active_private_key"
-
 	// Master password change — admin SPA Settings · Security modal.
 	// Returns the device-wrapped DEK re-wrapped with the new
 	// password's PBKDF2 KEK. The deviceMaster itself does not change
