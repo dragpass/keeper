@@ -26,7 +26,6 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
-	"github.com/dragpass/keeper/internal/keystore/userpresence"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
 
@@ -75,9 +74,6 @@ type Deps struct {
 	// actions write plaintext into. Defaults to the OS clipboard backend
 	// if nil. On Init failure, Write fails explicitly.
 	Clipboard clipboard.Clipboard
-	// UserPresence is the trusted local UI boundary. Nil defaults to an
-	// unavailable backend so callers cannot silently fall back to untrusted UI.
-	UserPresence userpresence.UserPresence
 }
 
 // App is the single wiring container for the Keeper process. Handlers
@@ -92,7 +88,6 @@ type App struct {
 	RecoverySessions    *sessions.RecoverySessionStore
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	Clipboard           clipboard.Clipboard
-	UserPresence        userpresence.UserPresence
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
@@ -119,7 +114,6 @@ func NewApp(deps Deps) *App {
 		RecoverySessions:    deps.RecoverySessions,
 		RecoveryKeySessions: deps.RecoveryKeySessions,
 		Clipboard:           deps.Clipboard,
-		UserPresence:        deps.UserPresence,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}
@@ -166,9 +160,6 @@ func NewApp(deps Deps) *App {
 			// internally to NoopClipboard, but Write returns ErrUnavailable.
 			app.Clipboard = clipboard.NewProductionClipboard()
 		}
-	}
-	if app.UserPresence == nil {
-		app.UserPresence = userpresence.Unavailable{}
 	}
 	return app
 }
