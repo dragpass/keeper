@@ -23,7 +23,6 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/dragpass/keeper/internal/keystore/sessions"
-	"github.com/dragpass/keeper/internal/keystore/userpresence"
 )
 
 func TestNewApp_FillsProductionDefaults(t *testing.T) {
@@ -59,9 +58,6 @@ func TestNewApp_FillsProductionDefaults(t *testing.T) {
 	}
 	if app.RecoveryKeySessions == nil {
 		t.Fatalf("RecoveryKeySessions must have a default store")
-	}
-	if _, ok := app.UserPresence.(userpresence.Unavailable); !ok {
-		t.Fatalf("UserPresence default must fail closed, got %T", app.UserPresence)
 	}
 }
 

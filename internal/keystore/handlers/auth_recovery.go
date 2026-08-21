@@ -88,29 +88,15 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 	}
 	oldSignature := signResponse.Data.(proto.RecoverySignResponseData).Signature
 
-	newRecoveryKey, err := recoverykey.Generate(d.Random())
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate new recovery key")
-	}
+	newRecoveryKey := []byte(req.NewRecoveryKey)
+	secure.WipeString(&req.NewRecoveryKey)
+	defer secure.Zeroize(newRecoveryKey)
 	newAuthSeed, newWrapKey, err := recoverykey.Derive(newRecoveryKey, req.Alias, recoverykey.Version)
 	if err != nil {
-		secure.Zeroize(newRecoveryKey)
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to derive new recovery key material")
+		return errs.CodeResponse(errs.ErrCodeValidation, "invalid new recovery key")
 	}
 	newWrapKeyBuffer := memguard.NewBufferFromBytes(newWrapKey)
 	defer newWrapKeyBuffer.Destroy()
-
-	newKeyHandle, newKeyExpiresAt, err := d.RecoveryKeySessions.Open(newRecoveryKey)
-	if err != nil {
-		secure.Zeroize(newRecoveryKey)
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to protect new recovery key")
-	}
-	keepNewKeyHandle := false
-	defer func() {
-		if !keepNewKeyHandle {
-			d.RecoveryKeySessions.Close(newKeyHandle)
-		}
-	}()
 
 	keypairResponse := generateKeypairWithRecoveryWrapKey(d, newWrapKeyBuffer)
 	if !keypairResponse.Success {
@@ -120,7 +106,6 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 
 	d.RecoveryKeySessions.Close(req.EnteredKeyHandle)
 	keepRecoveryHandle = true
-	keepNewKeyHandle = true
 	return proto.BaseResponse{Success: true, Data: proto.AuthRecoveryPrepareResponseData{
 		OldChallengeSignature: oldSignature,
 		RecoveryHandle:        openData.RecoveryHandle,
@@ -129,8 +114,6 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 		NewRecoveryAuthSeed:   newAuthSeed,
 		NewWrappedKeeper:      keypairData.WrappedKeeper,
 		NewRecoveryKeyVersion: recoverykey.Version,
-		NewRecoveryKeyHandle:  newKeyHandle,
-		NewRecoveryKeyExpires: newKeyExpiresAt.UnixMilli(),
 	}}
 }
 

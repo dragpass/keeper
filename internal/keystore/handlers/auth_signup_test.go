@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -14,37 +13,17 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
-	"github.com/dragpass/keeper/internal/keystore/userpresence"
 )
-
-type signupUserPresence struct {
-	userpresence.Unavailable
-	shownKey string
-	showErr  error
-}
-
-func (p *signupUserPresence) Capabilities() userpresence.Capabilities {
-	return userpresence.Capabilities{
-		Available:       true,
-		ShowRecoveryKey: true,
-		Backend:         "test",
-	}
-}
-
-func (p *signupUserPresence) ShowRecoveryKey(_ context.Context, prompt userpresence.RecoveryKeyPrompt) error {
-	p.shownKey = string(prompt.RecoveryKey.Bytes())
-	return p.showErr
-}
 
 func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x44}, 32))
 	password := "correct horse battery staple"
-	presence := &signupUserPresence{}
-	deps.UserPresence = presence
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x01}, 128))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: password})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{
+		Alias: "alice", Password: password, RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ",
+	})
 	if !response.Success {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
@@ -55,11 +34,6 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	if data.PublicKey == "" || data.Signature == "" || data.RecoveryWrappedKeeper == "" {
 		t.Fatalf("identity material missing: %+v", data)
 	}
-	if exists, _ := deps.RecoveryKeySessions.Status(data.RecoveryKeyHandle); !exists {
-		t.Fatal("recovery key handle must remain live until native display")
-	}
-	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
-
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -77,21 +51,19 @@ func TestHandleAuthSignupPrepareUsesAppPassword(t *testing.T) {
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x02}, 128))
 
 	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{
-		Alias:    "alice",
-		Password: "correct horse battery staple",
+		Alias: "alice", Password: "correct horse battery staple",
+		RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ",
 	})
 	if !response.Success {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
-	data := response.Data.(proto.AuthSignupPrepareResponseData)
-	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
 }
 
 func TestHandleAuthSignupPrepareRejectsShortPassword(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "short"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "short", RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"})
 	if response.Success || response.ErrorCode != "validation_error" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -104,7 +76,7 @@ func TestHandleAuthSignupPrepareCountsUnicodeCharacters(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x22}, 32))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "가나다라"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "가나다라", RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"})
 	if response.Success || response.ErrorCode != "validation_error" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -117,12 +89,10 @@ func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x03}, 256))
 
-	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "correct horse battery staple"})
+	response := HandleAuthSignupPrepare(deps, proto.AuthSignupPrepareRequest{Alias: "alice", Password: "correct horse battery staple", RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"})
 	if !response.Success {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
-	data := response.Data.(proto.AuthSignupPrepareResponseData)
-	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
 	stored, err := keychain.GetDeviceKey(store)
 	if err != nil {
 		t.Fatalf("GetDeviceKey: %v", err)
@@ -130,45 +100,6 @@ func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 	raw, err := base64.StdEncoding.DecodeString(stored)
 	if err != nil || len(raw) != 32 {
 		t.Fatalf("stored device key is invalid")
-	}
-}
-
-func TestHandleAuthRecoveryKeyShowConsumesHandleOnSuccess(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	presence := &signupUserPresence{}
-	deps.UserPresence = presence
-	handle, _, err := deps.RecoveryKeySessions.Open([]byte("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-
-	response := HandleAuthRecoveryKeyShow(deps, proto.AuthRecoveryKeyShowRequest{RecoveryKeyHandle: handle})
-	if !response.Success {
-		t.Fatalf("HandleAuthRecoveryKeyShow: %s", response.Error)
-	}
-	if presence.shownKey != "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ" {
-		t.Fatalf("shown key = %q", presence.shownKey)
-	}
-	if exists, _ := deps.RecoveryKeySessions.Status(handle); exists {
-		t.Fatal("successful display must consume the handle")
-	}
-}
-
-func TestHandleAuthRecoveryKeyShowKeepsHandleAfterCancel(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	deps.UserPresence = &signupUserPresence{showErr: userpresence.ErrDismissed}
-	handle, _, err := deps.RecoveryKeySessions.Open([]byte("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { deps.RecoveryKeySessions.Close(handle) })
-
-	response := HandleAuthRecoveryKeyShow(deps, proto.AuthRecoveryKeyShowRequest{RecoveryKeyHandle: handle})
-	if response.Success {
-		t.Fatalf("cancel response = %+v", response)
-	}
-	if err := deps.RecoveryKeySessions.Use(handle, func([]byte) error { return nil }); err != nil {
-		t.Fatalf("cancel must keep handle: %v", err)
 	}
 }
 
@@ -181,24 +112,19 @@ func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
 	deps.Rand = bytes.NewReader(bytes.Repeat([]byte{0x05}, 128))
 
 	response := HandleAuthRecoveryReissuePrepare(deps, proto.AuthRecoveryReissuePrepareRequest{
-		Alias: "alice",
+		Alias: "alice", RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ",
 	})
 	if !response.Success {
 		t.Fatalf("HandleAuthRecoveryReissuePrepare: %s", response.Error)
 	}
 	data := response.Data.(proto.AuthRecoveryReissuePrepareResponseData)
-	t.Cleanup(func() { deps.RecoveryKeySessions.Close(data.RecoveryKeyHandle) })
-	if data.RecoveryAuthSeed == "" || data.RecoveryWrappedKeeper == "" || data.RecoveryKeyHandle == "" {
+	if data.RecoveryAuthSeed == "" || data.RecoveryWrappedKeeper == "" {
 		t.Fatalf("reissue material missing: %+v", data)
 	}
 
-	var wrapKey []byte
-	if err := deps.RecoveryKeySessions.Use(data.RecoveryKeyHandle, func(raw []byte) error {
-		_, derived, deriveErr := recoverykey.Derive(raw, "alice", data.RecoveryKeyVersion)
-		wrapKey = derived
-		return deriveErr
-	}); err != nil {
-		t.Fatalf("derive from handle: %v", err)
+	_, wrapKey, err := recoverykey.Derive([]byte("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"), "alice", data.RecoveryKeyVersion)
+	if err != nil {
+		t.Fatalf("derive recovery key: %v", err)
 	}
 	decrypted, err := keepercrypto.AESGCMDecryptBase64(wrapKey, data.RecoveryWrappedKeeper)
 	secure.Zeroize(wrapKey)
@@ -218,18 +144,6 @@ func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("reissue response contains forbidden secret field/value %q", forbidden)
 		}
-	}
-
-	resumed := HandleAuthRecoveryReissuePrepare(deps, proto.AuthRecoveryReissuePrepareRequest{
-		Alias:             "alice",
-		RecoveryKeyHandle: data.RecoveryKeyHandle,
-	})
-	if !resumed.Success {
-		t.Fatalf("resume reissue: %s", resumed.Error)
-	}
-	resumedData := resumed.Data.(proto.AuthRecoveryReissuePrepareResponseData)
-	if resumedData.RecoveryKeyHandle != data.RecoveryKeyHandle || resumedData.RecoveryAuthSeed != data.RecoveryAuthSeed {
-		t.Fatal("resumed reissue must reuse the same RK24 handle and verifier seed")
 	}
 }
 
@@ -275,6 +189,7 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 		WrappedKeeperB64:   wrappedOldKey,
 		RecoveryKeyVersion: recoverykey.Version,
 		ServerKeyVersion:   1,
+		NewRecoveryKey:     "ZYXW-VUTS-RQPN-MLKJ-HGFE-DCBA",
 	})
 	if !prepareResponse.Success {
 		t.Fatalf("HandleAuthRecoveryPrepare: %s", prepareResponse.Error)
@@ -282,7 +197,6 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 	data := prepareResponse.Data.(proto.AuthRecoveryPrepareResponseData)
 	t.Cleanup(func() {
 		deps.RecoverySessions.Close(data.RecoveryHandle)
-		deps.RecoveryKeySessions.Close(data.NewRecoveryKeyHandle)
 	})
 	if data.OldChallengeSignature == "" || data.NewPublicKey == "" || data.NewWrappedKeeper == "" {
 		t.Fatalf("recovery output missing: %+v", data)
@@ -292,9 +206,6 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 	}
 	if exists, _ := deps.RecoverySessions.Status(data.RecoveryHandle); !exists {
 		t.Fatal("old private key handle must remain for group DEK rewrap")
-	}
-	if exists, _ := deps.RecoveryKeySessions.Status(data.NewRecoveryKeyHandle); !exists {
-		t.Fatal("new recovery key handle must remain for native display")
 	}
 
 	encoded, err := json.Marshal(prepareResponse)
