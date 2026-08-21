@@ -128,27 +128,3 @@ func (r RecoverySessionCloseRequest) Validate() error {
 
 type RecoverySessionCloseResponseData struct{}
 
-// WrapActivePrivateKeyRequest — Recovery key re-issue.
-// Called when the user re-issues an RK24. Returns the current active
-// Keeper privkey AES-GCM-wrapped with the supplied wrap_key — the keypair
-// itself does not change.
-//
-// Auth model: Native Messaging trust as-is (only the locked Extension
-// manifest ID can talk to the Keeper). No separate challenge-response —
-// the user already has an access token, and the admin SPA modal's
-// type-to-confirm verifies intent.
-type WrapActivePrivateKeyRequest struct {
-	WrapKeyB64 string `json:"wrap_key_b64"` // Base64 of a 32B raw AES-GCM key
-}
-
-func (r WrapActivePrivateKeyRequest) Validate() error {
-	_, err := requireBase64Len(r.WrapKeyB64, "wrap_key_b64", 32)
-	return err
-}
-
-// WrapActivePrivateKeyResponseData — Base64 of the PEM AES-GCM-wrapped
-// with wrap_key (IV(12) || ciphertext_with_tag). Stored as-is in the
-// server `recovery_wrapped_keeper` column.
-type WrapActivePrivateKeyResponseData struct {
-	WrappedKeeperB64 string `json:"wrapped_keeper_b64"`
-}
