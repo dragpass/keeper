@@ -227,7 +227,7 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 
 	return proto.CredentialHTTPResponseData{
 		StatusCode: httpResp.StatusCode,
-		Headers:    redactResponseHeaders(httpResp.Header),
+		Headers:    redactResponseHeaders(httpResp.Header, injected),
 		BodyB64:    base64.StdEncoding.EncodeToString(raw),
 		Truncated:  truncated,
 	}, nil
