@@ -342,6 +342,32 @@ func redactionVariants(secret string) []string {
 	return variants
 }
 
+// undecodableContentEncoding returns the first response content coding the
+// Keeper cannot read, or "" when the body is plain bytes.
+//
+// redactBody is a byte-substring replace, so it is blind to any coding it did
+// not decode: a secret echoed inside a br / zstd / deflate body never matches,
+// and the still-encoded bytes would be handed to the model base64'd — which can
+// decode them. The caller refuses such a response instead of forwarding it.
+//
+// gzip is the one coding that does reach here already decoded: net/http's
+// transport requests it, decodes it, and deletes the Content-Encoding header
+// (only when it owns the Accept-Encoding negotiation — see doCredentialRequest).
+// So a surviving "gzip" here means the transport did *not* decode it, and it is
+// as opaque as the rest.
+func undecodableContentEncoding(header http.Header) string {
+	for _, value := range header.Values("Content-Encoding") {
+		for _, coding := range strings.Split(value, ",") {
+			coding = strings.ToLower(strings.TrimSpace(coding))
+			if coding == "" || coding == "identity" {
+				continue
+			}
+			return coding
+		}
+	}
+	return ""
+}
+
 // redactBody masks literal and common encoded echoes of injected secrets in
 // the response body. Variants are longest-first so overlapping values redact
 // deterministically.

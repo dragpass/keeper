@@ -21,11 +21,14 @@ package handlers
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -131,6 +134,12 @@ func credTestRoundTrip(t *testing.T, method string, serverHandler http.HandlerFu
 	credJSON := `{"type":"api_token","label":"t","secret":{"authorization_scheme":"Bearer","token":"SUPER_SECRET_TOKEN_XYZ"}}`
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw, credJSON, credTestAAD)
 
+	// The signed policy carries the same template the request sends; a mismatch
+	// is its own rejection path (headerTemplatesEqual, unit-tested separately)
+	// and would otherwise mask what these round-trips are checking.
+	policy := credTestPolicy([]string{hostOf(t, ts.URL)}, allowedMethods)
+	policy.HeaderTemplate = headerTemplate
+
 	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
@@ -139,7 +148,7 @@ func credTestRoundTrip(t *testing.T, method string, serverHandler http.HandlerFu
 		TargetURL:      ts.URL + "/x",
 		Method:         method,
 		HeaderTemplate: headerTemplate,
-		Policy:         credTestPolicy([]string{hostOf(t, ts.URL)}, allowedMethods),
+		Policy:         policy,
 	})
 	if !resp.Success {
 		return proto.CredentialHTTPResponseData{}, obs, resp, log
@@ -381,6 +390,126 @@ func TestCredentialHTTP_ResponseRedaction(t *testing.T) {
 	}
 	if !strings.Contains(string(body), redactionMask) {
 		t.Fatalf("expected the redaction mask in the body, got: %s", body)
+	}
+}
+
+// A content coding the Go transport does not transparently decode leaves
+// redactBody scanning compressed bytes, where the secret substring does not
+// appear. The body would reach the model still carrying the secret, so an
+// undecodable encoding must be refused outright.
+//
+// deflate stands in for br / zstd here: same class (Go decompresses gzip only),
+// but zlib is in the standard library so the test needs no new dependency.
+func TestCredentialHTTP_UndecodableContentEncoding_Rejected(t *testing.T) {
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	if _, err := zw.Write([]byte("your token is SUPER_SECRET_TOKEN_XYZ done")); err != nil {
+		t.Fatalf("zlib write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zlib close: %v", err)
+	}
+	if bytes.Contains(compressed.Bytes(), []byte("SUPER_SECRET_TOKEN_XYZ")) {
+		t.Fatal("precondition: compressed bytes must not contain the literal secret")
+	}
+
+	data, _, resp, _ := credTestRoundTrip(t, "GET",
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Encoding", "deflate")
+			w.WriteHeader(200)
+			_, _ = w.Write(compressed.Bytes())
+		},
+		map[string]string{"Authorization": "Bearer {{secret.token}}"},
+		[]string{"GET"},
+	)
+	if resp.Success {
+		body, _ := base64.StdEncoding.DecodeString(data.BodyB64)
+		zr, err := zlib.NewReader(bytes.NewReader(body))
+		if err == nil {
+			plain, _ := io.ReadAll(zr)
+			if bytes.Contains(plain, []byte("SUPER_SECRET_TOKEN_XYZ")) {
+				t.Fatalf("secret survived redaction inside a %s body and reached the caller",
+					"deflate")
+			}
+		}
+		t.Fatal("expected an undecodable Content-Encoding to be refused")
+	}
+	if !strings.Contains(resp.Error, "content-encoding") {
+		t.Fatalf("error should name the refused encoding, got: %s", resp.Error)
+	}
+}
+
+// br / zstd need no real encoder to test the guard: the refusal is driven by the
+// declared Content-Encoding, before the bytes are looked at.
+func TestCredentialHTTP_UnknownContentEncodings_Rejected(t *testing.T) {
+	for _, encoding := range []string{"br", "zstd", "compress", "gzip, br"} {
+		t.Run(encoding, func(t *testing.T) {
+			_, _, resp, _ := credTestRoundTrip(t, "GET",
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Encoding", encoding)
+					w.WriteHeader(200)
+					fmt.Fprint(w, "opaque-bytes")
+				},
+				map[string]string{"Authorization": "Bearer {{secret.token}}"},
+				[]string{"GET"},
+			)
+			if resp.Success {
+				t.Fatalf("Content-Encoding %q was accepted", encoding)
+			}
+		})
+	}
+}
+
+// gzip stays supported: the Go transport owns the Accept-Encoding negotiation
+// and hands back decoded bytes with the header removed, so redaction still sees
+// plaintext. Regression guard for the fix over-blocking the common case.
+func TestCredentialHTTP_GzipResponse_DecodedAndRedacted(t *testing.T) {
+	data, obs, resp, _ := credTestRoundTrip(t, "GET",
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.WriteHeader(200)
+			gw := gzip.NewWriter(w)
+			_, _ = gw.Write([]byte("your token is SUPER_SECRET_TOKEN_XYZ done"))
+			_ = gw.Close()
+		},
+		map[string]string{"Authorization": "Bearer {{secret.token}}"},
+		[]string{"GET"},
+	)
+	if !resp.Success {
+		t.Fatalf("gzip response rejected: %s", resp.Error)
+	}
+	if ae := obs.headers.Get("Accept-Encoding"); ae != "gzip" {
+		t.Fatalf("outbound Accept-Encoding = %q, want the transport-owned \"gzip\"", ae)
+	}
+	body, _ := base64.StdEncoding.DecodeString(data.BodyB64)
+	if bytes.Contains(body, []byte("SUPER_SECRET_TOKEN_XYZ")) {
+		t.Fatalf("secret was not masked in the decoded gzip body: %s", body)
+	}
+	if !bytes.Contains(body, []byte(redactionMask)) {
+		t.Fatalf("expected the redaction mask, got: %s", body)
+	}
+}
+
+// A caller-supplied Accept-Encoding would hand encoding choice to the policy
+// author and disable the transport's transparent gzip decode. The Keeper drops
+// it so it always negotiates an encoding it can read.
+func TestCredentialHTTP_CallerAcceptEncoding_Dropped(t *testing.T) {
+	_, obs, resp, _ := credTestRoundTrip(t, "GET",
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			fmt.Fprint(w, "ok")
+		},
+		map[string]string{
+			"Authorization":   "Bearer {{secret.token}}",
+			"Accept-Encoding": "br",
+		},
+		[]string{"GET"},
+	)
+	if !resp.Success {
+		t.Fatalf("expected success, got: %s", resp.Error)
+	}
+	if ae := obs.headers.Get("Accept-Encoding"); ae == "br" {
+		t.Fatal("caller-supplied Accept-Encoding reached the target")
 	}
 }
 
