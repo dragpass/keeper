@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -185,12 +186,29 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 		httpReq.Header.Set(name, value)
 	}
 
+	// Safeguard 7 (part): the Keeper can only redact bytes it can read. The Go
+	// transport transparently decodes gzip *only* when it owns the negotiation —
+	// any caller-set Accept-Encoding switches that off and hands the encoding
+	// choice to the policy author. Drop it so we always ask for something we
+	// decode ourselves.
+	httpReq.Header.Del("Accept-Encoding")
+
 	client := newSecureHTTPClient(timeout)
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		return proto.CredentialHTTPResponseData{}, err
 	}
 	defer httpResp.Body.Close()
+
+	// Safeguard 7 (part): refuse a body we cannot inspect. The transport strips
+	// Content-Encoding after decoding gzip, so anything left here (br, zstd,
+	// deflate, ...) is opaque to redactBody — a secret echoed inside it would
+	// survive as compressed bytes and reach the model, which can decode it.
+	// Fail closed rather than forward it.
+	if encoding := undecodableContentEncoding(httpResp.Header); encoding != "" {
+		return proto.CredentialHTTPResponseData{},
+			fmt.Errorf("response content-encoding %q cannot be inspected for redaction", encoding)
+	}
 
 	// Safeguard 5: read at most maxRespBytes (+1 to detect overflow) and flag
 	// truncation.
