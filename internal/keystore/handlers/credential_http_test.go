@@ -393,6 +393,54 @@ func TestCredentialHTTP_ResponseRedaction(t *testing.T) {
 	}
 }
 
+// Dropping three header names by allowlist does not stop a credential from
+// coming back in some *other* header: debug / echo endpoints mirror request
+// headers, gateways copy them into Via / X-* fields, and a WWW-Authenticate
+// challenge can quote the rejected token. Header values get the same masking
+// the body gets, or the plaintext credential reaches the model.
+func TestCredentialHTTP_SecretEchoedInResponseHeader_Masked(t *testing.T) {
+	secret := "SUPER_SECRET_TOKEN_XYZ"
+	data, _, resp, _ := credTestRoundTrip(t, "GET",
+		func(w http.ResponseWriter, r *http.Request) {
+			// A debug endpoint mirroring what it received.
+			w.Header().Set("X-Echo-Authorization", r.Header.Get("Authorization"))
+			w.Header().Set("X-Debug-Token", secret)
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", token=`+secret)
+			// Encoded echoes must be caught too — same variants as the body.
+			w.Header().Set("X-Echo-B64", base64.StdEncoding.EncodeToString([]byte(secret)))
+			w.Header().Set("X-Echo-Url", url.QueryEscape(secret))
+			w.Header().Set("X-Ok", "keepme")
+			w.WriteHeader(200)
+			fmt.Fprint(w, "ok")
+		},
+		map[string]string{"Authorization": "Bearer {{secret.token}}"},
+		[]string{"GET"},
+	)
+	if !resp.Success {
+		t.Fatalf("expected success, got: %s", resp.Error)
+	}
+
+	for name, value := range data.Headers {
+		if strings.Contains(value, secret) {
+			t.Errorf("header %s leaked the raw secret: %s", name, value)
+		}
+	}
+	for _, name := range []string{"X-Echo-B64", "X-Echo-Url"} {
+		if !strings.Contains(data.Headers[name], redactionMask) {
+			t.Errorf("%s = %q, want the encoded echo masked", name, data.Headers[name])
+		}
+	}
+	if data.Headers["X-Ok"] != "keepme" {
+		t.Errorf("unrelated header was altered: %q", data.Headers["X-Ok"])
+	}
+
+	// The whole IPC response, not just the headers map.
+	respJSON, _ := json.Marshal(resp)
+	if strings.Contains(string(respJSON), secret) {
+		t.Fatalf("IPC response leaked the injected secret: %s", respJSON)
+	}
+}
+
 // A content coding the Go transport does not transparently decode leaves
 // redactBody scanning compressed bytes, where the secret substring does not
 // appear. The body would reach the model still carrying the secret, so an

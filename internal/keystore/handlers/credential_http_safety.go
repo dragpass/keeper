@@ -15,7 +15,6 @@
 package handlers
 
 import (
-	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
@@ -279,14 +278,22 @@ func substituteSecretHeaders(template map[string]string, secret map[string]strin
 
 // redactResponseHeaders flattens http.Header into a string map, dropping the
 // credential-bearing header names entirely (Authorization / Set-Cookie /
-// Proxy-Authorization). Multi-value headers are joined with ", ".
-func redactResponseHeaders(h http.Header) map[string]string {
+// Proxy-Authorization) and masking injected secrets in the values that remain.
+// Multi-value headers are joined with ", ".
+//
+// Dropping by name alone is not enough: a name allowlist cannot know which
+// *other* header carries the credential back. Debug / echo endpoints mirror
+// request headers, gateways copy them into Via / X-* fields, and a
+// WWW-Authenticate challenge can quote the rejected token. Any of those hands
+// the plaintext credential to the model, which is the one thing this boundary
+// exists to prevent — so header values get the same masking the body gets.
+func redactResponseHeaders(h http.Header, injected []string) map[string]string {
 	out := make(map[string]string, len(h))
 	for name, vals := range h {
 		if redactedHeaderNames[http.CanonicalHeaderKey(name)] {
 			continue
 		}
-		out[name] = strings.Join(vals, ", ")
+		out[name] = maskSecrets(strings.Join(vals, ", "), injected)
 	}
 	return out
 }
@@ -368,14 +375,23 @@ func undecodableContentEncoding(header http.Header) string {
 	return ""
 }
 
-// redactBody masks literal and common encoded echoes of injected secrets in
-// the response body. Variants are longest-first so overlapping values redact
-// deterministically.
-func redactBody(body []byte, injected []string) []byte {
+// maskSecrets replaces literal and common encoded echoes of every injected
+// secret with the redaction mask. Variants are longest-first so overlapping
+// values redact deterministically.
+//
+// Body and response headers share this one implementation on purpose: they are
+// two surfaces of the same response, and a secret that is masked in one but not
+// the other still reaches the model.
+func maskSecrets(value string, injected []string) string {
 	for _, s := range injected {
 		for _, variant := range redactionVariants(s) {
-			body = bytes.ReplaceAll(body, []byte(variant), []byte(redactionMask))
+			value = strings.ReplaceAll(value, variant, redactionMask)
 		}
 	}
-	return body
+	return value
+}
+
+// redactBody masks injected secrets echoed in the response body.
+func redactBody(body []byte, injected []string) []byte {
+	return []byte(maskSecrets(string(body), injected))
 }
