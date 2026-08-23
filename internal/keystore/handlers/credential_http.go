@@ -34,6 +34,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/awnumar/memguard"
+
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -120,8 +122,8 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	// payload) fails the open here.
 	var payload []byte
 	var decErr error
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		pt, err := AESGCMOpenWithAAD(groupDEK, iv, ciphertext, aad)
+	useErr := withCredentialDEK(d, req, func(dek []byte) error {
+		pt, err := AESGCMOpenWithAAD(dek, iv, ciphertext, aad)
 		if err != nil {
 			decErr = err
 			return nil
@@ -241,4 +243,36 @@ func wipeSecretStrings(m map[string]string) {
 	for k := range m {
 		m[k] = ""
 	}
+}
+
+// withCredentialDEK yields the DEK that opens the sealed payload, dispatching
+// on which key source the request carries. Validate() has already enforced
+// exactly one.
+//
+// Both scopes run the *same* decrypt-to-tool body — every one of the eight
+// safeguards lives once, above. Duplicating this handler per scope is how two
+// copies of a security sink drift apart, so only the key source is branched.
+//
+//   - org      : raw Group DEK inside the GroupSessionStore memguard lock.
+//   - personal : device-wrapped personal DEK unwrapped here and zeroized on
+//     return. The device key is fetched from the Keeper Keychain, never IPC.
+func withCredentialDEK(d Deps, req proto.CredentialHTTPRequest, fn func(dek []byte) error) error {
+	if req.GroupHandle != "" {
+		return d.GroupSessions.Use(req.GroupHandle, fn)
+	}
+
+	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
+	if err != nil {
+		return err
+	}
+	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
+	defer deviceKeyBuf.Destroy()
+
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	if err != nil {
+		return err
+	}
+	defer secure.Zeroize(dek)
+
+	return fn(dek)
 }

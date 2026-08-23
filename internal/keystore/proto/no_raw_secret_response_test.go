@@ -57,9 +57,10 @@ var rawSecretResponseCarveOuts = map[string]string{}
 // must never appear here — the removed wrapgroupdek's group_dek_b64 and the
 // removed group_session_open_with_raw were exactly such inputs.
 var rawSecretRequestCarveOuts = map[string]string{
-	"GroupEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
-	"GroupEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
-	"DEKUnwrapAndEncryptRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptRequest.plaintext_b64":               "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptWithAADRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
 }
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)
