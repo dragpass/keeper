@@ -177,6 +177,17 @@ const (
 	// Moves dekManager.encryptData into the Keeper.
 	ActionDEKUnwrapAndEncrypt = "dek_unwrap_and_encrypt"
 
+	// DEKUnwrapAndEncryptWithAAD: AAD-binding variant of
+	// DEKUnwrapAndEncrypt, the personal-scope sibling of
+	// GroupEncryptWithAAD.
+	//   Inputs: encrypted_dek_b64, plaintext_b64, aad_b64 (required)
+	//   Output: iv_b64, ciphertext_b64
+	// Binds the caller-supplied canonical AAD (account_id|entry_id|
+	// payload_kind|schema_version|dek_version) into the GCM tag so a sealed
+	// personal credential payload cannot be opened under a different context.
+	// aad_b64 is public context material, not secret.
+	ActionDEKUnwrapAndEncryptWithAAD = "dek_unwrap_and_encrypt_with_aad"
+
 	// DEKUnwrapAndDecryptMeta: bulk-decrypt personal entry metadata fields.
 	//   Inputs: encrypted_dek_b64, meta_fields (key→Base64(IV(12)||ct))
 	//   Output: fields (key→plaintext UTF-8)
