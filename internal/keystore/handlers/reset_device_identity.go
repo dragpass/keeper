@@ -48,6 +48,7 @@ var resetIdentitySlots = []resetIdentitySlot{
 	{config.PendingDragPassKeeperPrivateKey, slotPresent(keychain.GetPendingPrivateKey), keychain.DeletePendingPrivateKey},
 	{config.PendingDragPassKeeperPublicKey, slotPresent(keychain.GetPendingPublicKey), keychain.DeletePendingPublicKey},
 	{config.SessionCode, slotPresent(keychain.GetSessionCode), keychain.DeleteSessionCode},
+	{config.PendingPersonalKeyBundle, slotPresent(keychain.GetPendingPersonalKeyBundle), keychain.DeletePendingPersonalKeyBundle},
 	{config.PersonalDeviceWrappedDEK, slotPresent(keychain.GetPersonalDeviceWrappedDEK), keychain.DeletePersonalDeviceWrappedDEK},
 	{config.DeviceKey, slotPresent(keychain.GetDeviceKey), keychain.DeleteDeviceKey},
 }
