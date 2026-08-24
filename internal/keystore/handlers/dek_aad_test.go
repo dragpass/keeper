@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -47,6 +48,9 @@ func sealPersonalWithAAD(t *testing.T) (deps Deps, encryptedDEKB64 string, dek [
 
 func TestHandleDEKUnwrapAndEncryptWithAAD_RoundTrip(t *testing.T) {
 	deps, encryptedDEKB64, dek := sealPersonalWithAAD(t)
+	if err := keychain.DeletePersonalDeviceWrappedDEK(deps.Store); err != nil {
+		t.Fatalf("delete seeded personal DEK: %v", err)
+	}
 
 	const sentinel = "PERSONAL_AAD_PLAINTEXT_SENTINEL"
 	// Canonical AAD, personal scope: account_id replaces org_id.
@@ -59,6 +63,10 @@ func TestHandleDEKUnwrapAndEncryptWithAAD_RoundTrip(t *testing.T) {
 	})
 	if !resp.Success {
 		t.Fatalf("seal failed: %s", resp.Error)
+	}
+	stored, err := keychain.GetPersonalDeviceWrappedDEK(deps.Store)
+	if err != nil || stored != encryptedDEKB64 {
+		t.Fatalf("synced personal DEK = %q, err = %v", stored, err)
 	}
 	data := resp.Data.(proto.DEKUnwrapAndEncryptResponseData)
 

@@ -37,6 +37,7 @@ import (
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -261,6 +262,15 @@ func withCredentialDEK(d Deps, req proto.CredentialHTTPRequest, fn func(dek []by
 		return d.GroupSessions.Use(req.GroupHandle, fn)
 	}
 
+	encryptedDEK := req.EncryptedDEKB64
+	if req.UseLocalPersonalDEK {
+		var err error
+		encryptedDEK, err = keychain.GetPersonalDeviceWrappedDEK(d.Store)
+		if err != nil || encryptedDEK == "" {
+			return fmt.Errorf("personal DEK not found in keychain")
+		}
+	}
+
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
 		return err
@@ -268,7 +278,7 @@ func withCredentialDEK(d Deps, req proto.CredentialHTTPRequest, fn func(dek []by
 	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 	defer deviceKeyBuf.Destroy()
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
 	if err != nil {
 		return err
 	}

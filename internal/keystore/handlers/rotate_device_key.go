@@ -81,6 +81,10 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 	if err := keychain.SaveDeviceKey(d.Store, base64.StdEncoding.EncodeToString(newBuf.Bytes())); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save new device key to keychain: "+err.Error())
 	}
+	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, newWrappedB64); err != nil {
+		_ = keychain.SaveDeviceKey(d.Store, base64.StdEncoding.EncodeToString(oldBuf.Bytes()))
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK to keychain: "+err.Error())
+	}
 
 	d.Logger.Println("rotate_device_key successful")
 	return proto.BaseResponse{Success: true, Data: proto.RotateDeviceKeyResponseData{

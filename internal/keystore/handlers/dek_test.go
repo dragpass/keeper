@@ -55,6 +55,10 @@ func TestDEKGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	if data.PasswordWrappedDEKB64 == "" || data.DeviceWrappedDEKB64 == "" {
 		t.Fatal("both wrap outputs should be present")
 	}
+	stored, err := keychain.GetPersonalDeviceWrappedDEK(store)
+	if err != nil || stored != data.DeviceWrappedDEKB64 {
+		t.Fatalf("stored personal DEK = %q, err = %v", stored, err)
+	}
 
 	pwRaw, err := base64.StdEncoding.DecodeString(data.PasswordWrappedDEKB64)
 	if err != nil {

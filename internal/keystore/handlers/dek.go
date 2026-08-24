@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -109,6 +110,9 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
+	}
+	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, devWrapped); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 
 	d.Logger.Println("dek rotate to device key successful")

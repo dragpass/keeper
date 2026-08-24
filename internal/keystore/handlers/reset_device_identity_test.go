@@ -30,6 +30,7 @@ func seedAllIdentitySlots(t *testing.T, store keychain.SecretStore) map[string]s
 		config.PendingDragPassKeeperPrivateKey: "PENDING_PRIV_PEM_DO_NOT_LEAK",
 		config.PendingDragPassKeeperPublicKey:  "PENDING_PUB_PEM_DO_NOT_LEAK",
 		config.SessionCode:                     "SESSION_CODE_DO_NOT_LEAK",
+		config.PersonalDeviceWrappedDEK:        "PERSONAL_WRAPPED_DEK_DO_NOT_LEAK",
 		config.DeviceKey:                       "DEVICE_KEY_B64_DO_NOT_LEAK",
 	}
 	save := map[string]func(keychain.SecretStore, string) error{
@@ -38,6 +39,7 @@ func seedAllIdentitySlots(t *testing.T, store keychain.SecretStore) map[string]s
 		config.PendingDragPassKeeperPrivateKey: keychain.SavePendingPrivateKey,
 		config.PendingDragPassKeeperPublicKey:  keychain.SavePendingPublicKey,
 		config.SessionCode:                     keychain.SaveSessionCode,
+		config.PersonalDeviceWrappedDEK:        keychain.SavePersonalDeviceWrappedDEK,
 		config.DeviceKey:                       keychain.SaveDeviceKey,
 	}
 	for name, fn := range save {
@@ -89,6 +91,7 @@ func TestResetDeviceIdentity_AllSlots_ClearsEverythingButServerKey(t *testing.T)
 		config.PendingDragPassKeeperPrivateKey,
 		config.PendingDragPassKeeperPublicKey,
 		config.SessionCode,
+		config.PersonalDeviceWrappedDEK,
 		config.DeviceKey,
 	}
 	got := clearedList(t, resp)

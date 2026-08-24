@@ -44,17 +44,16 @@ type CredentialPolicy struct {
 // carried by the BaseRequest envelope (echoed by the Keeper), so it is not
 // duplicated here.
 type CredentialHTTPRequest struct {
-	// Exactly one key source. GroupHandle opens an org-scope sealed payload
-	// under the raw Group DEK behind the opaque handle; EncryptedDEKB64 opens
-	// a personal-scope one by unwrapping the device-wrapped personal DEK the
-	// same way DEKUnwrapAndEncrypt does. Both are public material — the handle
-	// is opaque and the wrapped DEK is unreadable without the Keychain device
-	// key, which never crosses IPC.
-	GroupHandle     string `json:"group_handle,omitempty"`
-	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"`
-	IVB64           string `json:"iv_b64"`         // 12B IV, public material
-	CiphertextB64   string `json:"ciphertext_b64"` // sealed payload (public material)
-	AADB64          string `json:"aad_b64"`        // canonical AAD, opened byte-identically (public material)
+	// Exactly one key source. GroupHandle opens an org-scope sealed payload.
+	// EncryptedDEKB64 opens an explicitly supplied device-wrapped personal DEK.
+	// UseLocalPersonalDEK reads that wrapped value from the Keeper Keychain, so
+	// MCP does not receive key material.
+	GroupHandle         string `json:"group_handle,omitempty"`
+	EncryptedDEKB64     string `json:"encrypted_dek_b64,omitempty"`
+	UseLocalPersonalDEK bool   `json:"use_local_personal_dek,omitempty"`
+	IVB64               string `json:"iv_b64"`         // 12B IV, public material
+	CiphertextB64       string `json:"ciphertext_b64"` // sealed payload (public material)
+	AADB64              string `json:"aad_b64"`        // canonical AAD, opened byte-identically (public material)
 
 	TargetURL string `json:"target_url"`
 	Method    string `json:"method"`
@@ -70,10 +69,20 @@ type CredentialHTTPRequest struct {
 func (r CredentialHTTPRequest) Validate() error {
 	// Exactly one key source. Accepting both would leave which key actually
 	// opened the payload ambiguous; accepting neither has no caller.
+	sources := 0
+	if r.GroupHandle != "" {
+		sources++
+	}
+	if r.EncryptedDEKB64 != "" {
+		sources++
+	}
+	if r.UseLocalPersonalDEK {
+		sources++
+	}
+	if sources != 1 {
+		return newValidationError("group_handle", "exactly one key source is required")
+	}
 	switch {
-	case r.GroupHandle != "" && r.EncryptedDEKB64 != "":
-		return newValidationError("group_handle",
-			"must not be combined with encrypted_dek_b64: exactly one key source")
 	case r.GroupHandle != "":
 		if err := requireHandle(r.GroupHandle, "group_handle"); err != nil {
 			return err
@@ -82,9 +91,6 @@ func (r CredentialHTTPRequest) Validate() error {
 		if _, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
 			return err
 		}
-	default:
-		return newValidationError("group_handle",
-			"one of group_handle or encrypted_dek_b64 is required")
 	}
 	if _, err := requireBase64Len(r.IVB64, "iv_b64", 12); err != nil {
 		return err
