@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -75,6 +76,9 @@ func generateAndWrapDual(d Deps, password *memguard.LockedBuffer) (proto.DEKGene
 	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
 	if err != nil {
 		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
+	}
+	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, devWrapped); err != nil {
+		return empty, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 
 	data := proto.DEKGenerateAndWrapDualResponseData{

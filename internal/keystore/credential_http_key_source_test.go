@@ -88,6 +88,23 @@ func TestCredentialHTTPRequest_AcceptsEitherKeySourceAlone(t *testing.T) {
 	if err := personalReq.Validate(); err != nil {
 		t.Errorf("personal scope rejected: %v", err)
 	}
+
+	localPersonalReq := credHTTPBase()
+	localPersonalReq.UseLocalPersonalDEK = true
+	if err := localPersonalReq.Validate(); err != nil {
+		t.Errorf("local personal scope rejected: %v", err)
+	}
+}
+
+func TestCredentialHTTPRequest_RejectsLocalPersonalWithAnotherSource(t *testing.T) {
+	req := credHTTPBase()
+	req.GroupHandle = strings.Repeat("a", 40)
+	req.UseLocalPersonalDEK = true
+
+	err := req.Validate()
+	if err == nil || !strings.Contains(err.Error(), "exactly one key source") {
+		t.Fatalf("error = %v, want exactly-one key source rejection", err)
+	}
 }
 
 // The personal key source is a device-wrapped DEK — unreadable without the

@@ -3,6 +3,7 @@ package config
 const (
 	Service                         = "com.dragpass.keeper"
 	DeviceKey                       = "device_key"
+	PersonalDeviceWrappedDEK        = "personal_device_wrapped_dek"
 	DragPassKeeperPrivateKey        = "keeper_private_key"
 	DragPassKeeperPublicKey         = "keeper_public_key"
 	SessionCode                     = "session_code"

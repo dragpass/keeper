@@ -19,6 +19,7 @@ import (
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -63,6 +64,9 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	iv, ciphertext, err := aesGCMSealSplitWithAAD(dek, plaintext, aad)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
+	}
+	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, req.EncryptedDEKB64); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 
 	d.Logger.Println("dek unwrap and encrypt with aad successful")
