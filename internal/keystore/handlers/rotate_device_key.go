@@ -22,7 +22,7 @@ import (
 //  3. unwrap with OLD deviceKey → raw 32B personal DEK (memguard)
 //  4. generate new 32B deviceKey (memguard)
 //  5. AES-GCM wrap raw DEK with the new deviceKey → new wrap bytes
-//  6. save the new deviceKey to the Keychain (saveDeviceKey overwrites OLD)
+//  6. commit the new deviceKey and wrapped DEK behind a recovery journal
 //  7. zeroize all plaintext buffers, return the response
 func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseResponse {
 	d.Logger.Println("rotate_device_key request processing...")
@@ -77,13 +77,15 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 		return errs.CodeResponse(errs.ErrCodeInternal, errors.New("internal: new wrap unexpectedly opens with old device key").Error())
 	}
 
-	// 6) save to Keychain (overwrite OLD)
-	if err := keychain.SaveDeviceKey(d.Store, base64.StdEncoding.EncodeToString(newBuf.Bytes())); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save new device key to keychain: "+err.Error())
-	}
-	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, newWrappedB64); err != nil {
-		_ = keychain.SaveDeviceKey(d.Store, base64.StdEncoding.EncodeToString(oldBuf.Bytes()))
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK to keychain: "+err.Error())
+	// 6) commit both Keychain slots behind a recovery journal.
+	if err := keychain.CommitPersonalKeyBundleRotation(
+		d.Store,
+		base64.StdEncoding.EncodeToString(oldBuf.Bytes()),
+		req.DeviceWrappedDEKB64,
+		base64.StdEncoding.EncodeToString(newBuf.Bytes()),
+		newWrappedB64,
+	); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to commit personal key rotation: "+err.Error())
 	}
 
 	d.Logger.Println("rotate_device_key successful")
