@@ -3,14 +3,20 @@
 package keychain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
 
 func acquirePersonalKeyBundleProcessLock() (func(), error) {
+	return acquirePersonalKeyBundleProcessLockWithTimeout(personalKeyBundleLockTimeout)
+}
+
+func acquirePersonalKeyBundleProcessLockWithTimeout(timeout time.Duration) (func(), error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve personal key bundle lock directory: %w", err)
@@ -24,7 +30,23 @@ func acquirePersonalKeyBundleProcessLock() (func(), error) {
 		return nil, fmt.Errorf("open personal key bundle lock: %w", err)
 	}
 	var overlapped windows.Overlapped
-	if err := windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &overlapped); err != nil {
+	if err := waitForPersonalKeyBundleProcessLock(timeout, func() (bool, error) {
+		err := windows.LockFileEx(
+			windows.Handle(file.Fd()),
+			windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+			0,
+			1,
+			0,
+			&overlapped,
+		)
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+			return false, nil
+		}
+		return false, err
+	}); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("acquire personal key bundle lock: %w", err)
 	}

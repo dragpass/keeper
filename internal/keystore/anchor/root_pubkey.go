@@ -40,8 +40,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/golang-jwt/jwt/v4"
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 // rootPublicKeyPEMBase64 is the Base64 of the Root pubkey PEM injected at

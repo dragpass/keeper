@@ -5,6 +5,7 @@ package keychain
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,24 @@ const personalKeyBundleHelperMode = "DRAGPASS_TEST_KEY_BUNDLE_HELPER"
 type personalKeyBundleChildResult struct {
 	output string
 	err    error
+}
+
+type crashAfterDeviceKeyStore struct {
+	KeyringSecretStore
+	checkpointPath string
+}
+
+func (s crashAfterDeviceKeyStore) Set(service, account, value string) error {
+	if err := s.KeyringSecretStore.Set(service, account, value); err != nil {
+		return err
+	}
+	if account == config.DeviceKey && value == "new-device-crash" {
+		if err := os.WriteFile(s.checkpointPath, []byte("written"), 0o600); err != nil {
+			return err
+		}
+		time.Sleep(30 * time.Second)
+	}
+	return nil
 }
 
 func TestPersonalKeyBundleProcessHelper(t *testing.T) {
@@ -48,6 +67,24 @@ func TestPersonalKeyBundleProcessHelper(t *testing.T) {
 		fmt.Print("released")
 		return
 	}
+	if mode == "timeout" {
+		if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
+			fmt.Printf("error: signal timeout contender: %v", err)
+			return
+		}
+		unlock, err := acquirePersonalKeyBundleProcessLockWithTimeout(150 * time.Millisecond)
+		if err == nil {
+			unlock()
+			fmt.Print("error: timeout contender acquired lock")
+			return
+		}
+		if !errors.Is(err, errPersonalKeyBundleLockTimeout) {
+			fmt.Printf("error: unexpected lock failure: %v", err)
+			return
+		}
+		fmt.Print("timeout")
+		return
+	}
 
 	if err := LoadE2EKeyringFile(os.Getenv(e2eKeyringFileEnvVar)); err != nil {
 		fmt.Printf("error: load shared store: %v", err)
@@ -57,8 +94,28 @@ func TestPersonalKeyBundleProcessHelper(t *testing.T) {
 		fmt.Printf("error: signal rotation: %v", err)
 		return
 	}
+	if mode == "recover" {
+		deviceKey, err := GetDeviceKey(KeyringSecretStore{})
+		if err != nil {
+			fmt.Printf("error: recover device key: %v", err)
+			return
+		}
+		wrappedDEK, err := GetPersonalDeviceWrappedDEK(KeyringSecretStore{})
+		if err != nil {
+			fmt.Printf("error: recover wrapped DEK: %v", err)
+			return
+		}
+		fmt.Printf("recovered:%s:%s", deviceKey, wrappedDEK)
+		return
+	}
+	store := SecretStore(KeyringSecretStore{})
+	if mode == "crash" {
+		store = crashAfterDeviceKeyStore{
+			checkpointPath: os.Getenv("DRAGPASS_TEST_KEY_BUNDLE_CHECKPOINT"),
+		}
+	}
 	err := CommitPersonalKeyBundleRotation(
-		KeyringSecretStore{},
+		store,
 		"old-device",
 		"old-wrapped",
 		"new-device-"+mode,
@@ -73,6 +130,83 @@ func TestPersonalKeyBundleProcessHelper(t *testing.T) {
 		return
 	}
 	fmt.Printf("error:%s:%v", mode, err)
+}
+
+func TestPersonalKeyBundleProcessLockTimesOut(t *testing.T) {
+	tempDir := t.TempDir()
+	sharedStorePath := filepath.Join(tempDir, "keyring.json")
+	writeKeyBundleTestStore(t, sharedStorePath, map[string]string{})
+
+	holderReady := filepath.Join(tempDir, "holder-ready")
+	releaseHolder := filepath.Join(tempDir, "release-holder")
+	holder, holderDone := startKeyBundleTestChild(t, tempDir, "holder", holderReady, sharedStorePath,
+		"DRAGPASS_TEST_KEY_BUNDLE_RELEASE="+releaseHolder)
+	waitForKeyBundleTestReady(t, holderReady)
+
+	timeoutReady := filepath.Join(tempDir, "timeout-ready")
+	contender, contenderDone := startKeyBundleTestChild(t, tempDir, "timeout", timeoutReady, sharedStorePath)
+	waitForKeyBundleTestReady(t, timeoutReady)
+	contenderResult := waitForKeyBundleTestChild(t, contender, contenderDone)
+	if contenderResult.err != nil || !strings.Contains(contenderResult.output, "timeout") {
+		t.Fatalf("timeout contender result: output=%q err=%v", contenderResult.output, contenderResult.err)
+	}
+
+	if err := os.WriteFile(releaseHolder, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	holderResult := waitForKeyBundleTestChild(t, holder, holderDone)
+	if holderResult.err != nil || !strings.Contains(holderResult.output, "released") {
+		t.Fatalf("holder result: output=%q err=%v", holderResult.output, holderResult.err)
+	}
+}
+
+func TestPersonalKeyBundleRecoversAfterRotationProcessCrash(t *testing.T) {
+	tempDir := t.TempDir()
+	sharedStorePath := filepath.Join(tempDir, "keyring.json")
+	initial := map[string]string{
+		e2eKey(config.Service, config.DeviceKey):                "old-device",
+		e2eKey(config.Service, config.PersonalDeviceWrappedDEK): "old-wrapped",
+	}
+	writeKeyBundleTestStore(t, sharedStorePath, initial)
+
+	crashReady := filepath.Join(tempDir, "crash-ready")
+	checkpoint := filepath.Join(tempDir, "device-key-written")
+	crashing, crashingDone := startKeyBundleTestChild(
+		t,
+		tempDir,
+		"crash",
+		crashReady,
+		sharedStorePath,
+		"DRAGPASS_TEST_KEY_BUNDLE_CHECKPOINT="+checkpoint,
+	)
+	waitForKeyBundleTestReady(t, crashReady)
+	waitForKeyBundleTestReady(t, checkpoint)
+	if err := crashing.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	crashResult := waitForKeyBundleTestChild(t, crashing, crashingDone)
+	if crashResult.err == nil {
+		t.Fatalf("crashing rotation exited successfully: %q", crashResult.output)
+	}
+
+	recoveryReady := filepath.Join(tempDir, "recovery-ready")
+	recovery, recoveryDone := startKeyBundleTestChild(t, tempDir, "recover", recoveryReady, sharedStorePath)
+	waitForKeyBundleTestReady(t, recoveryReady)
+	recoveryResult := waitForKeyBundleTestChild(t, recovery, recoveryDone)
+	if recoveryResult.err != nil || !strings.Contains(recoveryResult.output, "recovered:old-device:old-wrapped") {
+		t.Fatalf("recovery result: output=%q err=%v", recoveryResult.output, recoveryResult.err)
+	}
+
+	finalStore := readKeyBundleTestStore(t, sharedStorePath)
+	if got := finalStore[e2eKey(config.Service, config.DeviceKey)]; got != "old-device" {
+		t.Fatalf("recovered device key = %q", got)
+	}
+	if got := finalStore[e2eKey(config.Service, config.PersonalDeviceWrappedDEK)]; got != "old-wrapped" {
+		t.Fatalf("recovered wrapped DEK = %q", got)
+	}
+	if _, ok := finalStore[e2eKey(config.Service, config.PendingPersonalKeyBundle)]; ok {
+		t.Fatal("rotation journal remains after crash recovery")
+	}
 }
 
 func TestPersonalKeyBundleRotationSerializesAcrossProcesses(t *testing.T) {

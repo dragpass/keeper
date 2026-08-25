@@ -127,4 +127,3 @@ func (r RecoverySessionCloseRequest) Validate() error {
 }
 
 type RecoverySessionCloseResponseData struct{}
-

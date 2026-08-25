@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cgo: 0
+          - os: macos-14
+            cgo: 1
+          - os: windows-latest
+            cgo: 0
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: ${{ matrix.cgo }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go test ./... -count=1
+
+  quality:
+    name: format + vet + race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install X11 headers
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev
+      - name: gofmt
+        run: test -z "$(gofmt -l $(git ls-files '*.go' ':!vendor/**'))"
+      - run: go vet ./...
+      - name: key bundle subprocess race tests
+        run: >-
+          go test -race ./internal/keystore/keychain
+          -run 'TestPersonalKeyBundle(ProcessLockTimesOut|RotationSerializesAcrossProcesses|RecoversAfterRotationProcessCrash)$'
+          -count=3

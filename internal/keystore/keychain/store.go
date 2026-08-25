@@ -29,6 +29,8 @@ type SecretStore interface {
 // KeyringSecretStore uses the platform keyring and the configured e2e mirror.
 type KeyringSecretStore struct{}
 
+func (KeyringSecretStore) usesPlatformKeyring() {}
+
 func (KeyringSecretStore) Get(service, account string) (string, error) {
 	v, err := krGet(service, account)
 	if err != nil {

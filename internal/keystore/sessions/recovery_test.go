@@ -195,6 +195,7 @@ func TestRecoverySession_HandleIDsAreUnique(t *testing.T) {
 			t.Errorf("duplicate handle: %s", handle)
 		}
 		seen[handle] = true
+		store.Close(handle)
 	}
 }
 
