@@ -227,9 +227,10 @@ func TestGroupSession_HandleIDsAreUnique(t *testing.T) {
 			t.Errorf("duplicate handle: %s", handle)
 		}
 		seen[handle] = true
+		store.Close(handle)
 	}
-	if got := store.Size(); got != 100 {
-		t.Errorf("size = %d, want 100", got)
+	if got := store.Size(); got != 0 {
+		t.Errorf("size after close = %d, want 0", got)
 	}
 }
 
