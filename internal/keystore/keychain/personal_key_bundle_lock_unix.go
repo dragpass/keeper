@@ -3,14 +3,20 @@
 package keychain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 func acquirePersonalKeyBundleProcessLock() (func(), error) {
+	return acquirePersonalKeyBundleProcessLockWithTimeout(personalKeyBundleLockTimeout)
+}
+
+func acquirePersonalKeyBundleProcessLockWithTimeout(timeout time.Duration) (func(), error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve personal key bundle lock directory: %w", err)
@@ -23,7 +29,16 @@ func acquirePersonalKeyBundleProcessLock() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open personal key bundle lock: %w", err)
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+	if err := waitForPersonalKeyBundleProcessLock(timeout, func() (bool, error) {
+		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return false, nil
+		}
+		return false, err
+	}); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("acquire personal key bundle lock: %w", err)
 	}
