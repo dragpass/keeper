@@ -721,6 +721,34 @@ does not enable file storage in production builds. The automation fixture
 generates a per-test path under `user-data-dir/e2e-keyring.json` so test
 runs are isolated from each other.
 
+### KEEPER_E2E_OS_CLIPBOARD (real OS clipboard, recordings only)
+
+`KEEPER_E2E_MODE=1` swaps in `MemoryClipboard`, so decrypt-to-clipboard
+plaintext never reaches the OS pasteboard and a page's
+`navigator.clipboard.readText()` sees nothing.
+
+Setting `KEEPER_E2E_OS_CLIPBOARD=1` *in addition to* `KEEPER_E2E_MODE=1`
+keeps everything else about e2e mode (mock keyring, keyring file mirroring)
+and puts the real OS clipboard back in as the sink.
+
+The single intended caller is the marketing hero recorder
+(`tests/e2e-extension/recordings/record-hero.ts` in the `dragpass` repo),
+which records the real decrypt path: the content script pastes the recovered
+plaintext back in place, which requires a real clipboard read. Nothing else
+should set it — an e2e run with this flag writes decrypted plaintext to the
+machine's pasteboard.
+
+Trade-off: `clipboard_get_last_hash` requires `MemoryClipboard`, so it
+returns `ErrCodeUnsupported` while this flag is active. Specs that assert via
+`KEEPER_GET_CLIPBOARD_HASH_E2E` must run without it (the default).
+
+Stderr logs `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
+(recording opt-in; clipboard_get_last_hash unavailable)` on startup.
+
+**Ignored unless `KEEPER_E2E_MODE=1`.** The variable is read only inside the
+e2e branch of `main.init()`; a production process already uses the OS
+clipboard, so the flag cannot change or weaken its behaviour.
+
 ## Production Clipboard Smoke (DRAGPASS_KEEPER_CLIPBOARD_E2E)
 
 `internal/keystore/clipboard` ships an opt-in smoke/e2e suite that exercises the

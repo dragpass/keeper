@@ -75,10 +75,25 @@ func init() {
 		// In E2E mode, use the in-memory MemoryClipboard instead of the OS
 		// clipboard. User clipboard is unaffected, and the
 		// clipboard_get_last_hash action can query the SHA-256 hash.
-		deps.Clipboard = clipboard.NewMemoryClipboard()
+		//
+		// KEEPER_E2E_OS_CLIPBOARD=1 opts back into the real OS clipboard for
+		// the marketing hero recorder, which needs the content script's
+		// navigator.clipboard.readText() to see the decrypted plaintext.
+		// The env var is read only inside this branch, so it is structurally
+		// a no-op in production. See clipboard/sink.go.
+		sink := clipboard.SelectSink(true, os.Getenv(clipboard.E2EOSClipboardEnvVar) == "1")
+		if sink == clipboard.SinkOS {
+			deps.Clipboard = clipboard.NewProductionClipboard()
+		} else {
+			deps.Clipboard = clipboard.NewMemoryClipboard()
+		}
 		processApp = keystore.NewApp(deps)
 		processApp.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
-		processApp.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
+		if sink == clipboard.SinkOS {
+			processApp.Logger.Println("KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard (recording opt-in; clipboard_get_last_hash unavailable)")
+		} else {
+			processApp.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
+		}
 
 		// Optional: if KEEPER_E2E_KEYRING_FILE is set, load the file into
 		// the mock. Used so fixtures can share keyring entries between the
