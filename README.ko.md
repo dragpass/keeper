@@ -719,6 +719,34 @@ ADMIN_CREATE_ORG에 실패합니다.
 `user-data-dir/e2e-keyring.json` 아래에 테스트별 경로를 생성하므로 각 테스트
 실행이 서로 격리됩니다.
 
+### KEEPER_E2E_OS_CLIPBOARD (실제 OS 클립보드, 녹화 전용)
+
+`KEEPER_E2E_MODE=1`은 `MemoryClipboard`를 끼워 넣으므로 decrypt-to-clipboard
+평문이 OS 페이스트보드에 도달하지 않고, 페이지의
+`navigator.clipboard.readText()`는 아무것도 읽지 못합니다.
+
+`KEEPER_E2E_MODE=1`에 *더해서* `KEEPER_E2E_OS_CLIPBOARD=1`을 설정하면 e2e
+모드의 나머지(mock 키링, 키링 파일 미러링)는 그대로 두고 sink만 실제 OS
+클립보드로 되돌립니다.
+
+의도된 유일한 호출자는 마케팅 히어로 레코더(`dragpass` 저장소의
+`tests/e2e-extension/recordings/record-hero.ts`)입니다. 이 스크립트는 실제
+복호화 경로를 녹화하는데, content script가 복구된 평문을 제자리에 붙여넣으려면
+진짜 클립보드 읽기가 필요합니다. 그 외에는 설정하지 마십시오. 이 플래그를 켠
+e2e 실행은 복호화된 평문을 머신 페이스트보드에 씁니다.
+
+트레이드오프: `clipboard_get_last_hash`는 `MemoryClipboard`를 요구하므로 이
+플래그가 켜져 있는 동안 `ErrCodeUnsupported`를 반환합니다.
+`KEEPER_GET_CLIPBOARD_HASH_E2E`로 단언하는 스펙은 플래그 없이(기본값으로)
+실행해야 합니다.
+
+시작 시 stderr에 `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
+(recording opt-in; clipboard_get_last_hash unavailable)`을 남깁니다.
+
+**`KEEPER_E2E_MODE=1`이 아니면 무시됩니다.** 이 변수는 `main.init()`의 e2e
+분기 안에서만 읽습니다. 운영 프로세스는 이미 OS 클립보드를 쓰므로 플래그가
+동작을 바꾸거나 약화시킬 수 없습니다.
+
 ## Production Clipboard Smoke (DRAGPASS_KEEPER_CLIPBOARD_E2E)
 
 `internal/keystore/clipboard`에는 실제 OS 클립보드 백엔드

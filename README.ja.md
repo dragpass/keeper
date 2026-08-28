@@ -722,6 +722,34 @@ Keeper に鍵ペアを永続化しますが、SW 側の Keeper は空のキー�
 `user-data-dir/e2e-keyring.json` の下にテストごとのパスを生成するため、テスト実行同士が
 互いに分離されます。
 
+### KEEPER_E2E_OS_CLIPBOARD（実 OS クリップボード、録画専用）
+
+`KEEPER_E2E_MODE=1` は `MemoryClipboard` を差し込むため、decrypt-to-clipboard の
+平文は OS のペーストボードに届かず、ページの
+`navigator.clipboard.readText()` は何も読み取れません。
+
+`KEEPER_E2E_MODE=1` に *加えて* `KEEPER_E2E_OS_CLIPBOARD=1` を設定すると、e2e
+モードのその他（モックキーリング、キーリングファイルのミラーリング）はそのままに、
+sink だけを実 OS クリップボードへ戻します。
+
+想定される唯一の呼び出し元は、マーケティング用ヒーローレコーダー（`dragpass`
+リポジトリの `tests/e2e-extension/recordings/record-hero.ts`）です。実際の復号
+経路を録画する際、content script が復元した平文をその場に貼り戻すには本物の
+クリップボード読み取りが必要になります。それ以外では設定しないでください。この
+フラグを有効にした e2e 実行は、復号された平文をマシンのペーストボードに書き込みます。
+
+トレードオフ: `clipboard_get_last_hash` は `MemoryClipboard` を必要とするため、
+このフラグが有効な間は `ErrCodeUnsupported` を返します。
+`KEEPER_GET_CLIPBOARD_HASH_E2E` で検証するスペックは、フラグなし（既定）で
+実行してください。
+
+起動時に stderr へ `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
+(recording opt-in; clipboard_get_last_hash unavailable)` を出力します。
+
+**`KEEPER_E2E_MODE=1` でなければ無視されます。** この変数は `main.init()` の
+e2e 分岐の中でのみ読まれます。本番プロセスはすでに OS クリップボードを使うため、
+このフラグが挙動を変えたり弱めたりすることはありません。
+
 ## 本番クリップボードスモークテスト（DRAGPASS_KEEPER_CLIPBOARD_E2E）
 
 `internal/keystore/clipboard` には、実際の OS クリップボードバックエンド
