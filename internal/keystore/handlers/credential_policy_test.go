@@ -20,6 +20,38 @@ func TestCanonicalCredentialPolicyMatchesServerFormat(t *testing.T) {
 	}
 }
 
+// credSharedFixturePolicy — ariadne 의 sign_test.go 가 같은 값으로 같은 문자열을
+// 만드는지 확인하는 공유 fixture. 두 저장소의 canonical 이 한 자리라도 어긋나면
+// 모든 resolve 의 서명이 깨지므로, 기대값은 헬퍼를 부르지 않고 리터럴로 적는다.
+func credSharedFixturePolicy() proto.CredentialPolicy {
+	return proto.CredentialPolicy{
+		EntryID:             "11111111-1111-1111-1111-111111111111",
+		DekVersion:          3,
+		AllowedHosts:        []string{"api.example.com"},
+		AllowedMethods:      []string{"POST", "GET"},
+		AllowedPathPatterns: []string{"/v1/*"},
+		HeaderTemplate:      map[string]string{"X-API-Key": "{{secret.token}}"},
+		TargetHost:          "api.example.com",
+		TargetPath:          "/v1/users",
+		Method:              "GET",
+		ApprovalMode:        "always_ask",
+		Expiry:              "2026-07-18T12:00:00Z",
+	}
+}
+
+// TestCanonicalCredentialPolicy_SharedFixture — 공유 fixture 의 현재 canonical.
+// 이 리터럴이 바뀌면 이미 배포된 서버가 서명한 정책을 Keeper 가 더는 검증하지
+// 못한다는 뜻이다.
+func TestCanonicalCredentialPolicy_SharedFixture(t *testing.T) {
+	got := canonicalCredentialPolicy(credSharedFixturePolicy())
+	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
+	}
+}
+
 func TestPathAllowed(t *testing.T) {
 	tests := []struct {
 		name     string
