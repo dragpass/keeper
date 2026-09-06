@@ -10,6 +10,8 @@
 //   - newSecureHTTPClient     — TLS-only, redirect-blocked, connect-time IP re-check client (safeguards 2/3/4/6)
 //   - enforceHTTPSURL         — https-only target parsing (safeguard 3)
 //   - substituteSecretHeaders — {{secret.<key>}} placeholder resolution
+//   - injectSecretQuery       — query_template rendering appended to target_url
+//   - unwrapURLError          — strips the (secret-bearing) URL out of transport errors
 //   - redactResponseHeaders / redactBody — response redaction (safeguard 7)
 
 package handlers
@@ -18,6 +20,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -250,43 +253,153 @@ func enforceHTTPSURL(target string) (host string, err error) {
 	return u.Host, nil
 }
 
-// substituteSecretHeaders resolves every {{secret.<key>}} placeholder in the
-// template values against secret and returns the assembled header values plus
-// the distinct secret strings that were actually injected (used later for body
-// redaction). A placeholder whose key is absent from the decrypted payload is an
-// error — the request must not go out with an unresolved or empty credential.
-func substituteSecretHeaders(template map[string]string, secret map[string]string) (map[string]string, []string, error) {
-	assembled := make(map[string]string, len(template))
-	injectedSet := map[string]bool{}
+// resolveSecretPlaceholders resolves every {{secret.<key>}} placeholder in one
+// template value, recording each non-empty secret it substituted in injectedSet
+// (the set later drives response redaction). A placeholder whose key is absent
+// from the decrypted payload is an error — the request must not go out with an
+// unresolved or empty credential. field names the slot for the message.
+func resolveSecretPlaceholders(field, tmpl string, secret map[string]string, injectedSet map[string]bool) (string, error) {
 	var missing error
-
-	for name, tmpl := range template {
-		resolved := secretPlaceholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {
-			key := secretPlaceholderRe.FindStringSubmatch(match)[1]
-			val, ok := secret[key]
-			if !ok {
-				missing = fmt.Errorf("header_template references unknown secret key %q", key)
-				return match
-			}
-			if val != "" {
-				injectedSet[val] = true
-			}
-			return val
-		})
-		if missing != nil {
-			return nil, nil, missing
+	resolved := secretPlaceholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {
+		key := secretPlaceholderRe.FindStringSubmatch(match)[1]
+		val, ok := secret[key]
+		if !ok {
+			missing = fmt.Errorf("%s references unknown secret key %q", field, key)
+			return match
 		}
-		assembled[name] = resolved
+		if val != "" {
+			injectedSet[val] = true
+		}
+		return val
+	})
+	if missing != nil {
+		return "", missing
 	}
+	return resolved, nil
+}
 
+// sortedInjected flattens an injected-secret set longest first, so a secret that
+// is a substring of another is masked last (the deterministic ordering also
+// keeps output stable).
+func sortedInjected(injectedSet map[string]bool) []string {
 	injected := make([]string, 0, len(injectedSet))
 	for v := range injectedSet {
 		injected = append(injected, v)
 	}
-	// Longest first so a secret that is a substring of another is masked last
-	// (deterministic ordering also keeps output stable).
 	sort.Slice(injected, func(i, j int) bool { return len(injected[i]) > len(injected[j]) })
-	return assembled, injected, nil
+	return injected
+}
+
+// substituteSecretHeaders resolves the header template against the decrypted
+// secret and returns the assembled header values plus the distinct secret
+// strings that were actually injected (used later for body redaction).
+func substituteSecretHeaders(template map[string]string, secret map[string]string) (map[string]string, []string, error) {
+	assembled := make(map[string]string, len(template))
+	injectedSet := map[string]bool{}
+	for name, tmpl := range template {
+		resolved, err := resolveSecretPlaceholders("header_template", tmpl, secret, injectedSet)
+		if err != nil {
+			return nil, nil, err
+		}
+		assembled[name] = resolved
+	}
+	return assembled, sortedInjected(injectedSet), nil
+}
+
+// injectSecretQuery renders query_template against the decrypted secret and
+// appends the results to target's query string, returning the rewritten URL and
+// the running injected-secret list extended with whatever it added.
+//
+// target itself is never template-substituted: the existing query bytes are kept
+// verbatim and the rendered parameters are appended, so nothing the policy
+// already covers is re-encoded.
+//
+// Fail-closed rules, in order:
+//   - an unparseable target or an unparseable existing query is refused;
+//   - a parameter name that is empty or not printable ASCII is refused;
+//   - a name the target's query already carries is refused, so an agent cannot
+//     shadow (or be shadowed by) the injected credential — which parameter the
+//     server reads for a repeated name is not something the Keeper can decide;
+//   - a rendered value carrying CR / LF or any other non-printable byte is
+//     refused. Messages name the parameter and never the rendered value.
+//
+// The template may carry more than one parameter. Every name and value comes
+// from the signature-bound policy, so a count limit would add no guarantee the
+// signature does not already give, and the header template has no such cap
+// either. url.Values.Encode sorts by name, so the appended string is
+// deterministic.
+func injectSecretQuery(target string, template, secret map[string]string, injected []string) (string, []string, error) {
+	if len(template) == 0 {
+		return target, injected, nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid target_url")
+	}
+	existing, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", nil, fmt.Errorf("target_url query cannot be parsed")
+	}
+
+	injectedSet := map[string]bool{}
+	for _, s := range injected {
+		injectedSet[s] = true
+	}
+
+	names := make([]string, 0, len(template))
+	for name := range template {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	added := url.Values{}
+	for _, name := range names {
+		if name == "" || !isPrintableASCII(name) {
+			return "", nil, fmt.Errorf("query_template parameter name is empty or not printable ASCII")
+		}
+		if _, taken := existing[name]; taken {
+			return "", nil, fmt.Errorf("query_template parameter %q is already present in target_url", name)
+		}
+		value, err := resolveSecretPlaceholders("query_template", template[name], secret, injectedSet)
+		if err != nil {
+			return "", nil, err
+		}
+		if !isPrintableASCII(value) {
+			return "", nil, fmt.Errorf("rendered query_template value for %q is not printable ASCII", name)
+		}
+		added.Set(name, value)
+	}
+
+	encoded := added.Encode()
+	if u.RawQuery == "" {
+		u.RawQuery = encoded
+	} else {
+		u.RawQuery = u.RawQuery + "&" + encoded
+	}
+	return u.String(), sortedInjected(injectedSet), nil
+}
+
+// isPrintableASCII reports whether every byte of s is in 0x20..0x7e. CR, LF, NUL
+// and every other control byte are rejected by construction.
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// unwrapURLError returns the cause behind a net/url error. url.Error's message
+// embeds the request URL, and after query injection that URL carries the
+// credential in the clear — so every transport error is reduced to its cause
+// before it can reach an IPC response.
+func unwrapURLError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err
+	}
+	return err
 }
 
 // redactResponseHeaders flattens http.Header into a string map, dropping the

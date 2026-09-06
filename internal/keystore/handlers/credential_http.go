@@ -4,12 +4,12 @@
 // This is the Keeper's first network surface, so every step is a guardrail. The
 // handler opens a sealed credential payload under the raw Group DEK behind the
 // opaque handle (AAD-bound, like group_encrypt_with_aad's inverse), substitutes
-// the decrypted secret into the caller's header template, performs a single
-// locked-down HTTPS request, and returns a redacted response. The plaintext
+// the decrypted secret into the caller's header and query templates, performs a
+// single locked-down HTTPS request, and returns a redacted response. The plaintext
 // credential is assembled, used, and zeroized entirely inside the Keeper — it
 // appears zero times in the IPC response and the logs.
 //
-// The eight in-Keeper safeguards:
+// The nine in-Keeper safeguards:
 //  1. policy re-validation — target host exact-match against policy.allowed_hosts,
 //     method allowlist (hostAllowed / methodAllowed).
 //  2. SSRF / private-IP blocking — the outbound client's Dialer.Control hook
@@ -21,6 +21,10 @@
 //  6. request timeout (client Timeout, from policy or default).
 //  7. response redaction (redactResponseHeaders / redactBody).
 //  8. decrypted payload + assembled secret strings zeroized / dropped after use.
+//  9. query_template rendering — the credential is appended to the target's
+//     query only after every policy check has run against the pre-injection URL,
+//     and the rewritten URL is stripped out of transport errors (unwrapURLError)
+//     so it never reaches an IPC response.
 
 package handlers
 
@@ -110,6 +114,9 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	if !headerTemplatesEqual(req.HeaderTemplate, req.Policy.HeaderTemplate) {
 		return errs.CodeResponse(errs.ErrCodeValidation, "header_template does not match signed credential policy")
 	}
+	if !queryTemplatesEqual(req.QueryTemplate, req.Policy.QueryTemplate) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "query_template does not match signed credential policy")
+	}
 	var body []byte
 	if req.BodyB64 != "" {
 		body, resp, ok = decodeBase64(req.BodyB64, "body_b64")
@@ -153,7 +160,20 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
 
-	data, reqErr := doCredentialRequest(req.Method, req.TargetURL, headers, body, injected,
+	// Safeguard 9: render query_template into the target's query. Every policy
+	// check above ran against req.TargetURL — the pre-injection URL — and the
+	// rewritten one exists only from here to the transport. It carries the
+	// credential in the clear, so it must never reach a log line, an error
+	// string, or any returned field; injectSecretQuery adds the rendered values
+	// to injected so redaction covers a query secret echoed back.
+	targetURL, injected, err := injectSecretQuery(req.TargetURL, req.QueryTemplate, cred.Secret, injected)
+	if err != nil {
+		wipeSecretStrings(cred.Secret)
+		wipeSecretStrings(headers)
+		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
+	}
+
+	data, reqErr := doCredentialRequest(req.Method, targetURL, headers, body, injected,
 		defaultCredentialTimeout, defaultMaxRespBytes)
 
 	// Safeguard 8 (part): drop references to the assembled secret strings and the
@@ -164,7 +184,11 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	wipeSecretStrings(headers)
 
 	if reqErr != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "credential request failed: "+reqErr.Error())
+		// doCredentialRequest already strips the request URL out of transport
+		// errors (unwrapURLError); masking is the second line, covering any
+		// future error path that reconstructs it.
+		return errs.CodeResponse(errs.ErrCodeInternal,
+			maskSecrets("credential request failed: "+reqErr.Error(), injected))
 	}
 
 	d.Logger.Println("credential http request successful")
@@ -181,9 +205,13 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
+	// targetURL may carry an injected credential in its query, and both
+	// http.NewRequest and client.Do wrap failures in a *url.Error whose message
+	// embeds it verbatim. Every error leaving this function is reduced to its
+	// cause first.
 	httpReq, err := http.NewRequest(strings.ToUpper(strings.TrimSpace(method)), targetURL, bodyReader)
 	if err != nil {
-		return proto.CredentialHTTPResponseData{}, err
+		return proto.CredentialHTTPResponseData{}, unwrapURLError(err)
 	}
 	for name, value := range headers {
 		httpReq.Header.Set(name, value)
@@ -199,7 +227,7 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 	client := newSecureHTTPClient(timeout)
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return proto.CredentialHTTPResponseData{}, err
+		return proto.CredentialHTTPResponseData{}, unwrapURLError(err)
 	}
 	defer httpResp.Body.Close()
 
