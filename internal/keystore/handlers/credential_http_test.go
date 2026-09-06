@@ -1,6 +1,6 @@
 // credential_http_test.go — HandleCredentialHTTPRequest guards.
 //
-// Covers each of the eight in-Keeper safeguards with real httptest servers plus
+// Covers each of the in-Keeper safeguards with real httptest servers plus
 // the pure-helper units (SSRF classifier, host normalization, placeholder
 // substitution, redaction):
 //   - happy path: secret injected into the outbound Authorization header, server

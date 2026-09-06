@@ -2,7 +2,7 @@
 // decrypt-to-tool sink.
 //
 // CredentialHTTPRequest now takes either an org Group DEK handle or a
-// device-wrapped personal DEK. The eight safeguards run once for both scopes
+// device-wrapped personal DEK. The safeguards run once for both scopes
 // (withCredentialDEK branches only the key source), so what needs guarding is
 // the selection itself:
 //
