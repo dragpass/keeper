@@ -52,6 +52,33 @@ func TestCanonicalCredentialPolicy_SharedFixture(t *testing.T) {
 	}
 }
 
+// TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate — 같은 fixture 에
+// query 주입만 얹은 판. 앞 테스트의 문자열에 자리가 하나 붙고 header 자리는 빈
+// 문자열이 된다. ariadne sign_test.go 에 같은 리터럴이 있다.
+func TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate(t *testing.T) {
+	p := credSharedFixturePolicy()
+	p.HeaderTemplate = map[string]string{}
+	p.QueryTemplate = map[string]string{"api_key": "{{secret.token}}"}
+	got := canonicalCredentialPolicy(p)
+	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z|7:api_key16:{{secret.token}}"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
+	}
+}
+
+// TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat — nil 과 빈 map
+// 은 자리를 만들지 않는다. 여기가 깨지면 기존 credential 의 서명이 전부 깨진다.
+func TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat(t *testing.T) {
+	base := canonicalCredentialPolicy(credSharedFixturePolicy())
+	empty := credSharedFixturePolicy()
+	empty.QueryTemplate = map[string]string{}
+	if got := canonicalCredentialPolicy(empty); got != base {
+		t.Fatalf("빈 query_template 이 canonical 을 바꿨다: %q, want %q", got, base)
+	}
+}
+
 func TestPathAllowed(t *testing.T) {
 	tests := []struct {
 		name     string

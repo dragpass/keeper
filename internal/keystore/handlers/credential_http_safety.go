@@ -133,7 +133,20 @@ func requestShapeAllowed(target string, hasBody, allowQuery, allowBody bool) boo
 	return (allowQuery || u.RawQuery == "") && (allowBody || !hasBody)
 }
 
+// headerTemplatesEqual / queryTemplatesEqual report whether the template the
+// request sends is exactly the one the server signed. The comparison is the
+// same for both; they are two names because the call sites and their rejection
+// messages must say which slot failed. A nil map and an empty map compare
+// equal, so a caller that sends {} where the policy omitted the field passes.
 func headerTemplatesEqual(actual, signed map[string]string) bool {
+	return templatesEqual(actual, signed)
+}
+
+func queryTemplatesEqual(actual, signed map[string]string) bool {
+	return templatesEqual(actual, signed)
+}
+
+func templatesEqual(actual, signed map[string]string) bool {
 	if len(actual) != len(signed) {
 		return false
 	}
