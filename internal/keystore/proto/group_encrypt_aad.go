@@ -3,8 +3,9 @@
 //
 // GroupEncryptWithAAD is GroupEncrypt plus a required AAD: the caller-supplied
 // additional authenticated data is bound into the GCM tag so the sealed payload
-// is cryptographically tied to its canonical context (org_id|entry_id|
-// payload_kind|schema_version|dek_version). A ciphertext sealed under one AAD
+// is cryptographically tied to its canonical context (scope_id|entry_id|
+// payload_kind|schema_version|dek_version — scope_id is org_id for an org
+// payload, account_id for a personal one). A ciphertext sealed under one AAD
 // cannot be opened under another, which prevents swap attacks. The raw Group DEK
 // stays in the Keeper-side GroupSessionStore memguard buffer.
 

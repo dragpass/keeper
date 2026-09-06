@@ -86,7 +86,7 @@ const (
 	// GroupEncryptWithAAD: AAD-binding variant of GroupEncrypt. AES-GCM-seals
 	// plaintext under the raw Group DEK behind the opaque handle with a caller-
 	// supplied AAD bound into the GCM tag. The AAD carries the sealed payload's
-	// canonical context (org_id|entry_id|payload_kind|schema_version|dek_version)
+	// canonical context (scope_id|entry_id|payload_kind|schema_version|dek_version)
 	// so a ciphertext cannot be swapped to a different context without failing to
 	// open. AAD is required — a nil/empty AAD is what GroupEncrypt already covers.
 	//   Inputs: group_handle, plaintext_b64, aad_b64

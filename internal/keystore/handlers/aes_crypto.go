@@ -65,7 +65,7 @@ func AESGCMOpen(key, iv, ciphertext []byte) ([]byte, error) {
 // AESGCMSealSplitWithAAD is AESGCMSealSplit with additional authenticated data
 // (AAD) bound into the GCM tag. The AAD is authenticated but not encrypted, so
 // the same aad bytes must be supplied to AESGCMOpenWithAAD to open. Used to bind
-// a sealed payload to its canonical context (org_id|entry_id|payload_kind|
+// a sealed payload to its canonical context (scope_id|entry_id|payload_kind|
 // schema_version|dek_version) so a ciphertext cannot be swapped between contexts.
 //
 // aesGCMSealSplit / AESGCMOpen (the AAD=nil siblings) are unchanged.
