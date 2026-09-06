@@ -35,16 +35,43 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		p.Method,
 		p.Expiry,
 	}
-	// query_template is appended only when it is non-empty, so every policy that
-	// injects into headers or cookies canonicalizes to exactly the bytes it did
-	// before this field existed — a signature made by a server that predates it
-	// still verifies. The slot is unambiguous: expiry is RFC3339 (validated by
-	// time.Parse before this is called) and cannot contain "|", and the template
-	// encoding is length-prefixed and self-delimiting.
+	// Both trailing blocks are appended only when their template is non-empty, so
+	// every policy that injects into headers or cookies canonicalizes to exactly
+	// the bytes it did before either field existed — a signature made by a server
+	// that predates them still verifies. The slots are unambiguous: expiry is
+	// RFC3339 (validated by time.Parse before this is called) and cannot contain
+	// "|", the template encodings are length-prefixed and self-delimiting, and a
+	// policy injects into exactly one place, so query and exec are never both
+	// present.
 	if len(p.QueryTemplate) > 0 {
 		parts = append(parts, canonicalCredentialHeaders(p.QueryTemplate))
 	}
+	if len(p.EnvTemplate) > 0 {
+		parts = append(parts,
+			p.ExecExecutable,
+			canonicalCredentialArgv(p.ExecArgv),
+			p.ExecCwd,
+			canonicalCredentialHeaders(p.EnvTemplate),
+		)
+	}
 	return strings.Join(parts, "|")
+}
+
+// canonicalCredentialArgv encodes argv as length-prefixed elements joined with
+// ",". The length prefixes make the encoding injective the same way the template
+// encoding is: no combination of arguments can be re-read as a different argv,
+// and an argument containing "," or "|" cannot forge a field boundary.
+//
+// ariadne's credential/sign.go carries a byte-identical function. If the two
+// ever disagree by one character, every exec resolve fails signature
+// verification — which is why both repos assert the same literal for a shared
+// fixture.
+func canonicalCredentialArgv(argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		parts = append(parts, strconv.Itoa(len(arg))+":"+arg)
+	}
+	return strings.Join(parts, ",")
 }
 
 func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) bool {

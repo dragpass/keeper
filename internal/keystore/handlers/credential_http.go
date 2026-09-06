@@ -130,7 +130,11 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	// payload) fails the open here.
 	var payload []byte
 	var decErr error
-	useErr := withCredentialDEK(d, req, func(dek []byte) error {
+	useErr := withCredentialDEK(d, credentialKeySource{
+		groupHandle:         req.GroupHandle,
+		encryptedDEKB64:     req.EncryptedDEKB64,
+		useLocalPersonalDEK: req.UseLocalPersonalDEK,
+	}, func(dek []byte) error {
 		pt, err := AESGCMOpenWithAAD(dek, iv, ciphertext, aad)
 		if err != nil {
 			decErr = err
@@ -274,6 +278,15 @@ func wipeSecretStrings(m map[string]string) {
 	}
 }
 
+// credentialKeySource names which key opens a sealed credential payload. Both
+// credential sinks (http and exec) carry the same three alternatives on the
+// wire, so the branch that picks between them lives once, below.
+type credentialKeySource struct {
+	groupHandle         string
+	encryptedDEKB64     string
+	useLocalPersonalDEK bool
+}
+
 // withCredentialDEK yields the DEK that opens the sealed payload, dispatching
 // on which key source the request carries. Validate() has already enforced
 // exactly one.
@@ -285,13 +298,13 @@ func wipeSecretStrings(m map[string]string) {
 //   - org      : raw Group DEK inside the GroupSessionStore memguard lock.
 //   - personal : device-wrapped personal DEK unwrapped here and zeroized on
 //     return. The device key is fetched from the Keeper Keychain, never IPC.
-func withCredentialDEK(d Deps, req proto.CredentialHTTPRequest, fn func(dek []byte) error) error {
-	if req.GroupHandle != "" {
-		return d.GroupSessions.Use(req.GroupHandle, fn)
+func withCredentialDEK(d Deps, src credentialKeySource, fn func(dek []byte) error) error {
+	if src.groupHandle != "" {
+		return d.GroupSessions.Use(src.groupHandle, fn)
 	}
 
-	encryptedDEK := req.EncryptedDEKB64
-	if req.UseLocalPersonalDEK {
+	encryptedDEK := src.encryptedDEKB64
+	if src.useLocalPersonalDEK {
 		var err error
 		encryptedDEK, err = keychain.GetPersonalDeviceWrappedDEK(d.Store)
 		if err != nil || encryptedDEK == "" {

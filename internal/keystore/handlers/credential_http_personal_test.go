@@ -21,7 +21,7 @@ func TestWithCredentialDEKUsesLocalPersonalWrap(t *testing.T) {
 	}
 
 	called := false
-	err := withCredentialDEK(deps, proto.CredentialHTTPRequest{UseLocalPersonalDEK: true}, func(dek []byte) error {
+	err := withCredentialDEK(deps, credentialKeySource{useLocalPersonalDEK: true}, func(dek []byte) error {
 		called = len(dek) == 32
 		return nil
 	})
@@ -38,7 +38,7 @@ func TestWithCredentialDEKFailsWithoutLocalPersonalWrap(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, make([]byte, 32))
 
-	err := withCredentialDEK(deps, proto.CredentialHTTPRequest{UseLocalPersonalDEK: true}, func([]byte) error {
+	err := withCredentialDEK(deps, credentialKeySource{useLocalPersonalDEK: true}, func([]byte) error {
 		t.Fatal("callback must not run without a local personal DEK")
 		return nil
 	})
