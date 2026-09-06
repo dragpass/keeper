@@ -20,6 +20,65 @@ func TestCanonicalCredentialPolicyMatchesServerFormat(t *testing.T) {
 	}
 }
 
+// credSharedFixturePolicy — ariadne 의 sign_test.go 가 같은 값으로 같은 문자열을
+// 만드는지 확인하는 공유 fixture. 두 저장소의 canonical 이 한 자리라도 어긋나면
+// 모든 resolve 의 서명이 깨지므로, 기대값은 헬퍼를 부르지 않고 리터럴로 적는다.
+func credSharedFixturePolicy() proto.CredentialPolicy {
+	return proto.CredentialPolicy{
+		EntryID:             "11111111-1111-1111-1111-111111111111",
+		DekVersion:          3,
+		AllowedHosts:        []string{"api.example.com"},
+		AllowedMethods:      []string{"POST", "GET"},
+		AllowedPathPatterns: []string{"/v1/*"},
+		HeaderTemplate:      map[string]string{"X-API-Key": "{{secret.token}}"},
+		TargetHost:          "api.example.com",
+		TargetPath:          "/v1/users",
+		Method:              "GET",
+		ApprovalMode:        "always_ask",
+		Expiry:              "2026-07-18T12:00:00Z",
+	}
+}
+
+// TestCanonicalCredentialPolicy_SharedFixture — 공유 fixture 의 현재 canonical.
+// 이 리터럴이 바뀌면 이미 배포된 서버가 서명한 정책을 Keeper 가 더는 검증하지
+// 못한다는 뜻이다.
+func TestCanonicalCredentialPolicy_SharedFixture(t *testing.T) {
+	got := canonicalCredentialPolicy(credSharedFixturePolicy())
+	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
+	}
+}
+
+// TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate — 같은 fixture 에
+// query 주입만 얹은 판. 앞 테스트의 문자열에 자리가 하나 붙고 header 자리는 빈
+// 문자열이 된다. ariadne sign_test.go 에 같은 리터럴이 있다.
+func TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate(t *testing.T) {
+	p := credSharedFixturePolicy()
+	p.HeaderTemplate = map[string]string{}
+	p.QueryTemplate = map[string]string{"api_key": "{{secret.token}}"}
+	got := canonicalCredentialPolicy(p)
+	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z|7:api_key16:{{secret.token}}"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
+	}
+}
+
+// TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat — nil 과 빈 map
+// 은 자리를 만들지 않는다. 여기가 깨지면 기존 credential 의 서명이 전부 깨진다.
+func TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat(t *testing.T) {
+	base := canonicalCredentialPolicy(credSharedFixturePolicy())
+	empty := credSharedFixturePolicy()
+	empty.QueryTemplate = map[string]string{}
+	if got := canonicalCredentialPolicy(empty); got != base {
+		t.Fatalf("빈 query_template 이 canonical 을 바꿨다: %q, want %q", got, base)
+	}
+}
+
 func TestPathAllowed(t *testing.T) {
 	tests := []struct {
 		name     string

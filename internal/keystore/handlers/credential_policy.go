@@ -21,7 +21,7 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 	sort.Strings(hosts)
 	sort.Strings(methods)
 	sort.Strings(paths)
-	return strings.Join([]string{
+	parts := []string{
 		p.EntryID,
 		strconv.Itoa(p.DekVersion),
 		strings.Join(hosts, ","),
@@ -34,7 +34,17 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		p.TargetPath,
 		p.Method,
 		p.Expiry,
-	}, "|")
+	}
+	// query_template is appended only when it is non-empty, so every policy that
+	// injects into headers or cookies canonicalizes to exactly the bytes it did
+	// before this field existed — a signature made by a server that predates it
+	// still verifies. The slot is unambiguous: expiry is RFC3339 (validated by
+	// time.Parse before this is called) and cannot contain "|", and the template
+	// encoding is length-prefixed and self-delimiting.
+	if len(p.QueryTemplate) > 0 {
+		parts = append(parts, canonicalCredentialHeaders(p.QueryTemplate))
+	}
+	return strings.Join(parts, "|")
 }
 
 func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) bool {
@@ -50,6 +60,10 @@ func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) 
 		path == p.TargetPath && strings.EqualFold(strings.TrimSpace(method), strings.TrimSpace(p.Method))
 }
 
+// canonicalCredentialHeaders encodes a {name: value} template as a
+// length-prefixed, key-sorted string. Both header_template and query_template
+// use it — the length prefixes make the encoding injective, so no combination of
+// names and values can be re-read as a different map.
 func canonicalCredentialHeaders(headers map[string]string) string {
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
