@@ -35,16 +35,53 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		p.Method,
 		p.Expiry,
 	}
-	// query_template is appended only when it is non-empty, so every policy that
-	// injects into headers or cookies canonicalizes to exactly the bytes it did
-	// before this field existed — a signature made by a server that predates it
-	// still verifies. The slot is unambiguous: expiry is RFC3339 (validated by
-	// time.Parse before this is called) and cannot contain "|", and the template
-	// encoding is length-prefixed and self-delimiting.
+	// Both trailing blocks are appended only when their template is non-empty, so
+	// every policy that injects into headers or cookies canonicalizes to exactly
+	// the bytes it did before either field existed — a signature made by a server
+	// that predates them still verifies. The slots are unambiguous: expiry is
+	// RFC3339 (validated by time.Parse before this is called) and cannot contain
+	// "|", every part of both blocks is length-prefixed and self-delimiting, and
+	// a policy injects into exactly one place, so query and exec are never both
+	// present.
 	if len(p.QueryTemplate) > 0 {
 		parts = append(parts, canonicalCredentialHeaders(p.QueryTemplate))
 	}
+	if len(p.EnvTemplate) > 0 {
+		// The executable and cwd are length-prefixed like everything else in this
+		// block. A POSIX path may legally contain "|", and without the prefix a
+		// crafted path could absorb the following separator and make two distinct
+		// commands canonicalize to the same bytes.
+		parts = append(parts,
+			canonicalCredentialLengthPrefixed(p.ExecExecutable),
+			canonicalCredentialArgv(p.ExecArgv),
+			canonicalCredentialLengthPrefixed(p.ExecCwd),
+			canonicalCredentialHeaders(p.EnvTemplate),
+		)
+	}
 	return strings.Join(parts, "|")
+}
+
+// canonicalCredentialLengthPrefixed encodes one value as "<byte length>:<value>",
+// the same shape every other length-prefixed field in the canonical uses.
+func canonicalCredentialLengthPrefixed(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value
+}
+
+// canonicalCredentialArgv encodes argv as length-prefixed elements joined with
+// ",". The length prefixes make the encoding injective the same way the template
+// encoding is: no combination of arguments can be re-read as a different argv,
+// and an argument containing "," or "|" cannot forge a field boundary.
+//
+// ariadne's credential/sign.go carries a byte-identical function. If the two
+// ever disagree by one character, every exec resolve fails signature
+// verification — which is why both repos assert the same literal for a shared
+// fixture.
+func canonicalCredentialArgv(argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		parts = append(parts, canonicalCredentialLengthPrefixed(arg))
+	}
+	return strings.Join(parts, ",")
 }
 
 func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) bool {

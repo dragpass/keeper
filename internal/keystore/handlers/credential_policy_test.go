@@ -79,6 +79,94 @@ func TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat(t *testing.T
 	}
 }
 
+// credSharedExecFixturePolicy — exec 정책의 공유 fixture. HTTP 세 목록이 비고
+// header / query template 도 비며, 대신 서명이 명령 한 벌 (executable / argv /
+// cwd) 과 env_template 을 묶는다. ariadne sign_test.go 에 같은 값이 있다.
+func credSharedExecFixturePolicy() proto.CredentialPolicy {
+	return proto.CredentialPolicy{
+		EntryID:        "11111111-1111-1111-1111-111111111111",
+		DekVersion:     3,
+		HeaderTemplate: map[string]string{},
+		ExecExecutable: "/usr/bin/gh",
+		ExecArgv:       []string{"/usr/bin/gh", "api", "user"},
+		ExecCwd:        "/tmp/work",
+		EnvTemplate:    map[string]string{"GH_TOKEN": "{{secret.token}}"},
+		ApprovalMode:   "always_ask",
+		Expiry:         "2026-07-18T12:00:00Z",
+	}
+}
+
+// TestCanonicalCredentialPolicy_SharedExecFixture — exec 정책의 현재 canonical.
+// ariadne 의 TestCanonicalPolicyString_SharedExecFixture 가 같은 리터럴을 만든다.
+// 두 저장소가 한 자리라도 어긋나면 모든 exec resolve 의 서명 검증이 깨진다.
+func TestCanonicalCredentialPolicy_SharedExecFixture(t *testing.T) {
+	got := canonicalCredentialPolicy(credSharedExecFixturePolicy())
+	want := "11111111-1111-1111-1111-111111111111|3|||||false|false||||" +
+		"2026-07-18T12:00:00Z|11:/usr/bin/gh|11:/usr/bin/gh,3:api,4:user|9:/tmp/work|" +
+		"8:GH_TOKEN16:{{secret.token}}"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
+	}
+}
+
+// TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies — exec 필드가
+// 생긴 뒤에도 HTTP 정책의 canonical 은 바이트 단위로 같다. 0.0.27 이 서명 검증
+// 하던 문자열이 그대로여야 옛 서버가 서명한 정책이 계속 검증된다.
+func TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies(t *testing.T) {
+	base := canonicalCredentialPolicy(credSharedFixturePolicy())
+	const want = "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z"
+	if base != want {
+		t.Fatalf("HTTP canonical = %q, want %q", base, want)
+	}
+	// 빈 exec 필드는 자리를 만들지 않는다 — nil 도 빈 map 도.
+	empty := credSharedFixturePolicy()
+	empty.EnvTemplate = map[string]string{}
+	empty.ExecExecutable = ""
+	empty.ExecArgv = nil
+	empty.ExecCwd = ""
+	if got := canonicalCredentialPolicy(empty); got != base {
+		t.Fatalf("빈 exec 필드가 canonical 을 바꿨다: %q, want %q", got, base)
+	}
+}
+
+// TestCanonicalCredentialArgv_LengthPrefixIsInjective — 길이 접두가 쉼표와
+// 파이프를 담은 인자를 자기 구획 안에 가둔다. 접두가 없으면 서로 다른 argv 가
+// 같은 문자열로 서명될 수 있다.
+func TestCanonicalCredentialArgv_LengthPrefixIsInjective(t *testing.T) {
+	a := canonicalCredentialArgv([]string{"a,b", "c"})
+	b := canonicalCredentialArgv([]string{"a", "b,c"})
+	if a == b {
+		t.Fatalf("쉼표를 담은 argv 가 같은 canonical 이 됐다: %q", a)
+	}
+	if got := canonicalCredentialArgv([]string{"a,b", "c"}); got != "3:a,b,1:c" {
+		t.Fatalf("argv canonical = %q", got)
+	}
+	if got := canonicalCredentialArgv(nil); got != "" {
+		t.Fatalf("빈 argv canonical = %q, want \"\"", got)
+	}
+}
+
+// TestCanonicalCredentialPolicy_ExecPathsAreLengthPrefixed — POSIX 경로는 '|' 를
+// 담을 수 있다. 접두가 없으면 그런 경로가 뒤따르는 구분자를 삼켜 서로 다른 명령
+// 두 벌이 같은 바이트로 서명될 수 있다.
+func TestCanonicalCredentialPolicy_ExecPathsAreLengthPrefixed(t *testing.T) {
+	a := credSharedExecFixturePolicy()
+	a.ExecExecutable = "/usr/bin/gh|9:/tmp"
+	a.ExecArgv = []string{a.ExecExecutable}
+	a.ExecCwd = "/work"
+
+	b := credSharedExecFixturePolicy()
+	b.ExecExecutable = "/usr/bin/gh"
+	b.ExecArgv = []string{"/usr/bin/gh|9:/tmp"}
+	b.ExecCwd = "/tmp|/work"
+
+	if canonicalCredentialPolicy(a) == canonicalCredentialPolicy(b) {
+		t.Fatalf("'|' 를 담은 경로 두 벌이 같은 canonical 이 됐다: %q", canonicalCredentialPolicy(a))
+	}
+}
+
 func TestPathAllowed(t *testing.T) {
 	tests := []struct {
 		name     string

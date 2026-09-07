@@ -31,6 +31,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 // secretPlaceholderRe matches {{secret.<key>}} with optional surrounding
@@ -136,29 +138,22 @@ func requestShapeAllowed(target string, hasBody, allowQuery, allowBody bool) boo
 	return (allowQuery || u.RawQuery == "") && (allowBody || !hasBody)
 }
 
-// headerTemplatesEqual / queryTemplatesEqual report whether the template the
-// request sends is exactly the one the server signed. The comparison is the
-// same for both; they are two names because the call sites and their rejection
-// messages must say which slot failed. A nil map and an empty map compare
-// equal, so a caller that sends {} where the policy omitted the field passes.
+// headerTemplatesEqual / queryTemplatesEqual / envTemplatesEqual report whether
+// the template the request sends is exactly the one the server signed. The
+// comparison is the same for all three; they are three names because the call
+// sites and their rejection messages must say which slot failed. A nil map and
+// an empty map compare equal, so a caller that sends {} where the policy omitted
+// the field passes.
 func headerTemplatesEqual(actual, signed map[string]string) bool {
-	return templatesEqual(actual, signed)
+	return proto.CredentialTemplatesEqual(actual, signed)
 }
 
 func queryTemplatesEqual(actual, signed map[string]string) bool {
-	return templatesEqual(actual, signed)
+	return proto.CredentialTemplatesEqual(actual, signed)
 }
 
-func templatesEqual(actual, signed map[string]string) bool {
-	if len(actual) != len(signed) {
-		return false
-	}
-	for key, value := range signed {
-		if actual[key] != value {
-			return false
-		}
-	}
-	return true
+func envTemplatesEqual(actual, signed map[string]string) bool {
+	return proto.CredentialTemplatesEqual(actual, signed)
 }
 
 // isBlockedIP reports whether ip is a non-public destination the Keeper must
