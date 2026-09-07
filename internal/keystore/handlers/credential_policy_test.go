@@ -102,7 +102,7 @@ func credSharedExecFixturePolicy() proto.CredentialPolicy {
 func TestCanonicalCredentialPolicy_SharedExecFixture(t *testing.T) {
 	got := canonicalCredentialPolicy(credSharedExecFixturePolicy())
 	want := "11111111-1111-1111-1111-111111111111|3|||||false|false||||" +
-		"2026-07-18T12:00:00Z|/usr/bin/gh|11:/usr/bin/gh,3:api,4:user|/tmp/work|" +
+		"2026-07-18T12:00:00Z|11:/usr/bin/gh|11:/usr/bin/gh,3:api,4:user|9:/tmp/work|" +
 		"8:GH_TOKEN16:{{secret.token}}"
 	if got != want {
 		t.Fatalf("canonical policy = %q, want %q", got, want)
@@ -145,6 +145,25 @@ func TestCanonicalCredentialArgv_LengthPrefixIsInjective(t *testing.T) {
 	}
 	if got := canonicalCredentialArgv(nil); got != "" {
 		t.Fatalf("빈 argv canonical = %q, want \"\"", got)
+	}
+}
+
+// TestCanonicalCredentialPolicy_ExecPathsAreLengthPrefixed — POSIX 경로는 '|' 를
+// 담을 수 있다. 접두가 없으면 그런 경로가 뒤따르는 구분자를 삼켜 서로 다른 명령
+// 두 벌이 같은 바이트로 서명될 수 있다.
+func TestCanonicalCredentialPolicy_ExecPathsAreLengthPrefixed(t *testing.T) {
+	a := credSharedExecFixturePolicy()
+	a.ExecExecutable = "/usr/bin/gh|9:/tmp"
+	a.ExecArgv = []string{a.ExecExecutable}
+	a.ExecCwd = "/work"
+
+	b := credSharedExecFixturePolicy()
+	b.ExecExecutable = "/usr/bin/gh"
+	b.ExecArgv = []string{"/usr/bin/gh|9:/tmp"}
+	b.ExecCwd = "/tmp|/work"
+
+	if canonicalCredentialPolicy(a) == canonicalCredentialPolicy(b) {
+		t.Fatalf("'|' 를 담은 경로 두 벌이 같은 canonical 이 됐다: %q", canonicalCredentialPolicy(a))
 	}
 }
 
