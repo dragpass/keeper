@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -237,6 +238,41 @@ func TestCredentialExec_SignedCommandMismatchStartsNoProcess(t *testing.T) {
 			}
 			if _, err := os.Stat(marker); err == nil {
 				t.Fatalf("a process ran despite the %s mismatch", tc.name)
+			}
+		})
+	}
+}
+
+// TestCredentialExec_MismatchErrorIsStable — 명령 불일치 거부는 caller 가
+// "정책이 막았다" 와 "프로세스가 실패했다" 를 가르는 신호다. error_code 는
+// validation_error 이고 메시지는 항상 같은 문구로 끝난다 (credential_http_request
+// 의 "signed execution target" 대응물). 이 계약이 바뀌면 CLI 의 실패 분류가
+// 조용히 keeper_request_failed 로 떨어진다.
+func TestCredentialExec_MismatchErrorIsStable(t *testing.T) {
+	sh := credExecFixtureShell(t)
+	const wantSuffix = "does not match signed credential policy"
+
+	cases := map[string]func(*proto.CredentialExecRequest){
+		"executable": func(r *proto.CredentialExecRequest) { r.Policy.ExecExecutable = "/bin/cat" },
+		"args": func(r *proto.CredentialExecRequest) {
+			r.Policy.ExecArgv = append(append([]string{}, r.Policy.ExecArgv...), "--extra")
+		},
+		"cwd": func(r *proto.CredentialExecRequest) { r.Policy.ExecCwd = "/" },
+		"env_template": func(r *proto.CredentialExecRequest) {
+			r.Policy.EnvTemplate = map[string]string{"OTHER": "{{secret.token}}"}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, resp, _ := credExecRoundTrip(t, sh, []string{"-c", "true"}, t.TempDir(), mutate)
+			if resp.Success {
+				t.Fatalf("mismatched %s was accepted", name)
+			}
+			if resp.ErrorCode != string(errs.ErrCodeValidation) {
+				t.Fatalf("error_code = %q, want %q", resp.ErrorCode, errs.ErrCodeValidation)
+			}
+			if !strings.HasSuffix(resp.Error, wantSuffix) {
+				t.Fatalf("error = %q, want it to end with %q", resp.Error, wantSuffix)
 			}
 		})
 	}

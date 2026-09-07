@@ -96,20 +96,34 @@ func (r CredentialExecRequest) Validate() error {
 	// The command is only ever the one the server signed. Comparing here, before
 	// the payload is opened, means a mismatched request never reaches the
 	// decrypt — let alone the spawn.
+	//
+	// All four refusals carry the identical reason, so the whole class is one
+	// stable string for a caller to key on: error_code "validation_error" with a
+	// message ending in credentialExecMismatchReason. The field name says which
+	// half differed, for a human reading a log.
 	if r.Executable != r.Policy.ExecExecutable {
-		return newValidationError("executable", "does not match signed credential policy")
+		return newValidationError("executable", credentialExecMismatchReason)
 	}
 	if !CredentialExecArgvEqual(append([]string{r.Executable}, r.Args...), r.Policy.ExecArgv) {
-		return newValidationError("args", "do not match signed credential policy")
+		return newValidationError("args", credentialExecMismatchReason)
 	}
 	if r.Cwd != r.Policy.ExecCwd {
-		return newValidationError("cwd", "does not match signed credential policy")
+		return newValidationError("cwd", credentialExecMismatchReason)
 	}
 	if !CredentialTemplatesEqual(r.EnvTemplate, r.Policy.EnvTemplate) {
-		return newValidationError("env_template", "does not match signed credential policy")
+		return newValidationError("env_template", credentialExecMismatchReason)
 	}
 	return validateCredentialPolicyEnvelope(r.Policy)
 }
+
+// credentialExecMismatchReason is the one reason string every "the request is
+// not the command the server signed" refusal carries. It is part of the action's
+// contract, not just prose: a caller distinguishes "policy refused this" from
+// "the process failed" by error_code "validation_error" plus this suffix, the
+// same way credential_http_request's "request target does not match signed
+// execution target" is matched today. Do not reword it without updating
+// docs/protocol.md and the callers that classify it.
+const credentialExecMismatchReason = "does not match signed credential policy"
 
 // requireAbsoluteExecPath rejects an empty, relative, over-long, or NUL-bearing
 // path. Absolute means a leading "/" — the same rule the server applies, spelled
