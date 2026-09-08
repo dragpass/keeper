@@ -9,6 +9,10 @@
 // credential is assembled, used, and zeroized entirely inside the Keeper — it
 // appears zero times in the IPC response and the logs.
 //
+// Everything up to and including the open is credential_open.go's
+// openCredentialForSink, shared with the exec sink; what lives here is the HTTP
+// half of the policy check and the request itself.
+//
 // The nine in-Keeper safeguards:
 //  1. policy re-validation — target host exact-match against policy.allowed_hosts,
 //     method allowlist (hostAllowed / methodAllowed).
@@ -31,7 +35,6 @@ package handlers
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +43,6 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 const (
@@ -66,89 +68,67 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
 
-	// Decode the public material (IV / ciphertext / AAD / optional body).
-	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
-	if !ok {
-		return resp
-	}
-	ciphertext, resp, ok := decodeBase64(req.CiphertextB64, "ciphertext_b64")
-	if !ok {
-		return resp
-	}
-	aad, resp, ok := decodeBase64(req.AADB64, "aad_b64")
-	if !ok {
-		return resp
-	}
-	if ok, resp := verifyCredentialPolicy(d, aad, req.Policy); !ok {
-		return resp
-	}
-	if !executionTargetMatches(req.TargetURL, req.Method, req.Policy) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "request target does not match signed execution target")
-	}
-
-	// The signed policy is trusted only after verification above.
-	if !hostAllowed(host, req.Policy.AllowedHosts) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "target host is not in policy.allowed_hosts")
-	}
-	if !methodAllowed(req.Method, req.Policy.AllowedMethods) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "method is not in policy.allowed_methods")
-	}
-	if !pathAllowed(req.TargetURL, req.Policy.AllowedPathPatterns) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "target path is not in policy.allowed_path_patterns")
-	}
-	if !requestShapeAllowed(req.TargetURL, req.BodyB64 != "", req.Policy.AllowQuery, req.Policy.AllowBody) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "query or body is not allowed by credential policy")
-	}
-	if !headerTemplatesEqual(req.HeaderTemplate, req.Policy.HeaderTemplate) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "header_template does not match signed credential policy")
-	}
-	if !queryTemplatesEqual(req.QueryTemplate, req.Policy.QueryTemplate) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "query_template does not match signed credential policy")
-	}
+	// Safeguard 1: everything the signed policy pins about *this* request. It
+	// runs inside the prelude — after the signature is verified, before the
+	// payload is opened — which is the slot the exec sink's command check
+	// occupies too. body is decoded here rather than earlier so it keeps its
+	// place in that order.
 	var body []byte
-	if req.BodyB64 != "" {
-		body, resp, ok = decodeBase64(req.BodyB64, "body_b64")
-		if !ok {
-			return resp
+	matchPolicy := func() (bool, proto.BaseResponse) {
+		if !executionTargetMatches(req.TargetURL, req.Method, req.Policy) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation,
+				"request target does not match signed execution target")
 		}
+		if !hostAllowed(host, req.Policy.AllowedHosts) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "target host is not in policy.allowed_hosts")
+		}
+		if !methodAllowed(req.Method, req.Policy.AllowedMethods) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "method is not in policy.allowed_methods")
+		}
+		if !pathAllowed(req.TargetURL, req.Policy.AllowedPathPatterns) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "target path is not in policy.allowed_path_patterns")
+		}
+		if !requestShapeAllowed(req.TargetURL, req.BodyB64 != "", req.Policy.AllowQuery, req.Policy.AllowBody) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "query or body is not allowed by credential policy")
+		}
+		if !headerTemplatesEqual(req.HeaderTemplate, req.Policy.HeaderTemplate) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "header_template does not match signed credential policy")
+		}
+		if !queryTemplatesEqual(req.QueryTemplate, req.Policy.QueryTemplate) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "query_template does not match signed credential policy")
+		}
+		if req.BodyB64 != "" {
+			decoded, resp, ok := decodeBase64(req.BodyB64, "body_b64")
+			if !ok {
+				return false, resp
+			}
+			body = decoded
+		}
+		return true, proto.BaseResponse{}
 	}
 
-	// Safeguard 8 (part): decrypt inside the session lock, keep the plaintext in
-	// a local slice, and zeroize it on return. AAD mismatch (a swapped sealed
-	// payload) fails the open here.
-	var payload []byte
-	var decErr error
-	useErr := withCredentialDEK(d, credentialKeySource{
-		groupHandle:         req.GroupHandle,
-		encryptedDEKB64:     req.EncryptedDEKB64,
-		useLocalPersonalDEK: req.UseLocalPersonalDEK,
-	}, func(dek []byte) error {
-		pt, err := AESGCMOpenWithAAD(dek, iv, ciphertext, aad)
-		if err != nil {
-			decErr = err
-			return nil
-		}
-		payload = pt
-		return nil
-	})
-	if useErr != nil {
-		return sessionUseError(useErr, "credential http request")
-	}
-	if decErr != nil {
-		// Generic message — never echo the decrypt error detail.
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "sealed payload decrypt failed")
-	}
-	defer secure.Zeroize(payload)
-
-	var cred sealedCredential
-	if err := json.Unmarshal(payload, &cred); err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "sealed payload is not a valid credential")
+	// Safeguard 8 (part): the prelude decrypts inside the session lock and hands
+	// back the zeroizer for the plaintext.
+	secret, cleanup, resp, ok := openCredentialForSink(d, credentialRequestCommon{
+		keySource: credentialKeySource{
+			groupHandle:         req.GroupHandle,
+			encryptedDEKB64:     req.EncryptedDEKB64,
+			useLocalPersonalDEK: req.UseLocalPersonalDEK,
+		},
+		ivB64:         req.IVB64,
+		ciphertextB64: req.CiphertextB64,
+		aadB64:        req.AADB64,
+		policy:        req.Policy,
+		action:        "credential http request",
+	}, matchPolicy)
+	defer cleanup()
+	if !ok {
+		return resp
 	}
 
 	// Assemble outbound headers from the {{secret.<key>}} placeholders.
-	headers, injected, err := substituteSecretHeaders(req.HeaderTemplate, cred.Secret)
+	headers, injected, err := substituteSecretHeaders(req.HeaderTemplate, secret)
 	if err != nil {
-		wipeSecretStrings(cred.Secret)
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
 
@@ -158,9 +138,8 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	// credential in the clear, so it must never reach a log line, an error
 	// string, or any returned field; injectSecretQuery adds the rendered values
 	// to injected so redaction covers a query secret echoed back.
-	targetURL, injected, err := injectSecretQuery(req.TargetURL, req.QueryTemplate, cred.Secret, injected)
+	targetURL, injected, err := injectSecretQuery(req.TargetURL, req.QueryTemplate, secret, injected)
 	if err != nil {
-		wipeSecretStrings(cred.Secret)
 		wipeSecretStrings(headers)
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
@@ -168,11 +147,10 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 	data, reqErr := doCredentialRequest(req.Method, targetURL, headers, body, injected,
 		defaultCredentialTimeout, defaultMaxRespBytes)
 
-	// Safeguard 8 (part): drop references to the assembled secret strings and the
-	// parsed secret map now that the request is done. (Go strings are immutable,
-	// so this is a best-effort reference drop; the decrypted payload buffer above
-	// is the byte slice that gets truly zeroized.)
-	wipeSecretStrings(cred.Secret)
+	// Safeguard 8 (part): drop references to the assembled secret strings now
+	// that the request is done. (Go strings are immutable, so this is a
+	// best-effort reference drop; the decrypted payload buffer cleanup zeroizes
+	// is the byte slice that gets truly wiped.)
 	wipeSecretStrings(headers)
 
 	if reqErr != nil {

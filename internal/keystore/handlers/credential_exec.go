@@ -5,8 +5,9 @@
 // credential_http.go exactly — open the sealed payload under the key behind the
 // handle, verify the server-signed policy, substitute {{secret.<key>}}
 // placeholders, use the credential, redact and return — and every step it shares
-// with the HTTP sink runs the same code, because two copies of a security sink
-// are two things to keep in step and one of them always falls behind.
+// with the HTTP sink runs the same code (credential_open.go's
+// openCredentialForSink), because two copies of a security sink are two things
+// to keep in step and one of them always falls behind.
 //
 // What is genuinely different is what the signature binds. An HTTP policy pins a
 // network target: allowed_hosts exact-match is what keeps the credential from
@@ -44,12 +45,10 @@ package handlers
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"os"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // HandleCredentialExecRequest opens the sealed credential, injects it into the
@@ -70,76 +69,53 @@ func HandleCredentialExecRequest(d Deps, req proto.CredentialExecRequest) proto.
 		return errs.Response(err)
 	}
 
-	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
-	if !ok {
-		return resp
-	}
-	ciphertext, resp, ok := decodeBase64(req.CiphertextB64, "ciphertext_b64")
-	if !ok {
-		return resp
-	}
-	aad, resp, ok := decodeBase64(req.AADB64, "aad_b64")
-	if !ok {
-		return resp
-	}
-	if ok, resp := verifyCredentialPolicy(d, aad, req.Policy); !ok {
-		return resp
-	}
-
-	// Safeguard 1: re-check the command against the now-verified policy. Validate
-	// compared the same fields, but it did so against a policy no one had checked
-	// the signature of yet. This is the comparison that means "the command is the
-	// one a human approved", and it stands between here and the spawn.
-	if !execCommandMatchesPolicy(req) {
-		return errs.CodeResponse(errs.ErrCodeValidation,
-			"request command does not match signed credential policy")
-	}
-	if !envTemplatesEqual(req.EnvTemplate, req.Policy.EnvTemplate) {
-		return errs.CodeResponse(errs.ErrCodeValidation,
-			"env_template does not match signed credential policy")
-	}
-	// The Keeper's own working directory is whatever Chrome or the MCP process
-	// left behind, so cwd is required — and it has to be a directory that exists,
-	// or the spawn fails with a message that says nothing useful.
-	if info, err := os.Stat(req.Cwd); err != nil || !info.IsDir() {
-		return errs.CodeResponse(errs.ErrCodeValidation, "cwd is not an existing directory")
-	}
-
-	// Safeguard 8 (part): decrypt inside the session lock, keep the plaintext in
-	// a local slice, and zeroize it on return. AAD mismatch (a swapped sealed
-	// payload) fails the open here.
-	var payload []byte
-	var decErr error
-	useErr := withCredentialDEK(d, credentialKeySource{
-		groupHandle:         req.GroupHandle,
-		encryptedDEKB64:     req.EncryptedDEKB64,
-		useLocalPersonalDEK: req.UseLocalPersonalDEK,
-	}, func(dek []byte) error {
-		pt, err := AESGCMOpenWithAAD(dek, iv, ciphertext, aad)
-		if err != nil {
-			decErr = err
-			return nil
+	// Safeguard 1: re-check the command against the now-verified policy. It runs
+	// inside the prelude, in the slot the HTTP sink's target check occupies:
+	// after the signature is verified, so the comparison is against a policy
+	// someone has checked, and before the payload is opened, so a command that
+	// is not the approved one never reaches the plaintext. Validate compared the
+	// same fields, but it did so against a policy no one had checked the
+	// signature of yet.
+	matchPolicy := func() (bool, proto.BaseResponse) {
+		if !execCommandMatchesPolicy(req) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation,
+				"request command does not match signed credential policy")
 		}
-		payload = pt
-		return nil
-	})
-	if useErr != nil {
-		return sessionUseError(useErr, "credential exec request")
-	}
-	if decErr != nil {
-		// Generic message — never echo the decrypt error detail.
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "sealed payload decrypt failed")
-	}
-	defer secure.Zeroize(payload)
-
-	var cred sealedCredential
-	if err := json.Unmarshal(payload, &cred); err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "sealed payload is not a valid credential")
+		if !envTemplatesEqual(req.EnvTemplate, req.Policy.EnvTemplate) {
+			return false, errs.CodeResponse(errs.ErrCodeValidation,
+				"env_template does not match signed credential policy")
+		}
+		// The Keeper's own working directory is whatever Chrome or the MCP
+		// process left behind, so cwd is required — and it has to be a directory
+		// that exists, or the spawn fails with a message that says nothing
+		// useful.
+		if info, err := os.Stat(req.Cwd); err != nil || !info.IsDir() {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, "cwd is not an existing directory")
+		}
+		return true, proto.BaseResponse{}
 	}
 
-	variables, injected, err := substituteSecretEnv(req.EnvTemplate, cred.Secret)
+	// Safeguard 8 (part): the prelude decrypts inside the session lock and hands
+	// back the zeroizer for the plaintext.
+	secret, cleanup, resp, ok := openCredentialForSink(d, credentialRequestCommon{
+		keySource: credentialKeySource{
+			groupHandle:         req.GroupHandle,
+			encryptedDEKB64:     req.EncryptedDEKB64,
+			useLocalPersonalDEK: req.UseLocalPersonalDEK,
+		},
+		ivB64:         req.IVB64,
+		ciphertextB64: req.CiphertextB64,
+		aadB64:        req.AADB64,
+		policy:        req.Policy,
+		action:        "credential exec request",
+	}, matchPolicy)
+	defer cleanup()
+	if !ok {
+		return resp
+	}
+
+	variables, injected, err := substituteSecretEnv(req.EnvTemplate, secret)
 	if err != nil {
-		wipeSecretStrings(cred.Secret)
 		return errs.CodeResponse(errs.ErrCodeValidation, err.Error())
 	}
 
@@ -149,12 +125,11 @@ func HandleCredentialExecRequest(d Deps, req proto.CredentialExecRequest) proto.
 	result, runErr := runCredentialExec(req.Executable, req.Args, req.Cwd, env,
 		defaultCredentialExecTimeout, defaultCredentialExecMaxStream)
 
-	// Safeguard 8 (part): drop references to the assembled values and the parsed
-	// secret map now that the child has them. (Go strings are immutable, so this
-	// is a best-effort reference drop; the decrypted payload buffer above is the
-	// byte slice that gets truly zeroized. env itself is a slice of "NAME=value"
-	// strings with the same limit.)
-	wipeSecretStrings(cred.Secret)
+	// Safeguard 8 (part): drop references to the assembled values now that the
+	// child has them. (Go strings are immutable, so this is a best-effort
+	// reference drop; the decrypted payload buffer cleanup zeroizes is the byte
+	// slice that gets truly wiped. env itself is a slice of "NAME=value" strings
+	// with the same limit.)
 	wipeSecretStrings(variables)
 	for i := range env {
 		env[i] = ""
