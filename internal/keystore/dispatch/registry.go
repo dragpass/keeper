@@ -47,6 +47,7 @@ var actionFragments = []actionFragment{
 	serverKeyActions,
 	groupActions,
 	credentialActions,
+	messageActions,
 	archiveActions,
 	archiveQuorumActions,
 }

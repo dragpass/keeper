@@ -24,6 +24,7 @@ func (a *App) HandlersDeps() handlers.Deps {
 		RecoverySessions:    a.RecoverySessions,
 		RecoveryKeySessions: a.RecoveryKeySessions,
 		Clipboard:           a.Clipboard,
+		MessageChallenges:   a.MessageChallenges,
 	}
 }
 
