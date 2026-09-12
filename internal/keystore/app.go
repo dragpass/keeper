@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
+	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -74,6 +75,9 @@ type Deps struct {
 	// actions write plaintext into. Defaults to the OS clipboard backend
 	// if nil. On Init failure, Write fails explicitly.
 	Clipboard clipboard.Clipboard
+	// MessageChallenges holds the process-local secure-message display
+	// challenges. Lives and dies with the process; never persisted.
+	MessageChallenges *handlers.MessageChallengeStore
 }
 
 // App is the single wiring container for the Keeper process. Handlers
@@ -88,6 +92,7 @@ type App struct {
 	RecoverySessions    *sessions.RecoverySessionStore
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	Clipboard           clipboard.Clipboard
+	MessageChallenges   *handlers.MessageChallengeStore
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
@@ -114,6 +119,7 @@ func NewApp(deps Deps) *App {
 		RecoverySessions:    deps.RecoverySessions,
 		RecoveryKeySessions: deps.RecoveryKeySessions,
 		Clipboard:           deps.Clipboard,
+		MessageChallenges:   deps.MessageChallenges,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}
@@ -140,6 +146,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.RecoveryKeySessions == nil {
 		app.RecoveryKeySessions = sessions.NewRecoveryKeySessionStore(sessions.RecoveryKeySessionTTL)
+	}
+	if app.MessageChallenges == nil {
+		app.MessageChallenges = handlers.NewMessageChallengeStore()
 	}
 	if app.Clipboard == nil {
 		if testing.Testing() {

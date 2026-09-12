@@ -39,6 +39,12 @@ type Deps struct {
 	// fills in the OS clipboard backend; unit tests inject an isolated
 	// MemoryClipboard instance.
 	Clipboard clipboard.Clipboard
+	// MessageChallenges is the process-local challenge map behind the two-step
+	// secure-message reveal (message_display_prepare →
+	// group_decrypt_with_aad_for_app_display). Injected like the session stores
+	// so App owns its lifetime and parallel tests do not share entries. A nil
+	// store fails closed: no challenge can be minted and none can be consumed.
+	MessageChallenges *MessageChallengeStore
 }
 
 func (d Deps) Now() time.Time {
