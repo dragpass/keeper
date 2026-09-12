@@ -39,11 +39,22 @@ import (
 // legitimately carry raw secret material across IPC. Each entry needs an
 // English rationale. Keep this list as small as possible.
 //
-// This map is intentionally empty: no Keeper action returns raw secret key
-// material over IPC. The last carve-out (unwrapgroupdek's group_dek_b64) was
-// removed together with the unwrapgroupdek / group_session_open_with_raw
-// actions — all group crypto is now handle-based.
-var rawSecretResponseCarveOuts = map[string]string{}
+// The list was empty from 0.0.11 — when unwrapgroupdek's group_dek_b64 went
+// away with the action itself — until the Secure Message Overlay reopened it
+// with exactly one entry. No raw *key* material is in here and none ever
+// should be: the one exception is a decrypted message the user asked to read,
+// on its way to the DragPass app's own screen.
+//
+// The scope of that exception, the exposure it accepts, and the invariants it
+// must not widen are approved in dragpass-control-plane
+// docs/security/secure-message-overlay-proposed-boundary.md (§4 invariant 3
+// names this CI change explicitly). Anything beyond this single response type
+// needs that approval re-taken at the wider scope — including reusing the
+// action for a ciphertext that is not an AAD-bound message, which the fixed
+// message AAD is what prevents.
+var rawSecretResponseCarveOuts = map[string]string{
+	"GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64": "app-display carve-out: the decrypted secure message is the action's entire output, returned only under a server-signed display permit bound to a one-shot Keeper challenge and opened under a Keeper-built message AAD. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/security/secure-message-overlay-proposed-boundary.md.",
+}
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
 // raw secret input is a structurally unavoidable part of the action's contract.
