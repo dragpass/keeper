@@ -37,10 +37,12 @@ const (
 	// ChatErrorCodeInvalidInput — malformed syntax, wrong size, unknown or
 	// duplicate or missing field, oversize request, or a batch over the cap.
 	ChatErrorCodeInvalidInput = "CHAT_INVALID_INPUT"
-	// ChatErrorCodeDisplayNotAuthorized — permit signature, binding, window, or
+	// ChatErrorCodePermitNotAuthorized — permit signature, binding, window, or
 	// group-handle failure. One code for all of them: which check refused is not
-	// something an unauthorized caller gets to learn.
-	ChatErrorCodeDisplayNotAuthorized = "CHAT_DISPLAY_NOT_AUTHORIZED"
+	// something an unauthorized caller gets to learn. The name follows the
+	// contract (§3 / §8), which fixes the Keeper-side permit-failure code as
+	// CHAT_PERMIT_NOT_AUTHORIZED.
+	ChatErrorCodePermitNotAuthorized = "CHAT_PERMIT_NOT_AUTHORIZED"
 	// ChatErrorCodeDecryptFailed — a GCM tag / UTF-8 / AAD failure on any
 	// message in the batch. The whole batch is refused with no partial output.
 	ChatErrorCodeDecryptFailed = "CHAT_DECRYPT_FAILED"

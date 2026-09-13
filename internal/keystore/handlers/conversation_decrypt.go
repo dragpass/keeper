@@ -203,7 +203,7 @@ func chatNotAuthorized(d Deps, stage string) proto.BaseResponse {
 	// The stage name is a fixed token, logged for operators. The response says
 	// only that authorization failed.
 	d.Logger.Printf("conversation decrypt not authorized (%s check)", stage)
-	return chatFailure(proto.ChatErrorCodeDisplayNotAuthorized, "conversation display is not authorized")
+	return chatFailure(proto.ChatErrorCodePermitNotAuthorized, "conversation permit is not authorized")
 }
 
 func chatDecryptFailed(d Deps) proto.BaseResponse {

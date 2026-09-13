@@ -242,7 +242,7 @@ func TestConversationDecrypt_BindingMismatch_NotAuthorized(t *testing.T) {
 			f := newChatFixture(t)
 			req := f.authorized(t) // permit signed for the original values
 			tc.apply(&req)         // now the request disagrees with the permit
-			assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+			assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 		})
 	}
 }
@@ -261,7 +261,7 @@ func TestConversationDecrypt_TamperedSignature_NotAuthorized(t *testing.T) {
 	}
 	sig[0] ^= 0xff
 	req.Permit.Signature = base64.StdEncoding.EncodeToString(sig)
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 func TestConversationDecrypt_UnknownKeyVersion_FailsClosed(t *testing.T) {
@@ -270,7 +270,7 @@ func TestConversationDecrypt_UnknownKeyVersion_FailsClosed(t *testing.T) {
 	permit := f.unsignedPermit(req)
 	permit.ServerKeyVersion = msgServerKeyVersion + 1 // not pinned by the verifier double
 	req.Permit = f.sign(t, permit)                    // canonical includes version 2, so the signature is well-formed
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ func TestConversationDecrypt_IssuedAtTooFarFuture_NotAuthorized(t *testing.T) {
 	permit.IssuedAt = chatNowUnix + 10 // skew allows only +5
 	permit.ExpiresAt = permit.IssuedAt + proto.ChatReadPermitTTLSeconds
 	req.Permit = f.sign(t, permit)
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 func TestConversationDecrypt_WindowNot300_NotAuthorized(t *testing.T) {
@@ -293,14 +293,14 @@ func TestConversationDecrypt_WindowNot300_NotAuthorized(t *testing.T) {
 	permit := f.unsignedPermit(req)
 	permit.ExpiresAt = permit.IssuedAt + 299 // not exactly 300
 	req.Permit = f.sign(t, permit)
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 func TestConversationDecrypt_Expired_NotAuthorized(t *testing.T) {
 	f := newChatFixture(t)
 	req := f.authorized(t)
 	f.clock.advance(proto.ChatReadPermitTTLSeconds + 1) // now >= expires_at
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ func TestConversationDecrypt_ClosedHandle_NotAuthorized(t *testing.T) {
 	f := newChatFixture(t)
 	req := f.authorized(t)
 	f.deps.GroupSessions.Close(f.handle)
-	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodeDisplayNotAuthorized)
+	assertChatFailure(t, f.display(t, req), proto.ChatErrorCodePermitNotAuthorized)
 }
 
 // ────────────────────────────────────────────────────────────────────────
