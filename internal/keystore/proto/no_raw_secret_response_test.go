@@ -54,6 +54,17 @@ import (
 // message AAD is what prevents.
 var rawSecretResponseCarveOuts = map[string]string{
 	"GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64": "app-display carve-out: the decrypted secure message is the action's entire output, returned only under a server-signed display permit bound to a one-shot Keeper challenge and opened under a Keeper-built message AAD. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/security/secure-message-overlay-proposed-boundary.md.",
+	// Second carve-out (0.0.30): the DragPass 1:1 chat reveal. The []string
+	// covers the slice element type too — each entry is a decrypted chat
+	// message, the action's entire output, returned only under a server-signed
+	// conversation-read-permit and opened under a Keeper-built chat AAD
+	// (dragpass.chat|1|<org>|<conversation>|<dek_version>). Any tag/UTF-8/AAD
+	// failure refuses the whole batch with no partial plaintext. Zeroized after
+	// encoding, never logged; clipboard actions still return no plaintext. This
+	// widens the browser-display carve-out to conversation volume; approved in
+	// dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md
+	// §5 and docs/security/threat-model.md §4.10 (control-plane).
+	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30): decrypted 1:1 chat messages are the action's entire output, returned only under a server-signed conversation-read-permit and opened under a Keeper-built chat AAD. []string element type is covered here too. Any tag/UTF-8/AAD failure refuses the whole batch with no partial plaintext. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and docs/security/threat-model.md §4.10.",
 }
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
