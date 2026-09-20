@@ -57,6 +57,12 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 		return response
 	}
 
+	// Before the recovery session opens and long before the Keychain is
+	// written, so a refused date costs nothing but the call.
+	if rotatedAtTooFarAhead(d, req.RotatedAt) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
+	}
+
 	enteredKey, response := recoveryKeyHandleBuffer(d, req.EnteredKeyHandle)
 	if !response.Success {
 		return response

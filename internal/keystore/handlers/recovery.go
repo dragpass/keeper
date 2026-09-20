@@ -85,6 +85,13 @@ func HandleGenerateKeypairWithRecoveryWrap(d Deps, req proto.GenerateKeypairWith
 		return resp
 	}
 
+	// Checked here, before the statement is built and before the new keypair
+	// reaches the Keychain, so a refused date leaves the account exactly as it
+	// was rather than rotated with a statement nobody will accept.
+	if rotatedAtTooFarAhead(d, req.RotatedAt) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
+	}
+
 	// decode wrap_key (AES-GCM 32B raw)
 	wrapKey, resp, ok := decodeBase64Len(req.WrapKeyB64, 32, "wrap_key")
 	if !ok {

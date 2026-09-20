@@ -44,11 +44,7 @@ func HandleRotateUserKeypairPrepare(d Deps, req proto.RotateUserKeypairPrepareRe
 		return resp
 	}
 
-	// A statement dated far in the future would be signed now and only start
-	// looking valid later, so the date is held to this clock. Backdating is
-	// not refused: the server records its own receipt time separately, and a
-	// device with a slow clock should still be able to rotate.
-	if req.RotatedAt > d.Now().Unix()+proto.KeyRotationPrepareMaxFutureSeconds {
+	if rotatedAtTooFarAhead(d, req.RotatedAt) {
 		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
 	}
 

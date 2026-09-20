@@ -196,3 +196,52 @@ func TestSignData_Base64Roundtrip(t *testing.T) {
 		t.Errorf("signature verification after base64 roundtrip failed: %v", err)
 	}
 }
+
+// TestPublicKeyToPEM_MatchesGeneratedEncoding names the invariant the account
+// key fingerprint rests on.
+//
+// The fingerprint is sha256 over PEM bytes with no normalization anywhere, so
+// two paths that produce "the public key of this keypair" have to produce
+// byte-identical PEM. They do not obviously have to: GenerateRSAKeyPair
+// encodes the public half while it still holds the private key, and the
+// recovery flow re-derives it later from a parsed private key through
+// PublicKeyToPEM. If those ever diverged — a different PEM line width, a
+// missing trailing newline — a recovery statement would carry a fingerprint no
+// peer could reproduce, and nothing would fail loudly. It would simply stop
+// matching.
+func TestPublicKeyToPEM_MatchesGeneratedEncoding(t *testing.T) {
+	pair, err := GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRSAKeyPair: %v", err)
+	}
+	priv, err := ParsePrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatalf("ParsePrivateKey: %v", err)
+	}
+
+	derived, err := PublicKeyToPEM(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("PublicKeyToPEM: %v", err)
+	}
+	if derived != pair.PublicKey {
+		t.Fatalf("re-derived public key PEM differs from the generated one:\n got %q\nwant %q",
+			derived, pair.PublicKey)
+	}
+	if AccountKeyFingerprint([]byte(derived)) != AccountKeyFingerprint([]byte(pair.PublicKey)) {
+		t.Fatal("the two encodings hash to different account key fingerprints")
+	}
+
+	// Round-tripping the parsed public key must not drift either.
+	parsed, err := ParsePublicKey(pair.PublicKey)
+	if err != nil {
+		t.Fatalf("ParsePublicKey: %v", err)
+	}
+	reencoded, err := PublicKeyToPEM(parsed)
+	if err != nil {
+		t.Fatalf("PublicKeyToPEM (parsed): %v", err)
+	}
+	if reencoded != pair.PublicKey {
+		t.Fatalf("parse then re-encode changed the PEM bytes:\n got %q\nwant %q",
+			reencoded, pair.PublicKey)
+	}
+}

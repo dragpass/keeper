@@ -25,6 +25,20 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
+// rotatedAtTooFarAhead reports whether a caller dated a statement further
+// ahead of this Keeper's clock than the contract allows.
+//
+// A statement signed now but dated well into the future would only start
+// looking valid later, which is a small window for replaying one. Backdating
+// is not refused: the server records its own receipt time separately, and a
+// device with a slow clock still has to be able to rotate and recover.
+//
+// All three producers check it at the same point, right after the server
+// signature verifies and before anything is built or written.
+func rotatedAtTooFarAhead(d Deps, rotatedAt int64) bool {
+	return rotatedAt > d.Now().Unix()+proto.KeyRotationPrepareMaxFutureSeconds
+}
+
 // rotationStatementInput is everything a statement needs. The two signers are
 // closures so the caller keeps its private key material wherever it already
 // lives — this file never sees a PEM of a private key.
