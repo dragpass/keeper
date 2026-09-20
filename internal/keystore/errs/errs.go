@@ -46,6 +46,24 @@ const (
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"
+
+	// ErrCodePeerKeyChanged: a wrap named a peer account whose public key no
+	// longer matches the pinned fingerprint, and no valid rotation chain
+	// explains the change (account key trust v1, D3 `changed`). Nothing was
+	// wrapped and the pin was left as it was. The Extension stops the whole
+	// flow — invite, rotation, backfill, DM — rather than continuing with the
+	// remaining members, and surfaces the two fingerprints for a human to
+	// compare. There is no retry and no bypass: the user either confirms the
+	// new key through peer_key_pin_verify or forgets the peer.
+	ErrCodePeerKeyChanged ErrorCode = "peer_key_changed"
+
+	// ErrCodePeerKeyUnverified: strict mode is on and the peer's pin is
+	// `tofu` or `rotated` rather than `verified`. A policy refusal, not a
+	// detected substitution, so the Extension asks the user to complete the
+	// out-of-band check. Reserved by this release for the strict-mode toggle,
+	// which ships separately; the code is in the enum so both sides can be
+	// written against one stable spelling.
+	ErrCodePeerKeyUnverified ErrorCode = "peer_key_unverified"
 )
 
 // CodeForError inspects an error and returns the matching coarse code.
