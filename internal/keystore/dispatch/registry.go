@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -36,6 +37,21 @@ func wrap[T any](handler func(handlers.Deps, T) proto.BaseResponse) actionHandle
 	}
 }
 
+// wrapCapped is wrap plus a ceiling on the raw payload, checked before the
+// decode. Used where the caller controls a list inside the request — the wrap
+// actions take up to 64 recipients, each able to carry a rotation chain — and
+// the refusal has to land before anything is unwrapped rather than after.
+func wrapCapped[T any](maxBytes int, handler func(handlers.Deps, T) proto.BaseResponse) actionHandlerFunc {
+	return func(d handlers.Deps, payload json.RawMessage) proto.BaseResponse {
+		if len(payload) > maxBytes {
+			return errs.CodeResponse(errs.ErrCodeValidation, "payload exceeds the maximum request size")
+		}
+		return process(payload, func(req T) proto.BaseResponse {
+			return handler(d, req)
+		})
+	}
+}
+
 // actionFragment returns one domain's slice of the action→handler map.
 type actionFragment func() map[string]actionHandlerFunc
 
@@ -46,6 +62,7 @@ var actionFragments = []actionFragment{
 	identityActions,
 	serverKeyActions,
 	groupActions,
+	peerKeyActions,
 	credentialActions,
 	messageActions,
 	conversationActions,
