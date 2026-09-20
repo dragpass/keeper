@@ -77,6 +77,9 @@ func TestRecoverySign_Validate_RejectsShortHandle(t *testing.T) {
 
 func TestGenerateKeypairWithRecoveryWrap_Validate_RejectsNon32BWrapKey(t *testing.T) {
 	r := GenerateKeypairWithRecoveryWrapRequest{
+		AccountID:      "11111111-1111-4111-8111-111111111111",
+		RotatedAt:      1758240000,
+		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		ChallengeToken: "ct",
 		Signature:      "sig",
 		WrapKeyB64:     "AAAAAAAAAAAAAAAAAAAAAg==", // 16B

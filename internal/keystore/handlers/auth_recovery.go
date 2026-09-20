@@ -57,6 +57,12 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 		return response
 	}
 
+	// Before the recovery session opens and long before the Keychain is
+	// written, so a refused date costs nothing but the call.
+	if rotatedAtTooFarAhead(d, req.RotatedAt) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
+	}
+
 	enteredKey, response := recoveryKeyHandleBuffer(d, req.EnteredKeyHandle)
 	if !response.Success {
 		return response
@@ -98,7 +104,13 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 	newWrapKeyBuffer := memguard.NewBufferFromBytes(newWrapKey)
 	defer newWrapKeyBuffer.Destroy()
 
-	keypairResponse := generateKeypairWithRecoveryWrapKey(d, newWrapKeyBuffer)
+	keypairResponse := generateKeypairWithRecoveryWrapKey(d, newWrapKeyBuffer, recoveryStatementInput{
+		accountID: req.AccountID,
+		rotatedAt: req.RotatedAt,
+		// The handle this composite opened a few lines up. The request
+		// surface never carries one, so there is nothing to substitute.
+		recoveryHandle: openData.RecoveryHandle,
+	})
 	if !keypairResponse.Success {
 		return keypairResponse
 	}
@@ -114,6 +126,7 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 		NewRecoveryAuthSeed:   newAuthSeed,
 		NewWrappedKeeper:      keypairData.WrappedKeeper,
 		NewRecoveryKeyVersion: recoverykey.Version,
+		RotationStatement:     keypairData.RotationStatement,
 	}}
 }
 

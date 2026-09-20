@@ -75,6 +75,9 @@ func TestHandleRotateUserKeypairStatus_HasPending(t *testing.T) {
 	oldPub, _ := seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-status-001",
 		ServerSignature: "any",
 	})
@@ -105,6 +108,9 @@ func TestHandleRotateUserKeypairAbort_WithPending(t *testing.T) {
 	seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-abort-001",
 		ServerSignature: "any",
 	})

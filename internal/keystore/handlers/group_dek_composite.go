@@ -69,6 +69,12 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 
 // HandleDEKRewrapForMember unwraps my wrapped Group DEK with the Keychain
 // private key and rewraps it with the other party's public key.
+//
+// When the request names the peer's account, the peer key pin is checked first
+// and a key that changed without a valid rotation chain closes the action with
+// peer_key_changed before anything is unwrapped. The server chose the public
+// key in this request; the pin is the only thing on this device that remembers
+// which key it chose last time.
 func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto.BaseResponse {
 	d.Logger.Println("dek rewrap for member request processing...")
 
@@ -86,6 +92,23 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 	if err != nil {
 		d.Logger.Printf("dek rewrap for member error: failed to decode wrapped_for_me_b64: %v", err)
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_for_me_b64: "+err.Error())
+	}
+
+	// The fingerprint is taken over the PEM exactly as it arrived, not over a
+	// re-serialization of the parsed key: the Extension and the server hash
+	// the same bytes, and re-encoding here would quietly break the match.
+	pinStates, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, []peerKeyPinCheck{{
+		accountID:  req.OtherAccountID,
+		observed:   crypto.AccountKeyFingerprint([]byte(req.OtherPublicKey)),
+		statements: req.RotationStatements,
+	}})
+	if !ok {
+		return pinResp
+	}
+	pinEnforced := req.OtherAccountID != ""
+	pinState := ""
+	if pinEnforced {
+		pinState = pinStates[0]
 	}
 
 	privKeyBuf, err := getPrivateKeySecure(d.Store)
@@ -119,9 +142,11 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 	}
 
 	newEncryptedB64 := base64.StdEncoding.EncodeToString(newEncrypted)
-	d.Logger.Println("dek rewrap for member successful (raw group dek never left Keeper)")
+	d.Logger.Printf("dek rewrap for member successful (raw group dek never left Keeper, pin_enforced=%t)", pinEnforced)
 	return proto.BaseResponse{Success: true, Data: proto.DEKRewrapForMemberResponseData{
 		EncryptedForOtherB64: newEncryptedB64,
+		PinEnforced:          pinEnforced,
+		PinState:             pinState,
 	}}
 }
 
@@ -138,16 +163,41 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		return errs.Response(err)
 	}
 
+	// Both request shapes are read as one list. A legacy entry simply carries
+	// no account id, which is how it ends up exempt.
+	recipients := req.RecipientList()
+
 	// Parse every recipient public key up front so a bad key fails before we
 	// unwrap the raw Group DEK.
-	recipientKeys := make([]*rsa.PublicKey, len(req.RecipientPublicKeys))
-	for i, pem := range req.RecipientPublicKeys {
-		pub, err := crypto.ParsePublicKey(pem)
+	recipientKeys := make([]*rsa.PublicKey, len(recipients))
+	checks := make([]peerKeyPinCheck, len(recipients))
+	pinEnforced := false
+	for i, recipient := range recipients {
+		pub, err := crypto.ParsePublicKey(recipient.PublicKey)
 		if err != nil {
 			d.Logger.Printf("dek unwrap and rewrap for many error: failed to parse recipient public key [%d]: %v", i, err)
 			return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
 		}
 		recipientKeys[i] = pub
+		checks[i] = peerKeyPinCheck{
+			accountID:  recipient.AccountID,
+			observed:   crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
+			statements: recipient.RotationStatements,
+		}
+		if recipient.AccountID != "" {
+			pinEnforced = true
+		}
+	}
+
+	// Every recipient is judged before the first wrap. This is the call that
+	// rotation uses, and a rotation that wrapped the first ten members and
+	// then refused the eleventh would leave the org holding two DEKs.
+	pinStates, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, checks)
+	if !ok {
+		return pinResp
+	}
+	if !pinEnforced {
+		pinStates = nil
 	}
 
 	encrypted, err := base64.StdEncoding.DecodeString(req.WrappedForMeB64)
@@ -190,8 +240,13 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		wraps[i] = base64.StdEncoding.EncodeToString(newEncrypted)
 	}
 
-	d.Logger.Printf("dek unwrap and rewrap for many successful (%d recipients, raw group dek never left Keeper)", len(wraps))
+	d.Logger.Printf(
+		"dek unwrap and rewrap for many successful (%d recipients, raw group dek never left Keeper, pin_enforced=%t)",
+		len(wraps), pinEnforced,
+	)
 	return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndRewrapForManyResponseData{
 		EncryptedForRecipientsB64: wraps,
+		PinEnforced:               pinEnforced,
+		PinStates:                 pinStates,
 	}}
 }

@@ -44,6 +44,10 @@ func HandleRotateUserKeypairPrepare(d Deps, req proto.RotateUserKeypairPrepareRe
 		return resp
 	}
 
+	if rotatedAtTooFarAhead(d, req.RotatedAt) {
+		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
+	}
+
 	// Overwrites any existing pending — UX is "restart" with a fresh keypair.
 	// (A previous prepare may have ended without promote; if the caller wanted
 	// to retry, an explicit cancel would be expected, but the first iteration
@@ -93,11 +97,37 @@ func HandleRotateUserKeypairPrepare(d Deps, req proto.RotateUserKeypairPrepareRe
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "new signature failed: "+err.Error())
 	}
 
-	d.Logger.Println("rotate user keypair prepare successful (pending stored, both signatures generated)")
+	// The peer-verifiable statement. Its OLD fingerprint comes from the
+	// Keychain's active public key and its NEW one from the keypair generated
+	// above, both hashed as PEM bytes — the same formula the Extension and the
+	// server apply to the same bytes.
+	oldPubPEM, err := keychain.GetPublicKey(d.Store)
+	if err != nil {
+		_ = keychain.DeletePendingPrivateKey(d.Store)
+		_ = keychain.DeletePendingPublicKey(d.Store)
+		return errs.CodeResponse(errs.ErrCodeNotFound, "active public key not found: "+err.Error())
+	}
+	statement, err := buildRotationStatement(rotationStatementInput{
+		accountID:    req.AccountID,
+		reason:       req.Reason,
+		rotatedAt:    req.RotatedAt,
+		oldPublicPEM: oldPubPEM,
+		newPublicPEM: keyPair.PublicKey,
+		signOld:      func(canonical string) (string, error) { return signDataSecure(oldPrivBuf, canonical) },
+		signNew:      func(canonical string) (string, error) { return signDataSecure(pendingPrivBuf, canonical) },
+	})
+	if err != nil {
+		_ = keychain.DeletePendingPrivateKey(d.Store)
+		_ = keychain.DeletePendingPublicKey(d.Store)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "rotation statement failed: "+err.Error())
+	}
+
+	d.Logger.Println("rotate user keypair prepare successful (pending stored, challenge and statement signatures generated)")
 	return proto.BaseResponse{Success: true, Data: proto.RotateUserKeypairPrepareResponseData{
-		NewPublicKey: keyPair.PublicKey,
-		OldSignature: oldSigB64,
-		NewSignature: newSigB64,
+		NewPublicKey:      keyPair.PublicKey,
+		OldSignature:      oldSigB64,
+		NewSignature:      newSigB64,
+		RotationStatement: statement,
 	}}
 }
 

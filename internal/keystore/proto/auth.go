@@ -68,6 +68,12 @@ type AuthRecoveryPrepareRequest struct {
 	RecoveryKeyVersion int    `json:"recovery_key_version"`
 	ServerKeyVersion   uint   `json:"server_key_version,omitempty"`
 	NewRecoveryKey     string `json:"new_recovery_key"`
+	// AccountID and RotatedAt feed the rotation statement this composite
+	// produces. The recovery handle is not on this surface: the composite
+	// opens its own session and uses that handle, so there is nothing for the
+	// caller to pass or to get wrong.
+	AccountID string `json:"account_id"`
+	RotatedAt int64  `json:"rotated_at"`
 }
 
 func (r AuthRecoveryPrepareRequest) Validate() error {
@@ -89,6 +95,12 @@ func (r AuthRecoveryPrepareRequest) Validate() error {
 	if err := requireString(r.NewRecoveryKey, "new_recovery_key"); err != nil {
 		return err
 	}
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if err := requireRotatedAt(r.RotatedAt, "rotated_at"); err != nil {
+		return err
+	}
 	return requirePositiveVersion(r.RecoveryKeyVersion, "recovery_key_version")
 }
 
@@ -100,4 +112,7 @@ type AuthRecoveryPrepareResponseData struct {
 	NewRecoveryAuthSeed   string `json:"new_recovery_auth_seed"`
 	NewWrappedKeeper      string `json:"new_recovery_wrapped_keeper"`
 	NewRecoveryKeyVersion uint   `json:"new_recovery_key_version"`
+	// RotationStatement is passed straight through from the keypair step, so
+	// the app-first recovery can post it to the server's complete call.
+	RotationStatement KeyRotationStatement `json:"rotation_statement"`
 }

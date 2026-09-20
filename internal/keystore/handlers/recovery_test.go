@@ -45,6 +45,9 @@ func TestApp_HandleGenerateKeypairWithRecoveryWrap_VerifyFailedShortCircuits(t *
 	deps, log, _ := newTestDepsFailVerify(t, errors.New("server signature verification failed: stub"))
 
 	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
+		AccountID:      "11111111-1111-4111-8111-111111111111",
+		RotatedAt:      1758240000,
+		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		ChallengeToken: "any-challenge",
 		Signature:      "any-sig",
 		WrapKeyB64:     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // 32B Base64
@@ -67,6 +70,9 @@ func TestApp_HandleGenerateKeypairWithRecoveryWrap_DoesNotEchoWrapKey(t *testing
 
 	const wrapKeySentinel = "WRAP_KEY_SENTINEL_DO_NOT_LEAK_INTO_LOGS"
 	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
+		AccountID:      "11111111-1111-4111-8111-111111111111",
+		RotatedAt:      1758240000,
+		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		ChallengeToken: "any",
 		Signature:      "any",
 		WrapKeyB64:     wrapKeySentinel,

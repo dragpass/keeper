@@ -42,6 +42,9 @@ func TestHandleRotateUserKeypairPromote_Success(t *testing.T) {
 	oldPub, _ := seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-challenge-003",
 		ServerSignature: "any",
 	})
@@ -86,6 +89,9 @@ func TestHandleRotateUserKeypairPromote_RejectsBadServerSig(t *testing.T) {
 	seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(prepDeps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-challenge-004",
 		ServerSignature: "any",
 	})
@@ -112,6 +118,9 @@ func TestHandleRotateUserKeypairPromote_RejectsPendingPublicKeyMismatch(t *testi
 	seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-challenge-mismatch",
 		ServerSignature: "any",
 	})
@@ -138,6 +147,11 @@ func TestHandleRotateUserKeypairPromote_RejectsExpiredConfirmationPayload(t *tes
 	seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID: "11111111-1111-4111-8111-111111111111",
+		Reason:    proto.KeyRotationReasonVoluntary,
+		// This test pins the clock to Unix 200, so the statement date has to
+		// sit inside the same window the prepare handler checks.
+		RotatedAt:       100,
 		ChallengeToken:  "rotate-challenge-expired",
 		ServerSignature: "any",
 	})
@@ -180,6 +194,9 @@ func TestRotateUserKeypair_RoundTrip_NewKeypairUsable(t *testing.T) {
 	seedActiveKeypairForRotateTest(t, store)
 
 	prep := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-roundtrip-001",
 		ServerSignature: "any",
 	})

@@ -182,6 +182,8 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 	beginData := beginResponse.Data.(proto.AuthRecoveryBeginResponseData)
 
 	prepareResponse := HandleAuthRecoveryPrepare(deps, proto.AuthRecoveryPrepareRequest{
+		AccountID:          "11111111-1111-4111-8111-111111111111",
+		RotatedAt:          1758240000,
 		Alias:              "alice",
 		EnteredKeyHandle:   beginData.EnteredKeyHandle,
 		ChallengeToken:     "server-challenge",

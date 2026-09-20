@@ -90,20 +90,64 @@ type GroupDEKGenerateAndOpenResponseData struct {
 // encrypted_for_me_b64 from a generate_and_open response back into this
 // action, producing an equivalent raw-free flow (one extra unwrap+wrap
 // round-trip, but no raw exposure).
+//
+// The three account key trust fields are optional, and optional is a
+// compatibility device rather than a hole. What the pin defends against is a
+// malicious server, not a malicious Extension: an Extension already under an
+// attacker's control has easier routes than omitting an id. This version of
+// the Extension sends the ids from all four of its wrap call sites, and the
+// SPA never assembles a Keeper request at all, so a `pin_enforced:false`
+// response is a regression signal worth a console warning rather than a
+// supported mode.
 type DEKRewrapForMemberRequest struct {
 	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
 	OtherPublicKey  string `json:"other_public_key"`
+	// OwnerAccountID scopes the pin. Pins belong to the account doing the
+	// wrapping, so two accounts sharing a device keep separate trust records.
+	OwnerAccountID string `json:"owner_account_id,omitempty"`
+	// OtherAccountID names the peer being wrapped to. Its presence is what
+	// turns pin enforcement on.
+	OtherAccountID string `json:"other_account_id,omitempty"`
+	// RotationStatements is the chain that explains a key change, fetched
+	// from the server only when the pin and the served key already disagree.
+	// Absent means no rotation is claimed.
+	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
 }
 
 func (r DEKRewrapForMemberRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
 		return err
 	}
-	return requirePEM(r.OtherPublicKey, "other_public_key")
+	if err := requirePEM(r.OtherPublicKey, "other_public_key"); err != nil {
+		return err
+	}
+	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if err := requireOptionalAccountUUID(r.OtherAccountID, "other_account_id"); err != nil {
+		return err
+	}
+	// The two ids travel together or not at all. A peer id without an owner
+	// has no pin set to live in, and an owner without a peer is enforcement
+	// the caller asked for and then gave nothing to enforce against.
+	if (r.OwnerAccountID == "") != (r.OtherAccountID == "") {
+		return newValidationError(
+			"owner_account_id",
+			"must be sent together with other_account_id",
+		)
+	}
+	return ValidateKeyRotationStatements(r.RotationStatements)
 }
 
 type DEKRewrapForMemberResponseData struct {
 	EncryptedForOtherB64 string `json:"encrypted_for_other_b64"`
+	// PinEnforced is false when the request named no account, so the caller
+	// can tell "the pin passed" from "no pin was consulted".
+	PinEnforced bool `json:"pin_enforced"`
+	// PinState is the peer's trust level after the wrap: tofu, verified, or
+	// rotated. Absent when nothing was enforced. A refused wrap has no
+	// response at all — `changed` arrives as peer_key_changed.
+	PinState string `json:"pin_state,omitempty"`
 }
 
 // DEKUnwrapAndRewrapForManyRequest — the multi-recipient variant of
@@ -115,29 +159,138 @@ type DEKRewrapForMemberResponseData struct {
 // Usage: adminRotateDek — wrap the OLD Group DEK to each active member plus
 // the org archive key in one round-trip, replacing the per-member
 // unwrap→JS→wrap loop so the raw never enters the Extension JS heap.
+//
+// Two request shapes, exactly one per call. `recipients` is the shape that
+// carries account ids and therefore gets pin enforcement;
+// `recipient_public_keys` is the original flat list, still accepted and still
+// unenforced. Sending both is refused rather than resolved, because a caller
+// that populated both has a bug and picking one for it would hide which.
 type DEKUnwrapAndRewrapForManyRequest struct {
-	WrappedForMeB64     string   `json:"wrapped_for_me_b64"`
-	RecipientPublicKeys []string `json:"recipient_public_keys"`
+	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
+	// Recipients is the enforced path. A recipient with no account_id is
+	// pin-exempt — the org archive key is a resource, not an account.
+	Recipients []DEKRewrapRecipient `json:"recipients,omitempty"`
+	// RecipientPublicKeys is the pre-0.0.31 path. Kept working, never
+	// enforced.
+	RecipientPublicKeys []string `json:"recipient_public_keys,omitempty"`
+	// OwnerAccountID scopes the pins. Required as soon as any recipient
+	// names an account.
+	OwnerAccountID string `json:"owner_account_id,omitempty"`
 }
+
+// DEKRewrapRecipient is one wrap target. PublicKey is the PEM the DEK is
+// wrapped to; AccountID names whose key it is meant to be, which is what makes
+// the claim checkable.
+type DEKRewrapRecipient struct {
+	AccountID          string                 `json:"account_id,omitempty"`
+	PublicKey          string                 `json:"public_key"`
+	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+}
+
+// DEKRewrapMaxRecipients caps one call. The org member ceiling is 30, plus the
+// archive key and room to spare.
+const DEKRewrapMaxRecipients = 64
+
+// DEKRewrapMaxRequestBytes caps the raw payload of both wrap actions. Enforced
+// by the dispatcher before the request is decoded, so an oversized chain never
+// reaches the point where a Group DEK would be unwrapped.
+const DEKRewrapMaxRequestBytes = 512 * 1024
 
 func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
 		return err
 	}
-	if len(r.RecipientPublicKeys) == 0 {
-		return newValidationError("recipient_public_keys", "must not be empty")
+	if len(r.Recipients) > 0 && len(r.RecipientPublicKeys) > 0 {
+		return newValidationError(
+			"recipients",
+			"must not be sent together with recipient_public_keys",
+		)
 	}
-	for _, pem := range r.RecipientPublicKeys {
-		if err := requirePEM(pem, "recipient_public_keys"); err != nil {
+	if len(r.Recipients) == 0 && len(r.RecipientPublicKeys) == 0 {
+		return newValidationError(
+			"recipients",
+			"must not be empty (or send the legacy recipient_public_keys)",
+		)
+	}
+	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if len(r.RecipientPublicKeys) > 0 {
+		if len(r.RecipientPublicKeys) > DEKRewrapMaxRecipients {
+			return newValidationError("recipient_public_keys", "must hold at most 64 recipients")
+		}
+		for _, pem := range r.RecipientPublicKeys {
+			if err := requirePEM(pem, "recipient_public_keys"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(r.Recipients) > DEKRewrapMaxRecipients {
+		return newValidationError("recipients", "must hold at most 64 recipients")
+	}
+	// One account may not appear twice. The response lists run parallel to the
+	// request, so a repeated id would report two pin states for one peer, and
+	// the second evaluation would judge the first one's freshly written pin
+	// instead of the one the call started from. Either the caller built the
+	// list wrong or something upstream is trying to get two different keys
+	// accepted for one account in a single pass.
+	seenAccounts := make(map[string]struct{}, len(r.Recipients))
+	for _, recipient := range r.Recipients {
+		if recipient.AccountID == "" {
+			continue
+		}
+		if _, dup := seenAccounts[recipient.AccountID]; dup {
+			return newValidationError("recipients.account_id", "must not repeat an account")
+		}
+		seenAccounts[recipient.AccountID] = struct{}{}
+	}
+	for _, recipient := range r.Recipients {
+		if err := requirePEM(recipient.PublicKey, "recipients.public_key"); err != nil {
+			return err
+		}
+		if err := requireOptionalAccountUUID(recipient.AccountID, "recipients.account_id"); err != nil {
+			return err
+		}
+		// A pin lives in an owner's set, so naming a peer without naming the
+		// owner asks for a record with nowhere to go.
+		if recipient.AccountID != "" && r.OwnerAccountID == "" {
+			return newValidationError(
+				"owner_account_id",
+				"must be sent when a recipient names an account_id",
+			)
+		}
+		if err := ValidateKeyRotationStatements(recipient.RotationStatements); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// RecipientList renders either request shape as the enforced one, so the
+// handler has a single path. A legacy entry becomes a recipient with no
+// account id, which is exactly how it is treated: wrapped, not pinned.
+func (r DEKUnwrapAndRewrapForManyRequest) RecipientList() []DEKRewrapRecipient {
+	if len(r.Recipients) > 0 {
+		return r.Recipients
+	}
+	recipients := make([]DEKRewrapRecipient, len(r.RecipientPublicKeys))
+	for i, pem := range r.RecipientPublicKeys {
+		recipients[i] = DEKRewrapRecipient{PublicKey: pem}
+	}
+	return recipients
+}
+
 // DEKUnwrapAndRewrapForManyResponseData carries the new wraps in the same
-// order as the request's RecipientPublicKeys — the caller maps each entry
-// back to its recipient by index.
+// order as the request's recipients — the caller maps each entry back to its
+// recipient by index.
 type DEKUnwrapAndRewrapForManyResponseData struct {
 	EncryptedForRecipientsB64 []string `json:"encrypted_for_recipients_b64"`
+	// PinEnforced is true when at least one recipient named an account and
+	// was therefore checked.
+	PinEnforced bool `json:"pin_enforced"`
+	// PinStates runs parallel to the wraps: tofu, verified, rotated, or
+	// exempt for a recipient that named no account. Absent when nothing was
+	// enforced.
+	PinStates []string `json:"pin_states,omitempty"`
 }
