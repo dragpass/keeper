@@ -69,6 +69,17 @@ const (
 	AccountArchivePrivateKey = "account_archive_private_key"
 	AccountArchivePublicKey  = "account_archive_public_key"
 
+	// Peer account key pins (account key trust v1).
+	//
+	// One entry per (owner account, peer account) pair holds the pinned
+	// fingerprint and its trust state; the index chunks make that set
+	// enumerable, because SecretStore offers Get / Set / Delete and no
+	// listing. Both names are assembled in keychain/peer_key_pin.go — the
+	// prefixes live here so every slot the Keeper owns is visible in one
+	// file. Not key material: a pin holds a hash of a public key.
+	PeerKeyPinPrefix      = "peer-pin:"
+	PeerKeyPinIndexPrefix = "peer-pin-index:"
+
 	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a
