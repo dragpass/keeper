@@ -93,10 +93,25 @@ func HandleGenerateKeypairWithRecoveryWrap(d Deps, req proto.GenerateKeypairWith
 	}
 	wrapKeyBuf := memguard.NewBufferFromBytes(wrapKey)
 	defer wrapKeyBuf.Destroy()
-	return generateKeypairWithRecoveryWrapKey(d, wrapKeyBuf)
+	return generateKeypairWithRecoveryWrapKey(d, wrapKeyBuf, recoveryStatementInput{
+		accountID:      req.AccountID,
+		rotatedAt:      req.RotatedAt,
+		recoveryHandle: req.RecoveryHandle,
+	})
 }
 
-func generateKeypairWithRecoveryWrapKey(d Deps, wrapKey *memguard.LockedBuffer) proto.BaseResponse {
+// recoveryStatementInput is what the keypair step needs to produce the
+// rotation statement. The handle points at the OLD private key; the composite
+// action passes the one it opened itself.
+type recoveryStatementInput struct {
+	accountID      string
+	rotatedAt      int64
+	recoveryHandle string
+}
+
+func generateKeypairWithRecoveryWrapKey(
+	d Deps, wrapKey *memguard.LockedBuffer, statementInput recoveryStatementInput,
+) proto.BaseResponse {
 
 	// generate new RSA keypair
 	keyPair, err := crypto.GenerateRSAKeyPair()
@@ -117,6 +132,15 @@ func generateKeypairWithRecoveryWrapKey(d Deps, wrapKey *memguard.LockedBuffer) 
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "AES-GCM wrap failed: "+err.Error())
 	}
 
+	// The rotation statement is built before the Keychain is touched, so a
+	// signing failure leaves the active keypair where it was rather than
+	// installing a new key that no statement explains.
+	statement, err := buildRecoveryRotationStatement(d, statementInput, privKeyBuf, keyPair.PublicKey)
+	if err != nil {
+		d.Logger.Printf("recovery wrap error: rotation statement failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "rotation statement failed: "+err.Error())
+	}
+
 	// save the new keypair as active in the Keychain
 	if err := keychain.SavePrivateKey(d.Store, string(privKeyBuf.Bytes())); err != nil {
 		d.Logger.Printf("recovery wrap error: private key save failed: %v", err)
@@ -135,9 +159,61 @@ func generateKeypairWithRecoveryWrapKey(d Deps, wrapKey *memguard.LockedBuffer) 
 	_ = keychain.DeletePendingPrivateKey(d.Store)
 	_ = keychain.DeletePendingPublicKey(d.Store)
 
-	d.Logger.Println("recovery keypair generated, wrapped, and saved")
+	d.Logger.Println("recovery keypair generated, wrapped, saved, and declared")
 	return proto.BaseResponse{Success: true, Data: proto.GenerateKeypairWithRecoveryWrapResponseData{
-		PublicKey:     keyPair.PublicKey,
-		WrappedKeeper: wrappedB64,
+		PublicKey:         keyPair.PublicKey,
+		WrappedKeeper:     wrappedB64,
+		RotationStatement: statement,
 	}}
+}
+
+// buildRecoveryRotationStatement signs the statement for a recovery.
+//
+// The OLD half is signed through the recovery handle, inside the one Use call
+// that also derives the old public key from the same private key. Deriving it
+// there rather than reading the Keychain is what keeps the two halves
+// consistent: the statement then describes the key the recovery actually
+// restored, not whatever the active slot happens to hold.
+func buildRecoveryRotationStatement(
+	d Deps, in recoveryStatementInput, newPrivKeyBuf *memguard.LockedBuffer, newPublicPEM string,
+) (proto.KeyRotationStatement, error) {
+	var statement proto.KeyRotationStatement
+	useErr := d.RecoverySessions.Use(in.recoveryHandle, func(rawPEM []byte) error {
+		oldPrivKey, err := crypto.ParsePrivateKey(string(rawPEM))
+		if err != nil {
+			return errors.New("failed to parse old private key: " + err.Error())
+		}
+		oldPublicPEM, err := crypto.PublicKeyToPEM(&oldPrivKey.PublicKey)
+		if err != nil {
+			return errors.New("failed to render old public key: " + err.Error())
+		}
+		built, err := buildRotationStatement(rotationStatementInput{
+			accountID: in.accountID,
+			// Fixed, never taken from the caller. A recovery declares itself
+			// a recovery.
+			reason:       proto.KeyRotationReasonRecovery,
+			rotatedAt:    in.rotatedAt,
+			oldPublicPEM: oldPublicPEM,
+			newPublicPEM: newPublicPEM,
+			signOld: func(canonical string) (string, error) {
+				signature, err := crypto.SignData(oldPrivKey, canonical)
+				if err != nil {
+					return "", err
+				}
+				return base64.StdEncoding.EncodeToString(signature), nil
+			},
+			signNew: func(canonical string) (string, error) {
+				return signDataSecure(newPrivKeyBuf, canonical)
+			},
+		})
+		if err != nil {
+			return err
+		}
+		statement = built
+		return nil
+	})
+	if useErr != nil {
+		return proto.KeyRotationStatement{}, useErr
+	}
+	return statement, nil
 }

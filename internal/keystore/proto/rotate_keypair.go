@@ -14,25 +14,58 @@ package proto
 // RotateUserKeypairPrepareRequest — the Extension sends the challenge it
 // got from the server. challenge_token + server_signature verify the
 // rotation origin.
+// The three account key trust fields are required, not optional. A rotation
+// that produced no statement would leave every peer holding a pin that no
+// longer matches and nothing to explain it, which turns their next wrap into
+// peer_key_changed — the failure mode the statement exists to prevent. So
+// there is no path through this action that rotates without one.
 type RotateUserKeypairPrepareRequest struct {
 	ChallengeToken   string `json:"challenge_token"`
 	ServerSignature  string `json:"server_signature"`             // server signature over challenge_token
 	ServerKeyVersion uint   `json:"server_key_version,omitempty"` // falls back to active when 0
+	// AccountID is the subject of the statement canonical.
+	AccountID string `json:"account_id"`
+	// Reason is voluntary or compromise, the caller's choice. `recovery`
+	// is not selectable here: it belongs to the recovery flow, which sets it
+	// itself, so no caller can label an ordinary rotation as a recovery.
+	Reason string `json:"reason"`
+	// RotatedAt is the Unix seconds the statement is dated, and part of what
+	// both signatures cover.
+	RotatedAt int64 `json:"rotated_at"`
 }
 
 func (r RotateUserKeypairPrepareRequest) Validate() error {
 	if err := requireString(r.ChallengeToken, "challenge_token"); err != nil {
 		return err
 	}
-	return requireString(r.ServerSignature, "server_signature")
+	if err := requireString(r.ServerSignature, "server_signature"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	switch r.Reason {
+	case KeyRotationReasonVoluntary, KeyRotationReasonCompromise:
+	case "":
+		return newValidationError("reason", "must not be empty")
+	default:
+		return newValidationError("reason", "must be voluntary or compromise")
+	}
+	return requireRotatedAt(r.RotatedAt, "rotated_at")
 }
 
 // RotateUserKeypairPrepareResponseData — new public key + OLD/NEW
-// signatures.
+// signatures + the peer-verifiable rotation statement.
 type RotateUserKeypairPrepareResponseData struct {
 	NewPublicKey string `json:"new_public_key"` // PEM string (Extension Base64-encodes it when sending to the server)
 	OldSignature string `json:"old_signature"`  // challenge signed by ACTIVE(OLD) priv, Base64
 	NewSignature string `json:"new_signature"`  // challenge signed by PENDING(NEW) priv, Base64
+	// RotationStatement is signed over the §5 canonical rather than over the
+	// challenge. The two challenge signatures above prove key ownership to
+	// the server and are untouched; this one proves the same thing to peers,
+	// who never see the challenge and would have no reason to trust it if
+	// they did.
+	RotationStatement KeyRotationStatement `json:"rotation_statement"`
 }
 
 // RotateUserKeypairPromoteRequest — sent when the server approves

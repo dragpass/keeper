@@ -20,6 +20,9 @@ func TestApp_HandleRotateUserKeypairPrepare_VerifyFailedShortCircuits(t *testing
 	deps, log, _ := newTestDepsFailVerify(t, errors.New("server signature verification failed: stub"))
 
 	resp := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "any-challenge",
 		ServerSignature: "any-sig",
 	})
@@ -43,6 +46,9 @@ func TestApp_HandleRotateUserKeypairPrepare_VerifyFailedShortCircuits(t *testing
 func TestHandleRotateUserKeypairPrepare_ValidationDelegation(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	resp := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "", // empty → validation fail
 		ServerSignature: "",
 	})
@@ -97,6 +103,9 @@ func TestHandleRotateUserKeypairPrepare_Success(t *testing.T) {
 	oldPub, _ := seedActiveKeypairForRotateTest(t, store)
 
 	resp := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-challenge-001",
 		ServerSignature: "any",
 	})
@@ -137,6 +146,9 @@ func TestHandleRotateUserKeypairPrepare_RejectsBadServerSig(t *testing.T) {
 	seedActiveKeypairForRotateTest(t, store)
 
 	resp := HandleRotateUserKeypairPrepare(deps, proto.RotateUserKeypairPrepareRequest{
+		AccountID:       "11111111-1111-4111-8111-111111111111",
+		Reason:          proto.KeyRotationReasonVoluntary,
+		RotatedAt:       1758240000,
 		ChallengeToken:  "rotate-challenge-002",
 		ServerSignature: "any",
 	})

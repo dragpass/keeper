@@ -51,11 +51,25 @@ type RecoverySignResponseData struct {
 //
 // wrap_key is the Base64 of the raw bytes (32B AES-GCM key) that the
 // client derived from the RK24 HKDF wrap path (after PBKDF2).
+//
+// The recovery_handle is what makes a rotation statement possible here: it
+// already points at the OLD private key inside memguard, put there by
+// recovery_session_open so recoverysign could use it. The same handle signs
+// the statement's OLD half, and the keypair generated below signs the NEW
+// half, so one flow holds both halves of the proof a peer needs.
 type GenerateKeypairWithRecoveryWrapRequest struct {
 	ChallengeToken   string `json:"challenge_token"`
 	Signature        string `json:"signature"`                    // server signature over challenge_token
 	WrapKeyB64       string `json:"wrap_key_b64"`                 // Base64 of a 32B raw AES-GCM key
 	ServerKeyVersion uint   `json:"server_key_version,omitempty"` // falls back to active when 0
+	// AccountID is the subject of the rotation statement canonical.
+	AccountID string `json:"account_id"`
+	// RotatedAt is the Unix seconds the statement is dated.
+	RotatedAt int64 `json:"rotated_at"`
+	// RecoveryHandle points at the OLD private key in memguard. There is no
+	// `reason` field: this flow always declares `recovery`, and no caller can
+	// label a recovery as something else.
+	RecoveryHandle string `json:"recovery_handle"`
 }
 
 func (r GenerateKeypairWithRecoveryWrapRequest) Validate() error {
@@ -63,6 +77,15 @@ func (r GenerateKeypairWithRecoveryWrapRequest) Validate() error {
 		return err
 	}
 	if err := requireString(r.Signature, "signature"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if err := requireRotatedAt(r.RotatedAt, "rotated_at"); err != nil {
+		return err
+	}
+	if err := requireHandle(r.RecoveryHandle, "recovery_handle"); err != nil {
 		return err
 	}
 	// wrap_key is the Base64 of a 32B AES-GCM raw key (Recovery RK24 wrap
@@ -74,6 +97,10 @@ func (r GenerateKeypairWithRecoveryWrapRequest) Validate() error {
 type GenerateKeypairWithRecoveryWrapResponseData struct {
 	PublicKey     string `json:"publickey"`
 	WrappedKeeper string `json:"wrapped_keeper"` // private key AES-GCM-wrapped with wrap_key (Base64: iv || ciphertext)
+	// RotationStatement has the same shape the voluntary rotation produces,
+	// with reason fixed to `recovery`. The Extension sends it on to the
+	// server's recovery complete, which refuses the recovery without it.
+	RotationStatement KeyRotationStatement `json:"rotation_statement"`
 }
 
 // ────────────────────────────────────────────────────────────────────────

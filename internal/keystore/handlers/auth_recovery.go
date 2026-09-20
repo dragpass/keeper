@@ -98,7 +98,13 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 	newWrapKeyBuffer := memguard.NewBufferFromBytes(newWrapKey)
 	defer newWrapKeyBuffer.Destroy()
 
-	keypairResponse := generateKeypairWithRecoveryWrapKey(d, newWrapKeyBuffer)
+	keypairResponse := generateKeypairWithRecoveryWrapKey(d, newWrapKeyBuffer, recoveryStatementInput{
+		accountID: req.AccountID,
+		rotatedAt: req.RotatedAt,
+		// The handle this composite opened a few lines up. The request
+		// surface never carries one, so there is nothing to substitute.
+		recoveryHandle: openData.RecoveryHandle,
+	})
 	if !keypairResponse.Success {
 		return keypairResponse
 	}
@@ -114,6 +120,7 @@ func HandleAuthRecoveryPrepare(d Deps, req proto.AuthRecoveryPrepareRequest) pro
 		NewRecoveryAuthSeed:   newAuthSeed,
 		NewWrappedKeeper:      keypairData.WrappedKeeper,
 		NewRecoveryKeyVersion: recoverykey.Version,
+		RotationStatement:     keypairData.RotationStatement,
 	}}
 }
 
