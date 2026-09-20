@@ -124,8 +124,19 @@ func TestHandleDEKRewrapForMember_UnexplainedKeyChangeRefused(t *testing.T) {
 	if resp.ErrorCode != string(errs.ErrCodePeerKeyChanged) {
 		t.Fatalf("error_code = %q, want peer_key_changed", resp.ErrorCode)
 	}
-	if resp.Data != nil {
-		t.Fatalf("refusal carried data: %+v", resp.Data)
+	// The refusal carries the two fingerprints so the SPA can draw the
+	// "which of these is right" banner without another round trip.
+	detail, ok := resp.Data.(proto.PeerKeyChangedResponseData)
+	if !ok {
+		t.Fatalf("refusal data = %+v, want PeerKeyChangedResponseData", resp.Data)
+	}
+	if detail.ObservedFingerprint != swapped.fingerprint {
+		t.Fatalf("observed_fingerprint = %q, want the served key %q",
+			detail.ObservedFingerprint, swapped.fingerprint)
+	}
+	if detail.PinnedFingerprint != original.fingerprint {
+		t.Fatalf("pinned_fingerprint = %q, want the pinned key %q",
+			detail.PinnedFingerprint, original.fingerprint)
 	}
 	// Serialization check: no wrap output anywhere in the envelope.
 	encoded, err := json.Marshal(resp)
@@ -332,6 +343,14 @@ func TestDEKUnwrapAndRewrapForMany_Validate_RecipientShapes(t *testing.T) {
 		{"over the recipient cap", proto.DEKUnwrapAndRewrapForManyRequest{
 			WrappedForMeB64: wrapped, Recipients: tooMany,
 		}},
+		{"one account twice", proto.DEKUnwrapAndRewrapForManyRequest{
+			WrappedForMeB64: wrapped,
+			OwnerAccountID:  pinOwnerA,
+			Recipients: []proto.DEKRewrapRecipient{
+				{AccountID: pinPeer, PublicKey: pem},
+				{AccountID: pinPeer, PublicKey: pem},
+			},
+		}},
 		{"over the statement cap", proto.DEKUnwrapAndRewrapForManyRequest{
 			WrappedForMeB64: wrapped,
 			OwnerAccountID:  pinOwnerA,
@@ -346,6 +365,16 @@ func TestDEKUnwrapAndRewrapForMany_Validate_RecipientShapes(t *testing.T) {
 				t.Fatal("expected a validation error")
 			}
 		})
+	}
+
+	// Two account-less recipients are not a duplicate: there is no account to
+	// repeat, and a call may legitimately wrap to more than one org resource.
+	twoExempt := proto.DEKUnwrapAndRewrapForManyRequest{
+		WrappedForMeB64: wrapped,
+		Recipients:      []proto.DEKRewrapRecipient{{PublicKey: pem}, {PublicKey: pem}},
+	}
+	if err := twoExempt.Validate(); err != nil {
+		t.Fatalf("two exempt recipients rejected: %v", err)
 	}
 
 	// The legacy flat list still validates on its own.

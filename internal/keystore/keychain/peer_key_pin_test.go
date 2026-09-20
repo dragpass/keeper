@@ -300,6 +300,51 @@ func TestPeerKeyPin_OwnerScope(t *testing.T) {
 	}
 }
 
+// failingIndexStore fails the index write and nothing else, which is the one
+// way a delete can half-succeed.
+type failingIndexStore struct {
+	SecretStore
+	err error
+}
+
+func (s failingIndexStore) Set(service, account, value string) error {
+	if strings.HasPrefix(account, config.PeerKeyPinIndexPrefix) {
+		return s.err
+	}
+	return s.SecretStore.Set(service, account, value)
+}
+
+// The record and the index are two writes and are not atomic. When the second
+// one fails the first still happened, so the caller must not be told that
+// nothing was forgotten.
+func TestPeerKeyPin_DeleteReportsRemovalEvenWhenIndexWriteFails(t *testing.T) {
+	inner := NewMemorySecretStore()
+	if err := SavePeerKeyPin(inner, testOwnerA, testPeer1, testPin(fingerprintOfLen('a'), PeerKeyPinStateTOFU)); err != nil {
+		t.Fatalf("SavePeerKeyPin: %v", err)
+	}
+
+	store := failingIndexStore{SecretStore: inner, err: errors.New("keyring is unavailable")}
+	forgotten, err := DeletePeerKeyPin(store, testOwnerA, testPeer1)
+	if err == nil {
+		t.Fatal("expected the index write failure to surface")
+	}
+	if !forgotten {
+		t.Fatal("delete removed the record but reported nothing forgotten")
+	}
+	if _, err := GetPeerKeyPin(inner, testOwnerA, testPeer1); !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("record still present after the delete: %v", err)
+	}
+
+	// The stale index entry repairs itself on the next listing.
+	entries, err := ListPeerKeyPins(inner, testOwnerA)
+	if err != nil {
+		t.Fatalf("ListPeerKeyPins: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("listed %+v, want nothing", entries)
+	}
+}
+
 func readChunk(t *testing.T, store SecretStore, ownerAccountID string, n int) peerKeyPinIndexChunk {
 	t.Helper()
 	raw, err := store.Get(config.Service, PeerKeyPinIndexAccount(ownerAccountID, n))

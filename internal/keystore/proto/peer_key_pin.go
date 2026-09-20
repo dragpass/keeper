@@ -115,3 +115,23 @@ func (r PeerKeyPinForgetRequest) Validate() error {
 type PeerKeyPinForgetResponseData struct {
 	Forgotten bool `json:"forgotten"`
 }
+
+// PeerKeyChangedResponseData rides on a `peer_key_changed` failure, which is
+// the one refusal that carries data.
+//
+// The SPA has to put the two fingerprints side by side and ask a human which
+// one is right. Without them it would have to go back to the Keeper for the
+// pin and back to the server for the key it was just handed, to redraw a
+// banner about the refusal it already has. Both values are hashes of public
+// keys, so nothing here is material the failure did not already imply.
+//
+// Deliberately named *ResponseData so the no-raw-secret scan covers it like
+// every other response shape.
+type PeerKeyChangedResponseData struct {
+	// ObservedFingerprint is the key the server is serving right now.
+	ObservedFingerprint string `json:"observed_fingerprint"`
+	// PinnedFingerprint is the key this owner had already accepted. It is
+	// unchanged by the refusal and stays the pinned value until a human
+	// settles the difference.
+	PinnedFingerprint string `json:"pinned_fingerprint"`
+}

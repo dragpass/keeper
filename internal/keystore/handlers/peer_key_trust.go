@@ -47,6 +47,10 @@ type peerKeyTrustOutcome struct {
 	// It names conditions, never values: no fingerprint, key, or signature
 	// goes into it, because it travels into an error message and a log line.
 	Reason string
+	// PinnedFingerprint is what the pin held when a refusal was decided, so
+	// the caller can show it next to the observed one. Empty when allowed and
+	// when there was no pin to begin with.
+	PinnedFingerprint string
 }
 
 // evaluatePeerKeyTrust runs the state machine. `now` is Unix seconds.
@@ -83,9 +87,10 @@ func evaluatePeerKeyTrust(
 	//    statements running from the pinned fingerprint to this one.
 	if err := verifyRotationChain(statements, peerAccountID, existing.Fingerprint, observed); err != nil {
 		return peerKeyTrustOutcome{
-			Allowed: false,
-			State:   keychain.PeerKeyPinStateChanged,
-			Reason:  err.Error(),
+			Allowed:           false,
+			State:             keychain.PeerKeyPinStateChanged,
+			Reason:            err.Error(),
+			PinnedFingerprint: existing.Fingerprint,
 		}
 	}
 

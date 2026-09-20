@@ -140,6 +140,12 @@ func SavePeerKeyPin(store SecretStore, ownerAccountID, peerAccountID string, pin
 // DeletePeerKeyPin removes one pin and its index entry. Idempotent: the
 // returned bool reports whether a record was actually there, and a missing one
 // is a successful no-op.
+//
+// The bool is reported even alongside an error. The two writes are not atomic,
+// so a delete can remove the record and then fail to update the index; saying
+// "nothing was forgotten" there would be wrong in the direction that matters,
+// since the pin really is gone. The caller gets both facts and the stale index
+// entry is dropped by the next listing.
 func DeletePeerKeyPin(store SecretStore, ownerAccountID, peerAccountID string) (bool, error) {
 	existed := true
 	if err := store.Delete(config.Service, PeerKeyPinAccount(ownerAccountID, peerAccountID)); err != nil {
@@ -149,7 +155,7 @@ func DeletePeerKeyPin(store SecretStore, ownerAccountID, peerAccountID string) (
 		existed = false
 	}
 	if _, err := removePeerKeyPinIndexEntry(store, ownerAccountID, peerAccountID); err != nil {
-		return false, err
+		return existed, err
 	}
 	return existed, nil
 }

@@ -229,6 +229,22 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	if len(r.Recipients) > DEKRewrapMaxRecipients {
 		return newValidationError("recipients", "must hold at most 64 recipients")
 	}
+	// One account may not appear twice. The response lists run parallel to the
+	// request, so a repeated id would report two pin states for one peer, and
+	// the second evaluation would judge the first one's freshly written pin
+	// instead of the one the call started from. Either the caller built the
+	// list wrong or something upstream is trying to get two different keys
+	// accepted for one account in a single pass.
+	seenAccounts := make(map[string]struct{}, len(r.Recipients))
+	for _, recipient := range r.Recipients {
+		if recipient.AccountID == "" {
+			continue
+		}
+		if _, dup := seenAccounts[recipient.AccountID]; dup {
+			return newValidationError("recipients.account_id", "must not repeat an account")
+		}
+		seenAccounts[recipient.AccountID] = struct{}{}
+	}
 	for _, recipient := range r.Recipients {
 		if err := requirePEM(recipient.PublicKey, "recipients.public_key"); err != nil {
 			return err

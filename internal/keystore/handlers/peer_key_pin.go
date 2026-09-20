@@ -67,7 +67,19 @@ func enforcePeerKeyPins(
 		outcome := evaluatePeerKeyTrust(existing, check.accountID, check.observed, check.statements, now)
 		if !outcome.Allowed {
 			d.Logger.Printf("peer key pin refused the wrap: %s", outcome.Reason)
-			return nil, errs.CodeResponse(errs.ErrCodePeerKeyChanged, outcome.Reason), false
+			// The one refusal that carries data: the SPA needs both
+			// fingerprints to draw the "which of these is right" banner, and
+			// making it fetch them again would mean asking the server for the
+			// very key this refusal is about.
+			return nil, proto.BaseResponse{
+				Success:   false,
+				Error:     outcome.Reason,
+				ErrorCode: string(errs.ErrCodePeerKeyChanged),
+				Data: proto.PeerKeyChangedResponseData{
+					ObservedFingerprint: check.observed,
+					PinnedFingerprint:   outcome.PinnedFingerprint,
+				},
+			}, false
 		}
 		states[i] = string(outcome.State)
 		updates = append(updates, pendingPin{accountID: check.accountID, pin: outcome.Pin})
