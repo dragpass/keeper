@@ -22,7 +22,9 @@ const (
 	//   Inputs: group_handle, permit (account_id, org_id, conversation_id,
 	//           dek_version, issued_at, expires_at, server_key_version,
 	//           signature), org_id, conversation_id, dek_version,
-	//           messages: [{ iv_b64(12B), ciphertext_b64(17..8208B) }] (<=200)
+	//           payload_kind? ('message' | 'room_name', default 'message'),
+	//           messages: [{ iv_b64(12B), ciphertext_b64(17..8208B) }] (<=200,
+	//           exactly 1 when payload_kind is 'room_name')
 	//   Output: { plaintext_b64: string[] }  // parallel to messages
 	//
 	// This is the protocol's second TestNoRawSecretInResponseTypes carve-out
@@ -48,8 +50,25 @@ const (
 	//     one conversation at one version is one key/AAD family, so a failure is
 	//     a tamper or foreign-ciphertext signal.
 	//
+	// Named group rooms (0.0.34) reuse this action rather than adding one.
+	// `payload_kind` is the only thing the caller may say about binding, and it
+	// is an enum of two values, not a string the caller composes:
+	//
+	//   'message'   (default, and what an omitted field means) → permit
+	//               canonical `dragpass.chat.read|1|...`, AAD `dragpass.chat|1|...`
+	//   'room_name' → permit canonical `dragpass.room.read|1|...`, AAD
+	//               `dragpass.room|1|...`, and exactly one entry in messages,
+	//               since a room has one name
+	//
+	// The pair is chosen together, so a message permit presented for a
+	// room_name request fails signature verification and a room name fed to a
+	// message request fails the GCM tag. Choosing the canonical is the binding
+	// check; there is no separate one to forget. The room-name branch returns
+	// its plaintext through the same plaintext_b64 and adds no carve-out entry.
+	//
 	// Unknown fields, duplicate JSON keys (the nested permit included), missing
-	// fields, and requests over 2 MiB are refused as CHAT_INVALID_INPUT before
+	// fields, an unknown payload_kind, a room_name batch that is not exactly one
+	// entry, and requests over 2 MiB are refused as CHAT_INVALID_INPUT before
 	// anything is opened.
 	//
 	// There is no per-message challenge and no prepare step: opening the group

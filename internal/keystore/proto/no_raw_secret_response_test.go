@@ -54,17 +54,29 @@ import (
 // message AAD is what prevents.
 var rawSecretResponseCarveOuts = map[string]string{
 	"GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64": "app-display carve-out: the decrypted secure message is the action's entire output, returned only under a server-signed display permit bound to a one-shot Keeper challenge and opened under a Keeper-built message AAD. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/security/secure-message-overlay-proposed-boundary.md.",
-	// Second carve-out (0.0.30): the DragPass 1:1 chat reveal. The []string
-	// covers the slice element type too — each entry is a decrypted chat
-	// message, the action's entire output, returned only under a server-signed
-	// conversation-read-permit and opened under a Keeper-built chat AAD
-	// (dragpass.chat|1|<org>|<conversation>|<dek_version>). Any tag/UTF-8/AAD
-	// failure refuses the whole batch with no partial plaintext. Zeroized after
-	// encoding, never logged; clipboard actions still return no plaintext. This
-	// widens the browser-display carve-out to conversation volume; approved in
-	// dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md
-	// §5 and docs/security/threat-model.md §4.10 (control-plane).
-	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30): decrypted 1:1 chat messages are the action's entire output, returned only under a server-signed conversation-read-permit and opened under a Keeper-built chat AAD. []string element type is covered here too. Any tag/UTF-8/AAD failure refuses the whole batch with no partial plaintext. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and docs/security/threat-model.md §4.10.",
+	// Second carve-out (0.0.30, widened in 0.0.34): the DragPass chat reveal.
+	// The []string covers the slice element type too — each entry is a
+	// decrypted chat message, or the single decrypted room name when
+	// payload_kind is room_name, and it is the action's entire output. It is
+	// returned only under a server-signed read permit and opened under an AAD
+	// the Keeper built from structured fields, never one the request supplied.
+	// Any tag/UTF-8/AAD failure refuses the whole batch with no partial
+	// plaintext. Zeroized after encoding, never logged; clipboard actions still
+	// return no plaintext. 0.0.30 widened the browser-display carve-out from
+	// one message to a conversation's worth; 0.0.34 widens what it covers to
+	// N-member rooms and to room names, which is exactly the "reusing the
+	// action for a ciphertext that is not an AAD-bound message" case the block
+	// comment above names as needing approval at the wider scope — taken in
+	// dragpass-control-plane
+	// docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2.
+	// Neither widening adds a response field or a carve-out entry: the room
+	// name rides the same plaintext_b64 under its own domain
+	// (dragpass.room|1|... with a dragpass.room.read permit), so a chat
+	// ciphertext fails closed in room_name mode and a room name fails closed in
+	// message mode. Also approved in
+	// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and
+	// docs/security/threat-model.md §4.10 (control-plane).
+	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). []string element type is covered here too. Any tag/UTF-8/AAD failure refuses the whole batch with no partial plaintext. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, and docs/security/threat-model.md §4.10.",
 }
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
@@ -203,6 +215,36 @@ func TestNoRawSecretInRequestTypes(t *testing.T) {
 		if !seenCarveOut[key] {
 			t.Errorf("stale carve-out %q — no request field matched it; "+
 				"remove it from rawSecretRequestCarveOuts.", key)
+		}
+	}
+}
+
+// TestRawSecretResponseCarveOuts_ScopeIsStated — the two tests above catch a
+// new raw field and a stale entry, but not a carve-out whose *behavior* grew
+// while its rationale stayed where it was. 0.0.34 is exactly that case: the
+// chat carve-out now also covers a room name under a second AAD domain, with
+// no new entry and no new field. The contract
+// (dragpass-control-plane docs/exec-plans/active/dragpass-chat-grouproom-implementation.md
+// §6.2) calls widening the behavior without rewriting the rationale a
+// violation, so this test is where that is enforced.
+func TestRawSecretResponseCarveOuts_ScopeIsStated(t *testing.T) {
+	if len(rawSecretResponseCarveOuts) != 2 {
+		t.Fatalf("rawSecretResponseCarveOuts has %d entries, want 2 — "+
+			"a third plaintext-returning response is a design decision, not a test update.",
+			len(rawSecretResponseCarveOuts))
+	}
+
+	const chatKey = "ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64"
+	reason, ok := rawSecretResponseCarveOuts[chatKey]
+	if !ok {
+		t.Fatalf("carve-out %q is missing", chatKey)
+	}
+	// The room-name branch rides this one entry, so the entry has to say so.
+	for _, want := range []string{"room_name", "dragpass.room|1|", "dragpass.room.read"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the chat carve-out rationale does not mention %q — "+
+				"payload_kind=room_name returns plaintext through this field and the "+
+				"approved scope must name it.", want)
 		}
 	}
 }

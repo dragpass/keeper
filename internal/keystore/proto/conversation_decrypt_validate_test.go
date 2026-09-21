@@ -228,3 +228,180 @@ func TestConversationReadPermit_Validate_Rejects(t *testing.T) {
 		})
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Room name (0.0.34): the second canonical family
+// ────────────────────────────────────────────────────────────────────────
+
+// roomAADGolden / roomPermitCanonicalGolden — the room half of the same two
+// canonicals, on the same fixed inputs. Only the domain slot differs, which is
+// the point: everything else being identical is what lets one helper serve both
+// and what makes the domain the whole of the separation.
+const (
+	roomAADGolden = "dragpass.room|1|" +
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|" +
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|5"
+	roomPermitCanonicalGolden = "dragpass.room.read|1|" +
+		"cccccccc-cccc-4ccc-8ccc-cccccccccccc|" +
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|" +
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|5|" +
+		"1700000000|1700000300|1"
+)
+
+// TestRoomNameAADCanonical_GoldenVector — the room AAD literal. GR3
+// (packages/crypto) builds these bytes on the encrypt side and
+// docs/testing/fixtures/chat-rooms-v1.json pins them for ariadne too.
+func TestRoomNameAADCanonical_GoldenVector(t *testing.T) {
+	got := RoomNameAADCanonical(chatFixtureOrgID, chatFixtureConvID, chatFixtureDekVersion)
+	t.Logf("ROOM AAD canonical (golden): %s", got)
+	if got != roomAADGolden {
+		t.Fatalf("room AAD = %q, want %q", got, roomAADGolden)
+	}
+	if strings.Count(got, "|") != 4 {
+		t.Fatalf("room AAD must have 5 items separated by 4 pipes, got %d", strings.Count(got, "|"))
+	}
+	if strings.HasSuffix(got, "\n") {
+		t.Fatal("room AAD must not end with a newline")
+	}
+}
+
+// TestRoomNameReadPermitCanonical_GoldenVector — the 9-item room-name permit
+// signing string. ariadne's signer (GR2) asserts the same literal.
+func TestRoomNameReadPermitCanonical_GoldenVector(t *testing.T) {
+	got := RoomNameReadPermitCanonical(chatValidPermit())
+	t.Logf("room-name read-permit canonical (golden): %s", got)
+	if got != roomPermitCanonicalGolden {
+		t.Fatalf("room permit canonical = %q, want %q", got, roomPermitCanonicalGolden)
+	}
+	if strings.Count(got, "|") != 8 {
+		t.Fatalf("canonical must have 9 items separated by 8 pipes, got %d", strings.Count(got, "|"))
+	}
+	if strings.HasSuffix(got, "\n") {
+		t.Fatal("canonical must not end with a newline")
+	}
+}
+
+// TestRoomCanonicals_DomainSeparation — the room strings differ from every
+// other domain that could be fed to this key, including the chat pair built
+// from the very same (org, conversation, dek_version). A room name and a
+// message in one room at one epoch are sealed under one key; the domain is the
+// only thing keeping the server from moving a message row into the name column
+// and having it render as the room's title.
+func TestRoomCanonicals_DomainSeparation(t *testing.T) {
+	roomAAD := RoomNameAADCanonical(chatFixtureOrgID, chatFixtureConvID, chatFixtureDekVersion)
+	chatAAD := ChatAADCanonical(chatFixtureOrgID, chatFixtureConvID, chatFixtureDekVersion)
+	messageAAD := MessageAADCanonical(chatFixtureOrgID, chatFixtureConvID, chatFixtureDekVersion, MessageSchemaVersion, 2000000000)
+
+	if roomAAD == chatAAD {
+		t.Fatal("room AAD and chat AAD must not be byte-identical")
+	}
+	if roomAAD == messageAAD {
+		t.Fatal("room AAD and Secure Message AAD must not be byte-identical")
+	}
+	if !strings.HasPrefix(roomAAD, "dragpass.room|") {
+		t.Fatalf("room AAD must start with the room domain, got %q", roomAAD)
+	}
+
+	roomPermit := RoomNameReadPermitCanonical(chatValidPermit())
+	chatPermit := ConversationReadPermitCanonical(chatValidPermit())
+	if roomPermit == chatPermit {
+		t.Fatal("room permit canonical and chat permit canonical must not be byte-identical")
+	}
+	// The domain is also not a prefix of the other, so no verifier that
+	// compares prefixes can accept one for the other.
+	if strings.HasPrefix(chatPermit, RoomNameReadPermitDomain) ||
+		strings.HasPrefix(roomPermit, ChatReadPermitDomain) {
+		t.Fatal("neither permit domain may prefix the other")
+	}
+}
+
+// TestConversationPayloadCanonicals_PairsAreNeverMixed — the helper hands back
+// a permit canonical and an AAD from the same family, for every accepted value
+// of payload_kind. Verifying a signature in one domain and decrypting in the
+// other is the one mistake this action must be unable to make.
+func TestConversationPayloadCanonicals_PairsAreNeverMixed(t *testing.T) {
+	permit := chatValidPermit()
+
+	cases := []struct {
+		kind       string
+		wantPermit string
+		wantAAD    string
+	}{
+		{"", chatPermitCanonicalGolden, chatAADGolden},
+		{ConversationPayloadKindMessage, chatPermitCanonicalGolden, chatAADGolden},
+		{ConversationPayloadKindRoomName, roomPermitCanonicalGolden, roomAADGolden},
+	}
+	for _, tc := range cases {
+		name := tc.kind
+		if name == "" {
+			name = "omitted"
+		}
+		t.Run(name, func(t *testing.T) {
+			gotPermit, gotAAD := ConversationPayloadCanonicals(tc.kind, permit)
+			if gotPermit != tc.wantPermit {
+				t.Fatalf("permit canonical = %q, want %q", gotPermit, tc.wantPermit)
+			}
+			if gotAAD != tc.wantAAD {
+				t.Fatalf("aad = %q, want %q", gotAAD, tc.wantAAD)
+			}
+		})
+	}
+}
+
+func TestConversationDecrypt_Validate_PayloadKind(t *testing.T) {
+	t.Run("omitted is accepted", func(t *testing.T) {
+		if err := chatValidRequest().Validate(); err != nil {
+			t.Fatalf("omitted payload_kind rejected: %v", err)
+		}
+	})
+	t.Run("message is accepted", func(t *testing.T) {
+		r := chatValidRequest()
+		r.PayloadKind = ConversationPayloadKindMessage
+		if err := r.Validate(); err != nil {
+			t.Fatalf("payload_kind=message rejected: %v", err)
+		}
+	})
+	t.Run("room_name with one entry is accepted", func(t *testing.T) {
+		r := chatValidRequest()
+		r.PayloadKind = ConversationPayloadKindRoomName
+		if err := r.Validate(); err != nil {
+			t.Fatalf("payload_kind=room_name rejected: %v", err)
+		}
+	})
+
+	rejects := []struct {
+		name  string
+		apply func(*ConversationDecryptBatchForAppDisplayRequest)
+		field string
+	}{
+		{"unknown kind", func(r *ConversationDecryptBatchForAppDisplayRequest) {
+			r.PayloadKind = "room"
+		}, "payload_kind"},
+		{"kind is case sensitive", func(r *ConversationDecryptBatchForAppDisplayRequest) {
+			r.PayloadKind = "Room_Name"
+		}, "payload_kind"},
+		{"room_name with no entry", func(r *ConversationDecryptBatchForAppDisplayRequest) {
+			r.PayloadKind = ConversationPayloadKindRoomName
+			r.Messages = nil
+		}, "messages"},
+		{"room_name with two entries", func(r *ConversationDecryptBatchForAppDisplayRequest) {
+			r.PayloadKind = ConversationPayloadKindRoomName
+			r.Messages = append(r.Messages, ConversationDecryptMessage{
+				IVB64: chatFixtureIVB64, CiphertextB64: chatFixtureCt1B64,
+			})
+		}, "messages"},
+	}
+	for _, tc := range rejects {
+		t.Run(tc.name, func(t *testing.T) {
+			r := chatValidRequest()
+			tc.apply(&r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("%s accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("error must name %s, got %q", tc.field, err.Error())
+			}
+		})
+	}
+}

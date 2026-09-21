@@ -1,19 +1,21 @@
-// conversation_decrypt.go — the DragPass 1:1 chat reveal.
+// conversation_decrypt.go — the DragPass chat reveal, 1:1 and group rooms.
 //
-// HandleConversationDecryptBatchForAppDisplay verifies a server-signed
-// conversation-read-permit and opens a page of one conversation's messages
-// under the conversation DEK behind an opaque group handle, returning the
-// plaintexts. It is the protocol's second plaintext-returning response, so the
-// interesting part of this file is everything that has to hold before any
-// plaintext is produced:
+// HandleConversationDecryptBatchForAppDisplay verifies a server-signed read
+// permit and opens a page of one conversation's messages — or that
+// conversation's single sealed room name — under the conversation DEK behind an
+// opaque group handle, returning the plaintexts. It is the protocol's second
+// plaintext-returning response, so the interesting part of this file is
+// everything that has to hold before any plaintext is produced:
 //
 //	strict decode (no unknown / duplicate / missing field, 2 MiB cap,
 //	  <=200 messages, each ciphertext 17..8208B)
-//	  → structural validation
+//	  → structural validation, payload_kind included (room_name means exactly
+//	    one entry)
 //	  → the request and the permit agree on org_id / conversation_id /
 //	    dek_version
 //	  → the permit window holds (issued_at <= now+5, now < expires_at,
 //	    expires_at - issued_at == 300)
+//	  → payload_kind picks a permit canonical and an AAD together
 //	  → the server signature verifies under the named key version (unknown
 //	    version fails closed, no active-key fallback)
 //	  → every message opens under an AAD the Keeper built, not one it was given
@@ -21,8 +23,9 @@
 //	    batch with no partial output
 //
 // The order is the contract (dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5), not an
-// implementation detail. Unlike the Secure Message reveal there is no
+// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and
+// docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.1), not
+// an implementation detail. Unlike the Secure Message reveal there is no
 // per-message challenge: opening the group handle from a wrapped grant is
 // itself the key-possession proof, so possession + permit are the two axes.
 //
@@ -48,14 +51,17 @@ import (
 // may sit. Covers ordinary server/client clock drift and nothing more.
 const chatReadPermitClockSkewSeconds = 5
 
-// HandleConversationDecryptBatchForAppDisplay opens a batch of chat messages
-// for browser display.
+// HandleConversationDecryptBatchForAppDisplay opens a batch of chat messages,
+// or one room name, for browser display.
 //
-// The caller supplies structured context, never an AAD: the chat AAD is built
-// here from the permit's validated fields, so a drag token (no AAD), a Secure
+// The caller supplies structured context, never an AAD: the AAD is built here
+// from the permit's validated fields, so a drag token (no AAD), a Secure
 // Message (message canonical), and a credential payload (credential canonical)
 // fail the GCM tag even when the caller holds the right handle and names the
-// right conversation.
+// right conversation. payload_kind widens that to two families of this
+// action's own: a chat message does not open in room_name mode and a room name
+// does not open in message mode, and each mode demands a permit signed over
+// its own domain.
 func HandleConversationDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	d.Logger.Println("conversation decrypt batch request processing...")
 
@@ -73,8 +79,13 @@ func HandleConversationDecryptBatchForAppDisplay(d Deps, payload json.RawMessage
 	if !conversationReadPermitWindowHolds(permit, now) {
 		return chatNotAuthorized(d, "permit window")
 	}
+	// payload_kind picks the permit canonical and the AAD together, so the
+	// signature and the tag are always judged in the same domain. Validate has
+	// already refused any value other than "" / message / room_name.
+	permitCanonical, aadCanonical := proto.ConversationPayloadCanonicals(req.PayloadKind, permit)
+
 	if err := d.ServerKeyVerifier.Verify(
-		proto.ConversationReadPermitCanonical(permit), permit.Signature, permit.ServerKeyVersion,
+		permitCanonical, permit.Signature, permit.ServerKeyVersion,
 	); err != nil {
 		// The verifier's message names the failing step and sometimes the key
 		// version; neither belongs in a reply to a caller that just failed to
@@ -84,7 +95,7 @@ func HandleConversationDecryptBatchForAppDisplay(d Deps, payload json.RawMessage
 
 	// AAD from the permit's structured fields, never from the request body. The
 	// binding check above already proved the request agrees with the permit.
-	aad := []byte(proto.ChatAADCanonical(permit.OrgID, permit.ConversationID, permit.DekVersion))
+	aad := []byte(aadCanonical)
 
 	plaintexts := make([][]byte, len(req.Messages))
 	// Zeroize every opened plaintext on the way out, on both the success and the
