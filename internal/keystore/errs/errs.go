@@ -64,6 +64,17 @@ const (
 	// which ships separately; the code is in the enum so both sides can be
 	// written against one stable spelling.
 	ErrCodePeerKeyUnverified ErrorCode = "peer_key_unverified"
+
+	// ErrCodePeerKeyOwnerMismatch: the request carried an `owner_account_id`
+	// that is not the one this device recorded the first time it was given
+	// one (account key trust v1, owner TOFU). The owner half of a pin's
+	// keyring name originally comes from the server, so a server that reports
+	// a different account id would push every lookup into an empty namespace
+	// where every peer reads as a first observation and TOFU waves the wrap
+	// through. Nothing was wrapped, no pin was read or written, and no pin
+	// list was returned. The only way to change the recorded owner is
+	// `peer_key_owner_reset` from the extension options page.
+	ErrCodePeerKeyOwnerMismatch ErrorCode = "peer_key_owner_mismatch"
 )
 
 // CodeForError inspects an error and returns the matching coarse code.

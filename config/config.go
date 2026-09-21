@@ -92,6 +92,21 @@ const (
 	// wired to the extension options page only.
 	PeerKeyPolicyAccount = "peer-key-policy"
 
+	// The owner account this device's pins belong to (account key trust v1,
+	// owner TOFU).
+	//
+	// A single entry, like the policy and for the same structural reason: it
+	// is a fact about the device, not about one account's view of its peers.
+	// The owner half of `peer-pin:<owner>:<peer>` arrives in the request and
+	// originally came from the server (`GET /account/me`), so a server that
+	// reports a different account id would send every lookup into an empty
+	// namespace where every peer looks new. This slot records the first owner
+	// the Keeper ever saw and refuses the ones that disagree.
+	//
+	// Cleared only by peer_key_owner_reset, which is the single path that
+	// lets a device change owners.
+	PeerKeyOwnerAccount = "peer-key-owner"
+
 	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a

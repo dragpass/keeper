@@ -64,6 +64,58 @@ const (
 	// with forgotten:false and still prunes a stale index entry.
 	ActionPeerKeyPinForget = "peer_key_pin_forget"
 
+	// PeerKeyChainEvaluate: judge a peer's current key without wrapping to it.
+	//
+	//   Inputs: owner_account_id, account_id, public_key (PEM the server is
+	//           serving right now), rotation_statements?
+	//   Output: { state, fingerprint, advanced, pinned_fingerprint? }
+	//
+	// The pin only advanced to `rotated` inside a wrap, and the SPA blocks
+	// every wrap entry point while the pinned fingerprint differs from the
+	// served key. A peer who rotated legitimately therefore locked the org:
+	// the chain that explains the change existed, and nothing could ever show
+	// it to the Keeper. The two escapes the banner offered were both wrong —
+	// out-of-band verify lands on `verified` and erases the "this key
+	// changed" signal (and the same button launders a real substitution),
+	// while forget throws the protection away.
+	//
+	// This action gives the chain somewhere to be judged. It runs the same
+	// evaluatePeerKeyTrust the wrap path runs, on the same inputs, and
+	// persists the pin the same way, so a valid chain moves the pin to
+	// `rotated` and a refusal reports `changed` and changes nothing.
+	//
+	// It does not widen what a local caller can do: anyone who can reach the
+	// Keeper can already call the wrap actions, which take these same inputs
+	// and run this same state machine before producing anything. What is
+	// removed is the requirement to have a Group DEK in hand to ask the
+	// question.
+	ActionPeerKeyChainEvaluate = "peer_key_chain_evaluate"
+
+	// PeerKeyOwnerReset: forget which account this device's pins belong to.
+	//
+	//   Inputs: none
+	//   Output: { reset }
+	//
+	// The owner half of `peer-pin:<owner>:<peer>` arrives as a request field
+	// sourced from the server, so the Keeper records the first owner id it
+	// is ever given and refuses the rest with `peer_key_owner_mismatch`. This
+	// is the only path that changes that record, and it exists because a
+	// device legitimately shared by two accounts would otherwise be stuck on
+	// whoever signed in first.
+	//
+	// **It must be reachable only from the extension options surface.** No
+	// SPA route, no content script, no server-driven path may call it, since
+	// a caller who can clear the record can then pick the namespace the
+	// owner check exists to fix. The Keeper cannot enforce that itself: it
+	// does not know who launched it (four surfaces spawn the same binary over
+	// the same stdio loop — see docs/security/adr-ratchet-state-storage.md
+	// §3.1), so this is a client-side obligation stated here rather than a
+	// check.
+	//
+	// Pins are left behind, so switching back to a previous owner finds their
+	// trust records where they were.
+	ActionPeerKeyOwnerReset = "peer_key_owner_reset"
+
 	// PeerKeyPolicyGet: the device's peer key policy.
 	//
 	//   Inputs: none
