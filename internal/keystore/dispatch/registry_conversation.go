@@ -1,9 +1,11 @@
-// registry_conversation.go — DragPass 1:1 chat reveal action registration.
+// registry_conversation.go — DragPass chat reveal action registration.
 //
 // Mirrors proto/actions_conversation.go. This action is its own security
-// domain — a server-signed conversation-read-permit and a plaintext-returning
-// response — so it keeps its own registry fragment rather than riding on the
-// Group DEK catalog.
+// domain — a server-signed read permit and a plaintext-returning response — so
+// it keeps its own registry fragment rather than riding on the Group DEK
+// catalog. Named group rooms (0.0.34) widened the action with a `payload_kind`
+// field rather than adding a second entry here: one action, two canonical
+// families, and a registered action count that does not move.
 //
 // Like registry_message.go it registers the handler directly instead of through
 // wrap(). wrap() routes through `process`, which decodes with plain

@@ -1,15 +1,17 @@
-// conversation_decrypt.go — payload models for the DragPass 1:1 chat reveal
-// path (conversation_decrypt_batch_for_app_display).
+// conversation_decrypt.go — payload models for the DragPass chat reveal path
+// (conversation_decrypt_batch_for_app_display), 1:1 and named group rooms.
 //
 // The request carries the conversation context the Keeper needs to rebuild the
-// chat AAD by itself — org_id, conversation_id, dek_version — plus the
-// server-signed conversation-read-permit and the batch of sealed messages.
-// There is deliberately no aad_b64, no domain, and no canonical field: the
-// caller describes *which* conversation this is, never *how* the messages are
-// bound. See actions_conversation.go for the security model and
-// dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §4 / §5 for the
-// contract these types implement.
+// AAD by itself — org_id, conversation_id, dek_version — plus the server-signed
+// read permit and the batch of sealed ciphertexts. There is deliberately no
+// aad_b64, no domain, and no canonical field: the caller describes *which*
+// conversation this is, never *how* the ciphertext is bound. The one thing it
+// may say is `payload_kind`, an enum of two values that picks between two
+// canonical families the Keeper builds itself (0.0.34). See
+// actions_conversation.go for the security model and dragpass-control-plane
+// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §4 / §5 and
+// docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §5 / §6 for
+// the contracts these types implement.
 //
 // Validate() here is structural only — formats, ranges, batch size, and each
 // message's decoded length. Everything that needs state (the signature, the
@@ -61,6 +63,23 @@ const (
 	ChatReadPermitDomain           = "dragpass.chat.read"
 	ChatReadPermitCanonicalVersion = 1
 
+	// RoomNameAADDomain / RoomNameAADVersion — the named-group-room slice
+	// (0.0.34). A room's name is sealed under the room's own conversation DEK
+	// with the same slot layout as the chat AAD and a different domain:
+	// `dragpass.room|1|<org>|<conversation>|<dek_version>`. Sharing the chat
+	// domain would let the server move a message row into the name column and
+	// have it open as the room's title; the domain is what costs one string and
+	// refuses that.
+	RoomNameAADDomain  = "dragpass.room"
+	RoomNameAADVersion = 1
+
+	// RoomNameReadPermitDomain / RoomNameReadPermitCanonicalVersion — the first
+	// two slots of the room-name read permit. The nine items and the 300-second
+	// TTL are identical to the message permit; only the domain differs, which is
+	// what keeps a page of 50 list permits from also opening 50 conversations.
+	RoomNameReadPermitDomain           = "dragpass.room.read"
+	RoomNameReadPermitCanonicalVersion = 1
+
 	// ChatReadPermitTTLSeconds — the server fixes
 	// `expires_at = issued_at + 300`, and the Keeper requires exactly that
 	// difference. A wider window is not a permit this contract issued; a
@@ -84,6 +103,21 @@ const (
 	ConversationIVBytes            = 12
 	ConversationCiphertextMinBytes = 17
 	ConversationCiphertextMaxBytes = 8208
+)
+
+// The two values of `payload_kind`, the only thing a caller may say about how
+// the ciphertext is bound. Each value selects a pair of canonicals that are
+// built inside the Keeper; neither the AAD nor the permit domain is ever taken
+// from the request.
+const (
+	// ConversationPayloadKindMessage — a page of conversation messages. This is
+	// also what an omitted `payload_kind` means, so a 0.0.33-era caller keeps
+	// the behavior it was written against.
+	ConversationPayloadKindMessage = "message"
+	// ConversationPayloadKindRoomName — the single sealed room name of one
+	// conversation. A room has exactly one name, so the batch must carry
+	// exactly one entry.
+	ConversationPayloadKindRoomName = "room_name"
 )
 
 // ConversationReadPermit is the server-signed authorization to read one
@@ -143,12 +177,18 @@ type ConversationDecryptMessage struct {
 // ConversationDecryptBatchForAppDisplayRequest opens a page of one
 // conversation's messages for browser display: the conversation context, the
 // permit, and the batch.
+//
+// PayloadKind selects which of the two canonical families the Keeper builds
+// (see ConversationPayloadCanonicals). It is omitempty on purpose: the strict
+// decoder treats every non-omitempty field as a required key, and a caller
+// written against 0.0.33 sends no `payload_kind` at all.
 type ConversationDecryptBatchForAppDisplayRequest struct {
 	GroupHandle    string                       `json:"group_handle"`
 	Permit         ConversationReadPermit       `json:"permit"`
 	OrgID          string                       `json:"org_id"`
 	ConversationID string                       `json:"conversation_id"`
 	DekVersion     int                          `json:"dek_version"`
+	PayloadKind    string                       `json:"payload_kind,omitempty"`
 	Messages       []ConversationDecryptMessage `json:"messages"`
 }
 
@@ -167,6 +207,19 @@ func (r ConversationDecryptBatchForAppDisplayRequest) Validate() error {
 	}
 	if err := requireMessageDekVersion(r.DekVersion, "dek_version"); err != nil {
 		return err
+	}
+	switch r.PayloadKind {
+	case "", ConversationPayloadKindMessage:
+	case ConversationPayloadKindRoomName:
+		// A room has one name. Refusing 0 and 2+ here means the room branch can
+		// never be used as a general batch decrypt under a different domain.
+		if len(r.Messages) != 1 {
+			return newValidationError("messages",
+				"must carry exactly 1 entry when payload_kind is "+ConversationPayloadKindRoomName)
+		}
+	default:
+		return newValidationError("payload_kind",
+			"must be "+ConversationPayloadKindMessage+" or "+ConversationPayloadKindRoomName)
 	}
 	if len(r.Messages) > ConversationDecryptMaxMessages {
 		return newValidationError("messages", "must carry at most "+
@@ -190,13 +243,16 @@ func (r ConversationDecryptBatchForAppDisplayRequest) Validate() error {
 }
 
 // ConversationDecryptBatchForAppDisplayResponseData carries the decrypted
-// messages, parallel to request.messages.
+// payloads, parallel to request.messages — chat messages, or the one room name
+// when payload_kind is room_name.
 //
 // PlaintextB64 is the second TestNoRawSecretInResponseTypes carve-out (the
 // first is 0.0.29's GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64).
-// The exception is approved for this response type alone; see the carve-out
-// comment in no_raw_secret_response_test.go, dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, and
+// The exception is approved for this response type alone; the room-name branch
+// widens what it covers, not how many entries the carve-out list has. See the
+// carve-out comment in no_raw_secret_response_test.go, dragpass-control-plane
+// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5,
+// docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, and
 // threat-model §4.10.
 type ConversationDecryptBatchForAppDisplayResponseData struct {
 	PlaintextB64 []string `json:"plaintext_b64"` // secret in RESPONSE — the approved chat carve-out; never logged
@@ -219,15 +275,49 @@ func ChatAADCanonical(orgID, conversationID string, dekVersion int) string {
 	}, "|")
 }
 
+// RoomNameAADCanonical builds the AAD a group room's sealed name was bound
+// under. Same five slots as ChatAADCanonical, different domain — which is the
+// entire mechanism keeping a message ciphertext from opening as a room title
+// and a room title from opening as a message.
+//
+// Pure function for the same reason as ChatAADCanonical: packages/crypto
+// (GR3) builds these bytes on the encrypt side and
+// docs/testing/fixtures/chat-rooms-v1.json pins them.
+func RoomNameAADCanonical(orgID, conversationID string, dekVersion int) string {
+	return strings.Join([]string{
+		RoomNameAADDomain,
+		strconv.Itoa(RoomNameAADVersion),
+		orgID,
+		conversationID,
+		strconv.Itoa(dekVersion),
+	}, "|")
+}
+
 // ConversationReadPermitCanonical builds the 9-item string the server signs and
 // the Keeper verifies. No trailing newline; the schema slot is always 1.
 //
 // Pure function on purpose, for the same reason as ChatAADCanonical: ariadne's
 // signer (CC2) has to produce these bytes exactly.
 func ConversationReadPermitCanonical(p ConversationReadPermit) string {
+	return readPermitCanonical(ChatReadPermitDomain, ChatReadPermitCanonicalVersion, p)
+}
+
+// RoomNameReadPermitCanonical builds the room-name permit's signing string.
+// Nine items in the same order as the message permit, one different domain.
+//
+// The permit carries no domain field of its own, so this is the only place the
+// two are told apart: a message permit presented for a room-name request is
+// verified against the room canonical and fails, and the reverse fails too.
+// Choosing the canonical *is* the binding check, which is why there is no
+// separate one.
+func RoomNameReadPermitCanonical(p ConversationReadPermit) string {
+	return readPermitCanonical(RoomNameReadPermitDomain, RoomNameReadPermitCanonicalVersion, p)
+}
+
+func readPermitCanonical(domain string, schemaVersion int, p ConversationReadPermit) string {
 	return strings.Join([]string{
-		ChatReadPermitDomain,
-		strconv.Itoa(ChatReadPermitCanonicalVersion),
+		domain,
+		strconv.Itoa(schemaVersion),
 		p.AccountID,
 		p.OrgID,
 		p.ConversationID,
@@ -236,4 +326,26 @@ func ConversationReadPermitCanonical(p ConversationReadPermit) string {
 		strconv.FormatInt(p.ExpiresAt, 10),
 		strconv.FormatUint(uint64(p.ServerKeyVersion), 10),
 	}, "|")
+}
+
+// ConversationPayloadCanonicals returns the two strings one payload_kind
+// selects: the canonical the permit's signature must cover, and the AAD the
+// ciphertext must have been sealed under.
+//
+// They are returned together on purpose. Verifying a signature over one domain
+// and then decrypting under the other is the one mistake this action must be
+// unable to make, and the way to make it impossible is to leave the handler no
+// opportunity to pick them separately.
+//
+// Precondition: payloadKind has passed
+// ConversationDecryptBatchForAppDisplayRequest.Validate, which refuses anything
+// other than "", "message", and "room_name". An empty string is the omitted
+// field and means "message".
+func ConversationPayloadCanonicals(payloadKind string, p ConversationReadPermit) (permitCanonical, aad string) {
+	if payloadKind == ConversationPayloadKindRoomName {
+		return RoomNameReadPermitCanonical(p),
+			RoomNameAADCanonical(p.OrgID, p.ConversationID, p.DekVersion)
+	}
+	return ConversationReadPermitCanonical(p),
+		ChatAADCanonical(p.OrgID, p.ConversationID, p.DekVersion)
 }
