@@ -80,6 +80,18 @@ const (
 	PeerKeyPinPrefix      = "peer-pin:"
 	PeerKeyPinIndexPrefix = "peer-pin-index:"
 
+	// Peer key device policy (account key trust v1, strict mode).
+	//
+	// A single entry, deliberately not owner-scoped: this is a decision about
+	// the machine ("on this device, only wrap to keys somebody compared out
+	// of band"), not about one account's view of its peers. Two accounts
+	// sharing a device share the policy and keep separate pins.
+	//
+	// The server has no path to it. There is no action that lets a caller
+	// read it on the server's behalf either — the two policy actions are
+	// wired to the extension options page only.
+	PeerKeyPolicyAccount = "peer-key-policy"
+
 	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a

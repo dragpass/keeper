@@ -43,6 +43,10 @@ type peerKeyPinCheck struct {
 // swapped and the first ten were already wrapped, the org would split into
 // people who can read the new DEK and people who cannot. So every recipient is
 // judged before anything is produced, and one `changed` refuses the call whole.
+//
+// The device policy (§6.5) is read once here and applied to each verdict. With
+// strict mode on a peer nobody has compared out of band refuses the call the
+// same way, under `peer_key_unverified`.
 func enforcePeerKeyPins(
 	d Deps, ownerAccountID string, checks []peerKeyPinCheck,
 ) ([]string, proto.BaseResponse, bool) {
@@ -53,6 +57,15 @@ func enforcePeerKeyPins(
 	}
 	updates := make([]pendingPin, 0, len(checks))
 	now := d.Now().Unix()
+
+	// Read once per call, not once per recipient: the policy is a property of
+	// the device, and a rotation that judged half its members under one answer
+	// and half under another would be deciding by race.
+	policy, err := keychain.GetPeerKeyPolicy(d.Store)
+	if err != nil {
+		d.Logger.Printf("peer key pin error: failed to read policy: %v", err)
+		return nil, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read peer key policy: "+err.Error()), false
+	}
 
 	for i, check := range checks {
 		if check.accountID == "" {
@@ -65,8 +78,20 @@ func enforcePeerKeyPins(
 			return nil, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read peer key pin: "+err.Error()), false
 		}
 		outcome := evaluatePeerKeyTrust(existing, check.accountID, check.observed, check.statements, now)
+		outcome = applyPeerKeyPolicy(outcome, policy.RequireVerifiedPeers)
 		if !outcome.Allowed {
 			d.Logger.Printf("peer key pin refused the wrap: %s", outcome.Reason)
+			// A strict-mode refusal is a policy answer, not a detected
+			// substitution, so it gets its own code and carries no payload:
+			// there are no two fingerprints to compare, only one nobody has
+			// checked yet.
+			if outcome.Unverified {
+				return nil, proto.BaseResponse{
+					Success:   false,
+					Error:     outcome.Reason,
+					ErrorCode: string(errs.ErrCodePeerKeyUnverified),
+				}, false
+			}
 			// The one refusal that carries data: the SPA needs both
 			// fingerprints to draw the "which of these is right" banner, and
 			// making it fetch them again would mean asking the server for the

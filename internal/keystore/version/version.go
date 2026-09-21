@@ -13,7 +13,7 @@ import (
 )
 
 // Version must match the vX.Y.Z release tag. CI enforces this invariant.
-const Version = "0.0.31"
+const Version = "0.0.32"
 
 var (
 	BinaryHash string
