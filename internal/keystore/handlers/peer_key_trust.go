@@ -19,6 +19,12 @@
 // record by retrying. Only a human calling peer_key_pin_verify moves a pin
 // across a change the chain does not explain.
 //
+// applyPeerKeyPolicy is the device's own setting layered on top of that
+// decision: with strict mode on, an allowed outcome that is not `verified` is
+// refused too. It is a separate step so the state machine keeps deciding what
+// the key is, and the policy only decides how much the device insists on
+// before wrapping to it.
+//
 // Contract: dragpass-control-plane
 // docs/exec-plans/active/account-key-trust-implementation.md §6.2.
 
@@ -43,6 +49,13 @@ type peerKeyTrustOutcome struct {
 	// Pin is the record to persist. Meaningful only when Allowed — a refusal
 	// leaves the stored pin untouched.
 	Pin keychain.PeerKeyPin
+	// Unverified marks a refusal that the device policy produced rather than
+	// the state machine: the key is the one we expected, nobody has compared
+	// it out of band, and strict mode is on. The caller turns it into
+	// `peer_key_unverified` instead of `peer_key_changed`, because what the
+	// user has to do about it is different — finish the check, rather than
+	// work out which of two keys is real.
+	Unverified bool
 	// Reason explains a refusal in one English sentence. Empty when allowed.
 	// It names conditions, never values: no fingerprint, key, or signature
 	// goes into it, because it travels into an error message and a log line.
@@ -104,6 +117,39 @@ func evaluatePeerKeyTrust(
 	pin.VerifiedAt = 0
 	pin.LastSeenAt = now
 	return peerKeyTrustOutcome{Allowed: true, State: keychain.PeerKeyPinStateRotated, Pin: pin}
+}
+
+// applyPeerKeyPolicy narrows an allowed outcome when the device is in strict
+// mode (§6.5). Off — the default — it changes nothing.
+//
+// It runs after the state machine rather than inside it, which is what keeps
+// `changed` short-circuiting first: a refusal arrives here already refused and
+// leaves untouched, so a substituted key is still reported as `peer_key_changed`
+// and strict mode never renames it into a milder-sounding policy refusal.
+//
+// On, the rule is the whole of the setting: anything the user has not compared
+// out of band is refused. That covers a first observation (`tofu` with no pin
+// yet), an earlier observation nobody got around to checking (`tofu`), and a
+// peer whose rotation chain verified but whose current key no human has read
+// aloud (`rotated`). Letting the first observation through would be the worst
+// of the three to skip, since that is the wrap that actually hands the Group
+// DEK to a key nobody has looked at.
+//
+// A policy refusal leaves the pin alone for the same reason a `changed` one
+// does: nothing was wrapped, so nothing should be recorded as having been.
+func applyPeerKeyPolicy(outcome peerKeyTrustOutcome, requireVerifiedPeers bool) peerKeyTrustOutcome {
+	if !outcome.Allowed || !requireVerifiedPeers {
+		return outcome
+	}
+	if outcome.State == keychain.PeerKeyPinStateVerified {
+		return outcome
+	}
+	return peerKeyTrustOutcome{
+		Allowed:    false,
+		State:      outcome.State,
+		Unverified: true,
+		Reason:     "peer key has not been verified out of band and this device requires verified peers",
+	}
 }
 
 // verifyRotationChain decides whether `statements` genuinely carries the

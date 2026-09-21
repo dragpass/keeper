@@ -63,4 +63,30 @@ const (
 	// a human already confirmed. Idempotent — forgetting nothing succeeds
 	// with forgotten:false and still prunes a stale index entry.
 	ActionPeerKeyPinForget = "peer_key_pin_forget"
+
+	// PeerKeyPolicyGet: the device's peer key policy.
+	//
+	//   Inputs: none
+	//   Output: { require_verified_peers }
+	//
+	// A device that never set one reads the default, which is off. No owner
+	// id: this is a setting about the machine, not about one account's view
+	// of its peers.
+	ActionPeerKeyPolicyGet = "peer_key_policy_get"
+
+	// PeerKeyPolicySet: turn strict mode on or off.
+	//
+	//   Inputs: require_verified_peers
+	//   Output: { require_verified_peers }
+	//
+	// On, the wrap path refuses any peer whose pin is not `verified` with
+	// `peer_key_unverified`: a `tofu` peer nobody compared and a `rotated`
+	// peer whose chain verified but whose current key nobody has read aloud.
+	// `changed` is refused either way.
+	//
+	// The field is required rather than defaulted, so an empty payload turns
+	// nothing off by accident. The extension options page is the only caller;
+	// the SPA and the server have no route to it, which is the point of
+	// keeping the value in the keyring instead of on the account.
+	ActionPeerKeyPolicySet = "peer_key_policy_set"
 )
