@@ -112,6 +112,9 @@ func TestEnforcePeerKeyPins_StrictAppliesToEveryOwner(t *testing.T) {
 	setStrictMode(t, fixture.deps, true)
 
 	for _, owner := range []string{pinOwnerA, pinOwnerB} {
+		// Owner TOFU binds the device to the first id it sees, so the second
+		// owner arrives the way a real one would: after an options-page reset.
+		switchPeerKeyOwner(t, fixture.deps)
 		resp := HandleDEKRewrapForMember(fixture.deps, proto.DEKRewrapForMemberRequest{
 			WrappedForMeB64: fixture.wrapped,
 			OtherPublicKey:  peer.pair.PublicKey,

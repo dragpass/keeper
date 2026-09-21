@@ -536,6 +536,11 @@ func TestHandlePeerKeyPinForget_Idempotent(t *testing.T) {
 
 // Two accounts on one device keep separate trust. A's verification is not
 // visible to B, and B's forget does not reach A.
+//
+// The owner switch goes through peer_key_owner_reset, because owner TOFU now
+// refuses a second owner id until the device is unbound. That is the whole
+// point of this test still passing: resetting changes which namespace is in
+// use and changes nothing inside either one.
 func TestPeerKeyPin_OwnerScopeDoesNotLeak(t *testing.T) {
 	fixture := newWrapFixture(t)
 	keyA, keyB := newTrustKey(t), newTrustKey(t)
@@ -546,6 +551,7 @@ func TestPeerKeyPin_OwnerScopeDoesNotLeak(t *testing.T) {
 	}); !resp.Success {
 		t.Fatalf("owner A verify failed: %s", resp.Error)
 	}
+	switchPeerKeyOwner(t, fixture.deps)
 	if resp := HandleDEKRewrapForMember(fixture.deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: fixture.wrapped,
 		OtherPublicKey:  keyB.pair.PublicKey,
@@ -568,6 +574,7 @@ func TestPeerKeyPin_OwnerScopeDoesNotLeak(t *testing.T) {
 		t.Fatalf("owner B forget failed: %s", resp.Error)
 	}
 
+	switchPeerKeyOwner(t, fixture.deps)
 	gotA := HandlePeerKeyPinGet(fixture.deps, proto.PeerKeyPinGetRequest{
 		OwnerAccountID: pinOwnerA, AccountID: pinPeer,
 	}).Data.(proto.PeerKeyPinGetResponseData)

@@ -50,6 +50,15 @@ type peerKeyPinCheck struct {
 func enforcePeerKeyPins(
 	d Deps, ownerAccountID string, checks []peerKeyPinCheck,
 ) ([]string, proto.BaseResponse, bool) {
+	// The owner half of every pin key is checked before any of them is read.
+	// A legacy call carries no owner id and has no pin set to be steered
+	// into, so there is nothing to bind. See peer_key_owner.go.
+	if ownerAccountID != "" {
+		if resp, ok := requirePeerKeyOwner(d, ownerAccountID); !ok {
+			return nil, resp, false
+		}
+	}
+
 	states := make([]string, len(checks))
 	type pendingPin struct {
 		accountID string
@@ -155,6 +164,10 @@ func HandlePeerKeyPinList(d Deps, req proto.PeerKeyPinListRequest) proto.BaseRes
 		return errs.Response(err)
 	}
 
+	if resp, ok := requirePeerKeyOwner(d, req.OwnerAccountID); !ok {
+		return resp
+	}
+
 	entries, err := keychain.ListPeerKeyPins(d.Store, req.OwnerAccountID)
 	if err != nil {
 		d.Logger.Printf("peer key pin list error: %v", err)
@@ -178,6 +191,10 @@ func HandlePeerKeyPinGet(d Deps, req proto.PeerKeyPinGetRequest) proto.BaseRespo
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
+	}
+
+	if resp, ok := requirePeerKeyOwner(d, req.OwnerAccountID); !ok {
+		return resp
 	}
 
 	pin, err := loadPeerKeyPin(d.Store, req.OwnerAccountID, req.AccountID)
@@ -207,6 +224,10 @@ func HandlePeerKeyPinVerify(d Deps, req proto.PeerKeyPinVerifyRequest) proto.Bas
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
+	}
+
+	if resp, ok := requirePeerKeyOwner(d, req.OwnerAccountID); !ok {
+		return resp
 	}
 
 	// Parse before hashing: a string that starts with a PEM header but holds
@@ -260,6 +281,10 @@ func HandlePeerKeyPinForget(d Deps, req proto.PeerKeyPinForgetRequest) proto.Bas
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
+	}
+
+	if resp, ok := requirePeerKeyOwner(d, req.OwnerAccountID); !ok {
+		return resp
 	}
 
 	forgotten, err := keychain.DeletePeerKeyPin(d.Store, req.OwnerAccountID, req.AccountID)
