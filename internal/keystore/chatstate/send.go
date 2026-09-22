@@ -37,11 +37,12 @@
 //
 // # What is deliberately not here
 //
-// Nothing logs the group state, the ciphertext, or any buffer that passed
-// through the MLS layer, and no error message carries them. The serialized
-// state contains this device's leaf signature secret key, so a length or a
-// digest of it in a log is a fingerprint of a signing key sitting in a file
-// with no seal in front of it.
+// Nothing here logs, and no error message carries the group state, the
+// plaintext, or any buffer that passed through the MLS layer — not their bytes,
+// not their length, not a digest. The serialized state holds this device's leaf
+// signature secret key, so even its size in a log line is a fact about a
+// signing key. The one length that does appear in an error is the ciphertext's,
+// which the transport carries in the clear anyway.
 
 package chatstate
 
