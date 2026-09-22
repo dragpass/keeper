@@ -141,6 +141,16 @@ func (s *Store) Receive(
 			}
 			return nil
 		}
+		// A re-read above is served from the sealed copy and never reaches
+		// here, so an unsettled Commit does not stop anyone from reading what
+		// they already have. What it does stop is feeding a new message to
+		// MLS. A Commit handed to Open while ours is pending would be applied
+		// by the library and would silently drop our pending along with it,
+		// settling the race behind the record's back; ConfirmCommit is where
+		// that message belongs (§7.3.2).
+		if rec.Pending != nil {
+			return ErrCommitPending
+		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}

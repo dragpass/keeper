@@ -146,6 +146,14 @@ func (s *Store) Send(
 			out = SendResult{Entry: existing, Generation: rec.Generation}
 			return nil
 		}
+		// After the retransmission branch on purpose. Resending stored bytes
+		// touches neither the ratchet nor the epoch, so an unsettled Commit
+		// has nothing to say about it. A new message is different: which epoch
+		// it belongs to is undecided while a Commit of ours is in flight, and
+		// encrypting under a guess is what §7.3.2's third outcome refuses.
+		if rec.Pending != nil {
+			return ErrCommitPending
+		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}

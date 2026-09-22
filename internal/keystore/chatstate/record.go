@@ -89,6 +89,39 @@ type OutboxEntry struct {
 	Ciphertext      []byte   `json:"ciphertext"`
 }
 
+// PendingCommit is a Commit this device built and posted, whose fate the
+// server has not yet told us. At most one exists per conversation.
+//
+// There is no next_group_state field, and its absence is the persistence form
+// this design picked (design §7.3.1 offered two). The next epoch's state lives
+// inside GroupState, because mls-rs holds a built Commit in Group.pending_commit
+// and Snapshot carries that field through write_to_storage and back through
+// load_group. Keeping the shape the library already has buys three things our
+// own copy would not: the library refuses a second build while one is pending
+// (MlsError::ExistingPendingCommit), processing somebody else's Commit drops
+// ours in the same operation that applies theirs, and a restart finds it
+// without a second serialization format to version. What it costs is that the
+// confirmed state and the fork share one blob, so keeping the rollback anchor
+// on the confirmed axis is this package's job rather than the file layout's —
+// see commit.go and Record.Epoch.
+type PendingCommit struct {
+	// ClientCommitID is the server's idempotency key. It is the single
+	// authority on "was my Commit the one that won", which is why a device
+	// that lost the response asks with it rather than guessing.
+	ClientCommitID string `json:"client_commit_id"`
+
+	// ExpectedEpoch is the confirmed epoch this Commit was built against and
+	// the value the server compares under its CAS.
+	ExpectedEpoch uint64 `json:"expected_epoch"`
+
+	// Commit is the message to post, kept so a retry after a lost response
+	// sends the same bytes rather than building a second Commit.
+	Commit []byte `json:"commit"`
+
+	// Welcome is released only once the Commit is accepted (RFC 9420 §14).
+	Welcome []byte `json:"welcome,omitempty"`
+}
+
 // Record is one conversation's whole state. Everything that has to change
 // atomically is in here and nothing that has to change atomically is outside,
 // which is what lets a single file replacement be the unit of consistency and
@@ -119,6 +152,11 @@ type Record struct {
 	// may or may not have happened, and an unfinished position is treated as
 	// used (send.go).
 	PendingSend *Position `json:"pending_send,omitempty"`
+
+	// Pending is the one Commit this device has built and not yet settled.
+	// Separate from Epoch and GroupState above because those two are the
+	// confirmed state and a built Commit is not confirmed; see commit.go.
+	Pending *PendingCommit `json:"pending,omitempty"`
 
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
