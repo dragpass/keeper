@@ -737,10 +737,14 @@ func TestChatStateReceiveConfirmsTheMarkAndTheCopyTogetherAcrossAKill(t *testing
 		t.Fatalf("the retry did not deliver: %q", out.output)
 	}
 
-	rec = env.readRecord(t)
-	if len(rec.Received) != 1 || len(rec.History) != 1 {
+	confirmed := env.readRecord(t)
+	if len(confirmed.Received) != 1 || len(confirmed.History) != 1 {
 		t.Fatalf("the delivery landed as mark=%d copy=%d; want one of each",
-			len(rec.Received), len(rec.History))
+			len(confirmed.Received), len(confirmed.History))
+	}
+	if confirmed.Generation != rec.Generation+1 {
+		t.Fatalf("the delivery took %d writes; the mark and the copy are not one replacement",
+			confirmed.Generation-rec.Generation)
 	}
 
 	// A re-read in yet another process comes out of the sealed copy.
