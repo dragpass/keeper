@@ -178,7 +178,13 @@ func (s *Store) Send(
 		}
 		loaded := rec.Generation
 		rec.GroupState = state
-		rec.Epoch = position.Epoch
+		// Forward only. commit() copies this into the anchor, and the anchor's
+		// epoch is one of the two axes a rewound record is caught on, so a
+		// group state that came back behind the record must not be allowed to
+		// lower the ceiling it will later be judged against.
+		if position.Epoch > rec.Epoch {
+			rec.Epoch = position.Epoch
+		}
 		rec.PendingSend = &position
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
