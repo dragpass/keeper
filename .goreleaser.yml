@@ -38,8 +38,7 @@ release:
   # Append assets without replacing existing release content.
   mode: append
 
-# Use a cask because the legacy brews configuration is deprecated. The
-# post-install hook removes quarantine from the unsigned binary.
+# Use a cask because the legacy brews configuration is deprecated.
 homebrew_casks:
   - name: keeper
     ids:
@@ -56,29 +55,43 @@ homebrew_casks:
       email: vjinhyeokv@gmail.com
     binaries:
       - dragpass-keeper
-    hooks:
-      post:
-        # Remove quarantine and install Chrome's user-level Native Messaging
-        # manifest. The binary is linked into HOMEBREW_PREFIX/bin.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr",
-                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/dragpass-keeper"]
-            manifest_dir = File.expand_path("~/Library/Application Support/Google/Chrome/NativeMessagingHosts")
-            FileUtils.mkdir_p manifest_dir
-            manifest = <<~JSON
-              {
-                "name": "com.dragpass.keeper",
-                "description": "DragPass Device Key Storage",
-                "path": "#{HOMEBREW_PREFIX}/bin/dragpass-keeper",
-                "type": "stdio",
-                "allowed_origins": [
-                  "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk/"
-                ]
-              }
-            JSON
-            File.write(File.join(manifest_dir, "com.dragpass.keeper.json"), manifest)
-          end
+    # `hooks` makes GoReleaser emit Homebrew's deprecated `postflight` stanza,
+    # so every install prints a warning (goreleaser#6870, still open in
+    # 2.18.2). Write the replacement `postflight_steps` by hand instead.
+    #
+    # That block binds to Homebrew::InstallSteps::DSL, not the cask, so cask
+    # methods like `staged_path` and constants like `HOMEBREW_PREFIX` are out
+    # of reach. The `{{...}}` tokens below are substituted by Homebrew when the
+    # step runs (install_steps.rb `expand_template_tokens`), and the string
+    # literals keep GoReleaser from consuming those braces as its own template.
+    #
+    # `write_file` supersedes the now-deprecated `write` step, and `mkdir_p` is
+    # not redundant with it: the install sandbox only grants a write path for a
+    # directory the steps declare, so without it the manifest write fails on a
+    # machine that has no NativeMessagingHosts directory yet.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          # The binary is neither signed nor notarized, so macOS quarantines it
+          # and Gatekeeper refuses to run it until the attribute is removed.
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/dragpass-keeper"]
+
+          manifest_dir = "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+          mkdir_p manifest_dir, base: :home
+          write_file "#{manifest_dir}/com.dragpass.keeper.json", <<~JSON, base: :home
+            {
+              "name": "com.dragpass.keeper",
+              "description": "DragPass Device Key Storage",
+              "path": "{{ "{{HOMEBREW_PREFIX}}" }}/bin/dragpass-keeper",
+              "type": "stdio",
+              "allowed_origins": [
+                "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk/"
+              ]
+            }
+          JSON
+        end
+      end
     caveats: |
       The Chrome Native Messaging manifest was installed to:
         ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
