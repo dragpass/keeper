@@ -52,11 +52,17 @@ test-clipboard-e2e:
 MLS_DIR := mls
 MLS_LIB := $(MLS_DIR)/target/release/libdragpass_mls.a
 
-.PHONY: mls-lib mls-test build-mls test-mls mls-clean
+.PHONY: mls-lib mls-lib-windows mls-test build-mls test-mls mls-clean
 
 mls-lib:
 	@echo "Building MLS static library..."
 	@cd $(MLS_DIR) && cargo build --release
+
+# Windows always links through mingw, so the archive has to be the gnu triple's
+# even when cargo's host default would be MSVC.
+mls-lib-windows:
+	@echo "Building MLS static library (x86_64-pc-windows-gnu)..."
+	@cd $(MLS_DIR) && cargo build --release --target x86_64-pc-windows-gnu
 
 mls-test:
 	@cd $(MLS_DIR) && cargo test

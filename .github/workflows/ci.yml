@@ -38,6 +38,66 @@ jobs:
       - run: go build ./...
       - run: go test ./... -count=1
 
+  # The MLS build is separate from build-test on purpose. Linking mls-rs turns
+  # CGO_ENABLED on everywhere, and on Linux that alone gives up the static
+  # binary and adds an X11 build dependency, so the jobs above keep proving that
+  # the shipped recipe is untouched while this one proves the library links,
+  # runs and round-trips its state on all three platforms.
+  mls:
+    name: mls build + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust_target: ''
+          - os: macos-14
+            rust_target: ''
+          # Windows releases cross-build with mingw, never MSVC, so CI has to
+          # name the gnu triple rather than take the runner's default host
+          # target. The other two want the default, which is where the cgo
+          # directive looks for the archive.
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-gnu
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install X11 headers
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            mls/target
+          key: cargo-${{ matrix.os }}-${{ hashFiles('mls/Cargo.lock') }}
+      - name: rust toolchain and unit tests
+        run: |
+          rustc --version
+          cargo test --manifest-path mls/Cargo.toml
+      - name: build static library
+        run: |
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            rustup target add "${{ matrix.rust_target }}"
+            cargo build --release --manifest-path mls/Cargo.toml --target "${{ matrix.rust_target }}"
+          else
+            cargo build --release --manifest-path mls/Cargo.toml
+          fi
+      - name: go build + test with the library linked
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build -tags mls ./...
+          go test -tags mls ./internal/keystore/mls/ ./internal/keystore/chatstate/ -count=1
+
   quality:
     name: format + vet + race
     runs-on: ubuntu-latest

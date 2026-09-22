@@ -30,10 +30,13 @@
 package mls
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../../mls/target/release -ldragpass_mls
-#cgo darwin LDFLAGS: -framework CoreFoundation -framework Security
-#cgo linux LDFLAGS: -lm -ldl -pthread
-#cgo windows LDFLAGS: -lbcrypt -lntdll -luserenv -lws2_32
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../../mls/target/release -ldragpass_mls -framework CoreFoundation -framework Security
+#cgo linux LDFLAGS: -L${SRCDIR}/../../../mls/target/release -ldragpass_mls -lm -ldl -pthread
+// Windows names the triple because the release is mingw, never MSVC, while a
+// Windows host's default cargo target is MSVC — so "target/release" there holds
+// an archive this linker cannot use. Cross-building from another host adds its
+// own -L through CGO_LDFLAGS.
+#cgo windows LDFLAGS: -L${SRCDIR}/../../../mls/target/x86_64-pc-windows-gnu/release -ldragpass_mls -lbcrypt -lntdll -luserenv -lws2_32
 
 #include <stdint.h>
 #include <stdlib.h>

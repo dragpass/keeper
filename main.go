@@ -152,6 +152,7 @@ func main() {
 	app.RecoveryKeySessions.StartReaper(sessions.RecoveryKeySessionReaperInterval)
 
 	logger.Println("DragPass extension helper started")
+	logMLSLibrary(app)
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Printf("Critical Panic Recovered: %v", r)
