@@ -310,8 +310,8 @@ func (s *Store) conversationTags() ([]string, error) {
 
 func (s *Store) withConversation(conversationID string, fn func(convPaths) error) error {
 	p := s.paths(conversationID)
-	if err := os.MkdirAll(p.dir, 0o700); err != nil {
-		return fmt.Errorf("create chat state directory: %w", err)
+	if err := ensureOwnerOnlyDir(s.root, p.dir); err != nil {
+		return err
 	}
 	release, err := acquireConversationLock(p.lock, s.lockTimeout)
 	if err != nil {
@@ -319,6 +319,23 @@ func (s *Store) withConversation(conversationID string, fn func(convPaths) error
 	}
 	defer release()
 	return fn(p)
+}
+
+// ensureOwnerOnlyDir creates each directory in order and narrows it to this
+// user. MkdirAll alone is not enough on Windows, where the mode argument is
+// ignored; the parent is named explicitly rather than left to MkdirAll so that
+// it is narrowed too, instead of keeping whatever the config directory hands
+// down.
+func ensureOwnerOnlyDir(dirs ...string) error {
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create chat state directory: %w", err)
+		}
+		if err := restrictDirToOwner(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadChecked returns the record only if both rollback axes accept it. A
@@ -440,7 +457,9 @@ func replaceFile(dir, path string, data []byte) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 	}
-	if err := tmp.Chmod(0o600); err != nil {
+	// Before the bytes, not after: the file must never be readable by anyone
+	// else, not even for the window between the write and the rename.
+	if err := restrictFileToOwner(tmpName); err != nil {
 		cleanup()
 		return err
 	}

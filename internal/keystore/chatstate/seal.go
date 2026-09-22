@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/dragpass/keeper/config"
@@ -51,8 +50,8 @@ func loadSealKey(secrets keychain.SecretStore, ownerAccountID string) ([]byte, e
 // empty; without the lock they would each mint a key and each seal files the
 // other two cannot open.
 func createSealKey(secrets keychain.SecretStore, root, ownerAccountID string) ([]byte, error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("create chat state root: %w", err)
+	if err := ensureOwnerOnlyDir(root); err != nil {
+		return nil, err
 	}
 	release, err := acquireConversationLock(filepath.Join(root, "seal"+lockSuffix), LockTimeout)
 	if err != nil {

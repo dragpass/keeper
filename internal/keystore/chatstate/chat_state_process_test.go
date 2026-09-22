@@ -4,7 +4,24 @@
 // position, and a fake cannot show what a SIGKILL leaves on disk. Both are the
 // failures this package exists to prevent, so both are tested with actual
 // processes: the test binary re-executes itself as a helper, the parent
-// coordinates through barrier files, and Process.Kill() is a real SIGKILL.
+// coordinates through barrier files, and Process.Kill() is a real kill.
+//
+// **What Process.Kill() means on each platform, since it is not one thing.** On
+// unix it is SIGKILL. On Windows it is TerminateProcess, which also stops the
+// process without running deferred functions, atexit handlers, or any flush of
+// user-space buffers — so for what these tests assert, namely what an
+// interrupted write leaves on disk, the two are equivalent and the Windows runs
+// are not weaker. The progress file is written with unbuffered append syscalls
+// for that reason: a line that exists was really handed out, on both platforms.
+// Two differences are real and neither is skipped here. TerminateProcess is
+// asynchronous, so every kill is followed by waiting on the child rather than
+// assuming it is already gone. And the lock is mandatory on Windows
+// (LockFileEx) against advisory on unix (flock), with the handle released by
+// the kernel after termination rather than by the dying process; the tests
+// below take the next round's lock after each kill, so a release that never
+// came would surface as a lock timeout instead of passing quietly. **How long
+// that release takes is still unmeasured** and stays on the ADR §4.5 list — the
+// tests show it happens, not that it happens within any particular bound.
 //
 // The structure follows personal_key_bundle_process_test.go, which already
 // proves the shape on this codebase: helper mode behind an env var, a barrier
@@ -362,11 +379,20 @@ func TestChatStateSurvivesKillsDuringTheWriteLoop(t *testing.T) {
 	progress := filepath.Join(env.tempDir, "progress")
 
 	highest := uint64(0)
+	lines := 0
 	for round := range 5 {
 		ready := fmt.Sprintf("hammer-ready-%d", round)
 		hammer, hammerDone := env.start(t, "hammer", ready, helperProgress+"="+progress)
 		env.waitReady(t, ready)
-		time.Sleep(60 * time.Millisecond)
+		// Kill only once the child has demonstrably completed a reservation and
+		// is therefore inside the loop. This used to be a 60ms sleep, which is
+		// not a portable way to say "it has started": one cycle is two anchor
+		// writes plus an fsync and a rename, and on Windows CI that costs more
+		// than 60ms, so the kill landed before the first position was ever
+		// logged and the run failed on an empty progress file. The child loops
+		// straight into the next reservation after appending a line, so a kill
+		// issued here still lands mid-cycle.
+		lines = waitForLoggedLines(t, progress, lines+1)
 		if err := hammer.Process.Kill(); err != nil {
 			t.Fatal(err)
 		}
@@ -704,6 +730,45 @@ func parseToken(t *testing.T, result childResult, prefix string, want int) []str
 	}
 	t.Fatalf("no %q line in child output: %q (err=%v)", prefix, result.output, result.err)
 	return nil
+}
+
+// waitForLoggedLines blocks until the progress file holds at least want whole
+// lines and returns how many it found. A partial line left by a kill is not
+// counted: it is not yet a claim that a position was handed out.
+func waitForLoggedLines(t *testing.T, path string, want int) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got := countLogged(t, path); got >= want {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the hammer child logged %d reservations in 10s, want %d",
+				countLogged(t, path), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func countLogged(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	count := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(line, 10, 64); err == nil {
+			count++
+		}
+	}
+	return count
 }
 
 func highestLogged(t *testing.T, path string) uint64 {

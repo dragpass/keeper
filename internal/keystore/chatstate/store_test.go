@@ -369,13 +369,7 @@ func TestSealedRecordDoesNotExposeItsContents(t *testing.T) {
 	if strings.Contains(filepath.Base(store.paths(testConvA).record), testConvA) {
 		t.Fatal("the file name carries the conversation id")
 	}
-	info, err := os.Stat(store.paths(testConvA).record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("record permissions = %o, want 600", perm)
-	}
+	assertOwnerOnlyAccess(t, store.paths(testConvA).record)
 }
 
 // The AAD binds the conversation, so a file moved between conversations of the
