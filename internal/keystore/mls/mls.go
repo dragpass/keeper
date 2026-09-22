@@ -96,6 +96,20 @@ type Processed struct {
 	Removed     bool
 	Application bool
 	Plaintext   []byte
+
+	// SenderLeafIndex is SenderData.leaf_index, which the wire format keeps
+	// encrypted. It is half of the four-slot name of an inbound position and
+	// there is no way to learn it except by decrypting.
+	SenderLeafIndex uint32
+
+	// AuthenticatedData is the sender's cleartext declaration.
+	AuthenticatedData []byte
+
+	// KeyGeneration is the generation the library derived its keys from, or
+	// nil when it could not tell. Nil is an answer and never a zero: upstream
+	// reaches its None by folding an extraction error into a default, so a
+	// substituted zero would be indistinguishable from a checked match.
+	KeyGeneration *uint32
 }
 
 // Persist flushes the session's group state into the conversation's record.
@@ -135,4 +149,64 @@ func Restore(
 		return false, nil
 	}
 	return true, s.Load(blob)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// The seam chatstate drives its transactions through.
+// ────────────────────────────────────────────────────────────────────────
+
+// Cipher adapts a Session to chatstate's SendCipher and ReceiveCipher. It adds
+// no state of its own: every method is one Session call, and the ordering,
+// the lock and the durability all belong to chatstate.
+//
+// Load is called on every transaction even when the session already holds the
+// group, because the record is the authority on where the ratchet is and
+// another process may have moved it since this session last looked.
+type Cipher struct{ session *Session }
+
+func NewCipher(s *Session) *Cipher { return &Cipher{session: s} }
+
+func (c *Cipher) Load(groupState []byte) error { return c.session.Load(groupState) }
+
+func (c *Cipher) Peek() (chatstate.Position, error) {
+	epoch, leaf, generation, err := c.session.SendPosition()
+	if err != nil {
+		return chatstate.Position{}, err
+	}
+	return chatstate.Position{
+		Epoch:           epoch,
+		SenderLeafIndex: leaf,
+		// Fixed rather than asked: encrypt_control_messages is pinned false,
+		// so a Commit goes out as a PublicMessage and consumes nothing. The
+		// handshake ratchet never advances, which is what leaves the send
+		// discipline with this one axis to defend. Flipping that setting
+		// brings the other axis back, and mls-rs exposes neither a peek nor a
+		// burn for it.
+		ContentType: chatstate.ContentTypeApplication,
+		Generation:  uint64(generation),
+	}, nil
+}
+
+func (c *Cipher) Burn() error { return c.session.BurnGeneration() }
+
+func (c *Cipher) Seal(plaintext, authenticatedData []byte) ([]byte, error) {
+	return c.session.Encrypt(plaintext, authenticatedData)
+}
+
+func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
+
+func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
+	processed, err := c.session.Process(message)
+	if err != nil {
+		return chatstate.Opened{}, err
+	}
+	return chatstate.Opened{
+		Epoch:             processed.Epoch,
+		SenderLeafIndex:   processed.SenderLeafIndex,
+		Application:       processed.Application,
+		Removed:           processed.Removed,
+		AuthenticatedData: processed.AuthenticatedData,
+		KeyGeneration:     processed.KeyGeneration,
+		Plaintext:         processed.Plaintext,
+	}, nil
 }

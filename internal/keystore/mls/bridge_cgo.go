@@ -63,15 +63,20 @@ int32_t dpmls_group_add_member(DpSession *handle,
 int32_t dpmls_group_join(DpSession *handle, const uint8_t *welcome, size_t welcome_len);
 
 int32_t dpmls_group_encrypt(DpSession *handle,
-                            const uint8_t *plaintext, size_t plaintext_len, DpBuf *out);
+                            const uint8_t *plaintext, size_t plaintext_len,
+                            const uint8_t *authenticated_data, size_t authenticated_data_len,
+                            DpBuf *out);
 int32_t dpmls_group_process(DpSession *handle,
                             const uint8_t *message, size_t message_len,
-                            DpBuf *out, uint64_t *epoch,
-                            uint8_t *removed, uint8_t *is_application);
+                            DpBuf *out, DpBuf *authenticated_data,
+                            uint64_t *epoch, uint32_t *sender_index,
+                            uint8_t *removed, uint8_t *is_application,
+                            uint32_t *key_generation, uint8_t *key_generation_known);
 int32_t dpmls_wire_form(const uint8_t *message, size_t message_len, uint8_t *out);
 
-int32_t dpmls_group_peek_generation(DpSession *handle, uint32_t *out);
-int32_t dpmls_group_epoch(DpSession *handle, uint64_t *epoch, uint32_t *member_index);
+int32_t dpmls_group_send_position(DpSession *handle,
+                                  uint64_t *epoch, uint32_t *leaf_index, uint32_t *generation);
+int32_t dpmls_group_burn_generation(DpSession *handle);
 int32_t dpmls_group_flush(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_load(DpSession *handle, const uint8_t *blob, size_t blob_len);
 */
@@ -208,7 +213,11 @@ func (s *Session) Join(welcome []byte) error {
 	return statusError(rc)
 }
 
-func (s *Session) Encrypt(plaintext []byte) ([]byte, error) {
+// Encrypt takes the generation SendPosition reported and moves the ratchet on.
+// authenticatedData rides along in the clear and is covered by both the
+// sender's signature and the AEAD tag, which is what makes a declaration
+// carried in it the sender's word rather than the server's.
+func (s *Session) Encrypt(plaintext, authenticatedData []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -216,8 +225,14 @@ func (s *Session) Encrypt(plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 	var buf C.DpBuf
-	rc := C.dpmls_group_encrypt(h, bytePtr(plaintext), C.size_t(len(plaintext)), &buf)
+	rc := C.dpmls_group_encrypt(
+		h,
+		bytePtr(plaintext), C.size_t(len(plaintext)),
+		bytePtr(authenticatedData), C.size_t(len(authenticatedData)),
+		&buf,
+	)
 	runtime.KeepAlive(plaintext)
+	runtime.KeepAlive(authenticatedData)
 	if rc != 0 {
 		return nil, statusError(rc)
 	}
@@ -232,25 +247,40 @@ func (s *Session) Process(message []byte) (Processed, error) {
 		return Processed{}, err
 	}
 	var (
-		buf           C.DpBuf
-		epoch         C.uint64_t
-		removed       C.uint8_t
-		isApplication C.uint8_t
+		buf            C.DpBuf
+		aad            C.DpBuf
+		epoch          C.uint64_t
+		senderIndex    C.uint32_t
+		removed        C.uint8_t
+		isApplication  C.uint8_t
+		generation     C.uint32_t
+		generationKnwn C.uint8_t
 	)
 	rc := C.dpmls_group_process(
 		h, bytePtr(message), C.size_t(len(message)),
-		&buf, &epoch, &removed, &isApplication,
+		&buf, &aad, &epoch, &senderIndex, &removed, &isApplication,
+		&generation, &generationKnwn,
 	)
 	runtime.KeepAlive(message)
 	if rc != 0 {
 		return Processed{}, statusError(rc)
 	}
-	return Processed{
-		Epoch:       uint64(epoch),
-		Removed:     removed != 0,
-		Application: isApplication != 0,
-		Plaintext:   takeBuf(&buf),
-	}, nil
+	out := Processed{
+		Epoch:             uint64(epoch),
+		SenderLeafIndex:   uint32(senderIndex),
+		Removed:           removed != 0,
+		Application:       isApplication != 0,
+		AuthenticatedData: takeBuf(&aad),
+		Plaintext:         takeBuf(&buf),
+	}
+	// Nil rather than zero when the library could not report it. The two are
+	// different answers and the fail-closed rule upstream of here depends on
+	// being able to tell them apart.
+	if generationKnwn != 0 {
+		known := uint32(generation)
+		out.KeyGeneration = &known
+	}
+	return out, nil
 }
 
 func WireFormOf(message []byte) (WireForm, error) {
@@ -263,39 +293,42 @@ func WireFormOf(message []byte) (WireForm, error) {
 	return WireForm(form), nil
 }
 
-// PeekGeneration reports the next application generation this device would
-// consume, without consuming it. Two things about it matter to the caller:
-// it compiles only in a build carrying both export_key_generation and
-// secret_tree_access, and it is a read rather than a claim, so whatever holds
-// the conversation lock has to span from here to the encryption that takes the
-// number.
-func (s *Session) PeekGeneration() (uint32, error) {
+// SendPosition reports where this device's application ratchet stands without
+// moving it. Three things about it matter to the caller: it compiles only in a
+// build carrying both export_key_generation and secret_tree_access, the three
+// values come from one call so they describe one moment, and it is a read
+// rather than a claim — whatever holds the conversation lock has to span from
+// here to the encryption that takes the number.
+func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
-	var out C.uint32_t
-	if rc := C.dpmls_group_peek_generation(h, &out); rc != 0 {
-		return 0, statusError(rc)
+	var (
+		e    C.uint64_t
+		leaf C.uint32_t
+		gen  C.uint32_t
+	)
+	if rc := C.dpmls_group_send_position(h, &e, &leaf, &gen); rc != 0 {
+		return 0, 0, 0, statusError(rc)
 	}
-	return uint32(out), nil
+	return uint64(e), uint32(leaf), uint32(gen), nil
 }
 
-func (s *Session) Epoch() (epoch uint64, memberIndex uint32, err error) {
+// BurnGeneration consumes one application generation without encrypting
+// anything. The key it derives is dropped on the Rust side and never crosses
+// this boundary. The advance is only in memory until the caller persists the
+// state.
+func (s *Session) BurnGeneration() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
-	var e C.uint64_t
-	var idx C.uint32_t
-	if rc := C.dpmls_group_epoch(h, &e, &idx); rc != 0 {
-		return 0, 0, statusError(rc)
-	}
-	return uint64(e), uint32(idx), nil
+	return statusError(C.dpmls_group_burn_generation(h))
 }
 
 // Flush serializes the group and hands back the bytes to persist.

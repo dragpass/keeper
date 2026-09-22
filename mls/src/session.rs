@@ -64,6 +64,19 @@ pub struct Processed {
     pub epoch: u64,
     pub removed: bool,
     pub application: Option<Zeroizing<Vec<u8>>>,
+    /// SenderData.leaf_index, which the wire format keeps encrypted. Together
+    /// with the epoch, the axis and the generation it is the four-slot name of
+    /// one inbound position; two of the four are only knowable after the
+    /// decrypt, which is why this travels back with the plaintext.
+    pub sender_index: u32,
+    pub authenticated_data: Vec<u8>,
+    /// The generation the library actually derived the keys from.
+    ///
+    /// `None` is carried as `None` and never as a number. Upstream turns an
+    /// extraction failure into `None` by way of `unwrap_or_default` on the
+    /// error, so a caller that substitutes zero here cannot tell "checked it"
+    /// from "could not look".
+    pub key_generation: Option<u32>,
 }
 
 pub fn generate_signature_key() -> Res<(Vec<u8>, Vec<u8>)> {
@@ -187,9 +200,17 @@ impl Session {
         Ok((commit, welcome))
     }
 
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Res<Vec<u8>> {
+    /// Encrypt one application message, consuming the generation `send_position`
+    /// reported.
+    ///
+    /// `authenticated_data` travels in the clear inside the PrivateMessage and
+    /// is covered twice: by the sender's signature over FramedContent and by
+    /// the AEAD through PrivateContentAAD. That is what lets the receiver treat
+    /// a declaration carried in it as the sender's word rather than the
+    /// server's.
+    pub fn encrypt(&mut self, plaintext: &[u8], authenticated_data: &[u8]) -> Res<Vec<u8>> {
         self.group_mut()?
-            .encrypt_application_message(plaintext, Vec::new())
+            .encrypt_application_message(plaintext, authenticated_data.to_vec())
             .map_err(|e| err("encrypt", e))?
             .to_bytes()
             .map_err(|e| err("ciphertext encode", e))
@@ -201,41 +222,74 @@ impl Session {
         let received = group
             .process_incoming_message(msg)
             .map_err(|e| err("process", e))?;
-        let (removed, application) = match received {
-            ReceivedMessage::ApplicationMessage(m) => {
-                (false, Some(Zeroizing::new(m.data().to_vec())))
-            }
-            ReceivedMessage::Commit(c) => (matches!(c.effect, CommitEffect::Removed { .. }), None),
-            _ => (false, None),
+        let mut out = Processed {
+            epoch: 0,
+            removed: false,
+            application: None,
+            sender_index: 0,
+            authenticated_data: Vec::new(),
+            key_generation: None,
         };
-        Ok(Processed {
-            epoch: group.current_epoch(),
-            removed,
-            application,
-        })
+        match received {
+            ReceivedMessage::ApplicationMessage(m) => {
+                out.sender_index = m.sender_index;
+                out.authenticated_data = m.authenticated_data.clone();
+                out.key_generation = m.unauthenticated_key_generation;
+                out.application = Some(Zeroizing::new(m.data().to_vec()));
+            }
+            ReceivedMessage::Commit(c) => {
+                out.removed = matches!(c.effect, CommitEffect::Removed { .. });
+                out.sender_index = c.committer;
+            }
+            _ => {}
+        }
+        out.epoch = group.current_epoch();
+        Ok(out)
     }
 
-    /// The next application generation this device would consume, read without
-    /// advancing. Its presence is also the runtime proof that this build
-    /// carries both export_key_generation and secret_tree_access: the upstream
-    /// cfg on `peek_next_key_generation` requires them together, so a build
-    /// missing either does not compile this call.
+    /// Where this device's application ratchet stands: the epoch, this
+    /// device's leaf, and the generation the next encrypt would take. Read
+    /// without advancing any of them.
     ///
-    /// Upstream warns the value "is only safe for synchronous usage of Group
-    /// APIs" — it is a read of a counter, not a claim on it, so the caller owes
-    /// the exclusion between reading the number and consuming it.
-    pub fn peek_generation(&mut self) -> Res<u32> {
-        self.group_mut()?
+    /// The three come back from one call because the caller writes them down as
+    /// one position before it encrypts, and three separate reads could each
+    /// describe a different moment. Its presence is also the runtime proof that
+    /// this build carries both export_key_generation and secret_tree_access:
+    /// the upstream cfg on `peek_next_key_generation` requires them together,
+    /// so a build missing either does not compile this call.
+    ///
+    /// Upstream warns the generation "is only safe for synchronous usage of
+    /// Group APIs" — it is a read of a counter, not a claim on it, so the
+    /// caller owes the exclusion between reading the number and consuming it.
+    pub fn send_position(&mut self) -> Res<(u64, u32, u32)> {
+        let group = self.group_mut()?;
+        let generation = group
             .peek_next_key_generation()
-            .map_err(|e| err("peek generation", e))
+            .map_err(|e| err("peek generation", e))?;
+        Ok((
+            group.current_epoch(),
+            group.current_member_index(),
+            generation,
+        ))
     }
 
-    pub fn epoch(&mut self) -> Res<u64> {
-        Ok(self.group_mut()?.current_epoch())
-    }
-
-    pub fn member_index(&mut self) -> Res<u32> {
-        Ok(self.group_mut()?.current_member_index())
+    /// Consume one application generation without encrypting anything with it.
+    ///
+    /// This is the recovery half of the send ordering. A generation whose
+    /// consumption was written down but whose ciphertext never appeared cannot
+    /// be told apart from one that was really used, so it is treated as used:
+    /// the key is derived, dropped unused, and the ratchet moves on. The hole
+    /// it leaves is ordinary for MLS; handing the number out twice is not.
+    ///
+    /// The derived key is dropped immediately and is never returned across the
+    /// ABI. `next_encryption_key` is what advances `SecretKeyRatchet`, and that
+    /// advance is in the snapshot, so the caller has to persist the state
+    /// afterwards or the burn did not happen.
+    pub fn burn_generation(&mut self) -> Res<()> {
+        self.group_mut()?
+            .next_encryption_key()
+            .map_err(|e| err("burn generation", e))?;
+        Ok(())
     }
 
     /// Push the in-memory group into the storage and hand the bytes back.

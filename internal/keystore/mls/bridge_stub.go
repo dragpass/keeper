@@ -37,17 +37,19 @@ func (s *Session) AddMember(keyPackage []byte) (commit, welcome []byte, err erro
 
 func (s *Session) Join(welcome []byte) error { return ErrUnavailable }
 
-func (s *Session) Encrypt(plaintext []byte) ([]byte, error) { return nil, ErrUnavailable }
+func (s *Session) Encrypt(plaintext, authenticatedData []byte) ([]byte, error) {
+	return nil, ErrUnavailable
+}
 
 func (s *Session) Process(message []byte) (Processed, error) {
 	return Processed{}, ErrUnavailable
 }
 
-func (s *Session) PeekGeneration() (uint32, error) { return 0, ErrUnavailable }
-
-func (s *Session) Epoch() (epoch uint64, memberIndex uint32, err error) {
-	return 0, 0, ErrUnavailable
+func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, err error) {
+	return 0, 0, 0, ErrUnavailable
 }
+
+func (s *Session) BurnGeneration() error { return ErrUnavailable }
 
 func (s *Session) Flush() ([]byte, error) { return nil, ErrUnavailable }
 
