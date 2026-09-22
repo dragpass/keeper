@@ -1,0 +1,507 @@
+// store.go — the locked read / modify / persist cycle every operation runs.
+//
+// Each exported operation is one complete cycle under the conversation's lock:
+// load the anchor, load and judge the file, change it, replace the file
+// atomically, then raise the anchor. Nothing is cached across the lock, because
+// a cache is a copy of the state that no longer has a lock protecting it.
+//
+// The anchor is written twice per reservation and the order is the whole point.
+// Raising the ceiling first and committing the file second means the only crash
+// window leaves the file *ahead* of the anchor, which is the harmless
+// direction: those positions are already spent on disk. The other order would
+// leave the file behind the anchor, which is indistinguishable from a restored
+// backup and would lock a conversation on every crash.
+
+package chatstate
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/secure"
+)
+
+// MaxReserveCount bounds one reservation. A caller that wants more positions
+// than this is not composing a message.
+const MaxReserveCount = 64
+
+// Store is one owner account's view of the chat state directory. It holds
+// derived key material, so it is built per operation and closed after.
+type Store struct {
+	secrets     keychain.SecretStore
+	root        string
+	owner       string
+	nameKey     []byte
+	aeadKey     []byte
+	lockTimeout time.Duration
+}
+
+// Reservation is the answer to "which positions may I encrypt with". It is
+// returned only after the consumption of those positions is on disk and
+// fsynced, so a crash between this answer and the encryption loses a message
+// and never reuses a position. A gap in the chain is ordinary; a repeat is not
+// recoverable.
+type Reservation struct {
+	Epoch           uint64
+	FirstChainIndex uint64
+	Count           int
+	Generation      uint64
+}
+
+// Open returns the owner's store, minting the seal key on first use.
+func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
+	return open(secrets, ownerAccountID, true)
+}
+
+func open(secrets keychain.SecretStore, ownerAccountID string, create bool) (*Store, error) {
+	root, err := Root()
+	if err != nil {
+		return nil, err
+	}
+	master, err := loadSealKey(secrets, ownerAccountID)
+	if err != nil {
+		if !create || !errors.Is(err, keychain.ErrSecretNotFound) {
+			return nil, err
+		}
+		if master, err = createSealKey(secrets, ownerAccountID); err != nil {
+			return nil, err
+		}
+	}
+	defer secure.Zeroize(master)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create chat state root: %w", err)
+	}
+	return &Store{
+		secrets:     secrets,
+		root:        root,
+		owner:       ownerAccountID,
+		nameKey:     deriveSubkey(master, nameSubkeyLabel),
+		aeadKey:     deriveSubkey(master, aeadSubkeyLabel),
+		lockTimeout: LockTimeout,
+	}, nil
+}
+
+// Close drops the derived key material. Callers defer it.
+func (s *Store) Close() {
+	secure.Zeroize(s.nameKey)
+	secure.Zeroize(s.aeadKey)
+}
+
+// Reserve consumes count chain positions and returns them. The consumption is
+// durable before this returns; see Reservation.
+func (s *Store) Reserve(conversationID string, count int, wm ServerWatermark) (Reservation, error) {
+	if count < 1 || count > MaxReserveCount {
+		return Reservation{}, fmt.Errorf("reserve count must be 1..%d", MaxReserveCount)
+	}
+	var out Reservation
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		first := rec.NextIndex
+		need := first + uint64(count)
+		anchor.ReservedBefore = max(anchor.ReservedBefore, need)
+		if err := saveAnchor(s.secrets, p.tag, anchor); err != nil {
+			return err
+		}
+		rec.NextIndex = need
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		out = Reservation{
+			Epoch:           rec.Epoch,
+			FirstChainIndex: first,
+			Count:           count,
+			Generation:      rec.Generation,
+		}
+		return nil
+	})
+	return out, err
+}
+
+// CommitOutbox stores the ciphertext built for a reserved position. The stored
+// entry is authoritative: a second call with the same client message id returns
+// what is already there and writes nothing, so a retransmission after a lost
+// response is the same bytes rather than a second encryption.
+func (s *Store) CommitOutbox(
+	conversationID string, wm ServerWatermark, entry OutboxEntry,
+) (OutboxEntry, bool, error) {
+	if len(entry.IV) != ivBytes ||
+		len(entry.Ciphertext) == 0 || len(entry.Ciphertext) > MaxCiphertextBytes {
+		return OutboxEntry{}, false, errors.New("outbox entry has an unusable ciphertext")
+	}
+	var (
+		stored  OutboxEntry
+		created bool
+	)
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		if existing, ok := rec.findOutbox(entry.ClientMessageID); ok {
+			stored, created = existing, false
+			return nil
+		}
+		if entry.Position.Epoch != rec.Epoch || entry.Position.ChainIndex >= rec.NextIndex {
+			return ErrPositionNotReserved
+		}
+		if rec.positionTaken(entry.Position) {
+			return ErrPositionTaken
+		}
+		loaded := rec.Generation
+		rec.appendOutbox(entry)
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		stored, created = entry, true
+		return nil
+	})
+	return stored, created, err
+}
+
+// ReadOutbox returns the stored ciphertext for a client message id.
+func (s *Store) ReadOutbox(
+	conversationID string, wm ServerWatermark, clientMessageID string,
+) (OutboxEntry, error) {
+	var out OutboxEntry
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, _, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		entry, ok := rec.findOutbox(clientMessageID)
+		if !ok {
+			return ErrNotFound
+		}
+		out = entry
+		return nil
+	})
+	return out, err
+}
+
+// MarkReceived records an inbound position and reports whether this delivery
+// was the first. Persisting the mark before the caller is told it may show the
+// message is what keeps a redelivery from advancing the state twice.
+func (s *Store) MarkReceived(
+	conversationID string, wm ServerWatermark, pos Position,
+) (bool, uint64, error) {
+	var (
+		first      bool
+		generation uint64
+	)
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		if rec.receivedContains(pos) {
+			first, generation = false, rec.Generation
+			return nil
+		}
+		loaded := rec.Generation
+		rec.appendReceived(pos)
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		first, generation = true, rec.Generation
+		return nil
+	})
+	return first, generation, err
+}
+
+// Purge erases every trace of this owner's chat state: the files, the anchors,
+// and the seal key. The seal key goes last and its removal is what makes the
+// erasure final — a state file restored from a backup afterwards cannot be
+// opened under the key that replaces it, so a purge cannot be used to clear a
+// latched NeedsRekey and then bring the rewound file back.
+func Purge(secrets keychain.SecretStore, ownerAccountID string) (int, error) {
+	s, err := open(secrets, ownerAccountID, false)
+	if err != nil {
+		if errors.Is(err, keychain.ErrSecretNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer s.Close()
+
+	tags, err := s.conversationTags()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, tag := range tags {
+		if err := deleteAnchor(s.secrets, tag); err != nil {
+			return removed, err
+		}
+		dir := s.ownerDir()
+		for _, name := range []string{tag + recordSuffix, tag + lockSuffix} {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return removed, err
+			}
+		}
+		removed++
+	}
+	if err := os.RemoveAll(s.ownerDir()); err != nil {
+		return removed, err
+	}
+	if err := s.secrets.Delete(config.Service, sealKeyAccount(ownerAccountID)); err != nil &&
+		!errors.Is(err, keychain.ErrSecretNotFound) {
+		return removed, err
+	}
+	return removed, nil
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Paths and the locked cycle.
+// ────────────────────────────────────────────────────────────────────────
+
+type convPaths struct {
+	tag    string
+	dir    string
+	record string
+	lock   string
+}
+
+func (s *Store) ownerDir() string { return filepath.Join(s.root, s.ownerTag()) }
+
+func (s *Store) paths(conversationID string) convPaths {
+	tag := s.conversationTag(conversationID)
+	dir := s.ownerDir()
+	return convPaths{
+		tag:    tag,
+		dir:    dir,
+		record: filepath.Join(dir, tag+recordSuffix),
+		lock:   filepath.Join(dir, tag+lockSuffix),
+	}
+}
+
+// conversationTags lists the conversations this owner has state for. Directory
+// enumeration stands in for an index; nothing outside a single file needs to be
+// consistent, so there is no index to drift. The tags cannot be turned back
+// into conversation ids, which is all the local operations need and one fewer
+// thing the directory gives away.
+func (s *Store) conversationTags() ([]string, error) {
+	entries, err := os.ReadDir(s.ownerDir())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var tags []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), recordSuffix) {
+			continue
+		}
+		tags = append(tags, strings.TrimSuffix(entry.Name(), recordSuffix))
+	}
+	return tags, nil
+}
+
+func (s *Store) withConversation(conversationID string, fn func(convPaths) error) error {
+	p := s.paths(conversationID)
+	if err := os.MkdirAll(p.dir, 0o700); err != nil {
+		return fmt.Errorf("create chat state directory: %w", err)
+	}
+	release, err := acquireConversationLock(p.lock, s.lockTimeout)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn(p)
+}
+
+// loadChecked returns the record only if both rollback axes accept it. A
+// refusal latches NeedsRekey on the anchor rather than returning a soft error,
+// because a caller that can retry into a rewound state has the same problem as
+// one that never checked.
+func (s *Store) loadChecked(
+	p convPaths, conversationID string, wm ServerWatermark,
+) (*Record, Anchor, error) {
+	anchor, err := loadAnchor(s.secrets, p.tag)
+	if err != nil {
+		return nil, Anchor{}, err
+	}
+	if anchor.NeedsRekey {
+		return nil, anchor, ErrRekeyRequired
+	}
+	rec, err := s.readRecord(p, conversationID)
+	if err != nil {
+		return nil, anchor, err
+	}
+	if rec == nil {
+		// A missing file under an anchor that has authorized anything is a
+		// deletion, not a first use: those positions were handed out and the
+		// only record of that is gone.
+		if anchor.Generation > 0 || anchor.ReservedBefore > 0 {
+			return nil, anchor, s.latchRekey(p.tag, anchor)
+		}
+		rec = newRecord(s.owner, conversationID)
+	}
+	if anchor.rewound(rec, wm) {
+		return nil, anchor, s.latchRekey(p.tag, anchor)
+	}
+	return rec, anchor.withWatermark(wm), nil
+}
+
+func (s *Store) latchRekey(tag string, anchor Anchor) error {
+	anchor.NeedsRekey = true
+	if err := saveAnchor(s.secrets, tag, anchor); err != nil {
+		return err
+	}
+	return ErrRekeyRequired
+}
+
+// commit bumps the generation, replaces the file, and then raises the anchor to
+// match. The anchor write is last so the crash window leaves the file ahead.
+func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor Anchor) error {
+	rec.Generation = loadedGeneration + 1
+	if err := s.writeRecord(p, rec, loadedGeneration); err != nil {
+		return err
+	}
+	anchor.Generation = rec.Generation
+	anchor.Epoch = rec.Epoch
+	return saveAnchor(s.secrets, p.tag, anchor)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// File I/O.
+// ────────────────────────────────────────────────────────────────────────
+
+func (s *Store) readRecord(p convPaths, conversationID string) (*Record, error) {
+	s.sweepTempFiles(p.dir)
+	sealed, err := os.ReadFile(p.record)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	body, generation, err := openRecord(s.aeadKey, s.owner, conversationID, sealed)
+	if err != nil {
+		return nil, err
+	}
+	defer secure.Zeroize(body)
+	var rec Record
+	if err := json.Unmarshal(body, &rec); err != nil {
+		return nil, errSealedRecordMalformed
+	}
+	if rec.SchemaVersion != SchemaVersion ||
+		rec.Generation != generation ||
+		rec.OwnerAccountID != s.owner ||
+		rec.ConversationID != conversationID {
+		return nil, errSealedRecordMalformed
+	}
+	return &rec, nil
+}
+
+func (s *Store) writeRecord(p convPaths, rec *Record, loadedGeneration uint64) error {
+	current, err := onDiskGeneration(p.record)
+	if err != nil {
+		return err
+	}
+	if current != loadedGeneration {
+		return ErrConflict
+	}
+	body, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	sealed, sealErr := sealRecord(s.aeadKey, rec, body)
+	secure.Zeroize(body)
+	if sealErr != nil {
+		return sealErr
+	}
+	return replaceFile(p.dir, p.record, sealed)
+}
+
+// replaceFile is the atomic half: a temp file in the same directory, fsynced,
+// renamed over the target, and the directory fsynced after. A crash anywhere in
+// here leaves either the previous file or the new one, never a mixture. POSIX
+// guarantees the rename; the Windows equivalent is on the ADR's measure-first
+// list and is not assumed here.
+func replaceFile(dir, path string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, tempPrefix)
+	if err != nil {
+		return fmt.Errorf("create chat state temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return syncDir(dir)
+}
+
+// sweepTempFiles removes leftovers from an interrupted write. A temp file is
+// never a load candidate, which is what makes a half-written one harmless: the
+// only file that is ever read is the one a completed rename put in place.
+func (s *Store) sweepTempFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), tempPrefix) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
+// onDiskGeneration reads the cleartext header only. It answers "did the file
+// change since this operation read it", so a tampered header costs a spurious
+// conflict and never a silent overwrite.
+func onDiskGeneration(path string) (uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer file.Close()
+	var header [13]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, errSealedRecordMalformed
+		}
+		return 0, err
+	}
+	if [4]byte(header[0:4]) != fileMagic {
+		return 0, errSealedRecordMalformed
+	}
+	return binary.BigEndian.Uint64(header[5:13]), nil
+}

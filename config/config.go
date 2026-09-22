@@ -107,6 +107,25 @@ const (
 	// lets a device change owners.
 	PeerKeyOwnerAccount = "peer-key-owner"
 
+	// Chat v2 conversation state (ADR S4).
+	//
+	// The keyring holds the two small things and none of the bulk. The seal
+	// key is the 32-byte AES key every chat-state file of one owner is sealed
+	// under, which is what makes the files alone worthless; the anchor is the
+	// {generation, reserved_before, watermark} triple that decides whether a
+	// state file has been rewound. The anchor has to live in a *different*
+	// medium from the file it judges, otherwise restoring a backup restores
+	// the judge along with the accused.
+	//
+	// Both names are assembled in chatstate/. The anchor's suffix is an HMAC
+	// of (owner, conversation) under a key derived from the seal key, so the
+	// keyring never carries a conversation id in a slot name.
+	//
+	// Deleting the seal key is what makes a purge final: an old state file
+	// restored afterwards cannot be opened under the key that replaces it.
+	ChatStateSealKeyPrefix = "chat-state-seal:"
+	ChatStateAnchorPrefix  = "chat-state-anchor:"
+
 	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a
