@@ -300,6 +300,77 @@ func TestSendDoesNotBurnAPositionTheRatchetHasPassed(t *testing.T) {
 	}
 }
 
+// An intent left over from an epoch the group has since left has nothing to
+// burn: that secret tree is gone with the epoch. This is also the seam a
+// pending Commit sits next to — when one is confirmed and the epoch rises, a
+// stranded send intent from the old epoch has to be dropped rather than
+// charged against the new epoch's chain.
+func TestSendDropsAnIntentFromAnEpochTheGroupHasLeft(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 5)
+
+	failing := &fakeCipher{sealErr: errors.New("died before the AEAD")}
+	if _, err := store.Send(testConvA, noWatermark, SendRequest{
+		ClientMessageID: testClientA,
+		Plaintext:       []byte("never made it"),
+	}, failing); err == nil {
+		t.Fatal("the failing send reported success")
+	}
+
+	// A commit landed in between: new epoch, chain back to zero.
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+
+	cipher := &fakeCipher{}
+	result, err := store.Send(testConvA, noWatermark, SendRequest{
+		ClientMessageID: "55555555-5555-4555-8555-555555555555",
+		Plaintext:       []byte("first of the new epoch"),
+	}, cipher)
+	if err != nil {
+		t.Fatalf("send in the new epoch: %v", err)
+	}
+	if cipher.burns != 0 || len(result.Burned) != 0 {
+		t.Fatalf("burned %d positions of the new epoch for an intent of the old one", cipher.burns)
+	}
+	used := positionOf(t, result.Entry.Ciphertext)
+	if used.Epoch != 1 || used.Generation != 0 {
+		t.Fatalf("the new epoch's first send landed at %+v, want epoch 1 generation 0", used)
+	}
+	if readRecordForTest(t, store, testConvA).PendingSend != nil {
+		t.Fatal("the stale intent survived")
+	}
+}
+
+// The recovery loop has a bound, and hitting it refuses the send rather than
+// grinding forward. A record and a library that disagree by more than one step
+// is not a crash window, it is damage, and encrypting on top of it is the one
+// thing that cannot be undone.
+func TestSendRefusesWhenAnIntentCannotBeAbandonedWithinTheBound(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+
+	err := store.withConversation(testConvA, func(p convPaths) error {
+		rec, anchor, err := store.loadChecked(p, testConvA, noWatermark)
+		if err != nil {
+			return err
+		}
+		rec.PendingSend = &Position{
+			ContentType: ContentTypeApplication,
+			Generation:  uint64(maxBurnForward) + 1,
+		}
+		return store.commit(p, rec, rec.Generation, anchor)
+	})
+	if err != nil {
+		t.Fatalf("seed the far intent: %v", err)
+	}
+
+	if _, err := store.Send(testConvA, noWatermark, SendRequest{
+		ClientMessageID: testClientA,
+		Plaintext:       []byte("should not be encrypted"),
+	}, &fakeCipher{}); !errors.Is(err, ErrBurnForward) {
+		t.Fatalf("send = %v, want ErrBurnForward", err)
+	}
+}
+
 func TestSendRetransmissionReturnsTheStoredCiphertextWithoutEncrypting(t *testing.T) {
 	store, _ := newTestStore(t)
 	seedGroupState(t, store, testConvA, 0, 0, 0)
