@@ -43,6 +43,39 @@ test-cover:
 test-clipboard-e2e:
 	DRAGPASS_KEEPER_CLIPBOARD_E2E=1 go test ./internal/keystore/clipboard -count=1 -run ProductionSmoke -v
 
+# ── MLS (Rust static library) ───────────────────────
+# Off the default path on purpose. Linking this turns CGO_ENABLED on for every
+# target, and on Linux that alone costs the static binary and adds an X11 build
+# dependency through golang.design/x/clipboard. Those are release decisions, not
+# a side effect of adding a library, so `build` and `pkg` stay exactly as they
+# were and the MLS build is asked for by name.
+MLS_DIR := mls
+MLS_LIB := $(MLS_DIR)/target/release/libdragpass_mls.a
+
+.PHONY: mls-lib mls-lib-windows mls-test build-mls test-mls mls-clean
+
+mls-lib:
+	@echo "Building MLS static library..."
+	@cd $(MLS_DIR) && cargo build --release
+
+# Windows always links through mingw, so the archive has to be the gnu triple's
+# even when cargo's host default would be MSVC.
+mls-lib-windows:
+	@echo "Building MLS static library (x86_64-pc-windows-gnu)..."
+	@cd $(MLS_DIR) && cargo build --release --target x86_64-pc-windows-gnu
+
+mls-test:
+	@cd $(MLS_DIR) && cargo test
+
+build-mls: mls-lib
+	@CGO_ENABLED=1 go build -tags mls ./...
+
+test-mls: mls-lib
+	@CGO_ENABLED=1 go test -tags mls ./... -count=1
+
+mls-clean:
+	@cd $(MLS_DIR) && cargo clean
+
 # ── Build ───────────────────────────────────────────
 .PHONY: all build pkg clean build-macos build-macos-amd64 build-macos-arm64 build-windows build-linux build-linux-amd64 build-linux-arm64 pkg-macos pkg-macos-amd64 pkg-macos-arm64 pkg-windows pkg-linux pkg-linux-amd64 pkg-linux-arm64 sign checksums release refresh uninstall
 
