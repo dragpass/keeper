@@ -64,10 +64,11 @@ func (c ContentType) valid() bool {
 // discards one member's generation 0 as a redelivery of another member's, which
 // loses an ordinary message rather than a repeated one.
 //
-// The sending side fills Epoch and Generation and leaves the other two at zero:
-// it has one leaf, its own, and the axis it sends on is the MLS layer's choice
-// and not yet made. Every outbox entry carries the same two zeros, so
-// uniqueness there is what it always was.
+// The MLS send path fills all four, because SendCipher.Peek reads this
+// device's own leaf and axis off the group state. The pre-MLS commit_outbox
+// path fills only Epoch and Generation and leaves the other two at zero, which
+// is what localLeafIndex reads a named axis as: proof that the position came
+// from a peek and its leaf is real, rather than a default.
 type Position struct {
 	Epoch           uint64      `json:"epoch"`
 	SenderLeafIndex uint32      `json:"sender_leaf_index"`
@@ -199,6 +200,29 @@ func (r *Record) appendOutbox(e OutboxEntry) {
 	if len(r.Outbox) > OutboxCapacity {
 		r.Outbox = append([]OutboxEntry(nil), r.Outbox[len(r.Outbox)-OutboxCapacity:]...)
 	}
+}
+
+// localLeafIndex reports this device's own leaf in the group, and whether the
+// record has ever learned it.
+//
+// The authoritative copy is inside GroupState, which this package treats as
+// opaque and which the protocol edge cannot read without linking the MLS
+// library into it. What is readable here is the positions this device's own
+// send path wrote: those come from SendCipher.Peek, so they carry the real
+// leaf and name the ratchet they sit on. The positions the pre-MLS
+// commit_outbox path writes name neither, and that is what separates "never
+// learned" from "leaf 0" — a distinction a bare uint32 cannot carry, and the
+// one a watermark's leaf slot has to be judged against.
+func (r *Record) localLeafIndex() (uint32, bool) {
+	if r.PendingSend != nil && r.PendingSend.ContentType.valid() {
+		return r.PendingSend.SenderLeafIndex, true
+	}
+	for i := len(r.Outbox) - 1; i >= 0; i-- {
+		if r.Outbox[i].Position.ContentType.valid() {
+			return r.Outbox[i].Position.SenderLeafIndex, true
+		}
+	}
+	return 0, false
 }
 
 func (r *Record) receivedContains(p Position) bool {

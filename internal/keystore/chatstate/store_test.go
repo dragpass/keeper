@@ -199,7 +199,7 @@ func TestServerWatermarkCatchesAFileAndAnchorRestoredTogether(t *testing.T) {
 	if err := secrets2.Set(config.Service, anchorAccount(paths2.tag), anchor2); err != nil {
 		t.Fatal(err)
 	}
-	ahead := ServerWatermark{Epoch: 0, NextIndex: 6}
+	ahead := ServerWatermark{Epoch: 0, NextApplicationIndex: 6}
 	if _, err := store2.Reserve(testConvB, 1, ahead); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("reserve under a server watermark ahead of the file = %v, want ErrRekeyRequired", err)
 	}
@@ -210,12 +210,12 @@ func TestServerWatermarkBehindTheAnchorLoses(t *testing.T) {
 	if _, err := store.Reserve(testConvA, 4, noWatermark); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextIndex: 3}); err != nil {
+	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextApplicationIndex: 3}); err != nil {
 		t.Fatalf("reserve under a watermark behind the file = %v", err)
 	}
 	// A server that now claims less than it already claimed must not talk this
 	// device into handing out a position it already spent.
-	got, err := store.Reserve(testConvA, 1, ServerWatermark{NextIndex: 1})
+	got, err := store.Reserve(testConvA, 1, ServerWatermark{NextApplicationIndex: 1})
 	if err != nil {
 		t.Fatalf("reserve under a lower watermark = %v, want acceptance", err)
 	}
@@ -228,7 +228,7 @@ func TestServerWatermarkBehindTheAnchorLoses(t *testing.T) {
 // reporting a chain this device rewound away from. Either way it is refused.
 func TestServerWatermarkAheadOfAFreshFileRefuses(t *testing.T) {
 	store, _ := newTestStore(t)
-	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextIndex: 3}); !errors.Is(err, ErrRekeyRequired) {
+	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextApplicationIndex: 3}); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("reserve under a watermark ahead of the file = %v, want ErrRekeyRequired", err)
 	}
 }
@@ -652,8 +652,11 @@ func clientID(i int) string {
 
 func TestAnchorJSONStaysSmallEnoughForEveryKeyring(t *testing.T) {
 	raw, err := json.Marshal(Anchor{
+		Version:    AnchorVersion,
 		Generation: 1 << 40, ReservedBefore: 1 << 40, Epoch: 1 << 40,
-		WatermarkEpoch: 1 << 40, WatermarkNextIndex: 1 << 40, NeedsRekey: true,
+		WatermarkEpoch: 1 << 40, WatermarkLeafIndex: 1 << 20,
+		WatermarkNextHandshake: 1 << 40, WatermarkNextApplication: 1 << 40,
+		NeedsRekey: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -661,7 +664,7 @@ func TestAnchorJSONStaysSmallEnoughForEveryKeyring(t *testing.T) {
 	// Windows Credential Manager caps an entry around 2.5 KB. The anchor is in
 	// the keyring because it is small; a change that stops being small is a
 	// design change.
-	if len(raw) > 256 {
+	if len(raw) > 320 {
 		t.Fatalf("anchor JSON is %d bytes: %s", len(raw), raw)
 	}
 }

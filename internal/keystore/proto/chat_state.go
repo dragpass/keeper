@@ -62,11 +62,11 @@ const (
 // Wire-shape constants.
 const (
 	// ChatStatePermitDomain / ChatStatePermitCanonicalVersion — the first two
-	// slots of the 10-item conversation-state permit canonical. A separate
+	// slots of the 12-item conversation-state permit canonical. A separate
 	// domain from `dragpass.chat.read`, so a page of read permits cannot also
 	// advance a chain, and a state permit cannot open a message.
 	ChatStatePermitDomain           = "dragpass.chat.state"
-	ChatStatePermitCanonicalVersion = 1
+	ChatStatePermitCanonicalVersion = 2
 
 	// ChatStatePermitTTLSeconds — the server fixes
 	// `expires_at = issued_at + 300` and the Keeper requires exactly that
@@ -94,24 +94,39 @@ const (
 // ChatStatePermit is the server's statement that this account may advance this
 // conversation's state now, and how far the server has seen the chain get.
 //
-// WatermarkEpoch / WatermarkNextIndex are the second rollback axis, and they
-// are inside the signature rather than beside it on purpose. A watermark
-// carried as an ordinary request field could simply be left out by a caller
-// that would rather not be checked against it, which is the same as not having
-// it. The server is still UNTRUSTED: the Keeper follows whichever of the
-// server's watermark and its own anchor is *higher*, so a server reporting a
-// lower one changes nothing and a server reporting a higher one can force a
-// re-establishment but learns no plaintext.
+// The four Watermark* fields are the second rollback axis, and they are inside
+// the signature rather than beside it on purpose. A watermark carried as an
+// ordinary request field could simply be left out by a caller that would rather
+// not be checked against it, which is the same as not having it. The server is
+// still UNTRUSTED: the Keeper follows whichever of the server's watermark and
+// its own anchor is *higher*, so a server reporting a lower one changes nothing
+// and a server reporting a higher one can force a re-establishment but learns
+// no plaintext.
+//
+// Four slots rather than one because naming a position in an MLS group takes
+// four (chatstate.Position): every sender has its own ratchet and each sender
+// has a handshake one and an application one. Only the application axis is
+// compared; see chatstate.Anchor.rewound for why the handshake one is carried
+// and not looked at.
 type ChatStatePermit struct {
-	AccountID          string `json:"account_id"` // from the user JWT, never from the request
-	OrgID              string `json:"org_id"`
-	ConversationID     string `json:"conversation_id"`
-	WatermarkEpoch     uint64 `json:"watermark_epoch"`
-	WatermarkNextIndex uint64 `json:"watermark_next_index"`
-	IssuedAt           int64  `json:"issued_at"`
-	ExpiresAt          int64  `json:"expires_at"` // issued_at + 300
-	ServerKeyVersion   uint   `json:"server_key_version"`
-	Signature          string `json:"signature"` // Base64, RSA-PSS SHA-256 over the canonical
+	AccountID      string `json:"account_id"` // from the user JWT, never from the request
+	OrgID          string `json:"org_id"`
+	ConversationID string `json:"conversation_id"`
+
+	WatermarkEpoch uint64 `json:"watermark_epoch"`
+
+	// WatermarkLeafIndex names whose chain the two counters below describe. It
+	// carries nothing until the server has accepted a position, and once it
+	// has, a permit naming another leaf is refused rather than used to judge
+	// this one's chain.
+	WatermarkLeafIndex       uint32 `json:"watermark_leaf_index"`
+	WatermarkNextHandshake   uint64 `json:"watermark_next_handshake"`
+	WatermarkNextApplication uint64 `json:"watermark_next_application"`
+
+	IssuedAt         int64  `json:"issued_at"`
+	ExpiresAt        int64  `json:"expires_at"` // issued_at + 300
+	ServerKeyVersion uint   `json:"server_key_version"`
+	Signature        string `json:"signature"` // Base64, RSA-PSS SHA-256 over the canonical
 }
 
 func (p ChatStatePermit) Validate() error {
@@ -139,8 +154,8 @@ func (p ChatStatePermit) Validate() error {
 	return nil
 }
 
-// ChatStatePermitCanonical builds the 10-item string the server signs and the
-// Keeper verifies. No trailing newline; the schema slot is always 1.
+// ChatStatePermitCanonical builds the 12-item string the server signs and the
+// Keeper verifies. No trailing newline; the schema slot is always 2.
 //
 // Pure function on purpose, like the other canonicals in this package: ariadne
 // has to produce these bytes exactly.
@@ -152,7 +167,9 @@ func ChatStatePermitCanonical(p ChatStatePermit) string {
 		p.OrgID,
 		p.ConversationID,
 		strconv.FormatUint(p.WatermarkEpoch, 10),
-		strconv.FormatUint(p.WatermarkNextIndex, 10),
+		strconv.FormatUint(uint64(p.WatermarkLeafIndex), 10),
+		strconv.FormatUint(p.WatermarkNextHandshake, 10),
+		strconv.FormatUint(p.WatermarkNextApplication, 10),
 		strconv.FormatInt(p.IssuedAt, 10),
 		strconv.FormatInt(p.ExpiresAt, 10),
 		strconv.FormatUint(uint64(p.ServerKeyVersion), 10),

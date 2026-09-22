@@ -196,10 +196,46 @@ func openChatState(
 		return nil, chatstate.ServerWatermark{}, chatStateFailure(d, "open", err), false
 	}
 	watermark := chatstate.ServerWatermark{
-		Epoch:     permit.WatermarkEpoch,
-		NextIndex: permit.WatermarkNextIndex,
+		Epoch:                permit.WatermarkEpoch,
+		LeafIndex:            permit.WatermarkLeafIndex,
+		NextHandshakeIndex:   permit.WatermarkNextHandshake,
+		NextApplicationIndex: permit.WatermarkNextApplication,
+	}
+	if resp, ok := chatStateWatermarkNamesThisLeaf(d, store, conversationID, watermark); !ok {
+		store.Close()
+		return nil, chatstate.ServerWatermark{}, resp, false
 	}
 	return store, watermark, proto.BaseResponse{}, true
+}
+
+// chatStateWatermarkNamesThisLeaf refuses a watermark that describes some other
+// sender's chain.
+//
+// The leaf slot only means something once the server has accepted a position:
+// until then there is no chain for it to name and it is ignored, which is also
+// the answer for a conversation that has no group yet and therefore no leaf of
+// its own to compare. Once the server has accepted one, the two must agree —
+// judging this device's positions against a record of somebody else's is the
+// one way a signed, in-window, correctly bound permit can still be the wrong
+// permit.
+//
+// A disagreement is an authorization failure and not a rewind, so it does not
+// latch the conversation: the anchor is left where it is and a permit naming
+// the right leaf still works.
+func chatStateWatermarkNamesThisLeaf(
+	d Deps, store *chatstate.Store, conversationID string, wm chatstate.ServerWatermark,
+) (proto.BaseResponse, bool) {
+	if !wm.HasAccepted() {
+		return proto.BaseResponse{}, true
+	}
+	leaf, known, err := store.LocalLeafIndex(conversationID)
+	if err != nil {
+		return chatStateFailure(d, "watermark leaf", err), false
+	}
+	if known && leaf != wm.LeafIndex {
+		return chatStateNotAuthorized(d, "watermark leaf"), false
+	}
+	return proto.BaseResponse{}, true
 }
 
 // decodeChatStateRequest applies the size cap, the strict decode, and the

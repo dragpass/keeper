@@ -287,6 +287,32 @@ func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byt
 	return blob, err
 }
 
+// LocalLeafIndex reports this device's leaf in the conversation's MLS group,
+// and false when the conversation has never learned one — no record, no group,
+// or nothing sent yet. False is an answer: a leaf nobody knows cannot be
+// compared against the leaf a server watermark names.
+//
+// It reads the record without judging it against the anchor, unlike every
+// other call here. The value it takes out is one this device wrote about
+// itself and a rewound copy of the file carries the same leaf as a current
+// one, so nothing is decided on the unjudged bytes; the caller's real
+// operation runs the judgement immediately afterwards.
+func (s *Store) LocalLeafIndex(conversationID string) (uint32, bool, error) {
+	var (
+		leaf  uint32
+		known bool
+	)
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, err := s.readRecord(p, conversationID)
+		if err != nil || rec == nil {
+			return err
+		}
+		leaf, known = rec.localLeafIndex()
+		return nil
+	})
+	return leaf, known, err
+}
+
 // Purge erases every trace of one owner's chat state: the files, the anchors,
 // and the seal key.
 func Purge(secrets keychain.SecretStore, ownerAccountID string) (int, error) {
