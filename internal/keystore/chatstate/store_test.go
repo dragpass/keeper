@@ -572,3 +572,83 @@ func TestAnchorJSONStaysSmallEnoughForEveryKeyring(t *testing.T) {
 		t.Fatalf("anchor JSON is %d bytes: %s", len(raw), raw)
 	}
 }
+
+// TestPurgeAllErasesEveryOwner: a device reset names no account, so the sweep
+// has to find both owners' files, anchors, and seal keys from the directory
+// listing alone.
+func TestPurgeAllErasesEveryOwner(t *testing.T) {
+	_, secrets := newTestStore(t)
+	const otherOwner = "55555555-5555-4555-8555-555555555555"
+
+	type seeded struct {
+		owner string
+		dir   string
+		tags  []string
+	}
+	var all []seeded
+	for _, owner := range []string{testOwner, otherOwner} {
+		store, err := Open(secrets, owner)
+		if err != nil {
+			t.Fatalf("open %s: %v", owner, err)
+		}
+		s := seeded{owner: owner, dir: store.ownerDir()}
+		for _, conv := range []string{testConvA, testConvB} {
+			if _, err := store.Reserve(conv, 1, noWatermark); err != nil {
+				t.Fatalf("reserve %s/%s: %v", owner, conv, err)
+			}
+			s.tags = append(s.tags, store.paths(conv).tag)
+		}
+		store.Close()
+		all = append(all, s)
+	}
+
+	removed, err := PurgeAll(secrets)
+	if err != nil {
+		t.Fatalf("purge all: %v", err)
+	}
+	if removed != 4 {
+		t.Fatalf("purge all removed %d conversations, want 4", removed)
+	}
+
+	for _, s := range all {
+		if _, err := os.Stat(s.dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s directory survived the sweep: %v", s.owner, err)
+		}
+		if _, err := secrets.Get(config.Service, sealKeyAccount(s.owner)); !errors.Is(err, keychain.ErrSecretNotFound) {
+			t.Errorf("%s seal key survived the sweep: %v", s.owner, err)
+		}
+		for _, tag := range s.tags {
+			if _, err := secrets.Get(config.Service, anchorAccount(tag)); !errors.Is(err, keychain.ErrSecretNotFound) {
+				t.Errorf("%s anchor %s survived the sweep: %v", s.owner, tag, err)
+			}
+		}
+	}
+}
+
+// TestPurgeAllWithoutAnyStateIsANoOp: the sweep runs on devices that never
+// opened a conversation, so an absent root is a success and not an error.
+func TestPurgeAllWithoutAnyStateIsANoOp(t *testing.T) {
+	t.Setenv(RootEnvVar, filepath.Join(t.TempDir(), "chat-state"))
+	removed, err := PurgeAll(keychain.NewMemorySecretStore())
+	if err != nil || removed != 0 {
+		t.Fatalf("purge all on an untouched device = %d, %v", removed, err)
+	}
+}
+
+// TestPurgeAllTakesASealKeyThatHasNoConversationYet: an owner who signed in and
+// never chatted still holds a seal key, and the sweep finds owners by listing
+// directories, so the key is minted with its directory rather than with the
+// first conversation.
+func TestPurgeAllTakesASealKeyThatHasNoConversationYet(t *testing.T) {
+	store, secrets := newTestStore(t)
+	if _, err := os.Stat(store.ownerDir()); err != nil {
+		t.Fatalf("minting the seal key left no directory: %v", err)
+	}
+
+	if _, err := PurgeAll(secrets); err != nil {
+		t.Fatalf("purge all: %v", err)
+	}
+	if _, err := secrets.Get(config.Service, sealKeyAccount(testOwner)); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatalf("seal key survived the sweep: %v", err)
+	}
+}

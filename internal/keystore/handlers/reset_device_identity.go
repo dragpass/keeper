@@ -7,6 +7,13 @@
 // (identity_sign.go guard), and there was no Extension-callable escape short of
 // `make refresh` (manual keychain purge).
 //
+// It also erases every owner's chat state (chatstate.PurgeAll): the sealed
+// files, the anchors, and the seal keys. A reset that spared it would leave the
+// one thing on this device that a restored backup can turn into a reused
+// (key, nonce) pair, which is the failure the chat state layer cannot take
+// back. The purged conversations are not named in `cleared` — that list is the
+// Keychain slots, and the chat state is neither one slot nor a fixed number.
+//
 // Security: this is a purely local, destructive action. It never returns key
 // material — only the names of the slots actually removed (idempotent: success
 // with an empty list when nothing was present). server_public_key is an
@@ -18,6 +25,7 @@ package handlers
 
 import (
 	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -56,6 +64,19 @@ var resetIdentitySlots = []resetIdentitySlot{
 // HandleResetDeviceIdentity wipes this device's account-scoped key material.
 func HandleResetDeviceIdentity(d Deps, req proto.ResetDeviceIdentityRequest) proto.BaseResponse {
 	d.Logger.Println("reset device identity request processing...")
+
+	// Chat state before the slots: a process that dies partway leaves slots a
+	// second call clears just as well, while leftover chat state is the
+	// entrance for a rewound chain that a reset exists to close.
+	//
+	// A failure is logged and not returned. Refusing the reset over it would
+	// block the re-enrollment this action exists for, and the caller has no
+	// remedy to offer beyond calling it again, which it can do anyway.
+	if removed, err := chatstate.PurgeAll(d.Store); err != nil {
+		d.Logger.Printf("reset device identity: chat state purge incomplete after %d conversation(s)", removed)
+	} else {
+		d.Logger.Printf("reset device identity: purged chat state for %d conversation(s)", removed)
+	}
 
 	// Non-nil so an empty result serializes as `[]`, not `null`.
 	cleared := make([]string, 0, len(resetIdentitySlots))

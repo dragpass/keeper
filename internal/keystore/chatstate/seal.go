@@ -27,10 +27,18 @@ const (
 	aeadSubkeyLabel = "dragpass.chat.state.aead|1"
 )
 
+// ownerTagDomain separates the keyless owner tag from anything else that might
+// one day hash an account id.
+const ownerTagDomain = "dragpass.chat.state.owner|1|"
+
 var errSealKeyMalformed = errors.New("chat state seal key is malformed")
 
 func sealKeyAccount(ownerAccountID string) string {
-	return config.ChatStateSealKeyPrefix + ownerAccountID
+	return sealKeyAccountForTag(ownerTag(ownerAccountID))
+}
+
+func sealKeyAccountForTag(tag string) string {
+	return config.ChatStateSealKeyPrefix + tag
 }
 
 func loadSealKey(secrets keychain.SecretStore, ownerAccountID string) ([]byte, error) {
@@ -50,7 +58,11 @@ func loadSealKey(secrets keychain.SecretStore, ownerAccountID string) ([]byte, e
 // empty; without the lock they would each mint a key and each seal files the
 // other two cannot open.
 func createSealKey(secrets keychain.SecretStore, root, ownerAccountID string) ([]byte, error) {
-	if err := ensureOwnerOnlyDir(root); err != nil {
+	// The owner's directory is created with the key, before any conversation
+	// needs it, so that a seal key always has a directory. A device reset finds
+	// owners by listing directories; a key with none would outlive the reset
+	// that is supposed to take it.
+	if err := ensureOwnerOnlyDir(root, filepath.Join(root, ownerTag(ownerAccountID))); err != nil {
 		return nil, err
 	}
 	release, err := acquireConversationLock(filepath.Join(root, "seal"+lockSuffix), LockTimeout)
@@ -94,8 +106,16 @@ func (s *Store) conversationTag(conversationID string) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
-func (s *Store) ownerTag() string {
-	mac := hmac.New(sha256.New, s.nameKey)
-	mac.Write([]byte("owner|" + s.owner))
-	return hex.EncodeToString(mac.Sum(nil)[:16])
+// ownerTag names one owner's directory and their seal key slot. Unlike
+// conversationTag it is keyed by nothing, and that is what a device reset
+// depends on: it enumerates the directories under the state root and has to
+// name the seal key slot of each one, without having been told which accounts
+// exist — SecretStore offers Get / Set / Delete and no listing, and the action
+// a user reaches for when the server-side account is gone has no account id to
+// pass. A keyed tag would make those slots unreachable from that sweep. The
+// hygiene is unchanged: neither form can be walked back to an account id, and
+// both are visible only to the user who can already read the keyring.
+func ownerTag(ownerAccountID string) string {
+	sum := sha256.Sum256([]byte(ownerTagDomain + ownerAccountID))
+	return hex.EncodeToString(sum[:16])
 }
