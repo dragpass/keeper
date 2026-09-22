@@ -226,6 +226,12 @@ func (s *Store) MarkReceived(
 // blob the library handed out and returns the record generation that now
 // carries it.
 //
+// The blob is not only ratchet state: the MLS snapshot puts this device's leaf
+// signature secret key in the same structure as the epoch secrets. The seal key
+// in front of these files is therefore standing in front of a signing key too,
+// which is why the erasure paths have to reach the seal key and not just the
+// files.
+//
 // The blob is written through the same whole-file replacement every other
 // change here takes. That matters more than it looks: mls-rs asks its storage
 // provider for atomicity but only "optimally", so nothing upstream supplies it.

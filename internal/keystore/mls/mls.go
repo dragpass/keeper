@@ -18,14 +18,33 @@
 // tag off by default is what lets the library be measured and reviewed before
 // that trade is made rather than as a side effect of making it.
 //
+// # What the state blob holds
+//
+// More than ratchet state. mls-rs's snapshot carries the epoch secrets, the
+// secret tree, the key schedule, the private tree and, in the same structure,
+// this device's leaf signature secret key. So the record's seal key is
+// protecting a signing key and not only decryption material, and losing the
+// file to an attacker who also has the seal key means losing the ability to
+// prove this device authored anything.
+//
 // # Memory
 //
 // mls-rs protects key material with zeroize, which overwrites a buffer when the
-// value holding it is dropped. That is the whole of the protection: it does not
-// reach copies made along the way, the allocation a growing Vec abandons, pages
-// the OS wrote to swap, or a core dump. The Rust side allocates from a plain
-// global heap, so Keeper's memguard arena does not cover any of it. Secrets in
-// this package's Go buffers are not covered either unless the caller wipes them.
+// value holding it is dropped. Measured coverage (mls-rs 0.56.0 /
+// mls-rs-core 0.27.0): the serialized state and prior-epoch blobs, the key
+// schedule's five secrets, the secret tree's node secrets, every derived
+// message key and nonce, the signature and HPKE secret keys, and application
+// plaintext.
+//
+// That is the whole of the protection, and it is narrower than the list makes
+// it sound: it covers one buffer at the moment its owner is dropped. It does
+// not reach copies made along the way, the allocation a growing Vec abandons,
+// pages the OS wrote to swap, or the image in a core dump. Neither mls-rs nor
+// any of its 112 dependencies calls mlock, VirtualLock, madvise or mprotect —
+// zeroize's own documentation puts those explicitly out of scope — so the Rust
+// side allocates from a plain global heap and Keeper's memguard arena does not
+// extend over any of it. Secrets in this package's Go buffers are not covered
+// either unless the caller wipes them.
 package mls
 
 import (

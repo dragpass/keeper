@@ -436,3 +436,57 @@ pub unsafe extern "C" fn dpmls_group_load(
         Ok(DPMLS_OK)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn take(buf: &mut DpBuf) -> Vec<u8> {
+        let out = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }.to_vec();
+        unsafe { dpmls_buf_free(buf) };
+        out
+    }
+
+    #[test]
+    fn version_names_the_two_features_that_are_off_by_default() {
+        let mut buf = DpBuf::EMPTY;
+        assert_eq!(unsafe { dpmls_version(&mut buf) }, DPMLS_OK);
+        let s = String::from_utf8(take(&mut buf)).unwrap();
+        assert!(s.contains("secret_tree_access"), "{s}");
+        assert!(s.contains("export_key_generation"), "{s}");
+    }
+
+    // A freed buffer is left null, so a caller that frees twice — which an
+    // error path combined with a deferred free would do — releases once.
+    #[test]
+    fn freeing_a_buffer_twice_is_harmless() {
+        let mut buf = DpBuf::EMPTY;
+        assert_eq!(unsafe { dpmls_version(&mut buf) }, DPMLS_OK);
+        assert!(!buf.ptr.is_null());
+        unsafe { dpmls_buf_free(&mut buf) };
+        assert!(buf.ptr.is_null());
+        unsafe { dpmls_buf_free(&mut buf) };
+        unsafe { dpmls_buf_free(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn a_null_handle_is_an_error_rather_than_a_dereference() {
+        assert_eq!(
+            unsafe { dpmls_group_create(std::ptr::null_mut(), b"gid".as_ptr(), 3) },
+            DPMLS_ERR
+        );
+        let mut buf = DpBuf::EMPTY;
+        assert_eq!(unsafe { dpmls_last_error(&mut buf) }, DPMLS_OK);
+        assert!(String::from_utf8(take(&mut buf))
+            .unwrap()
+            .contains("null session handle"));
+    }
+
+    #[test]
+    fn a_null_input_with_a_length_is_refused() {
+        assert_eq!(
+            unsafe { dpmls_group_create(std::ptr::null_mut(), std::ptr::null(), 7) },
+            DPMLS_ERR
+        );
+    }
+}
