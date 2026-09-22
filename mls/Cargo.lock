@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "dragpass-mls"
-version = "0.0.39"
+version = "0.0.40"
 dependencies = [
  "mls-rs",
  "mls-rs-core",

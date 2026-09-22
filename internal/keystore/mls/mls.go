@@ -195,6 +195,44 @@ func (c *Cipher) Seal(plaintext, authenticatedData []byte) ([]byte, error) {
 
 func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
 
+// BuildCommit builds a Commit and leaves it pending. mls-rs refuses a second
+// one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
+// §7.3.1 states is enforced a layer below this and not only by the record.
+func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
+	if len(plan.AddKeyPackages) > 1 {
+		// One Add per Commit is all the skeleton's FFI carries. Refusing is
+		// the honest answer; silently committing the first would produce a
+		// Commit that does not match the plan the caller was told was built.
+		return chatstate.BuiltCommit{}, errors.New("mls: a commit carries at most one add")
+	}
+	if len(plan.AddKeyPackages) == 0 {
+		commit, expected, err := c.session.CommitUpdate()
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, ExpectedEpoch: expected}, nil
+	}
+	commit, welcome, expected, err := c.session.CommitAddMember(plan.AddKeyPackages[0])
+	if err != nil {
+		return chatstate.BuiltCommit{}, err
+	}
+	return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
+}
+
+func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
+
+func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
+
+func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
+	processed, err := c.session.Process(message)
+	if err != nil {
+		return 0, false, err
+	}
+	return processed.Epoch, processed.Removed, nil
+}
+
+func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
+
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 	processed, err := c.session.Process(message)
 	if err != nil {

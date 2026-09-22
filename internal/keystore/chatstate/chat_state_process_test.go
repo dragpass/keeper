@@ -304,6 +304,60 @@ func TestChatStateProcessHelper(t *testing.T) {
 			fmt.Printf("error: tc crash receive: %v\n", err)
 		}
 
+	case "commit-crash":
+		if !signalReady() {
+			return
+		}
+		if _, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
+			ClientCommitID: os.Getenv(helperClientID),
+			Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+		}, &fakeCommitter{}); err != nil {
+			fmt.Printf("error: begin commit: %v\n", err)
+			return
+		}
+		// The commit is built, durable and posted, and no verdict has come
+		// back. This is §7.3.2's third outcome, so the kill lands here.
+		if err := os.WriteFile(os.Getenv(helperCheckpnt), []byte("pending"), 0o600); err != nil {
+			fmt.Printf("error: checkpoint: %v\n", err)
+			return
+		}
+		time.Sleep(30 * time.Second)
+
+	case "commit-gates":
+		if !signalReady() {
+			return
+		}
+		_, commitErr := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
+			ClientCommitID: "99999999-9999-4999-8999-999999999999",
+		}, &fakeCommitter{})
+		_, sendErr := store.Send(testConvA, noWatermark, SendRequest{
+			ClientMessageID: testClientA,
+			Plaintext:       []byte("not while the epoch is undecided"),
+		}, &fakeCipher{})
+		pending, found, pendingErr := store.PendingCommit(testConvA, noWatermark)
+		if pendingErr != nil {
+			fmt.Printf("error: pending commit: %v\n", pendingErr)
+			return
+		}
+		fmt.Printf("commit-gates:%t:%t:%t:%t:%s\n",
+			errors.Is(commitErr, ErrCommitPending),
+			errors.Is(sendErr, ErrCommitPending),
+			found, pending.Welcome == nil, pending.ClientCommitID)
+
+	case "commit-confirm":
+		if !signalReady() {
+			return
+		}
+		out, err := store.ConfirmCommit(testConvA, noWatermark, CommitOutcome{
+			ClientCommitID: os.Getenv(helperClientID),
+			Kind:           CommitAccepted,
+		}, &fakeCommitter{})
+		if err != nil {
+			fmt.Printf("error: confirm commit: %v\n", err)
+			return
+		}
+		fmt.Printf("commit-confirmed:%d:%t\n", out.Epoch, out.WelcomeReleasable)
+
 	case "resend":
 		if !signalReady() {
 			return
@@ -784,6 +838,76 @@ func TestChatStateSendRetransmitReusesTheStoredCiphertext(t *testing.T) {
 	}
 }
 
+// A Commit built and posted by a process that died before it heard the
+// verdict. The next process must find it, must not guess which way it went,
+// and must refuse everything that would build on the undecided epoch. The
+// confirmed state has to be exactly where the dead process left it, including
+// the anchor: an anchor that had taken the pending epoch would read the record
+// as rewound here and latch the conversation (§7.3.3).
+func TestChatStatePendingCommitSurvivesAKillAndBlocksUntilSettled(t *testing.T) {
+	env := newProcessEnv(t)
+	env.seedGroupState(t)
+	checkpoint := filepath.Join(env.tempDir, "commit-pending")
+
+	victim, victimDone := env.start(t, "commit-crash", "commit-crash-ready",
+		helperCheckpnt+"="+checkpoint, helperClientID+"="+testCommitA)
+	env.waitReady(t, "commit-crash-ready")
+	env.waitReady(t, "commit-pending")
+
+	stranded := env.readRecord(t)
+	if stranded.Pending == nil || stranded.Pending.ClientCommitID != testCommitA {
+		t.Fatalf("the commit was not durable as pending: %+v", stranded.Pending)
+	}
+	if stranded.Epoch != 0 {
+		t.Fatalf("building a commit advanced the confirmed epoch to %d", stranded.Epoch)
+	}
+	if want := string(fakePendingState(0, 0, 0, 1)); string(stranded.GroupState) != want {
+		t.Fatalf("group state = %q, want %q", stranded.GroupState, want)
+	}
+	if anchor := env.readAnchor(t); anchor.Epoch != 0 || anchor.NeedsRekey {
+		t.Fatalf("the anchor took the pending epoch or latched: %+v", anchor)
+	}
+
+	if err := victim.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForChild(t, victim, victimDone); result.err == nil {
+		t.Fatalf("the killed child exited cleanly: %q", result.output)
+	}
+
+	gates, gatesDone := env.start(t, "commit-gates", "commit-gates-ready")
+	env.waitReady(t, "commit-gates-ready")
+	want := "commit-gates:true:true:true:true:" + testCommitA
+	if out := waitForChild(t, gates, gatesDone); !strings.Contains(out.output, want) {
+		t.Fatalf("after the kill the gates reported %q, want %q", out.output, want)
+	}
+
+	confirm, confirmDone := env.start(t, "commit-confirm", "commit-confirm-ready",
+		helperClientID+"="+testCommitA)
+	env.waitReady(t, "commit-confirm-ready")
+	if out := waitForChild(t, confirm, confirmDone); !strings.Contains(out.output, "commit-confirmed:1:true") {
+		t.Fatalf("the verdict did not settle the commit: %q", out.output)
+	}
+
+	settled := env.readRecord(t)
+	if settled.Pending != nil {
+		t.Fatalf("the pending outlived its verdict: %+v", settled.Pending)
+	}
+	if settled.Epoch != 1 || string(settled.GroupState) != string(fakeState(1, 0, 0)) {
+		t.Fatalf("record after the verdict: epoch %d state %q", settled.Epoch, settled.GroupState)
+	}
+	if anchor := env.readAnchor(t); anchor.Epoch != 1 || anchor.NeedsRekey {
+		t.Fatalf("anchor after the verdict: %+v", anchor)
+	}
+
+	next, nextDone := env.start(t, "tc-send", "commit-after-ready",
+		helperClientID+"=55555555-5555-4555-8555-555555555555")
+	env.waitReady(t, "commit-after-ready")
+	if _, created, _ := parseTcSent(t, waitForChild(t, next, nextDone)); !created {
+		t.Fatal("sending stayed blocked after the commit was settled")
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Harness.
 // ────────────────────────────────────────────────────────────────────────
@@ -894,6 +1018,17 @@ func (e *processEnv) seedGroupState(t *testing.T) {
 	if _, err := store.SaveGroupState(testConvA, noWatermark, fakeState(0, 0, 0)); err != nil {
 		t.Fatalf("seed group state: %v", err)
 	}
+}
+
+func (e *processEnv) readAnchor(t *testing.T) Anchor {
+	t.Helper()
+	store := e.parentStore(t)
+	defer store.Close()
+	anchor, err := loadAnchor(store.secrets, store.conversationTag(testConvA))
+	if err != nil {
+		t.Fatalf("load anchor: %v", err)
+	}
+	return anchor
 }
 
 func (e *processEnv) readRecord(t *testing.T) *Record {
