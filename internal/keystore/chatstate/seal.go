@@ -19,12 +19,33 @@ import (
 
 const sealKeyBytes = 32
 
-// Labels for the two things the seal key is used for. One key with two labels
-// rather than two keyring entries: the derivation is what separates them, and a
-// second entry would be a second thing to keep in step during a purge.
+// Labels for the three things the seal key is used for. One key with three
+// labels rather than three keyring entries: the derivation is what separates
+// them, and a second entry would be a second thing to keep in step during a
+// purge.
+//
+// **The seal key is per owner account, not per conversation, and every
+// conversation of that owner is sealed under subkeys of it.** So there is no
+// such thing as deleting one conversation by deleting a key: removing this key
+// makes every one of that account's conversations unopenable at once. A
+// per-conversation erasure has to be a record deletion, and `chat_state_purge`
+// is deliberately owner-scoped for the same reason — its request carries an
+// owner account id and nothing narrower.
+//
+// **And deleting the key is not an erasure while a copy of it survives.** It is
+// removed from this keyring; a keychain backup, a synced keychain, or a
+// mirrored test store that still holds the value can open every record file
+// that was kept alongside it.
 const (
 	nameSubkeyLabel = "dragpass.chat.state.name|1"
 	aeadSubkeyLabel = "dragpass.chat.state.aead|1"
+
+	// historySubkeyLabel seals the local copies of delivered messages. Design
+	// §8.4 requires that key to be something other than an MLS message key,
+	// which a subkey of this master is. Whether it should be its own keyring
+	// secret, so that the history can be destroyed without the state, is
+	// M4.6.3 and is not decided here.
+	historySubkeyLabel = "dragpass.chat.state.history|1"
 )
 
 // ownerTagDomain separates the keyless owner tag from anything else that might
