@@ -222,6 +222,55 @@ func (s *Store) MarkReceived(
 	return first, generation, err
 }
 
+// SaveGroupState replaces the conversation's serialized MLS state with the
+// blob the library handed out and returns the record generation that now
+// carries it.
+//
+// The blob is written through the same whole-file replacement every other
+// change here takes. That matters more than it looks: mls-rs asks its storage
+// provider for atomicity but only "optimally", so nothing upstream supplies it.
+// Routing the blob through this path is what turns that suggestion into a
+// property — a crash leaves the record holding the previous group state or the
+// new one, never a spliced half of each.
+func (s *Store) SaveGroupState(
+	conversationID string, wm ServerWatermark, blob []byte,
+) (uint64, error) {
+	if len(blob) == 0 {
+		return 0, errors.New("group state blob is empty")
+	}
+	var generation uint64
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		rec.GroupState = blob
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		generation = rec.Generation
+		return nil
+	})
+	return generation, err
+}
+
+// LoadGroupState returns the stored blob, or nil when this conversation has
+// never held one. Nil is an answer, not a failure: a conversation exists before
+// its group does.
+func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byte, error) {
+	var blob []byte
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, _, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		blob = rec.GroupState
+		return nil
+	})
+	return blob, err
+}
+
 // Purge erases every trace of one owner's chat state: the files, the anchors,
 // and the seal key.
 func Purge(secrets keychain.SecretStore, ownerAccountID string) (int, error) {
