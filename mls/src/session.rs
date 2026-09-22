@@ -177,18 +177,30 @@ impl Session {
             .ok_or_else(|| "mls: session has no group".to_string())
     }
 
-    pub fn add_member(&mut self, key_package: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
+    /// Build a Commit that adds one member, **without applying it**.
+    ///
+    /// RFC 9420 §14: "The generation of Commit messages MUST NOT modify a
+    /// client's state, since the client doesn't know at that time whether the
+    /// changes implied by the Commit message will conflict with another Commit
+    /// or not." `build()` honours that — it puts the next epoch's state,
+    /// secrets and key schedule in `Group::pending_commit` and assigns none of
+    /// them to the group. The assignment happens only in
+    /// `apply_detached_commit`, which `apply_pending_commit` calls.
+    ///
+    /// The epoch returned is the **confirmed** one, the epoch this Commit was
+    /// built against. It is what the server compares under its CAS, and it is
+    /// deliberately not the epoch the Commit would produce: nothing here knows
+    /// yet whether that epoch will exist.
+    pub fn commit_add_member(&mut self, key_package: &[u8]) -> Res<(Vec<u8>, Vec<u8>, u64)> {
         let kp = MlsMessage::from_bytes(key_package).map_err(|e| err("key package decode", e))?;
         let group = self.group_mut()?;
+        let expected_epoch = group.current_epoch();
         let output = group
             .commit_builder()
             .add_member(kp)
             .map_err(|e| err("add member", e))?
             .build()
             .map_err(|e| err("commit build", e))?;
-        group
-            .apply_pending_commit()
-            .map_err(|e| err("apply commit", e))?;
         let welcome = match output.welcome_messages.first() {
             Some(w) => w.to_bytes().map_err(|e| err("welcome encode", e))?,
             None => Vec::new(),
@@ -197,7 +209,58 @@ impl Session {
             .commit_message
             .to_bytes()
             .map_err(|e| err("commit encode", e))?;
-        Ok((commit, welcome))
+        Ok((commit, welcome, expected_epoch))
+    }
+
+    /// Build a Commit with no proposals — the path update that rotates this
+    /// device's own key material. Same pending discipline as
+    /// `commit_add_member`.
+    pub fn commit_update(&mut self) -> Res<(Vec<u8>, u64)> {
+        let group = self.group_mut()?;
+        let expected_epoch = group.current_epoch();
+        let output = group
+            .commit_builder()
+            .build()
+            .map_err(|e| err("commit build", e))?;
+        let commit = output
+            .commit_message
+            .to_bytes()
+            .map_err(|e| err("commit encode", e))?;
+        Ok((commit, expected_epoch))
+    }
+
+    /// Promote the pending Commit to confirmed. Called only once the server's
+    /// CAS has said this Commit is the one that won its epoch.
+    pub fn apply_pending_commit(&mut self) -> Res<()> {
+        self.group_mut()?
+            .apply_pending_commit()
+            .map_err(|e| err("apply commit", e))?;
+        Ok(())
+    }
+
+    /// Drop the pending Commit and the next-epoch secrets it carries.
+    ///
+    /// RFC 9420 §14 asks for a forked state to be deleted as soon as it is not
+    /// needed, so losing a CAS ends here rather than in a retry that keeps the
+    /// fork around. Processing the winner's Commit clears the pending on its
+    /// own; this exists for the case where the outcome is settled without the
+    /// winning message in hand.
+    pub fn clear_pending_commit(&mut self) -> Res<()> {
+        self.group_mut()?.clear_pending_commit();
+        Ok(())
+    }
+
+    pub fn has_pending_commit(&mut self) -> Res<bool> {
+        Ok(self.group_mut()?.has_pending_commit())
+    }
+
+    /// The confirmed epoch. `Group::current_epoch` reads
+    /// `self.context().epoch`, and the pending Commit is a separate field, so
+    /// this never reports an epoch that only a pending Commit would reach.
+    /// The rollback anchor is built on that: it follows this value and nothing
+    /// else (design §7.3.3).
+    pub fn epoch(&mut self) -> Res<u64> {
+        Ok(self.group_mut()?.current_epoch())
     }
 
     /// Encrypt one application message, consuming the generation `send_position`

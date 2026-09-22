@@ -31,9 +31,21 @@ func (s *Session) CreateGroup(groupID []byte) error { return ErrUnavailable }
 
 func (s *Session) KeyPackage() ([]byte, error) { return nil, ErrUnavailable }
 
-func (s *Session) AddMember(keyPackage []byte) (commit, welcome []byte, err error) {
-	return nil, nil, ErrUnavailable
+func (s *Session) CommitAddMember(keyPackage []byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	return nil, nil, 0, ErrUnavailable
 }
+
+func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error) {
+	return nil, 0, ErrUnavailable
+}
+
+func (s *Session) ApplyPendingCommit() error { return ErrUnavailable }
+
+func (s *Session) ClearPendingCommit() error { return ErrUnavailable }
+
+func (s *Session) HasPendingCommit() (bool, error) { return false, ErrUnavailable }
+
+func (s *Session) Epoch() (uint64, error) { return 0, ErrUnavailable }
 
 func (s *Session) Join(welcome []byte) error { return ErrUnavailable }
 

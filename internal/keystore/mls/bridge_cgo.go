@@ -57,9 +57,14 @@ void    dpmls_session_free(DpSession *handle);
 
 int32_t dpmls_group_create(DpSession *handle, const uint8_t *group_id, size_t group_id_len);
 int32_t dpmls_key_package(DpSession *handle, DpBuf *out);
-int32_t dpmls_group_add_member(DpSession *handle,
-                               const uint8_t *key_package, size_t key_package_len,
-                               DpBuf *commit, DpBuf *welcome);
+int32_t dpmls_group_commit_add_member(DpSession *handle,
+                                      const uint8_t *key_package, size_t key_package_len,
+                                      DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
+int32_t dpmls_group_commit_update(DpSession *handle, DpBuf *commit, uint64_t *expected_epoch);
+int32_t dpmls_group_commit_apply(DpSession *handle);
+int32_t dpmls_group_commit_clear(DpSession *handle);
+int32_t dpmls_group_has_pending_commit(DpSession *handle, uint8_t *out);
+int32_t dpmls_group_epoch(DpSession *handle, uint64_t *out);
 int32_t dpmls_group_join(DpSession *handle, const uint8_t *welcome, size_t welcome_len);
 
 int32_t dpmls_group_encrypt(DpSession *handle,
@@ -185,20 +190,106 @@ func (s *Session) KeyPackage() ([]byte, error) {
 	return takeBuf(&buf), nil
 }
 
-func (s *Session) AddMember(keyPackage []byte) (commit, welcome []byte, err error) {
+// CommitAddMember builds a Commit that adds one member and leaves it pending.
+// The confirmed state does not move: RFC 9420 §14 forbids it, because at this
+// moment nobody knows whether this Commit or somebody else's will be the one
+// its epoch accepts. expectedEpoch is the confirmed epoch the Commit was built
+// against, which is the value the server compares under its CAS.
+func (s *Session) CommitAddMember(keyPackage []byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	var c, w C.DpBuf
-	rc := C.dpmls_group_add_member(h, bytePtr(keyPackage), C.size_t(len(keyPackage)), &c, &w)
+	var (
+		c, w  C.DpBuf
+		epoch C.uint64_t
+	)
+	rc := C.dpmls_group_commit_add_member(
+		h, bytePtr(keyPackage), C.size_t(len(keyPackage)), &c, &w, &epoch,
+	)
 	runtime.KeepAlive(keyPackage)
 	if rc != 0 {
-		return nil, nil, statusError(rc)
+		return nil, nil, 0, statusError(rc)
 	}
-	return takeBuf(&c), takeBuf(&w), nil
+	return takeBuf(&c), takeBuf(&w), uint64(epoch), nil
+}
+
+// CommitUpdate builds a Commit with no proposals, which rotates this device's
+// own key material. Pending in the same way CommitAddMember is.
+func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, 0, err
+	}
+	var (
+		c     C.DpBuf
+		epoch C.uint64_t
+	)
+	if rc := C.dpmls_group_commit_update(h, &c, &epoch); rc != 0 {
+		return nil, 0, statusError(rc)
+	}
+	return takeBuf(&c), uint64(epoch), nil
+}
+
+// ApplyPendingCommit promotes the pending Commit to confirmed. Nothing else
+// does: this is the only call that moves the group to the epoch a Commit this
+// device built would create.
+func (s *Session) ApplyPendingCommit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	return statusError(C.dpmls_group_commit_apply(h))
+}
+
+// ClearPendingCommit drops the pending Commit and the next-epoch secrets it
+// carries. Processing somebody else's Commit does the same thing on its own;
+// this is for settling an outcome without the winning message in hand.
+func (s *Session) ClearPendingCommit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	return statusError(C.dpmls_group_commit_clear(h))
+}
+
+func (s *Session) HasPendingCommit() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return false, err
+	}
+	var out C.uint8_t
+	if rc := C.dpmls_group_has_pending_commit(h, &out); rc != 0 {
+		return false, statusError(rc)
+	}
+	return out != 0, nil
+}
+
+// Epoch is the confirmed epoch. A pending Commit never shows up here, which is
+// what lets the rollback anchor follow this value without mistaking a lost CAS
+// for a rewind (design §7.3.3).
+func (s *Session) Epoch() (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return 0, err
+	}
+	var out C.uint64_t
+	if rc := C.dpmls_group_epoch(h, &out); rc != 0 {
+		return 0, statusError(rc)
+	}
+	return uint64(out), nil
 }
 
 func (s *Session) Join(welcome []byte) error {

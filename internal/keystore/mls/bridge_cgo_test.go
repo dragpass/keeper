@@ -46,9 +46,14 @@ func twoMemberGroup(t *testing.T) (alice, bob *Session, commit []byte) {
 	if err != nil {
 		t.Fatalf("key package: %v", err)
 	}
-	commit, welcome, err := alice.AddMember(kp)
+	commit, welcome, _, err := alice.CommitAddMember(kp)
 	if err != nil {
-		t.Fatalf("add member: %v", err)
+		t.Fatalf("commit add member: %v", err)
+	}
+	// Building it did not move alice. In the real flow the server's CAS says
+	// whether it may; here the test plays that part.
+	if err := alice.ApplyPendingCommit(); err != nil {
+		t.Fatalf("apply pending commit: %v", err)
 	}
 	if err := bob.Join(welcome); err != nil {
 		t.Fatalf("join: %v", err)

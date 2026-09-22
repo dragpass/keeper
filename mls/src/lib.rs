@@ -259,20 +259,104 @@ pub unsafe extern "C" fn dpmls_key_package(handle: *mut Session, out: *mut DpBuf
     })
 }
 
+/// Build an Add Commit and hold it pending. `expected_epoch` receives the
+/// confirmed epoch the Commit was built against, which is what the server
+/// compares under its CAS. Nothing in the group moves until
+/// `dpmls_group_commit_apply`.
+///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`.
 #[no_mangle]
-pub unsafe extern "C" fn dpmls_group_add_member(
+pub unsafe extern "C" fn dpmls_group_commit_add_member(
     handle: *mut Session,
     key_package: *const u8,
     key_package_len: usize,
     commit: *mut DpBuf,
     welcome: *mut DpBuf,
+    expected_epoch: *mut u64,
 ) -> i32 {
     guard(|| {
-        let (c, w) = session_of(handle)?.add_member(slice(key_package, key_package_len)?)?;
+        if expected_epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        let (c, w, epoch) =
+            session_of(handle)?.commit_add_member(slice(key_package, key_package_len)?)?;
+        *expected_epoch = epoch;
         put(commit, c)?;
         put(welcome, w)?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Build a Commit with no proposals and hold it pending.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_update(
+    handle: *mut Session,
+    commit: *mut DpBuf,
+    expected_epoch: *mut u64,
+) -> i32 {
+    guard(|| {
+        if expected_epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        let (c, epoch) = session_of(handle)?.commit_update()?;
+        *expected_epoch = epoch;
+        put(commit, c)?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Promote the pending Commit to confirmed.
+///
+/// # Safety
+/// `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_apply(handle: *mut Session) -> i32 {
+    guard(|| {
+        session_of(handle)?.apply_pending_commit()?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Drop the pending Commit along with the next-epoch secrets it carries.
+///
+/// # Safety
+/// `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_clear(handle: *mut Session) -> i32 {
+    guard(|| {
+        session_of(handle)?.clear_pending_commit()?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// # Safety
+/// `handle` as in `session_of`; `out` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_has_pending_commit(handle: *mut Session, out: *mut u8) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        *out = u8::from(session_of(handle)?.has_pending_commit()?);
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The confirmed epoch, never one that only a pending Commit would reach.
+///
+/// # Safety
+/// `handle` as in `session_of`; `out` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_epoch(handle: *mut Session, out: *mut u64) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        *out = session_of(handle)?.epoch()?;
         Ok(DPMLS_OK)
     })
 }
