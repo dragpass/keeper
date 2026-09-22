@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -44,7 +46,26 @@ func loadSealKey(secrets keychain.SecretStore, ownerAccountID string) ([]byte, e
 	return key, nil
 }
 
-func createSealKey(secrets keychain.SecretStore, ownerAccountID string) ([]byte, error) {
+// createSealKey mints the owner's seal key under a lock and re-checks first.
+// Three Keeper processes can be spawned at once and all three can find the slot
+// empty; without the lock they would each mint a key and each seal files the
+// other two cannot open.
+func createSealKey(secrets keychain.SecretStore, root, ownerAccountID string) ([]byte, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create chat state root: %w", err)
+	}
+	release, err := acquireConversationLock(filepath.Join(root, "seal"+lockSuffix), LockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	if key, err := loadSealKey(secrets, ownerAccountID); err == nil {
+		return key, nil
+	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return nil, err
+	}
+
 	key := make([]byte, sealKeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err

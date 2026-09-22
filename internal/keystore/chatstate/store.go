@@ -73,14 +73,11 @@ func open(secrets keychain.SecretStore, ownerAccountID string, create bool) (*St
 		if !create || !errors.Is(err, keychain.ErrSecretNotFound) {
 			return nil, err
 		}
-		if master, err = createSealKey(secrets, ownerAccountID); err != nil {
+		if master, err = createSealKey(secrets, root, ownerAccountID); err != nil {
 			return nil, err
 		}
 	}
 	defer secure.Zeroize(master)
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("create chat state root: %w", err)
-	}
 	return &Store{
 		secrets:     secrets,
 		root:        root,
