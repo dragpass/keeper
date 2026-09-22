@@ -148,7 +148,7 @@ func (s *Store) CommitOutbox(
 			stored, created = existing, false
 			return nil
 		}
-		if entry.Position.Epoch != rec.Epoch || entry.Position.ChainIndex >= rec.NextIndex {
+		if entry.Position.Epoch != rec.Epoch || entry.Position.Generation >= rec.NextIndex {
 			return ErrPositionNotReserved
 		}
 		if rec.positionTaken(entry.Position) {
@@ -188,9 +188,16 @@ func (s *Store) ReadOutbox(
 // MarkReceived records an inbound position and reports whether this delivery
 // was the first. Persisting the mark before the caller is told it may show the
 // message is what keeps a redelivery from advancing the state twice.
+//
+// A position that does not name its ratchet is refused rather than stored: an
+// unnamed axis collapses two senders' chains onto one key, and the answer this
+// returns would then be "redelivery" for a message nobody has seen.
 func (s *Store) MarkReceived(
 	conversationID string, wm ServerWatermark, pos Position,
 ) (bool, uint64, error) {
+	if !pos.ContentType.valid() {
+		return false, 0, errors.New("received position must name a content type")
+	}
 	var (
 		first      bool
 		generation uint64

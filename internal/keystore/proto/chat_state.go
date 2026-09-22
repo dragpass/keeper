@@ -83,6 +83,12 @@ const (
 	// asking for more positions than this is not composing a message. Kept in
 	// step with chatstate.MaxReserveCount by a test in the handlers package.
 	ChatStateMaxReserveCount = 64
+
+	// ChatStateContentTypeHandshake / ChatStateContentTypeApplication — which
+	// of a sender's two ratchets a received position sits on. Kept in step with
+	// the chatstate constants by a test in the handlers package.
+	ChatStateContentTypeHandshake   = "handshake"
+	ChatStateContentTypeApplication = "application"
 )
 
 // ChatStatePermit is the server's statement that this account may advance this
@@ -278,12 +284,19 @@ type ChatStateReadOutboxResponseData struct {
 	CiphertextB64 string `json:"ciphertext_b64"`
 }
 
+// ChatStateMarkReceivedRequest names one inbound position. Four slots and not
+// two, because MLS gives every sender its own sender ratchet (RFC 9420 §9.1)
+// and gives each sender a handshake one and an application one (§6.3.1):
+// (epoch, generation) is not unique in a group, and two members' first messages
+// of an epoch would each be judged a redelivery of the other.
 type ChatStateMarkReceivedRequest struct {
-	Permit         ChatStatePermit `json:"permit"`
-	OrgID          string          `json:"org_id"`
-	ConversationID string          `json:"conversation_id"`
-	Epoch          uint64          `json:"epoch"`
-	ChainIndex     uint64          `json:"chain_index"`
+	Permit          ChatStatePermit `json:"permit"`
+	OrgID           string          `json:"org_id"`
+	ConversationID  string          `json:"conversation_id"`
+	Epoch           uint64          `json:"epoch"`
+	SenderLeafIndex uint32          `json:"sender_leaf_index"`
+	ContentType     string          `json:"content_type"`
+	Generation      uint64          `json:"generation"`
 }
 
 func (r ChatStateMarkReceivedRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -291,7 +304,15 @@ func (r ChatStateMarkReceivedRequest) ChatStateContext() (ChatStatePermit, strin
 }
 
 func (r ChatStateMarkReceivedRequest) Validate() error {
-	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if r.ContentType != ChatStateContentTypeHandshake &&
+		r.ContentType != ChatStateContentTypeApplication {
+		return newValidationError("content_type",
+			"must be "+ChatStateContentTypeHandshake+" or "+ChatStateContentTypeApplication)
+	}
+	return nil
 }
 
 type ChatStateMarkReceivedResponseData struct {

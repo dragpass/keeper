@@ -204,7 +204,7 @@ func TestChatStateProcessHelper(t *testing.T) {
 		}
 		entry := OutboxEntry{
 			ClientMessageID: os.Getenv(helperClientID),
-			Position:        Position{Epoch: reservation.Epoch, ChainIndex: reservation.FirstChainIndex},
+			Position:        Position{Epoch: reservation.Epoch, Generation: reservation.FirstChainIndex},
 			IV:              bytes.Repeat([]byte{9}, ivBytes),
 		}
 		entry.Ciphertext = []byte("ciphertext-at-" + strconv.FormatUint(reservation.FirstChainIndex, 10))
@@ -213,7 +213,7 @@ func TestChatStateProcessHelper(t *testing.T) {
 			fmt.Printf("error: commit outbox: %v\n", err)
 			return
 		}
-		fmt.Printf("sent:%d:%t:%s\n", stored.Position.ChainIndex, created,
+		fmt.Printf("sent:%d:%t:%s\n", stored.Position.Generation, created,
 			base64.StdEncoding.EncodeToString(stored.Ciphertext))
 
 	case "resend":
@@ -229,7 +229,7 @@ func TestChatStateProcessHelper(t *testing.T) {
 			fmt.Printf("error: read outbox: %v\n", err)
 			return
 		}
-		fmt.Printf("resent:%d:%s\n", entry.Position.ChainIndex,
+		fmt.Printf("resent:%d:%s\n", entry.Position.Generation,
 			base64.StdEncoding.EncodeToString(entry.Ciphertext))
 
 	default:
@@ -366,7 +366,7 @@ func TestChatStateAbandonsAPositionAfterAKill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read record: %v", err)
 	}
-	if rec.positionTaken(Position{ChainIndex: killed}) {
+	if rec.positionTaken(Position{Generation: killed}) {
 		t.Fatalf("the abandoned position %d carries an outbox entry", killed)
 	}
 }

@@ -13,8 +13,12 @@ import (
 )
 
 // SchemaVersion pins the record layout. An unknown version fails closed rather
-// than being read with today's field meanings.
-const SchemaVersion = 1
+// than being read with today's field meanings, which is exactly what a
+// version-1 record needs here: its received marks named only (epoch,
+// chain_index), so decoding one under this layout would leave every mark on
+// leaf 0 at generation 0 — a deduplication set that silently discards live
+// messages rather than one that is merely incomplete.
+const SchemaVersion = 2
 
 const (
 	// OutboxCapacity / ReceivedCapacity bound the record so a long-lived
@@ -34,12 +38,44 @@ const (
 	ivBytes            = 12
 )
 
-// Position is one place in one sending chain. Two different plaintexts must
-// never occupy the same Position: at that moment AES-GCM is being asked to
-// reuse a (key, nonce) pair.
+// ContentType says which of a sender's two ratchets a position sits on. A
+// string rather than a small integer so that the zero value is not also a valid
+// answer: a position that never named its ratchet must not read as a handshake
+// position.
+type ContentType string
+
+const (
+	ContentTypeHandshake   ContentType = "handshake"
+	ContentTypeApplication ContentType = "application"
+)
+
+func (c ContentType) valid() bool {
+	return c == ContentTypeHandshake || c == ContentTypeApplication
+}
+
+// Position is one place in one ratchet. Two different plaintexts must never
+// occupy the same Position: at that moment AES-GCM is being asked to reuse a
+// (key, nonce) pair.
+//
+// Naming that place takes four slots, not two. MLS gives every sender its own
+// sender ratchet (RFC 9420 §9.1) and gives each sender two of them, handshake
+// and application (§6.3.1), so (epoch, generation) names a different message
+// for every member and every axis. Judging deliveries on those two alone
+// discards one member's generation 0 as a redelivery of another member's, which
+// loses an ordinary message rather than a repeated one.
+//
+// The sending side fills Epoch and Generation and leaves the other two at zero:
+// it has one leaf, its own, and the axis it sends on is the MLS layer's choice
+// and not yet made. Every outbox entry carries the same two zeros, so
+// uniqueness there is what it always was.
 type Position struct {
-	Epoch      uint64 `json:"epoch"`
-	ChainIndex uint64 `json:"chain_index"`
+	Epoch           uint64      `json:"epoch"`
+	SenderLeafIndex uint32      `json:"sender_leaf_index"`
+	ContentType     ContentType `json:"content_type"`
+
+	// Generation is the step along that one sender's one ratchet. It is not
+	// Record.Generation, which counts this file's writes.
+	Generation uint64 `json:"generation"`
 }
 
 // OutboxEntry is a ciphertext that has already been built, kept so a

@@ -80,7 +80,7 @@ func HandleChatStateCommitOutbox(d Deps, payload json.RawMessage) proto.BaseResp
 	}
 	stored, created, err := store.CommitOutbox(req.ConversationID, watermark, chatstate.OutboxEntry{
 		ClientMessageID: req.ClientMessageID,
-		Position:        chatstate.Position{Epoch: req.Epoch, ChainIndex: req.ChainIndex},
+		Position:        chatstate.Position{Epoch: req.Epoch, Generation: req.ChainIndex},
 		IV:              iv,
 		Ciphertext:      ciphertext,
 	})
@@ -90,7 +90,7 @@ func HandleChatStateCommitOutbox(d Deps, payload json.RawMessage) proto.BaseResp
 	return proto.BaseResponse{Success: true, Data: proto.ChatStateCommitOutboxResponseData{
 		Stored:        created,
 		Epoch:         stored.Position.Epoch,
-		ChainIndex:    stored.Position.ChainIndex,
+		ChainIndex:    stored.Position.Generation,
 		IVB64:         base64.StdEncoding.EncodeToString(stored.IV),
 		CiphertextB64: base64.StdEncoding.EncodeToString(stored.Ciphertext),
 	}}
@@ -111,7 +111,7 @@ func HandleChatStateReadOutbox(d Deps, payload json.RawMessage) proto.BaseRespon
 	}
 	return proto.BaseResponse{Success: true, Data: proto.ChatStateReadOutboxResponseData{
 		Epoch:         entry.Position.Epoch,
-		ChainIndex:    entry.Position.ChainIndex,
+		ChainIndex:    entry.Position.Generation,
 		IVB64:         base64.StdEncoding.EncodeToString(entry.IV),
 		CiphertextB64: base64.StdEncoding.EncodeToString(entry.Ciphertext),
 	}}
@@ -128,7 +128,12 @@ func HandleChatStateMarkReceived(d Deps, payload json.RawMessage) proto.BaseResp
 
 	first, generation, err := store.MarkReceived(
 		req.ConversationID, watermark,
-		chatstate.Position{Epoch: req.Epoch, ChainIndex: req.ChainIndex},
+		chatstate.Position{
+			Epoch:           req.Epoch,
+			SenderLeafIndex: req.SenderLeafIndex,
+			ContentType:     chatstate.ContentType(req.ContentType),
+			Generation:      req.Generation,
+		},
 	)
 	if err != nil {
 		return chatStateFailure(d, "mark received", err)
