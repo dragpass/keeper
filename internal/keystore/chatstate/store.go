@@ -60,17 +60,13 @@ type Reservation struct {
 
 // Open returns the owner's store, minting the seal key on first use.
 func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
-	return open(secrets, ownerAccountID, true)
-}
-
-func open(secrets keychain.SecretStore, ownerAccountID string, create bool) (*Store, error) {
 	root, err := Root()
 	if err != nil {
 		return nil, err
 	}
 	master, err := loadSealKey(secrets, ownerAccountID)
 	if err != nil {
-		if !create || !errors.Is(err, keychain.ErrSecretNotFound) {
+		if !errors.Is(err, keychain.ErrSecretNotFound) {
 			return nil, err
 		}
 		if master, err = createSealKey(secrets, root, ownerAccountID); err != nil {
@@ -219,46 +215,74 @@ func (s *Store) MarkReceived(
 	return first, generation, err
 }
 
-// Purge erases every trace of this owner's chat state: the files, the anchors,
-// and the seal key. The seal key goes last and its removal is what makes the
-// erasure final — a state file restored from a backup afterwards cannot be
-// opened under the key that replaces it, so a purge cannot be used to clear a
-// latched NeedsRekey and then bring the rewound file back.
+// Purge erases every trace of one owner's chat state: the files, the anchors,
+// and the seal key.
 func Purge(secrets keychain.SecretStore, ownerAccountID string) (int, error) {
-	s, err := open(secrets, ownerAccountID, false)
+	root, err := Root()
 	if err != nil {
-		if errors.Is(err, keychain.ErrSecretNotFound) {
+		return 0, err
+	}
+	return purgeOwner(secrets, root, ownerTag(ownerAccountID))
+}
+
+// PurgeAll erases the chat state of every owner on this device. It starts from
+// the directory listing rather than from an owner the caller names, because a
+// device reset has no account to name: it is what a user reaches for once the
+// server-side account is gone.
+func PurgeAll(secrets keychain.SecretStore) (int, error) {
+	root, err := Root()
+	if err != nil {
+		return 0, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	defer s.Close()
-
-	tags, err := s.conversationTags()
-	if err != nil {
-		return 0, err
-	}
 	removed := 0
-	for _, tag := range tags {
-		if err := deleteAnchor(s.secrets, tag); err != nil {
-			return removed, err
+	var failures []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
 		}
-		dir := s.ownerDir()
-		for _, name := range []string{tag + recordSuffix, tag + lockSuffix} {
-			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return removed, err
-			}
+		count, err := purgeOwner(secrets, root, entry.Name())
+		removed += count
+		failures = append(failures, err)
+	}
+	return removed, errors.Join(failures...)
+}
+
+// purgeOwner erases one owner's directory, the anchors of every conversation in
+// it, and the seal key. The seal key goes last and its removal is what makes
+// the erasure final — a state file restored from a backup afterwards cannot be
+// opened under the key that replaces it, so a purge cannot be used to clear a
+// latched NeedsRekey and then bring the rewound file back.
+//
+// A failing step does not stop the ones after it. Each step stands alone, and
+// stopping early leaves more behind than carrying on does: it would skip the
+// seal key, which is the step that makes whatever survived unopenable. The
+// caller is told what failed and every step is idempotent, so a retry costs
+// nothing.
+func purgeOwner(secrets keychain.SecretStore, root, tag string) (int, error) {
+	dir := filepath.Join(root, tag)
+	conversations, err := conversationTagsIn(dir)
+	failures := []error{err}
+	removed := 0
+	for _, conversation := range conversations {
+		if err := deleteAnchor(secrets, conversation); err != nil {
+			failures = append(failures, err)
+			continue
 		}
 		removed++
 	}
-	if err := os.RemoveAll(s.ownerDir()); err != nil {
-		return removed, err
-	}
-	if err := s.secrets.Delete(config.Service, sealKeyAccount(ownerAccountID)); err != nil &&
+	failures = append(failures, os.RemoveAll(dir))
+	if err := secrets.Delete(config.Service, sealKeyAccountForTag(tag)); err != nil &&
 		!errors.Is(err, keychain.ErrSecretNotFound) {
-		return removed, err
+		failures = append(failures, err)
 	}
-	return removed, nil
+	return removed, errors.Join(failures...)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -272,7 +296,7 @@ type convPaths struct {
 	lock   string
 }
 
-func (s *Store) ownerDir() string { return filepath.Join(s.root, s.ownerTag()) }
+func (s *Store) ownerDir() string { return filepath.Join(s.root, ownerTag(s.owner)) }
 
 func (s *Store) paths(conversationID string) convPaths {
 	tag := s.conversationTag(conversationID)
@@ -285,13 +309,13 @@ func (s *Store) paths(conversationID string) convPaths {
 	}
 }
 
-// conversationTags lists the conversations this owner has state for. Directory
+// conversationTagsIn lists the conversations one owner has state for. Directory
 // enumeration stands in for an index; nothing outside a single file needs to be
 // consistent, so there is no index to drift. The tags cannot be turned back
 // into conversation ids, which is all the local operations need and one fewer
 // thing the directory gives away.
-func (s *Store) conversationTags() ([]string, error) {
-	entries, err := os.ReadDir(s.ownerDir())
+func conversationTagsIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil

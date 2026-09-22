@@ -28,8 +28,9 @@ const (
 	//
 	// Clears: active keypair (keeper_private_key / keeper_public_key), pending
 	// keypair (pending_keeper_private_key / pending_keeper_public_key),
-	// session_code, and device_key. server_public_key is an account-independent
-	// trust anchor and is deliberately preserved.
+	// session_code, and device_key, plus every owner's chat state (the sealed
+	// files, the anchors, and the seal keys). server_public_key is an
+	// account-independent trust anchor and is deliberately preserved.
 	//
 	// This is a purely local, destructive action. It returns no secret
 	// material — only the names of the slots actually removed. It is

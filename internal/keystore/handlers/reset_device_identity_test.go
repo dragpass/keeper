@@ -7,18 +7,33 @@
 //   - the cleared list not matching what was actually present (idempotency)
 //   - an empty result serializing as `null` instead of `[]`
 //   - key material echoed to the logger / error string
+//   - chat state left behind by a reset (the entrance for a rewound chain)
 package handlers
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
+
+// newResetDeps is newTestDeps with the chat state root pointed at a temporary
+// directory. A reset erases chat state, so a test that skipped this would erase
+// the developer's own — which is why chatstate.Root is derived from
+// os.UserConfigDir and stays overridable.
+func newResetDeps(t *testing.T) (Deps, *logger.MemoryLogger, *keychain.MemorySecretStore) {
+	t.Helper()
+	t.Setenv(chatstate.RootEnvVar, filepath.Join(t.TempDir(), "chat-state"))
+	return newTestDeps(t)
+}
 
 // seedAllIdentitySlots writes every account-scoped slot plus the preserved
 // server key state, returning sentinel values for log assertions.
@@ -77,7 +92,7 @@ func slotStillPresent(t *testing.T, store keychain.SecretStore, name string) boo
 // account-scoped slot is wiped, the cleared list names them all, and
 // server_public_key survives.
 func TestResetDeviceIdentity_AllSlots_ClearsEverythingButServerKey(t *testing.T) {
-	deps, log, store := newTestDeps(t)
+	deps, log, store := newResetDeps(t)
 	sentinels := seedAllIdentitySlots(t, store)
 
 	resp := HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{})
@@ -118,7 +133,7 @@ func TestResetDeviceIdentity_AllSlots_ClearsEverythingButServerKey(t *testing.T)
 // TestResetDeviceIdentity_PartialSlots_ReportsOnlyPresent: only present slots
 // appear in the cleared list.
 func TestResetDeviceIdentity_PartialSlots_ReportsOnlyPresent(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newResetDeps(t)
 
 	if err := keychain.SavePrivateKey(store, "PRIV"); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -138,7 +153,7 @@ func TestResetDeviceIdentity_PartialSlots_ReportsOnlyPresent(t *testing.T) {
 // TestResetDeviceIdentity_Empty_IsIdempotent: an empty keychain still succeeds
 // with an empty (non-null) cleared list.
 func TestResetDeviceIdentity_Empty_IsIdempotent(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newResetDeps(t)
 
 	resp := HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{})
 	if !resp.Success {
@@ -165,10 +180,82 @@ func TestResetDeviceIdentity_Empty_IsIdempotent(t *testing.T) {
 	_ = store
 }
 
+// TestResetDeviceIdentity_ErasesChatStateOfEveryOwner: the reset names no
+// account, so it has to reach every owner's conversations. What is left behind
+// otherwise is a sealed file plus the key that opens it, which is what a
+// restored backup needs to put a spent chain position back in play.
+func TestResetDeviceIdentity_ErasesChatStateOfEveryOwner(t *testing.T) {
+	deps, _, store := newResetDeps(t)
+	const (
+		ownerA = "11111111-1111-4111-8111-111111111111"
+		ownerB = "55555555-5555-4555-8555-555555555555"
+	)
+	for _, owner := range []string{ownerA, ownerB} {
+		state, err := chatstate.Open(store, owner)
+		if err != nil {
+			t.Fatalf("seed %s: %v", owner, err)
+		}
+		if _, err := state.Reserve(chatConvID, 1, chatstate.ServerWatermark{}); err != nil {
+			t.Fatalf("seed %s: %v", owner, err)
+		}
+		state.Close()
+	}
+	root := os.Getenv(chatstate.RootEnvVar)
+	if got := ownerDirectoryCount(t, root); got != 2 {
+		t.Fatalf("seeding left %d owner directories, want 2", got)
+	}
+
+	resp := HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{})
+	if !resp.Success {
+		t.Fatalf("expected success, got error %q", resp.Error)
+	}
+
+	if got := ownerDirectoryCount(t, root); got != 0 {
+		t.Errorf("%d owner directories survived the reset", got)
+	}
+	// The seal keys and the anchors go with them, and nothing else was seeded
+	// into this store, so an empty keychain is the whole assertion.
+	if got := store.Size(); got != 0 {
+		t.Errorf("keychain still holds %d entries after the reset", got)
+	}
+}
+
+// ownerDirectoryCount counts the owner directories under a state root. The
+// root also holds the lock file the seal mint takes, which is not one.
+func ownerDirectoryCount(t *testing.T, root string) int {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read state root: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			count++
+		}
+	}
+	return count
+}
+
+// TestResetDeviceIdentity_WithoutAnyChatState_StillSucceeds: the reset runs on
+// devices that never opened a conversation, so an absent state root is an
+// ordinary success.
+func TestResetDeviceIdentity_WithoutAnyChatState_StillSucceeds(t *testing.T) {
+	deps, _, _ := newResetDeps(t)
+	if _, err := os.Stat(os.Getenv(chatstate.RootEnvVar)); !os.IsNotExist(err) {
+		t.Fatalf("the fixture root should not exist yet: %v", err)
+	}
+
+	resp := HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{})
+	if !resp.Success {
+		t.Fatalf("expected success on a device with no chat state, got %q", resp.Error)
+	}
+}
+
 // TestResetDeviceIdentity_LogsProcessing_NoMaterial: the processing log is
 // emitted and the count line carries no key material.
 func TestResetDeviceIdentity_LogsProcessing_NoMaterial(t *testing.T) {
-	deps, log, store := newTestDeps(t)
+	deps, log, store := newResetDeps(t)
 	sentinels := seedAllIdentitySlots(t, store)
 
 	_ = HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{})

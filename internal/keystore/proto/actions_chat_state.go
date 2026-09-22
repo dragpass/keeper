@@ -74,10 +74,13 @@ const (
 	ChatStateMarkReceived = "chat_state_mark_received"
 
 	// ChatStatePurge erases one account's chat state: the sealed files, the
-	// anchors, and the seal key. Logout and device reset call it. Unlike
-	// peer_key_pin, which survives a logout so a human's out-of-band check is
-	// not thrown away, chat state must not: what is left behind is an entrance
-	// for a rewound chain later.
+	// anchors, and the seal key. Logout calls it, because a logout knows whose
+	// state is going away. A device reset does not name an account — it is
+	// reached for once the server-side account is gone — so
+	// reset_device_identity erases every owner's state in-process instead of
+	// through this action. Unlike peer_key_pin, which survives a logout so a
+	// human's out-of-band check is not thrown away, chat state must not: what
+	// is left behind is an entrance for a rewound chain later.
 	//
 	// The one action here with no permit. It only deletes, and any local
 	// process can already delete these files with the filesystem, so requiring
