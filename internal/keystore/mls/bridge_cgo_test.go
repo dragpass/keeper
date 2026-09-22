@@ -530,3 +530,250 @@ func (c *reportsNoGeneration) Open(message []byte) (chatstate.Opened, error) {
 	opened.KeyGeneration = nil
 	return opened, nil
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Pending commits against the real library (design §7.3, RFC 9420 §14).
+// ────────────────────────────────────────────────────────────────────────
+
+const (
+	aliceCommitID = "77777777-7777-4777-8777-777777777777"
+	bobCommitID   = "88888888-8888-4888-8888-888888888888"
+)
+
+// The MUST itself, with the library rather than a stand-in: building a Commit
+// leaves the confirmed epoch and the send chain exactly where they were.
+//
+// The send chain part is the concrete shape of §7.3.4 under
+// encrypt_control_messages=false. A Commit goes out as a PublicMessage, so it
+// derives nothing from the handshake ratchet, and it does not touch the
+// application ratchet either. There is no generation for a losing Commit to
+// have consumed, so there is none to reclaim.
+func TestBuildingACommitMovesNeitherTheEpochNorTheSendChain(t *testing.T) {
+	alice, _, _ := twoMemberGroup(t)
+
+	epochBefore, err := alice.Epoch()
+	if err != nil {
+		t.Fatalf("epoch: %v", err)
+	}
+	e0, leaf0, generation0, err := alice.SendPosition()
+	if err != nil {
+		t.Fatalf("send position: %v", err)
+	}
+
+	commit, expected, err := alice.CommitUpdate()
+	if err != nil {
+		t.Fatalf("commit update: %v", err)
+	}
+	if expected != epochBefore {
+		t.Fatalf("the commit was built against epoch %d, the group is on %d", expected, epochBefore)
+	}
+	if form, err := WireFormOf(commit); err != nil || form != WireFormPublicMessage {
+		t.Fatalf("commit wire form = %v, %v; want PublicMessage", form, err)
+	}
+
+	if pending, err := alice.HasPendingCommit(); err != nil || !pending {
+		t.Fatalf("has pending commit = %t, %v; want true", pending, err)
+	}
+	if got, err := alice.Epoch(); err != nil || got != epochBefore {
+		t.Fatalf("building a commit moved the epoch from %d to %d (%v)", epochBefore, got, err)
+	}
+	e1, leaf1, generation1, err := alice.SendPosition()
+	if err != nil {
+		t.Fatalf("send position after build: %v", err)
+	}
+	if e0 != e1 || leaf0 != leaf1 || generation0 != generation1 {
+		t.Fatalf("building a commit moved the send chain from (%d,%d,%d) to (%d,%d,%d)",
+			e0, leaf0, generation0, e1, leaf1, generation1)
+	}
+
+	if err := alice.ApplyPendingCommit(); err != nil {
+		t.Fatalf("apply pending commit: %v", err)
+	}
+	if got, err := alice.Epoch(); err != nil || got != epochBefore+1 {
+		t.Fatalf("epoch after applying = %d, %v; want %d", got, err, epochBefore+1)
+	}
+}
+
+// The "at most one pending" rule is the library's, not only the record's.
+func TestTheLibraryRefusesASecondPendingCommit(t *testing.T) {
+	alice, _, _ := twoMemberGroup(t)
+
+	if _, _, err := alice.CommitUpdate(); err != nil {
+		t.Fatalf("first commit: %v", err)
+	}
+	_, _, err := alice.CommitUpdate()
+	if err == nil {
+		t.Fatal("a second commit was built while one was pending")
+	}
+	// mls-rs renders MlsError::ExistingPendingCommit as this string. Asserting
+	// on it rather than only on "some error" is what would notice the refusal
+	// moving to a different cause.
+	if !strings.Contains(err.Error(), "commit already pending") {
+		t.Fatalf("second commit failed with %v; want the existing-pending-commit error", err)
+	}
+}
+
+// Losing a race, end to end through the store. Alice and bob both commit
+// against the same epoch, the server picks bob's, and alice's confirmation has
+// to drop her fork and apply bob's Commit to the epoch she never left. The
+// proof that she did leave it correctly is that she can still open what bob
+// sends at the epoch his Commit created.
+func TestALostRaceAppliesTheWinnerFromTheEpochThatNeverMoved(t *testing.T) {
+	aliceStore, bobStore, alice, bob := twoMemberStores(t)
+	wm := chatstate.ServerWatermark{}
+
+	aliceAttempt, err := aliceStore.BeginCommit(testConv, wm, chatstate.BeginCommitRequest{
+		ClientCommitID: aliceCommitID,
+	}, NewCipher(alice))
+	if err != nil {
+		t.Fatalf("alice begin commit: %v", err)
+	}
+	bobAttempt, err := bobStore.BeginCommit(testConv, wm, chatstate.BeginCommitRequest{
+		ClientCommitID: bobCommitID,
+	}, NewCipher(bob))
+	if err != nil {
+		t.Fatalf("bob begin commit: %v", err)
+	}
+	if aliceAttempt.ExpectedEpoch != bobAttempt.ExpectedEpoch {
+		t.Fatalf("the two commits were not built against one epoch: %d vs %d",
+			aliceAttempt.ExpectedEpoch, bobAttempt.ExpectedEpoch)
+	}
+
+	// The server's compare-and-set picks bob.
+	aliceOut, err := aliceStore.ConfirmCommit(testConv, wm, chatstate.CommitOutcome{
+		ClientCommitID: aliceCommitID,
+		Kind:           chatstate.CommitSuperseded,
+		WinnerMessage:  bobAttempt.Commit,
+	}, NewCipher(alice))
+	if err != nil {
+		t.Fatalf("alice confirm superseded: %v", err)
+	}
+	bobOut, err := bobStore.ConfirmCommit(testConv, wm, chatstate.CommitOutcome{
+		ClientCommitID: bobCommitID,
+		Kind:           chatstate.CommitAccepted,
+	}, NewCipher(bob))
+	if err != nil {
+		t.Fatalf("bob confirm accepted: %v", err)
+	}
+	if aliceOut.Epoch != bobOut.Epoch || aliceOut.Epoch != aliceAttempt.ExpectedEpoch+1 {
+		t.Fatalf("the two diverged: alice %d, bob %d", aliceOut.Epoch, bobOut.Epoch)
+	}
+	if aliceOut.WelcomeReleasable || aliceOut.Removed {
+		t.Fatalf("the losing side released something: %+v", aliceOut)
+	}
+	if pending, err := alice.HasPendingCommit(); err != nil || pending {
+		t.Fatalf("alice's fork survived her loss: %t, %v", pending, err)
+	}
+
+	plaintext := []byte("보낸 쪽이 이겼습니다")
+	sent, err := bobStore.Send(testConv, wm, chatstate.SendRequest{
+		ClientMessageID: "44444444-4444-4444-8444-444444444444",
+		Plaintext:       plaintext,
+	}, NewCipher(bob))
+	if err != nil {
+		t.Fatalf("bob send after winning: %v", err)
+	}
+	got, err := aliceStore.Receive(testConv, wm, chatstate.ReceiveRequest{
+		Seq: 1, Message: sent.Entry.Ciphertext,
+	}, NewCipher(alice))
+	if err != nil {
+		t.Fatalf("alice receive after losing: %v", err)
+	}
+	if !bytes.Equal(got.Plaintext, plaintext) {
+		t.Fatalf("alice decrypted %q; want %q", got.Plaintext, plaintext)
+	}
+}
+
+// The persistence form in one assertion: the fork rides inside the group state
+// blob, so a session that knows nothing but what the record holds is still
+// waiting on the same Commit and can still accept it.
+func TestAPendingCommitRidesTheGroupStateBlob(t *testing.T) {
+	store := newTestStore(t)
+	alice, _, _ := twoMemberGroup(t)
+	charlie := newSession(t, "charlie@device-1")
+	keyPackage, err := charlie.KeyPackage()
+	if err != nil {
+		t.Fatalf("key package: %v", err)
+	}
+	if _, err := Persist(store, testConv, chatstate.ServerWatermark{}, alice); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	attempt, err := store.BeginCommit(testConv, chatstate.ServerWatermark{},
+		chatstate.BeginCommitRequest{
+			ClientCommitID: aliceCommitID,
+			Plan:           chatstate.CommitPlan{AddKeyPackages: [][]byte{keyPackage}},
+		}, NewCipher(alice))
+	if err != nil {
+		t.Fatalf("begin commit: %v", err)
+	}
+	if len(attempt.Welcome) == 0 || attempt.WelcomeReleasable {
+		t.Fatalf("begin = %+v; a welcome must exist and must not be releasable yet", attempt)
+	}
+
+	restored := newSession(t, "alice@device-1")
+	found, err := Restore(store, testConv, chatstate.ServerWatermark{}, restored)
+	if err != nil || !found {
+		t.Fatalf("restore = %t, %v", found, err)
+	}
+	if pending, err := restored.HasPendingCommit(); err != nil || !pending {
+		t.Fatalf("the fork did not survive the record: %t, %v", pending, err)
+	}
+	if got, err := restored.Epoch(); err != nil || got != attempt.ExpectedEpoch {
+		t.Fatalf("the restored epoch is %d, %v; want the confirmed %d",
+			got, err, attempt.ExpectedEpoch)
+	}
+
+	out, err := store.ConfirmCommit(testConv, chatstate.ServerWatermark{},
+		chatstate.CommitOutcome{ClientCommitID: aliceCommitID, Kind: chatstate.CommitAccepted},
+		NewCipher(restored))
+	if err != nil {
+		t.Fatalf("confirm after restore: %v", err)
+	}
+	if out.Epoch != attempt.ExpectedEpoch+1 || !out.WelcomeReleasable {
+		t.Fatalf("confirm after restore = %+v", out)
+	}
+	if err := charlie.Join(out.Welcome); err != nil {
+		t.Fatalf("the released welcome did not admit the new member: %v", err)
+	}
+}
+
+// §16's unmeasured item. A pending Commit carries the next epoch's state,
+// epoch secrets and key schedule, so while one is outstanding the record holds
+// two epochs' worth of secrets. The numbers go in the test log rather than in
+// an assertion on an exact size, which would only track this group shape; what
+// is asserted is the direction, which is the claim being checked.
+func TestAPendingCommitEnlargesTheStoredBlob(t *testing.T) {
+	alice, _, _ := twoMemberGroup(t)
+
+	confirmed, err := alice.Flush()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if _, _, err := alice.CommitUpdate(); err != nil {
+		t.Fatalf("commit update: %v", err)
+	}
+	withPending, err := alice.Flush()
+	if err != nil {
+		t.Fatalf("flush with pending: %v", err)
+	}
+	t.Logf("two-member group state: confirmed %d bytes, with a pending commit %d bytes (+%d)",
+		len(confirmed), len(withPending), len(withPending)-len(confirmed))
+
+	if len(withPending) <= len(confirmed) {
+		t.Fatalf("a pending commit did not enlarge the blob: %d vs %d",
+			len(withPending), len(confirmed))
+	}
+	if err := alice.ApplyPendingCommit(); err != nil {
+		t.Fatalf("apply pending commit: %v", err)
+	}
+	applied, err := alice.Flush()
+	if err != nil {
+		t.Fatalf("flush after applying: %v", err)
+	}
+	t.Logf("after applying: %d bytes", len(applied))
+	if len(applied) >= len(withPending) {
+		t.Fatalf("settling the commit did not shrink the blob: %d vs %d",
+			len(applied), len(withPending))
+	}
+}
