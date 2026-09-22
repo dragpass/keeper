@@ -330,12 +330,7 @@ func (s *Store) ConfirmCommit(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil
-		// Forward only, for the same reason send.go moves it forward only: the
-		// anchor is judged against this and a value that went backwards would
-		// lower the ceiling the next load is checked against.
-		if epoch > rec.Epoch {
-			rec.Epoch = epoch
-		}
+		rec.enterEpoch(epoch)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}

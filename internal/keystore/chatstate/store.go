@@ -159,7 +159,7 @@ func (s *Store) CommitOutbox(
 		if entry.Position.Epoch != rec.Epoch || entry.Position.Generation >= rec.NextIndex {
 			return ErrPositionNotReserved
 		}
-		if rec.positionTaken(entry.Position) {
+		if rec.positionTaken(entry.Position) || rec.sealedBySendPath(entry.Position) {
 			return ErrPositionTaken
 		}
 		loaded := rec.Generation
@@ -285,6 +285,32 @@ func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byt
 		return nil
 	})
 	return blob, err
+}
+
+// LocalLeafIndex reports this device's leaf in the conversation's MLS group,
+// and false when the conversation has never learned one — no record, no group,
+// or nothing sent yet. False is an answer: a leaf nobody knows cannot be
+// compared against the leaf a server watermark names.
+//
+// It reads the record without judging it against the anchor, unlike every
+// other call here. The value it takes out is one this device wrote about
+// itself and a rewound copy of the file carries the same leaf as a current
+// one, so nothing is decided on the unjudged bytes; the caller's real
+// operation runs the judgement immediately afterwards.
+func (s *Store) LocalLeafIndex(conversationID string) (uint32, bool, error) {
+	var (
+		leaf  uint32
+		known bool
+	)
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, err := s.readRecord(p, conversationID)
+		if err != nil || rec == nil {
+			return err
+		}
+		leaf, known = rec.localLeafIndex()
+		return nil
+	})
+	return leaf, known, err
 }
 
 // Purge erases every trace of one owner's chat state: the files, the anchors,
@@ -496,6 +522,14 @@ func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor
 		return err
 	}
 	anchor.Generation = rec.Generation
+	if rec.Epoch > anchor.Epoch {
+		// The anchor's half of Record.enterEpoch, which explains why the
+		// ceiling is per-epoch. It lands here rather than beside the record's
+		// half so that the ceiling and the epoch it belongs to move in one
+		// keyring write, and after the file that advanced into it is already
+		// on disk.
+		anchor.ReservedBefore = rec.NextIndex
+	}
 	anchor.Epoch = rec.Epoch
 	return saveAnchor(s.secrets, p.tag, anchor)
 }

@@ -233,7 +233,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 		{
 			name: "watermark changed after signing",
 			mutate: func(_ *testing.T, f *chatStateFixture, p proto.ChatStatePermit) proto.ChatStateReserveSendRequest {
-				p.WatermarkNextIndex += 9
+				p.WatermarkNextApplication += 9
 				return f.reserveRequest(p, 1)
 			},
 			code: proto.ChatStateErrorCodeNotAuthorized,
@@ -654,5 +654,89 @@ func TestChatStateContentTypesMatchTheStore(t *testing.T) {
 	if proto.ChatStateContentTypeApplication != string(chatstate.ContentTypeApplication) {
 		t.Fatalf("proto %q != store %q",
 			proto.ChatStateContentTypeApplication, chatstate.ContentTypeApplication)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// The watermark's leaf slot: whose chain the server is describing
+// ────────────────────────────────────────────────────────────────────────
+
+// seedSendPositionAtLeaf puts one outbox entry in the record under a position
+// that names its ratchet and its leaf, which is what the MLS send path writes
+// and what teaches the record whose leaf it is on.
+func seedSendPositionAtLeaf(t *testing.T, f *chatStateFixture, leaf uint32) {
+	t.Helper()
+	store, err := chatstate.Open(f.deps.Store, chatAccountID)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	reservation, err := store.Reserve(chatConvID, 1, chatstate.ServerWatermark{})
+	if err != nil {
+		t.Fatalf("seed reserve: %v", err)
+	}
+	if _, _, err := store.CommitOutbox(chatConvID, chatstate.ServerWatermark{}, chatstate.OutboxEntry{
+		ClientMessageID: chatStateClientMsgID,
+		Position: chatstate.Position{
+			SenderLeafIndex: leaf,
+			ContentType:     chatstate.ContentTypeApplication,
+			Generation:      reservation.FirstChainIndex,
+		},
+		IV:         bytes.Repeat([]byte{7}, proto.ConversationIVBytes),
+		Ciphertext: bytes.Repeat([]byte{9}, 32),
+	}); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+}
+
+// watermarkPermit signs a permit carrying one accepted application position on
+// the named leaf. The epoch stays behind the record's so the rollback axes have
+// nothing to say and the leaf slot is the only thing under test.
+func (f *chatStateFixture) watermarkPermit(t *testing.T, leaf uint32, nextApplication uint64) proto.ChatStatePermit {
+	t.Helper()
+	p := f.unsignedPermit()
+	p.WatermarkLeafIndex = leaf
+	p.WatermarkNextApplication = nextApplication
+	return f.sign(t, p)
+}
+
+// A permit describing another leaf's chain is refused rather than used to judge
+// this one's. It is an authorization failure and not a rewind, so the next
+// permit naming the right leaf still works — nothing was latched.
+func TestChatState_AWatermarkNamingAnotherLeafIsRefused(t *testing.T) {
+	f := newChatStateFixture(t)
+	seedSendPositionAtLeaf(t, f, 3)
+
+	wrong := f.reserveRequest(f.watermarkPermit(t, 9, 1), 1)
+	assertChatStateFailure(t, f.reserve(t, wrong), proto.ChatStateErrorCodeNotAuthorized)
+
+	right := f.reserveRequest(f.watermarkPermit(t, 3, 1), 1)
+	if resp := f.reserve(t, right); !resp.Success {
+		t.Fatalf("a watermark on this device's own leaf was refused: %s (%s)", resp.Error, resp.ErrorCode)
+	}
+}
+
+// Until the server has accepted a position there is no chain for the leaf slot
+// to name, so it carries nothing and is ignored — including on the first send,
+// where this device's leaf is non-zero and the watermark is all zeros.
+func TestChatState_AnEmptyWatermarkIgnoresItsLeafSlot(t *testing.T) {
+	f := newChatStateFixture(t)
+	seedSendPositionAtLeaf(t, f, 3)
+
+	if resp := f.reserve(t, f.reserveRequest(f.watermarkPermit(t, 9, 0), 1)); !resp.Success {
+		t.Fatalf("a watermark that has accepted nothing was judged on its leaf: %s (%s)",
+			resp.Error, resp.ErrorCode)
+	}
+}
+
+// A conversation that has never sent has no leaf of its own to compare, which
+// is the same answer as a conversation with no group state: the slot is not
+// invented and the call is not refused on it.
+func TestChatState_AWatermarkLeafIsIgnoredBeforeThisDeviceHasALeaf(t *testing.T) {
+	f := newChatStateFixture(t)
+
+	if resp := f.reserve(t, f.reserveRequest(f.watermarkPermit(t, 9, 0), 1)); !resp.Success {
+		t.Fatalf("a conversation with no leaf was refused on a leaf: %s (%s)",
+			resp.Error, resp.ErrorCode)
 	}
 }

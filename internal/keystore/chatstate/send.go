@@ -186,13 +186,33 @@ func (s *Store) Send(
 		}
 		loaded := rec.Generation
 		rec.GroupState = state
-		// Forward only. commit() copies this into the anchor, and the anchor's
-		// epoch is one of the two axes a rewound record is caught on, so a
-		// group state that came back behind the record must not be allowed to
-		// lower the ceiling it will later be judged against.
-		if position.Epoch > rec.Epoch {
-			rec.Epoch = position.Epoch
+		rec.enterEpoch(position.Epoch)
+
+		// The chain counters have to record the position this send is taking,
+		// the same way Reserve records the ones it hands out. Not bookkeeping:
+		// axis 2 compares the server's count against NextIndex, and a server
+		// only ever has a count once a send declared a position — which only
+		// this path does. A send that left NextIndex at 0 would therefore
+		// latch the conversation on the first watermark that ever existed for
+		// it, every time, rather than eventually.
+		//
+		// The number comes from the peek, which is already past whatever
+		// burnUnfinished consumed, so abandoned positions land in the counters
+		// too instead of being handed out again after a crash.
+		//
+		// The ceiling reaches the keyring before the file advances into it,
+		// the order Reserve takes and for the same reason: the only crash
+		// window it leaves has the file ahead of the anchor, the harmless
+		// direction. It is only ever raised here, never lowered, so a crash in
+		// that window cannot leave a ceiling below a NextIndex the file on
+		// disk still carries. commit() does the per-epoch reset, once the file
+		// is down and in the same write that moves the anchor's epoch.
+		need := position.Generation + 1
+		anchor.ReservedBefore = max(anchor.ReservedBefore, need)
+		if err := saveAnchor(s.secrets, p.tag, anchor); err != nil {
+			return err
 		}
+		rec.NextIndex = max(rec.NextIndex, need)
 		rec.PendingSend = &position
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err

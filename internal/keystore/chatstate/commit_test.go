@@ -518,7 +518,7 @@ func TestAPendingCommitIsNotAnInputToAnyRollbackComparison(t *testing.T) {
 			Pending:    &PendingCommit{ClientCommitID: testCommitA, ExpectedEpoch: 7},
 		}
 	}
-	watermark := ServerWatermark{Epoch: 7, NextIndex: 3}
+	watermark := ServerWatermark{Epoch: 7, NextApplicationIndex: 3}
 
 	if anchor.rewound(base(), watermark) {
 		t.Fatal("a conversation with a pending commit read as rewound")
