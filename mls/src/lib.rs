@@ -300,10 +300,15 @@ pub unsafe extern "C" fn dpmls_group_encrypt(
     handle: *mut Session,
     plaintext: *const u8,
     plaintext_len: usize,
+    authenticated_data: *const u8,
+    authenticated_data_len: usize,
     out: *mut DpBuf,
 ) -> i32 {
     guard(|| {
-        let ct = session_of(handle)?.encrypt(slice(plaintext, plaintext_len)?)?;
+        let ct = session_of(handle)?.encrypt(
+            slice(plaintext, plaintext_len)?,
+            slice(authenticated_data, authenticated_data_len)?,
+        )?;
         put(out, ct)?;
         Ok(DPMLS_OK)
     })
@@ -312,30 +317,54 @@ pub unsafe extern "C" fn dpmls_group_encrypt(
 /// Apply one inbound message. `out` receives the plaintext for an application
 /// message and stays empty for everything else.
 ///
+/// `key_generation` is only meaningful when `key_generation_known` is 1. The
+/// two are separate outputs rather than one sentinel value because the library
+/// answers `None` when it could not extract the generation, and a caller that
+/// folded that into 0 would compare a declared 0 against an unknown and call it
+/// a match.
+///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn dpmls_group_process(
     handle: *mut Session,
     message: *const u8,
     message_len: usize,
     out: *mut DpBuf,
+    authenticated_data: *mut DpBuf,
     epoch: *mut u64,
+    sender_index: *mut u32,
     removed: *mut u8,
     is_application: *mut u8,
+    key_generation: *mut u32,
+    key_generation_known: *mut u8,
 ) -> i32 {
     guard(|| {
+        if epoch.is_null()
+            || sender_index.is_null()
+            || removed.is_null()
+            || is_application.is_null()
+            || key_generation.is_null()
+            || key_generation_known.is_null()
+        {
+            return Ok(DPMLS_ERR_ARG);
+        }
         let Processed {
             epoch: e,
             removed: r,
             application,
+            sender_index: leaf,
+            authenticated_data: aad,
+            key_generation: gen,
         } = session_of(handle)?.process(slice(message, message_len)?)?;
-        if epoch.is_null() || removed.is_null() || is_application.is_null() {
-            return Ok(DPMLS_ERR_ARG);
-        }
         *epoch = e;
+        *sender_index = leaf;
         *removed = u8::from(r);
         *is_application = u8::from(application.is_some());
+        *key_generation = gen.unwrap_or(0);
+        *key_generation_known = u8::from(gen.is_some());
+        put(authenticated_data, aad)?;
         put(out, take_zeroizing(application))?;
         Ok(DPMLS_OK)
     })
@@ -373,34 +402,38 @@ pub unsafe extern "C" fn dpmls_wire_form(
 
 // ─── state ──────────────────────────────────────────────────────────────
 
+/// Read the send chain position without advancing it.
+///
 /// # Safety
 /// `handle` as in `session_of`.
 #[no_mangle]
-pub unsafe extern "C" fn dpmls_group_peek_generation(handle: *mut Session, out: *mut u32) -> i32 {
+pub unsafe extern "C" fn dpmls_group_send_position(
+    handle: *mut Session,
+    epoch: *mut u64,
+    leaf_index: *mut u32,
+    generation: *mut u32,
+) -> i32 {
     guard(|| {
-        if out.is_null() {
+        if epoch.is_null() || leaf_index.is_null() || generation.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        *out = session_of(handle)?.peek_generation()?;
+        let (e, leaf, gen) = session_of(handle)?.send_position()?;
+        *epoch = e;
+        *leaf_index = leaf;
+        *generation = gen;
         Ok(DPMLS_OK)
     })
 }
 
+/// Consume one application generation without producing a ciphertext. The
+/// derived key never crosses this boundary.
+///
 /// # Safety
 /// `handle` as in `session_of`.
 #[no_mangle]
-pub unsafe extern "C" fn dpmls_group_epoch(
-    handle: *mut Session,
-    epoch: *mut u64,
-    member_index: *mut u32,
-) -> i32 {
+pub unsafe extern "C" fn dpmls_group_burn_generation(handle: *mut Session) -> i32 {
     guard(|| {
-        if epoch.is_null() || member_index.is_null() {
-            return Ok(DPMLS_ERR_ARG);
-        }
-        let s = session_of(handle)?;
-        *epoch = s.epoch()?;
-        *member_index = s.member_index()?;
+        session_of(handle)?.burn_generation()?;
         Ok(DPMLS_OK)
     })
 }

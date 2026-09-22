@@ -68,6 +68,7 @@ const (
 	helperCount    = "DRAGPASS_TEST_CHAT_STATE_COUNT"
 	helperClientID = "DRAGPASS_TEST_CHAT_STATE_CLIENT_ID"
 	helperKeyring  = "DRAGPASS_TEST_CHAT_STATE_KEYRING"
+	helperDelayMs  = "DRAGPASS_TEST_CHAT_STATE_DELAY_MS"
 )
 
 type childResult struct {
@@ -215,6 +216,93 @@ func TestChatStateProcessHelper(t *testing.T) {
 		}
 		fmt.Printf("sent:%d:%t:%s\n", stored.Position.Generation, created,
 			base64.StdEncoding.EncodeToString(stored.Ciphertext))
+
+	case "tc-send":
+		if !signalReady() {
+			return
+		}
+		cipher := &fakeCipher{}
+		// A delay between the peek and the AEAD widens the window T-c has to
+		// cover. Without the lock spanning it, a second process loads the same
+		// state in here and both encrypt at the same position.
+		if ms, _ := strconv.Atoi(os.Getenv(helperDelayMs)); ms > 0 {
+			cipher.beforeAt = func() { time.Sleep(time.Duration(ms) * time.Millisecond) }
+		}
+		clientID := os.Getenv(helperClientID)
+		result, err := store.Send(testConvA, noWatermark, SendRequest{
+			ClientMessageID: clientID,
+			Plaintext:       []byte("plaintext for " + clientID),
+		}, cipher)
+		if err != nil {
+			fmt.Printf("error: tc send: %v\n", err)
+			return
+		}
+		fmt.Printf("tc-sent:%d:%t:%s\n", result.Entry.Position.Generation, result.Created,
+			base64.StdEncoding.EncodeToString(result.Entry.Ciphertext))
+
+	case "tc-crash-mid-send":
+		if !signalReady() {
+			return
+		}
+		cipher := &fakeCipher{}
+		cipher.beforeAt = func() {
+			// Here the intent is fsynced and the AEAD has not run. This is the
+			// window T-c leaves open, so the kill lands exactly in it.
+			position, err := cipher.Peek()
+			if err != nil {
+				fmt.Printf("error: peek: %v\n", err)
+				return
+			}
+			if err := os.WriteFile(
+				os.Getenv(helperCheckpnt),
+				[]byte(strconv.FormatUint(position.Generation, 10)),
+				0o600,
+			); err != nil {
+				fmt.Printf("error: checkpoint: %v\n", err)
+				return
+			}
+			time.Sleep(30 * time.Second)
+		}
+		if _, err := store.Send(testConvA, noWatermark, SendRequest{
+			ClientMessageID: os.Getenv(helperClientID),
+			Plaintext:       []byte("never reaches the wire"),
+		}, cipher); err != nil {
+			fmt.Printf("error: tc crash send: %v\n", err)
+		}
+
+	case "tc-receive":
+		if !signalReady() {
+			return
+		}
+		seq, _ := strconv.ParseUint(os.Getenv(helperCount), 10, 64)
+		got, err := store.Receive(testConvA, noWatermark,
+			ReceiveRequest{Seq: seq, Message: []byte("wire")}, inbound(3, uint32(seq), "delivered"))
+		if err != nil {
+			fmt.Printf("error: tc receive: %v\n", err)
+			return
+		}
+		fmt.Printf("tc-received:%t:%t\n", got.FirstDelivery, got.FromHistory)
+
+	case "tc-crash-mid-receive":
+		if !signalReady() {
+			return
+		}
+		seq, _ := strconv.ParseUint(os.Getenv(helperCount), 10, 64)
+		cipher := inbound(3, uint32(seq), "delivered")
+		cipher.beforeState = func() {
+			// The decrypt has happened and nothing has been written. If the
+			// mark and the sealed copy were separate writes, this is where a
+			// kill would leave one without the other.
+			if err := os.WriteFile(os.Getenv(helperCheckpnt), []byte("opened"), 0o600); err != nil {
+				fmt.Printf("error: checkpoint: %v\n", err)
+				return
+			}
+			time.Sleep(30 * time.Second)
+		}
+		if _, err := store.Receive(testConvA, noWatermark,
+			ReceiveRequest{Seq: seq, Message: []byte("wire")}, cipher); err != nil {
+			fmt.Printf("error: tc crash receive: %v\n", err)
+		}
 
 	case "resend":
 		if !signalReady() {
@@ -508,6 +596,195 @@ func TestChatStateRefusesARestoredFileAfterRestart(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// The send transaction across processes.
+// ────────────────────────────────────────────────────────────────────────
+
+// The T-c window, with a real kill in it. The intent for a position is fsynced
+// before the AEAD runs, so a process killed in between leaves a record that
+// says "this position may have been used". The next process abandons it. The
+// hole that leaves is ordinary; handing the number out twice is the failure
+// this whole design exists to prevent.
+func TestChatStateSendAbandonsAnUnfinishedPositionAfterAKill(t *testing.T) {
+	env := newProcessEnv(t)
+	env.seedGroupState(t)
+	checkpoint := filepath.Join(env.tempDir, "pending-generation")
+
+	victim, victimDone := env.start(t, "tc-crash-mid-send", "tc-crash-ready",
+		helperCheckpnt+"="+checkpoint, helperClientID+"="+testClientA)
+	env.waitReady(t, "tc-crash-ready")
+	env.waitReady(t, "pending-generation")
+
+	raw, err := os.ReadFile(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	killed, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The intent has to be on the disk already, before anything was encrypted.
+	stranded := env.readRecord(t)
+	if stranded.PendingSend == nil || stranded.PendingSend.Generation != killed {
+		t.Fatalf("the intent was not durable at the AEAD: %+v", stranded.PendingSend)
+	}
+	if len(stranded.Outbox) != 0 {
+		t.Fatalf("a ciphertext existed before the AEAD: %+v", stranded.Outbox)
+	}
+
+	if err := victim.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForChild(t, victim, victimDone); result.err == nil {
+		t.Fatalf("the killed child exited cleanly: %q", result.output)
+	}
+
+	next, nextDone := env.start(t, "tc-send", "tc-next-ready",
+		helperClientID+"=55555555-5555-4555-8555-555555555555")
+	env.waitReady(t, "tc-next-ready")
+	generation, _, ciphertext := parseTcSent(t, waitForChild(t, next, nextDone))
+	if generation <= killed {
+		t.Fatalf("generation %d was handed out again after the kill (killed at %d)",
+			generation, killed)
+	}
+	if at := positionOf(t, mustDecode(t, ciphertext)); at.Generation == killed {
+		t.Fatalf("the ciphertext was built at the abandoned position %d", killed)
+	}
+
+	rec := env.readRecord(t)
+	if rec.PendingSend != nil {
+		t.Fatalf("the intent survived the recovery: %+v", rec.PendingSend)
+	}
+	if rec.positionTaken(Position{ContentType: ContentTypeApplication, Generation: killed}) {
+		t.Fatalf("the abandoned position %d carries an outbox entry", killed)
+	}
+}
+
+// Two processes sending at once, with the window between reading the position
+// and using it held open on purpose. Whether they collide is judged on the
+// positions taken out of the ciphertexts, not on what either process reported:
+// the reservation numbers can differ while the bytes land on the same key.
+func TestChatStateSendDoesNotLetTwoProcessesShareAPosition(t *testing.T) {
+	env := newProcessEnv(t)
+	env.seedGroupState(t)
+
+	firstCmd, firstDone := env.start(t, "tc-send", "tc-first-ready",
+		helperClientID+"=55555555-5555-4555-8555-555555555555",
+		helperDelayMs+"=250")
+	secondCmd, secondDone := env.start(t, "tc-send", "tc-second-ready",
+		helperClientID+"=66666666-6666-4666-8666-666666666666",
+		helperDelayMs+"=250")
+	env.waitReady(t, "tc-first-ready")
+	env.waitReady(t, "tc-second-ready")
+
+	_, _, firstCipher := parseTcSent(t, waitForChild(t, firstCmd, firstDone))
+	_, _, secondCipher := parseTcSent(t, waitForChild(t, secondCmd, secondDone))
+	if firstCipher == secondCipher {
+		t.Fatalf("both processes produced the same ciphertext: %q", firstCipher)
+	}
+
+	firstAt := positionOf(t, mustDecode(t, firstCipher))
+	secondAt := positionOf(t, mustDecode(t, secondCipher))
+	if firstAt == secondAt {
+		t.Fatalf("both ciphertexts were built at %+v", firstAt)
+	}
+
+	rec := env.readRecord(t)
+	if len(rec.Outbox) != 2 {
+		t.Fatalf("the record holds %d outbox entries, want 2", len(rec.Outbox))
+	}
+	if rec.Outbox[0].Position == rec.Outbox[1].Position {
+		t.Fatalf("one writer overwrote the other: %+v", rec.Outbox)
+	}
+	if string(rec.GroupState) != string(fakeState(0, 0, 2)) {
+		t.Fatalf("the chain ended at %q; one advance was lost", rec.GroupState)
+	}
+}
+
+// The receive side's boundary is atomicity rather than ordering: the advanced
+// state, the delivery mark and the sealed copy are one replacement. A kill
+// after the decrypt and before that write leaves none of the three, and a
+// completed one leaves all three. There is no arrangement that leaves a mark
+// without a copy.
+func TestChatStateReceiveConfirmsTheMarkAndTheCopyTogetherAcrossAKill(t *testing.T) {
+	env := newProcessEnv(t)
+	env.seedGroupState(t)
+	checkpoint := filepath.Join(env.tempDir, "opened")
+
+	victim, victimDone := env.start(t, "tc-crash-mid-receive", "tc-rx-crash-ready",
+		helperCheckpnt+"="+checkpoint, helperCount+"=1")
+	env.waitReady(t, "tc-rx-crash-ready")
+	env.waitReady(t, "opened")
+	if err := victim.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if result := waitForChild(t, victim, victimDone); result.err == nil {
+		t.Fatalf("the killed child exited cleanly: %q", result.output)
+	}
+
+	rec := env.readRecord(t)
+	if len(rec.Received) != 0 || len(rec.History) != 0 {
+		t.Fatalf("a killed delivery left mark=%d copy=%d behind",
+			len(rec.Received), len(rec.History))
+	}
+	if string(rec.GroupState) != string(fakeState(0, 0, 0)) {
+		t.Fatalf("a killed delivery advanced the stored state: %q", rec.GroupState)
+	}
+
+	next, nextDone := env.start(t, "tc-receive", "tc-rx-ready", helperCount+"=1")
+	env.waitReady(t, "tc-rx-ready")
+	if out := waitForChild(t, next, nextDone); !strings.Contains(out.output, "tc-received:true:false") {
+		t.Fatalf("the retry did not deliver: %q", out.output)
+	}
+
+	confirmed := env.readRecord(t)
+	if len(confirmed.Received) != 1 || len(confirmed.History) != 1 {
+		t.Fatalf("the delivery landed as mark=%d copy=%d; want one of each",
+			len(confirmed.Received), len(confirmed.History))
+	}
+	if confirmed.Generation != rec.Generation+1 {
+		t.Fatalf("the delivery took %d writes; the mark and the copy are not one replacement",
+			confirmed.Generation-rec.Generation)
+	}
+
+	// A re-read in yet another process comes out of the sealed copy.
+	reread, rereadDone := env.start(t, "tc-receive", "tc-rx-again-ready", helperCount+"=1")
+	env.waitReady(t, "tc-rx-again-ready")
+	if out := waitForChild(t, reread, rereadDone); !strings.Contains(out.output, "tc-received:false:true") {
+		t.Fatalf("the re-read did not come from history: %q", out.output)
+	}
+}
+
+// A retransmission from another process sends the bytes the first one stored.
+func TestChatStateSendRetransmitReusesTheStoredCiphertext(t *testing.T) {
+	env := newProcessEnv(t)
+	env.seedGroupState(t)
+
+	sender, senderDone := env.start(t, "tc-send", "tc-send-ready",
+		helperClientID+"="+testClientA)
+	env.waitReady(t, "tc-send-ready")
+	sentAt, created, sentBytes := parseTcSent(t, waitForChild(t, sender, senderDone))
+	if !created {
+		t.Fatal("the first send did not create an outbox entry")
+	}
+
+	resender, resenderDone := env.start(t, "tc-send", "tc-resend-ready",
+		helperClientID+"="+testClientA)
+	env.waitReady(t, "tc-resend-ready")
+	resentAt, recreated, resentBytes := parseTcSent(t, waitForChild(t, resender, resenderDone))
+	if recreated {
+		t.Fatal("the retransmission encrypted again")
+	}
+	if sentAt != resentAt || sentBytes != resentBytes {
+		t.Fatalf("retransmission differs: %d/%s vs %d/%s",
+			sentAt, sentBytes, resentAt, resentBytes)
+	}
+	if got := env.readRecord(t).GroupState; string(got) != string(fakeState(0, 0, 1)) {
+		t.Fatalf("the retransmission moved the chain: %q", got)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Harness.
 // ────────────────────────────────────────────────────────────────────────
 
@@ -602,7 +879,20 @@ func (e *processEnv) parentStore(t *testing.T) *Store {
 		owner:       testOwner,
 		nameKey:     deriveSubkey(e.sealKey, nameSubkeyLabel),
 		aeadKey:     deriveSubkey(e.sealKey, aeadSubkeyLabel),
+		historyKey:  deriveSubkey(e.sealKey, historySubkeyLabel),
 		lockTimeout: LockTimeout,
+	}
+}
+
+// seedGroupState gives the conversation a group for the send transaction to
+// load. The parent does it once so that two children starting together are
+// not also racing to create it.
+func (e *processEnv) seedGroupState(t *testing.T) {
+	t.Helper()
+	store := e.parentStore(t)
+	defer store.Close()
+	if _, err := store.SaveGroupState(testConvA, noWatermark, fakeState(0, 0, 0)); err != nil {
+		t.Fatalf("seed group state: %v", err)
 	}
 }
 
@@ -713,6 +1003,25 @@ func parseResent(t *testing.T, result childResult) (uint64, string) {
 		t.Fatal(err)
 	}
 	return index, fields[1]
+}
+
+func parseTcSent(t *testing.T, result childResult) (uint64, bool, string) {
+	t.Helper()
+	fields := parseToken(t, result, "tc-sent:", 3)
+	generation, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return generation, fields[1] == "true", fields[2]
+}
+
+func mustDecode(t *testing.T, encoded string) []byte {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func parseToken(t *testing.T, result childResult, prefix string, want int) []string {

@@ -114,8 +114,20 @@ type Record struct {
 	// in the protocol carries it in either direction.
 	GroupState []byte `json:"group_state,omitempty"`
 
+	// PendingSend names the position a send declared it was about to use
+	// before it called the AEAD. Its presence after a restart means that call
+	// may or may not have happened, and an unfinished position is treated as
+	// used (send.go).
+	PendingSend *Position `json:"pending_send,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
+
+	// History is the sealed local copy of delivered messages. It is in this
+	// struct rather than in a file of its own so that confirming a delivery
+	// and storing its copy is one replacement; see history.go for what that
+	// settles and what it leaves open.
+	History []HistoryEntry `json:"history,omitempty"`
 }
 
 func newRecord(ownerAccountID, conversationID string) *Record {

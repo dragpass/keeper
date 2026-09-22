@@ -38,11 +38,17 @@ const MaxReserveCount = 64
 // Store is one owner account's view of the chat state directory. It holds
 // derived key material, so it is built per operation and closed after.
 type Store struct {
+	// HistoryPolicy is the tunable part of the local message history. Its
+	// zero value is the shipped behaviour; see history.go for which of its
+	// values are still undecided.
+	HistoryPolicy HistoryPolicy
+
 	secrets     keychain.SecretStore
 	root        string
 	owner       string
 	nameKey     []byte
 	aeadKey     []byte
+	historyKey  []byte
 	lockTimeout time.Duration
 }
 
@@ -80,6 +86,7 @@ func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
 		owner:       ownerAccountID,
 		nameKey:     deriveSubkey(master, nameSubkeyLabel),
 		aeadKey:     deriveSubkey(master, aeadSubkeyLabel),
+		historyKey:  deriveSubkey(master, historySubkeyLabel),
 		lockTimeout: LockTimeout,
 	}, nil
 }
@@ -88,6 +95,7 @@ func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
 func (s *Store) Close() {
 	secure.Zeroize(s.nameKey)
 	secure.Zeroize(s.aeadKey)
+	secure.Zeroize(s.historyKey)
 }
 
 // Reserve consumes count chain positions and returns them. The consumption is
@@ -224,7 +232,9 @@ func (s *Store) MarkReceived(
 
 // SaveGroupState replaces the conversation's serialized MLS state with the
 // blob the library handed out and returns the record generation that now
-// carries it.
+// carries it. Send and Receive persist the state themselves as part of their
+// transactions; this is for the paths that move the group without sending or
+// receiving, such as establishing it in the first place.
 //
 // The blob is not only ratchet state: the MLS snapshot puts this device's leaf
 // signature secret key in the same structure as the epoch secrets. The seal key
@@ -321,6 +331,19 @@ func PurgeAll(secrets keychain.SecretStore) (int, error) {
 // the erasure final — a state file restored from a backup afterwards cannot be
 // opened under the key that replaces it, so a purge cannot be used to clear a
 // latched NeedsRekey and then bring the rewound file back.
+//
+// Owner-scoped, and it has to be: the seal key is one per owner account, so
+// there is no per-conversation key to drop. Reaching for this to forget a
+// single conversation would take every other conversation of that account with
+// it. What it reaches, and what it does not:
+//
+//   - The record files, which hold the group state and the sealed local
+//     history, and the temp files beside them.
+//   - The keyring anchor of each conversation and the owner's seal key.
+//   - Not a copy of any of those made earlier. A filesystem backup still holds
+//     the records, and a keychain backup or a synced keychain still holds the
+//     seal key that opens them. Deleting a key here is a deletion from this
+//     keyring, not from wherever else it already went.
 //
 // A failing step does not stop the ones after it. Each step stands alone, and
 // stopping early leaves more behind than carrying on does: it would skip the
