@@ -177,6 +177,38 @@ func newRecord(ownerAccountID, conversationID string) *Record {
 	}
 }
 
+// enterEpoch moves the record onto a new epoch and restarts the sending chain
+// counter with it. Forward only, and a no-op when the epoch is not new: the
+// anchor's epoch is copied from this field, so a value that went backwards
+// would lower the ceiling the next load is judged against.
+//
+// NextIndex and the anchor's ReservedBefore both count positions along *one*
+// epoch's ratchet, and MLS restarts generation at 0 in every new epoch. Before
+// MLS there was only ever one epoch, so the question could not arise. Now it
+// decides whether either rollback axis still works after the first Commit.
+//
+// A NextIndex carried across the boundary makes the watermark comparison
+// `nextIndex > rec.NextIndex` false for the whole of the new epoch, so axis 2
+// stops detecting rather than falsely latching — the worse of the two
+// directions, because nothing reports it. A ReservedBefore carried across is
+// the mirror for axis 1: a restored file could claim every position below the
+// old epoch's ceiling without tripping it.
+//
+// Resetting them opens nothing. A rewind across the boundary is caught on its
+// own by `rec.Epoch < a.Epoch`, and anchor.Epoch only ever moves forward
+// because commit() copies it from this field and this method is the only way
+// to raise it. Nothing that goes backwards can reach the reset.
+//
+// The anchor's half is in commit() rather than beside this one: the ceiling
+// and the epoch it belongs to have to land in the same keyring write.
+func (r *Record) enterEpoch(epoch uint64) {
+	if epoch <= r.Epoch {
+		return
+	}
+	r.Epoch = epoch
+	r.NextIndex = 0
+}
+
 func (r *Record) findOutbox(clientMessageID string) (OutboxEntry, bool) {
 	for _, e := range r.Outbox {
 		if e.ClientMessageID == clientMessageID {
@@ -189,6 +221,26 @@ func (r *Record) findOutbox(clientMessageID string) (OutboxEntry, bool) {
 func (r *Record) positionTaken(p Position) bool {
 	for _, e := range r.Outbox {
 		if e.Position == p {
+			return true
+		}
+	}
+	return false
+}
+
+// sealedBySendPath reports whether the MLS send path already built a
+// ciphertext at this epoch and generation.
+//
+// The two send paths share one counter but never one Position: Send names the
+// leaf and the axis, the pre-MLS commit_outbox path leaves both empty, so
+// positionTaken — which compares whole Positions — cannot see the collision.
+// Neither can NextIndex any more: Send raising it is exactly what makes a
+// generation Send already spent look handed-out to commit_outbox. Only the
+// numbers can meet, and one number carrying two ciphertexts is what this
+// package exists to refuse.
+func (r *Record) sealedBySendPath(p Position) bool {
+	for _, e := range r.Outbox {
+		if e.Position.ContentType.valid() &&
+			e.Position.Epoch == p.Epoch && e.Position.Generation == p.Generation {
 			return true
 		}
 	}

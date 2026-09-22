@@ -186,9 +186,7 @@ func (s *Store) Receive(
 		}
 		loaded := rec.Generation
 		rec.GroupState = state
-		if opened.Epoch > rec.Epoch {
-			rec.Epoch = opened.Epoch
-		}
+		rec.enterEpoch(opened.Epoch)
 		first := true
 		if opened.Application {
 			first = !rec.receivedContains(position)

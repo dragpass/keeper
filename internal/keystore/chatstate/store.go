@@ -159,7 +159,7 @@ func (s *Store) CommitOutbox(
 		if entry.Position.Epoch != rec.Epoch || entry.Position.Generation >= rec.NextIndex {
 			return ErrPositionNotReserved
 		}
-		if rec.positionTaken(entry.Position) {
+		if rec.positionTaken(entry.Position) || rec.sealedBySendPath(entry.Position) {
 			return ErrPositionTaken
 		}
 		loaded := rec.Generation
@@ -522,6 +522,14 @@ func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor
 		return err
 	}
 	anchor.Generation = rec.Generation
+	if rec.Epoch > anchor.Epoch {
+		// The anchor's half of Record.enterEpoch, which explains why the
+		// ceiling is per-epoch. It lands here rather than beside the record's
+		// half so that the ceiling and the epoch it belongs to move in one
+		// keyring write, and after the file that advanced into it is already
+		// on disk.
+		anchor.ReservedBefore = rec.NextIndex
+	}
 	anchor.Epoch = rec.Epoch
 	return saveAnchor(s.secrets, p.tag, anchor)
 }

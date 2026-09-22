@@ -5,6 +5,8 @@
 package chatstate
 
 import (
+	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/dragpass/keeper/config"
@@ -152,5 +154,142 @@ func TestLocalLeafIsUnknownUntilTheSendPathWritesOne(t *testing.T) {
 	leaf, known, err := store.LocalLeafIndex(testConvB)
 	if err != nil || !known || leaf != 6 {
 		t.Fatalf("LocalLeafIndex after a send = %d, known=%v, err=%v; want 6, true", leaf, known, err)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// The sending chain the watermark is compared against
+// ────────────────────────────────────────────────────────────────────────
+
+// sendOnce puts one message through the MLS send path and returns the
+// watermark ariadne would record for it: the next free position on the axis
+// that send declared.
+func sendOnce(t *testing.T, store *Store, conversationID, clientMessageID string) ServerWatermark {
+	t.Helper()
+	sent, err := store.Send(conversationID, noWatermark, SendRequest{
+		ClientMessageID: clientMessageID, Plaintext: []byte("payload"),
+	}, &fakeCipher{})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	return ServerWatermark{
+		Epoch:                sent.Entry.Position.Epoch,
+		LeafIndex:            sent.Entry.Position.SenderLeafIndex,
+		NextApplicationIndex: sent.Entry.Position.Generation + 1,
+	}
+}
+
+// The regression this test exists for. The MLS send path did not record the
+// position it took, so NextIndex stayed 0 while the server counted upward. A
+// watermark exists only once a send declared a position, and only this path
+// declares one, so "the server has a watermark at all" and "NextIndex is still
+// 0" were the same moment: the axis latched on first use, every time, rather
+// than eventually under some unlucky ordering.
+func TestTheWatermarkForThePositionJustSentDoesNotLatch(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 4, 2, 0)
+	recorded := sendOnce(t, store, testConvA, testClientA)
+
+	if _, err := store.ReadOutbox(testConvA, recorded, testClientA); err != nil {
+		t.Fatalf("the watermark for the position just sent latched the conversation: %v", err)
+	}
+}
+
+// The axis has to keep detecting, not merely stop latching falsely: a server
+// holding a position this device never sent is the whole case axis 2 is for.
+func TestAWatermarkOnePositionAheadOfTheLastSendStillLatches(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 4, 2, 0)
+	ahead := sendOnce(t, store, testConvA, testClientA)
+	ahead.NextApplicationIndex++
+
+	if _, err := store.ReadOutbox(testConvA, ahead, testClientA); !errors.Is(err, ErrRekeyRequired) {
+		t.Fatalf("a watermark ahead of the last send = %v, want ErrRekeyRequired", err)
+	}
+}
+
+// Both counters belong to one epoch's ratchet, so both restart when the chain
+// enters a new one. The assertion that matters is the last: carried across,
+// epoch 4's count of three would swallow every position below it in epoch 5
+// and the axis would go quiet instead of latching.
+func TestAnEpochAdvanceRestartsBothChainCounters(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 4, 2, 0)
+	for i := range 3 {
+		sendOnce(t, store, testConvA, clientID(i))
+	}
+	if got := readRecordForTest(t, store, testConvA).NextIndex; got != 3 {
+		t.Fatalf("NextIndex after three sends = %d, want 3", got)
+	}
+	if got := anchorForTest(t, store, testConvA).ReservedBefore; got != 3 {
+		t.Fatalf("ReservedBefore after three sends = %d, want 3", got)
+	}
+
+	// Somebody else's Commit carries the group to epoch 5.
+	arrival := inbound(3, 0, "hello")
+	arrival.opened.Epoch = 5
+	if _, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, arrival); err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	rec := readRecordForTest(t, store, testConvA)
+	anchor := anchorForTest(t, store, testConvA)
+	if rec.Epoch != 5 || rec.NextIndex != 0 {
+		t.Fatalf("record after the epoch advance = epoch %d, NextIndex %d; want 5, 0",
+			rec.Epoch, rec.NextIndex)
+	}
+	if anchor.Epoch != 5 || anchor.ReservedBefore != 0 {
+		t.Fatalf("anchor after the epoch advance = epoch %d, ReservedBefore %d; want 5, 0",
+			anchor.Epoch, anchor.ReservedBefore)
+	}
+
+	// One send on the new chain, and the watermark for it compares against the
+	// new epoch's generation rather than the old epoch's count.
+	recorded := sendOnce(t, store, testConvA, clientID(4))
+	if recorded.Epoch != 5 {
+		t.Fatalf("the send after the advance was on epoch %d, want 5", recorded.Epoch)
+	}
+	if _, err := store.ReadOutbox(testConvA, recorded, clientID(4)); err != nil {
+		t.Fatalf("the watermark for the first send of a new epoch latched: %v", err)
+	}
+	ahead := recorded
+	ahead.NextApplicationIndex++
+	if _, err := store.ReadOutbox(testConvA, ahead, clientID(4)); !errors.Is(err, ErrRekeyRequired) {
+		t.Fatalf("the axis stopped detecting in the new epoch: %v", err)
+	}
+}
+
+// Resetting the counters at the boundary takes nothing away, because the epoch
+// comparison catches a record from before it on its own. The first case is the
+// one that proves it: with both counters at zero on each side, `rec.Epoch <
+// a.Epoch` is the only check left that can fire.
+func TestARewindAcrossAnEpochBoundaryIsStillCaught(t *testing.T) {
+	anchor := Anchor{Version: AnchorVersion, Generation: 9, Epoch: 5, ReservedBefore: 0}
+	for name, rec := range map[string]*Record{
+		"nothing spent in the old epoch":   {Generation: 9, Epoch: 4, NextIndex: 0},
+		"positions spent in the old epoch": {Generation: 9, Epoch: 4, NextIndex: 7},
+	} {
+		if !anchor.rewound(rec, ServerWatermark{}) {
+			t.Fatalf("%s: a record from before the epoch boundary was accepted", name)
+		}
+	}
+}
+
+// Send raising the shared counter is exactly what makes a generation it
+// already spent look handed-out to the pre-MLS path, and the number is all the
+// two can collide on, since only Send names an axis.
+func TestTheLegacyPathCannotTakeAGenerationTheSendPathSealed(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 2, 0)
+	sendOnce(t, store, testConvA, testClientA)
+
+	clash := OutboxEntry{
+		ClientMessageID: clientID(9),
+		Position:        Position{Epoch: 0, Generation: 0},
+		IV:              bytes.Repeat([]byte{7}, ivBytes),
+		Ciphertext:      []byte("a second ciphertext at one position"),
+	}
+	if _, _, err := store.CommitOutbox(testConvA, noWatermark, clash); !errors.Is(err, ErrPositionTaken) {
+		t.Fatalf("commit outbox onto a sealed generation = %v, want ErrPositionTaken", err)
 	}
 }
