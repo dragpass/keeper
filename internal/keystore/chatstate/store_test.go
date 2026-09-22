@@ -44,7 +44,7 @@ func newTestStore(t *testing.T) (*Store, *keychain.MemorySecretStore) {
 func sampleEntry(index uint64) OutboxEntry {
 	return OutboxEntry{
 		ClientMessageID: testClientA,
-		Position:        Position{Epoch: 0, ChainIndex: index},
+		Position:        Position{Epoch: 0, Generation: index},
 		IV:              bytes.Repeat([]byte{7}, ivBytes),
 		Ciphertext:      []byte("sealed-bytes-for-the-wire"),
 	}
@@ -247,7 +247,7 @@ func TestCommitOutboxReturnsTheStoredBytesOnRetry(t *testing.T) {
 
 	retry := entry
 	retry.Ciphertext = []byte("a second encryption of the same message")
-	retry.Position = Position{ChainIndex: reservation.FirstChainIndex + 1}
+	retry.Position = Position{Generation: reservation.FirstChainIndex + 1}
 	again, created, err := store.CommitOutbox(testConvA, noWatermark, retry)
 	if err != nil {
 		t.Fatalf("retry commit: %v", err)
@@ -303,7 +303,7 @@ func TestReadOutboxReportsAMissingEntry(t *testing.T) {
 
 func TestMarkReceivedAdvancesOnce(t *testing.T) {
 	store, _ := newTestStore(t)
-	pos := Position{Epoch: 0, ChainIndex: 3}
+	pos := Position{Epoch: 0, SenderLeafIndex: 2, ContentType: ContentTypeApplication, Generation: 3}
 	first, gen1, err := store.MarkReceived(testConvA, noWatermark, pos)
 	if err != nil || !first {
 		t.Fatalf("first delivery: first=%v err=%v", first, err)
@@ -317,6 +317,99 @@ func TestMarkReceivedAdvancesOnce(t *testing.T) {
 	}
 	if gen2 != gen1 {
 		t.Fatalf("redelivery advanced the generation from %d to %d", gen1, gen2)
+	}
+}
+
+// The whole point of the four-slot position. MLS gives every sender its own
+// ratchet (RFC 9420 §9.1), so leaf 1's generation 0 and leaf 2's generation 0
+// are two ordinary messages, not one message delivered twice.
+func TestMarkReceivedSeparatesSenders(t *testing.T) {
+	store, _ := newTestStore(t)
+	fromOne := Position{Epoch: 4, SenderLeafIndex: 1, ContentType: ContentTypeApplication}
+	fromTwo := fromOne
+	fromTwo.SenderLeafIndex = 2
+
+	first, _, err := store.MarkReceived(testConvA, noWatermark, fromOne)
+	if err != nil || !first {
+		t.Fatalf("leaf 1 generation 0: first=%v err=%v", first, err)
+	}
+	second, _, err := store.MarkReceived(testConvA, noWatermark, fromTwo)
+	if err != nil {
+		t.Fatalf("leaf 2 generation 0: %v", err)
+	}
+	if !second {
+		t.Fatal("leaf 2's generation 0 was judged a redelivery of leaf 1's")
+	}
+	again, _, err := store.MarkReceived(testConvA, noWatermark, fromOne)
+	if err != nil || again {
+		t.Fatalf("leaf 1's own redelivery: again=%v err=%v", again, err)
+	}
+}
+
+// A sender's handshake ratchet and application ratchet advance independently
+// (RFC 9420 §6.3.1), so the same generation on each is two messages.
+func TestMarkReceivedSeparatesTheTwoRatchets(t *testing.T) {
+	store, _ := newTestStore(t)
+	handshake := Position{Epoch: 4, SenderLeafIndex: 1, ContentType: ContentTypeHandshake, Generation: 7}
+	application := handshake
+	application.ContentType = ContentTypeApplication
+
+	if first, _, err := store.MarkReceived(testConvA, noWatermark, handshake); err != nil || !first {
+		t.Fatalf("handshake generation 7: first=%v err=%v", first, err)
+	}
+	first, _, err := store.MarkReceived(testConvA, noWatermark, application)
+	if err != nil {
+		t.Fatalf("application generation 7: %v", err)
+	}
+	if !first {
+		t.Fatal("an application message was judged a redelivery of a handshake message")
+	}
+}
+
+func TestMarkReceivedRefusesAPositionWithoutARatchet(t *testing.T) {
+	store, _ := newTestStore(t)
+	unnamed := Position{Epoch: 4, SenderLeafIndex: 1, Generation: 7}
+	if _, _, err := store.MarkReceived(testConvA, noWatermark, unnamed); err == nil {
+		t.Fatal("a position that named no content type was stored")
+	}
+}
+
+func TestReceivedPositionsSurviveTheSealedFile(t *testing.T) {
+	store, _ := newTestStore(t)
+	pos := Position{Epoch: 2, SenderLeafIndex: 7, ContentType: ContentTypeHandshake, Generation: 9}
+	if first, _, err := store.MarkReceived(testConvA, noWatermark, pos); err != nil || !first {
+		t.Fatalf("mark received: first=%v err=%v", first, err)
+	}
+	rec, err := store.readRecord(store.paths(testConvA), testConvA)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(rec.Received) != 1 || rec.Received[0] != pos {
+		t.Fatalf("received ring came back as %+v, want exactly %+v", rec.Received, pos)
+	}
+}
+
+func TestReceivedRingEvictsItsOldestPosition(t *testing.T) {
+	rec := newRecord(testOwner, testConvA)
+	pos := func(i int) Position {
+		return Position{
+			Epoch:           1,
+			SenderLeafIndex: uint32(i % 4),
+			ContentType:     ContentTypeApplication,
+			Generation:      uint64(i),
+		}
+	}
+	for i := range ReceivedCapacity + 1 {
+		rec.appendReceived(pos(i))
+	}
+	if len(rec.Received) != ReceivedCapacity {
+		t.Fatalf("ring holds %d positions, want %d", len(rec.Received), ReceivedCapacity)
+	}
+	if rec.receivedContains(pos(0)) {
+		t.Fatal("the oldest position survived a full ring")
+	}
+	if !rec.receivedContains(pos(1)) || !rec.receivedContains(pos(ReceivedCapacity)) {
+		t.Fatal("the ring dropped a position it still had room for")
 	}
 }
 

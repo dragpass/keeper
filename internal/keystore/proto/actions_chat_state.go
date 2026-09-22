@@ -69,7 +69,13 @@ const (
 	// the state once, not twice, and a key that forward secrecy says is gone
 	// must not come back because a crash replayed its deletion.
 	//
-	//   Inputs: permit, org_id, conversation_id, epoch, chain_index
+	// The position takes four slots because MLS gives every sender its own
+	// sender ratchet (RFC 9420 §9.1) and two of them each (§6.3.1): on (epoch,
+	// generation) alone, two members' first messages of an epoch would each
+	// look like a redelivery of the other.
+	//
+	//   Inputs: permit, org_id, conversation_id, epoch, sender_leaf_index,
+	//           content_type ("handshake" | "application"), generation
 	//   Output: { first_delivery, generation }
 	ChatStateMarkReceived = "chat_state_mark_received"
 

@@ -139,15 +139,23 @@ func (f *chatStateFixture) readOutbox(t *testing.T, p proto.ChatStatePermit, cli
 	}))
 }
 
-func (f *chatStateFixture) markReceived(t *testing.T, p proto.ChatStatePermit, index uint64) proto.BaseResponse {
+func (f *chatStateFixture) markReceivedRequest(
+	p proto.ChatStatePermit, leafIndex uint32, contentType string, generation uint64,
+) proto.ChatStateMarkReceivedRequest {
+	return proto.ChatStateMarkReceivedRequest{
+		Permit:          p,
+		OrgID:           p.OrgID,
+		ConversationID:  p.ConversationID,
+		Epoch:           0,
+		SenderLeafIndex: leafIndex,
+		ContentType:     contentType,
+		Generation:      generation,
+	}
+}
+
+func (f *chatStateFixture) markReceived(t *testing.T, req proto.ChatStateMarkReceivedRequest) proto.BaseResponse {
 	t.Helper()
-	return HandleChatStateMarkReceived(f.deps, chatMarshal(t, proto.ChatStateMarkReceivedRequest{
-		Permit:         p,
-		OrgID:          p.OrgID,
-		ConversationID: p.ConversationID,
-		Epoch:          0,
-		ChainIndex:     index,
-	}))
+	return HandleChatStateMarkReceived(f.deps, chatMarshal(t, req))
 }
 
 func (f *chatStateFixture) purge(t *testing.T, ownerAccountID string) proto.BaseResponse {
@@ -358,7 +366,8 @@ func TestChatState_EveryPermitGatedActionRefusesAnUnsignedPermit(t *testing.T) {
 		proto.ChatStateReserveSend:  f.reserve(t, f.reserveRequest(unsigned, 1)),
 		proto.ChatStateCommitOutbox: f.commit(t, f.commitRequest(unsigned, 0, chatStateClientMsgID, chatStateCtB64)),
 		proto.ChatStateReadOutbox:   f.readOutbox(t, unsigned, chatStateClientMsgID),
-		proto.ChatStateMarkReceived: f.markReceived(t, unsigned, 0),
+		proto.ChatStateMarkReceived: f.markReceived(t,
+			f.markReceivedRequest(unsigned, 0, proto.ChatStateContentTypeApplication, 0)),
 	}
 	for action, resp := range responses {
 		if resp.ErrorCode != proto.ChatStateErrorCodeNotAuthorized {
@@ -460,8 +469,9 @@ func TestChatState_ReadOutboxReportsAMissingEntry(t *testing.T) {
 func TestChatState_MarkReceivedIsIdempotent(t *testing.T) {
 	f := newChatStateFixture(t)
 	permit := f.permit(t)
+	req := f.markReceivedRequest(permit, 1, proto.ChatStateContentTypeApplication, 4)
 
-	first := f.markReceived(t, permit, 4)
+	first := f.markReceived(t, req)
 	if !first.Success {
 		t.Fatalf("first mark failed: %s (%s)", first.Error, first.ErrorCode)
 	}
@@ -470,7 +480,7 @@ func TestChatState_MarkReceivedIsIdempotent(t *testing.T) {
 		t.Fatalf("first mark data = %+v", first.Data)
 	}
 
-	second := f.markReceived(t, permit, 4)
+	second := f.markReceived(t, req)
 	secondData, ok := second.Data.(proto.ChatStateMarkReceivedResponseData)
 	if !ok || secondData.FirstDelivery {
 		t.Fatalf("redelivery reported first_delivery = %+v", second.Data)
@@ -479,6 +489,56 @@ func TestChatState_MarkReceivedIsIdempotent(t *testing.T) {
 		t.Fatalf("redelivery advanced the generation: %d then %d",
 			firstData.Generation, secondData.Generation)
 	}
+}
+
+// The delivery of two members' first message of one epoch, which the two-slot
+// position judged a redelivery and dropped.
+func TestChatState_MarkReceivedDistinguishesSenders(t *testing.T) {
+	f := newChatStateFixture(t)
+	permit := f.permit(t)
+
+	fromOne := f.markReceived(t, f.markReceivedRequest(permit, 1, proto.ChatStateContentTypeApplication, 0))
+	if !fromOne.Success {
+		t.Fatalf("leaf 1 failed: %s (%s)", fromOne.Error, fromOne.ErrorCode)
+	}
+	fromTwo := f.markReceived(t, f.markReceivedRequest(permit, 2, proto.ChatStateContentTypeApplication, 0))
+	if !fromTwo.Success {
+		t.Fatalf("leaf 2 failed: %s (%s)", fromTwo.Error, fromTwo.ErrorCode)
+	}
+	for name, resp := range map[string]proto.BaseResponse{"leaf 1": fromOne, "leaf 2": fromTwo} {
+		data, ok := resp.Data.(proto.ChatStateMarkReceivedResponseData)
+		if !ok || !data.FirstDelivery {
+			t.Fatalf("%s generation 0 was not a first delivery: %+v", name, resp.Data)
+		}
+	}
+}
+
+func TestChatState_MarkReceivedRefusesAnUnknownContentType(t *testing.T) {
+	f := newChatStateFixture(t)
+	req := f.markReceivedRequest(f.permit(t), 1, "commit", 0)
+	assertChatStateFailure(t, f.markReceived(t, req), proto.ChatStateErrorCodeInvalidInput)
+	f.assertStateRootAbsent(t)
+}
+
+// The two-slot request shape is refused, not defaulted. The strict decoder sees
+// an unknown `chain_index` and three missing keys, and a position that defaulted
+// its leaf and its ratchet would deduplicate against a chain nobody sent on.
+func TestChatState_MarkReceivedRefusesTheTwoSlotRequestShape(t *testing.T) {
+	f := newChatStateFixture(t)
+	permit := f.permit(t)
+	payload, err := json.Marshal(map[string]any{
+		"permit":          permit,
+		"org_id":          permit.OrgID,
+		"conversation_id": permit.ConversationID,
+		"epoch":           0,
+		"chain_index":     4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertChatStateFailure(t,
+		HandleChatStateMarkReceived(f.deps, payload), proto.ChatStateErrorCodeInvalidInput)
+	f.assertStateRootAbsent(t)
 }
 
 // TestChatState_OwnerComesFromThePermit checks the partitioning the handler
@@ -581,5 +641,18 @@ func TestChatStateReserveCapMatchesTheStore(t *testing.T) {
 	if proto.ChatStateMaxReserveCount != chatstate.MaxReserveCount {
 		t.Fatalf("proto cap %d != store cap %d",
 			proto.ChatStateMaxReserveCount, chatstate.MaxReserveCount)
+	}
+}
+
+// The wire spells the two ratchets and the store stores them, so a drift here
+// would pass validation and then be refused as a storage failure.
+func TestChatStateContentTypesMatchTheStore(t *testing.T) {
+	if proto.ChatStateContentTypeHandshake != string(chatstate.ContentTypeHandshake) {
+		t.Fatalf("proto %q != store %q",
+			proto.ChatStateContentTypeHandshake, chatstate.ContentTypeHandshake)
+	}
+	if proto.ChatStateContentTypeApplication != string(chatstate.ContentTypeApplication) {
+		t.Fatalf("proto %q != store %q",
+			proto.ChatStateContentTypeApplication, chatstate.ContentTypeApplication)
 	}
 }
