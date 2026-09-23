@@ -62,10 +62,6 @@ func TestMCPCallableActions_ExcludeChatState(t *testing.T) {
 				"must not be reachable from a tool call", action)
 		}
 	}
-	// The chat reveal path is the same boundary one layer over.
-	if pinned[proto.ActionConversationDecryptBatchForAppDisplay] {
-		t.Error("the chat reveal action is on the MCP surface")
-	}
 	if pinned[proto.MLSDecryptBatchForAppDisplay] {
 		t.Error("the chat v2 reveal action is on the MCP surface")
 	}

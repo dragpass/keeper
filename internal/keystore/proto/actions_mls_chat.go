@@ -154,10 +154,8 @@ const (
 	// the DragPass app's own screen, through chatstate.Store.ReceiveBatch and
 	// the local history: a seq already delivered, or sent by this device and
 	// bound by MLSMarkSent, is answered from the sealed copy with from_history
-	// and no MLS key. It widens the v1 reveal's carve-out rather than adding
-	// one (M6.3): the response is
-	// ConversationDecryptBatchForAppDisplayResponseData, plaintext_b64 its only
-	// plaintext field. All or nothing: one message that fails refuses the
+	// and no MLS key. The response is MLSDisplayResponseData, plaintext_b64
+	// its only plaintext field (the chat carve-out, M6.3). All or nothing: one message that fails refuses the
 	// batch with no plaintext and nothing written. The one exception is a
 	// message this device sent that has no sealed copy here: it is reported as
 	// state own_without_local_copy with an empty plaintext entry, and the rest
@@ -185,9 +183,8 @@ const (
 	// MLSRoomNameOpen opens a room's name for the DragPass app's own screen.
 	// Only the confirmed epoch's name opens (CHAT_MLS_EPOCH_STALE otherwise):
 	// an older epoch's exporter is gone. The response is
-	// ConversationDecryptBatchForAppDisplayResponseData with exactly one
-	// plaintext_b64 entry, the same carve-out as the display batch rather than
-	// a new one. Writes nothing.
+	// MLSDisplayResponseData with exactly one plaintext_b64 entry, the same
+	// carve-out as the display batch rather than a new one. Writes nothing.
 	//
 	//   Inputs: permit, org_id, conversation_id, epoch, name_iv_b64 (12B),
 	//           name_ciphertext_b64 (17..272B)

@@ -39,8 +39,7 @@ import (
 )
 
 // chatStatePermitClockSkewSeconds — how far into the future a permit's
-// issued_at may sit. Ordinary server/client drift and nothing more, the same
-// allowance the chat read permit gets.
+// issued_at may sit. Ordinary server/client drift and nothing more.
 const chatStatePermitClockSkewSeconds = 5
 
 // HandleChatStateReserveSend consumes chain positions and returns them only
