@@ -168,6 +168,20 @@ type Record struct {
 	// canonical, so once the server signs v3 it cannot open this store at all.
 	RemovalLatch []string `json:"removal_latch,omitempty"`
 
+	// LeafReplacementLatch is the accounts this device may not encrypt new
+	// messages past until its confirmed group holds only the expected key of
+	// each (design M4.4), one entry per account, sorted. See latch.go.
+	//
+	// SchemaVersion is not raised for it, on the same argument as
+	// RemovalLatch, one version later: the field reaches a record only from a
+	// v4 permit, a Keeper old enough to drop it on rewrite refuses every v4
+	// permit (it neither decodes the new slot nor verifies the new
+	// canonical), and this Keeper refuses every v3 one. So no binary that
+	// would lose the field ever rewrites a record once the field can be set.
+	// Raising the version would buy nothing and would make every existing
+	// record unreadable, because an unknown version fails closed.
+	LeafReplacementLatch []ReplacementLatch `json:"leaf_replacement_latch,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
 

@@ -3,7 +3,7 @@
 //
 // These sit on top of the chat_state_* actions rather than beside them: the
 // same sealed state directory, the same per-conversation lock, the same
-// conversation-state permit (canonical v3), and one new thing — the MLS group
+// conversation-state permit (canonical v4), and one new thing — the MLS group
 // state inside the record is now read and written, by the Keeper only. No
 // action here carries the group state, a secret, or a key across IPC in either
 // direction. Storage: internal/keystore/chatstate. MLS: internal/keystore/mls.
@@ -34,13 +34,17 @@ const (
 	MLSGroupCreate = "mls_group_create"
 
 	// MLSCommitBuild builds one pending Commit of exactly one kind against
-	// expected_epoch: add, remove_account_ids (every leaf of each account), or
+	// expected_epoch: add, remove_account_ids (every leaf of each account),
+	// replace (each account's leaves swapped for the leaf of the device that
+	// took it over, under the key the permit names; design M4.4), or
 	// update_self (a path update that also moves the group onto the device's
 	// active leaf key after a rotation). A plan that mixes kinds is refused.
 	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           expected_epoch (>=1), exactly one of add[1..32] /
-	//           remove_account_ids[1..64] / update_self, rotation_statements?
+	//           remove_account_ids[1..64] /
+	//           replace[1..32] { account_id, key_package_b64 } /
+	//           update_self, rotation_statements?
 	//   Output: MLSCommitResponseData
 	MLSCommitBuild = "mls_commit_build"
 
@@ -82,7 +86,8 @@ const (
 	// (§7.2.1 T-c), through chatstate.Store.Send: two calls — reserve, then
 	// encrypt — would let another process encrypt from the same group state
 	// in between. Idempotent on client_message_id. Refused with
-	// CHAT_MLS_ROTATION_PENDING while the S-1 latch holds, before any
+	// CHAT_MLS_ROTATION_PENDING while the S-1 latch holds, and with
+	// CHAT_MLS_LEAF_REPLACEMENT_PENDING while the M4.4 latch holds, before any
 	// position is consumed.
 	//
 	//   Inputs: permit, org_id, conversation_id, client_message_id,

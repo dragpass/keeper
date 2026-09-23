@@ -75,6 +75,7 @@ func (f *chatStateFixture) unsignedPermit() proto.ChatStatePermit {
 		OrgID:                    chatOrgID,
 		ConversationID:           chatConvID,
 		PendingRemovalAccountIDs: []string{},
+		PendingLeafReplacements:  []proto.ChatStateLeafReplacement{},
 		IssuedAt:                 now,
 		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
 		ServerKeyVersion:         msgServerKeyVersion,

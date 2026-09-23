@@ -25,10 +25,23 @@ import (
 // declaration for it, into the pending slot.
 //
 // enroll needs no usable active key (a record an older Keeper wrote does not
-// count); rotate needs one. Either way the new key and its declaration are
-// written to the pending slot and the active slot is not touched, so a
-// declaration the server never accepts cannot replace the one peers hold.
-// mls_leaf_promote makes it active.
+// count). rotate is accepted with or without one: with none it is a takeover
+// (design M4.4), a new machine, a reinstall or a device after
+// reset_device_identity replacing whichever device holds the account's live
+// declaration. Either way the new key and its declaration are written to the
+// pending slot and the active slot is not touched, so a declaration the server
+// never accepts cannot replace the one peers hold. mls_leaf_promote makes it
+// active.
+//
+// A rotate without a local leaf is not a wider door than a rotate with one.
+// What makes any declaration speak for the account is the account key's
+// signature over it, and signing requires the account private key in this
+// device's keyring (the same getPrivateKeySecure every declaration goes
+// through). A device holding that key could already enroll a leaf of its own,
+// so letting it rotate lets it do nothing it could not; and nothing about the
+// old device's leaf is needed or touched here. Whether the new declaration
+// supersedes another device's is the server's decision to accept and every
+// peer's §5.3 freshness check to enforce, not this device's.
 //
 // While a pending entry exists, every declare returns that entry's declaration
 // and mints nothing — whatever the challenge, reason or window of the retry.
@@ -107,12 +120,8 @@ func declareLocked(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse,
 	if req.NotAfter <= d.Now().Unix() {
 		return errs.CodeResponse(errs.ErrCodeValidation, "not_after has already passed"), false
 	}
-	live := active != nil && active.Usable()
-	switch {
-	case req.Reason == proto.MLSLeafReasonEnroll && live:
+	if req.Reason == proto.MLSLeafReasonEnroll && active != nil && active.Usable() {
 		return errs.CodeResponse(errs.ErrCodeValidation, "an mls leaf key is already active; rotate to replace it"), false
-	case req.Reason == proto.MLSLeafReasonRotate && !live:
-		return errs.CodeResponse(errs.ErrCodeNotFound, "no mls leaf key to rotate; enroll first"), false
 	}
 
 	accountPriv, err := getPrivateKeySecure(d.Store)

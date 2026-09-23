@@ -307,16 +307,40 @@ func TestHandleMLSLeafDeclare_RotateStagesANewKeyAndPromoteReplacesTheOld(t *tes
 	}
 }
 
-func TestHandleMLSLeafDeclare_RotateWithoutEnrollIsNotFound(t *testing.T) {
+// M4.4 takeover: a device with no local leaf declares rotate. It is minted
+// into pending exactly as a normal rotate is, promoted by the same acceptance,
+// and the device then signs with it. Enroll over the active leaf this leaves is
+// still refused.
+func TestHandleMLSLeafDeclare_ARotateWithoutALocalLeafIsATakeover(t *testing.T) {
 	deps, _, store := newTestDeps(t)
-	seedActiveKeypairForRotateTest(t, store)
+	accountPub, _ := seedActiveKeypairForRotateTest(t, store)
 
-	resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonRotate))
-	if resp.Success || resp.ErrorCode != string(errs.ErrCodeNotFound) {
-		t.Fatalf("rotate with no key = %+v, want not_found", resp)
+	d := declareLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonRotate))
+	if d.Reason != proto.MLSLeafReasonRotate {
+		t.Fatalf("takeover declaration reason = %q", d.Reason)
 	}
-	if leafSlots(t, store) != [2]string{} {
-		t.Fatal("a refused rotate stored a key")
+	pending := pendingLeafKey(t, store)
+	if pending.AccountID != leafTestAccountID || pending.DeviceID != leafTestDeviceID ||
+		d.SignatureKey != base64.StdEncoding.EncodeToString(pending.PublicKey) {
+		t.Fatal("the takeover declaration is not the pending key")
+	}
+	if _, found, _ := keychain.GetMLSLeafKey(store); found {
+		t.Fatal("a takeover declare wrote the active slot before any acceptance")
+	}
+	if err := VerifyLeafDeclaration(d, accountPublicKey(t, accountPub)); err != nil {
+		t.Fatalf("takeover declaration does not verify: %v", err)
+	}
+
+	if got := promoteLeaf(t, deps, d); !got.Promoted || got.Fingerprint != d.SignatureKeyFingerprint {
+		t.Fatalf("takeover promote = %+v", got)
+	}
+	if key := storedLeafKey(t, store); !key.Usable() ||
+		base64.StdEncoding.EncodeToString(key.PublicKey) != d.SignatureKey {
+		t.Fatal("the promoted takeover key is not the active one")
+	}
+	resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("enroll over the takeover's active leaf = %+v, want validation_error", resp)
 	}
 }
 
@@ -467,9 +491,6 @@ func TestHandleMLSLeafDeclare_AVersionTwoRecordDoesNotComeBackToLife(t *testing.
 
 	if got := leafStatus(t, deps); got.HasActive || got.HasPending {
 		t.Fatalf("status over a v2 record = %+v, want no usable entry", got)
-	}
-	if resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonRotate)); resp.Success {
-		t.Fatal("rotate treated a v2 record as a live key")
 	}
 	fresh := enrollLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
 	if fresh.SignatureKey == base64.StdEncoding.EncodeToString(public) {

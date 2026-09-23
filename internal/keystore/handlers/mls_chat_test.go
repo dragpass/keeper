@@ -196,7 +196,36 @@ func TestMLSChat_ValidationRefusesMalformedRequests(t *testing.T) {
 		"duplicate remove": build(func(r *proto.MLSCommitBuildRequest) {
 			r.UpdateSelf, r.RemoveAccountIDs = false, []string{mlsTestPeer, mlsTestPeer}
 		}),
+		// The permit lists nobody as taken over, so a replace of anyone is a
+		// replacement it has no key for.
+		"replace of an unlisted account": build(func(r *proto.MLSCommitBuildRequest) {
+			r.UpdateSelf, r.Replace = false, []proto.MLSReplaceMember{{AccountID: mlsTestPeer, KeyPackageB64: mlsTestBlobB64}}
+		}),
+		"empty replace": build(func(r *proto.MLSCommitBuildRequest) { r.UpdateSelf, r.Replace = false, []proto.MLSReplaceMember{} }),
 	}
+	listed := f.unsignedPermit()
+	listed.PendingLeafReplacements = []proto.ChatStateLeafReplacement{
+		{AccountID: mlsTestPeer, NewSignatureKeyFP: strings.Repeat("a", 64)},
+	}
+	lp := f.sign(t, listed)
+	replace := []proto.MLSReplaceMember{{AccountID: mlsTestPeer, KeyPackageB64: mlsTestBlobB64}}
+	withListed := func(mut func(*proto.MLSCommitBuildRequest)) proto.MLSCommitBuildRequest {
+		r := proto.MLSCommitBuildRequest{
+			Permit: lp, OrgID: lp.OrgID, ConversationID: lp.ConversationID,
+			ClientCommitID: mlsTestCommitID, ExpectedEpoch: 1, Replace: replace,
+		}
+		mut(&r)
+		return r
+	}
+	cases["replace with add"] = withListed(func(r *proto.MLSCommitBuildRequest) { r.Add = []proto.MLSMemberKeyPackage{member} })
+	cases["replace with remove"] = withListed(func(r *proto.MLSCommitBuildRequest) { r.RemoveAccountIDs = []string{mlsTestPeer} })
+	cases["replace with update"] = withListed(func(r *proto.MLSCommitBuildRequest) { r.UpdateSelf = true })
+	cases["replace naming one account twice"] = withListed(func(r *proto.MLSCommitBuildRequest) {
+		r.Replace = append(append([]proto.MLSReplaceMember(nil), replace...), replace...)
+	})
+	cases["replace with an oversized key package"] = withListed(func(r *proto.MLSCommitBuildRequest) {
+		r.Replace = []proto.MLSReplaceMember{{AccountID: mlsTestPeer, KeyPackageB64: oversized}}
+	})
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
 			assertChatStateFailure(t, HandleMLSCommitBuild(f.deps, chatMarshal(t, req)),
@@ -290,6 +319,8 @@ func TestMLSChat_FailuresMapToTheirProtocolCodes(t *testing.T) {
 		{mls.ErrLeafUntrusted, proto.ChatMLSErrorCodeLeafUntrusted},
 		{&MLSLeafUntrustedError{Reason: "x"}, proto.ChatMLSErrorCodeLeafUntrusted},
 		{chatstate.ErrRotationPending, proto.ChatMLSErrorCodeRotationPending},
+		{chatstate.ErrLeafReplacementPending, proto.ChatMLSErrorCodeLeafReplacementPending},
+		{chatstate.ErrReplacementNotListed, proto.ChatStateErrorCodeInvalidInput},
 		{chatstate.ErrCommitPending, proto.ChatMLSErrorCodeCommitPending},
 		{chatstate.ErrEpochStale, proto.ChatMLSErrorCodeEpochStale},
 		{chatstate.ErrHandshakeApplied, proto.ChatMLSErrorCodeEpochStale},

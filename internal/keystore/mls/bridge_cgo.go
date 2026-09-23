@@ -73,6 +73,10 @@ int32_t dpmls_group_commit_update(DpSession *handle, DpBuf *commit, uint64_t *ex
 int32_t dpmls_group_commit_remove_members(DpSession *handle,
                                           const uint8_t *leaf_indices, size_t leaf_indices_len,
                                           DpBuf *commit, uint64_t *expected_epoch);
+int32_t dpmls_group_commit_replace_members(DpSession *handle,
+                                           const uint8_t *leaf_indices, size_t leaf_indices_len,
+                                           const uint8_t *key_packages, size_t key_packages_len,
+                                           DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
 int32_t dpmls_group_roster(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_commit_apply(DpSession *handle);
 int32_t dpmls_group_commit_clear(DpSession *handle);
@@ -317,6 +321,36 @@ func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expe
 		return nil, 0, statusError(rc)
 	}
 	return takeBuf(&c), uint64(epoch), nil
+}
+
+// CommitReplaceMembers builds one Commit that removes these leaves and adds
+// these members, and leaves it pending like CommitAddMembers. Every member
+// added must have been approved first; CommitReplaceMembersVerified is the path
+// that does both.
+func (s *Session) CommitReplaceMembers(
+	leafIndices []uint32, keyPackages [][]byte,
+) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	indices := frameLeafIndices(leafIndices)
+	framed := frameKeyPackages(keyPackages)
+	var (
+		c, w  C.DpBuf
+		epoch C.uint64_t
+	)
+	rc := C.dpmls_group_commit_replace_members(
+		h, bytePtr(indices), C.size_t(len(indices)), bytePtr(framed), C.size_t(len(framed)), &c, &w, &epoch,
+	)
+	runtime.KeepAlive(indices)
+	runtime.KeepAlive(framed)
+	if rc != 0 {
+		return nil, nil, 0, statusError(rc)
+	}
+	return takeBuf(&c), takeBuf(&w), uint64(epoch), nil
 }
 
 // Roster is every leaf of the confirmed tree. A pending Commit is not in it.

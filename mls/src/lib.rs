@@ -572,6 +572,59 @@ pub unsafe extern "C" fn dpmls_group_commit_remove_members(
     })
 }
 
+/// Build one Commit that removes the leaves in `leaf_indices` (framed as in
+/// `gate::decode_leaf_indices`) and adds the members in `key_packages` (framed
+/// as in `gate::decode_key_packages`), and hold it pending. `expected_epoch`
+/// receives the confirmed epoch it was built against.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`; `commit` and
+/// `welcome` must point to writable DpBufs and `expected_epoch` to a writable
+/// u64.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_replace_members(
+    handle: *mut Session,
+    leaf_indices: *const u8,
+    leaf_indices_len: usize,
+    key_packages: *const u8,
+    key_packages_len: usize,
+    commit: *mut DpBuf,
+    welcome: *mut DpBuf,
+    expected_epoch: *mut u64,
+) -> i32 {
+    guard(|| {
+        if expected_epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `leaf_indices` and `key_packages`
+        // point to `leaf_indices_len` and `key_packages_len` readable bytes for
+        // the duration of this call. Both are decoded before the session is
+        // used, and the key package slices borrow the caller's buffer only
+        // until the Commit is built, inside this call.
+        let (session, indices_framed, kps_framed) = unsafe {
+            (
+                session_of(handle)?,
+                slice(leaf_indices, leaf_indices_len)?,
+                slice(key_packages, key_packages_len)?,
+            )
+        };
+        let indices = gate::decode_leaf_indices(indices_framed).map_err(|e| format!("mls: {e}"))?;
+        let kps = gate::decode_key_packages(kps_framed).map_err(|e| format!("mls: {e}"))?;
+        let (c, w, epoch) = session.commit_replace_members(&indices, &kps)?;
+        // SAFETY: `expected_epoch` was checked for null above and the caller
+        // promises it points to a writable u64; the caller promises `commit`
+        // and `welcome` point to writable DpBufs, which `put` checks for null
+        // and overwrites without reading.
+        unsafe {
+            *expected_epoch = epoch;
+            put(commit, c)?;
+            put(welcome, w)?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
 /// Every leaf of the confirmed tree, never one only a pending Commit reaches,
 /// in the leaf framing of `gate::encode_leaves`.
 ///

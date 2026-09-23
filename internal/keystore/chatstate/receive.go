@@ -384,9 +384,9 @@ func (s *Store) receiveOne(
 	// took the leaf out is confirmed the moment it is applied. A device
 	// that was itself removed has no group left to read a roster from and
 	// will never encrypt in it again, so its latch is left as it was.
-	latch := rec.RemovalLatch
+	latch := storedLatches(rec)
 	if !opened.Removed {
-		if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+		if latch, err = judgeLatches(rec, wm, cipher); err != nil {
 			return ReceiveResult{}, false, err
 		}
 	}
@@ -404,7 +404,7 @@ func (s *Store) receiveOne(
 		}
 	}
 	rec.GroupState = state
-	rec.RemovalLatch = latch
+	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
 	if opened.Application {
 		first = !rec.receivedContains(position)

@@ -1,7 +1,7 @@
 // mls_chat.go — payload models for the MLS chat v2 actions.
 //
 // Every request here is a conversation-state request: it carries the same
-// ChatStatePermit (canonical v3) as the chat_state_* actions and implements
+// ChatStatePermit (canonical v4) as the chat_state_* actions and implements
 // ChatStateBound, so the handlers run the one gate authorizeChatState already
 // runs. What differs is the size cap, because a KeyPackage batch, a Commit and
 // a Welcome are larger than one ciphertext.
@@ -190,10 +190,58 @@ func (r MLSGroupCreateRequest) Validate() error {
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
 
+// MLSReplaceMember is one account to replace (design M4.4): the account a new
+// device took over, and that device's KeyPackage as the server handed it out.
+// There is no fingerprint field: the only key the Keeper accepts for the
+// account is the one the permit names in pending_leaf_replacements.
+type MLSReplaceMember struct {
+	AccountID     string `json:"account_id"`
+	KeyPackageB64 string `json:"key_package_b64"`
+}
+
+// validateMLSReplace bounds the list like an Add, allows one entry per account,
+// and requires every account to be one this request's permit lists as taken
+// over. An account it does not list has no key the Keeper could accept.
+func validateMLSReplace(members []MLSReplaceMember, listed []ChatStateLeafReplacement) error {
+	const field = "replace"
+	if len(members) == 0 || len(members) > MLSChatMaxMembersPerCommit {
+		return newValidationError(field,
+			"must hold 1.."+strconv.Itoa(MLSChatMaxMembersPerCommit)+" accounts")
+	}
+	seen := map[string]bool{}
+	for _, m := range members {
+		if err := requireMessageUUID(m.AccountID, "replace.account_id"); err != nil {
+			return err
+		}
+		if err := requireMessageBase64Len(m.KeyPackageB64, "replace.key_package_b64", 1, MLSChatMaxKeyPackageBytes); err != nil {
+			return err
+		}
+		if seen[m.AccountID] {
+			return newValidationError(field, "must not name one account twice")
+		}
+		seen[m.AccountID] = true
+		if _, ok := LeafReplacementFor(listed, m.AccountID); !ok {
+			return newValidationError(field, "names an account the permit does not list in pending_leaf_replacements")
+		}
+	}
+	return nil
+}
+
+// LeafReplacementFor finds the permit's entry for an account.
+func LeafReplacementFor(listed []ChatStateLeafReplacement, accountID string) (ChatStateLeafReplacement, bool) {
+	for _, e := range listed {
+		if e.AccountID == accountID {
+			return e, true
+		}
+	}
+	return ChatStateLeafReplacement{}, false
+}
+
 // MLSCommitBuildRequest builds one Commit of exactly one kind: an Add, a
-// Remove of every leaf of the named accounts, or an Update of this device's
-// own leaf. UpdateSelf also moves the group onto the device's active leaf key
-// when a rotation has promoted a new one (design P3).
+// Remove of every leaf of the named accounts, a replace of the named
+// accounts' leaves with their new devices' (design M4.4), or an Update of this
+// device's own leaf. UpdateSelf also moves the group onto the device's active
+// leaf key when a rotation has promoted a new one (design P3).
 type MLSCommitBuildRequest struct {
 	Permit           ChatStatePermit       `json:"permit"`
 	OrgID            string                `json:"org_id"`
@@ -202,6 +250,7 @@ type MLSCommitBuildRequest struct {
 	ExpectedEpoch    uint64                `json:"expected_epoch"`
 	Add              []MLSMemberKeyPackage `json:"add,omitempty"`
 	RemoveAccountIDs []string              `json:"remove_account_ids,omitempty"`
+	Replace          []MLSReplaceMember    `json:"replace,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -237,12 +286,18 @@ func (r MLSCommitBuildRequest) Validate() error {
 			return err
 		}
 	}
+	if r.Replace != nil {
+		kinds++
+		if err := validateMLSReplace(r.Replace, r.Permit.PendingLeafReplacements); err != nil {
+			return err
+		}
+	}
 	if r.UpdateSelf {
 		kinds++
 	}
 	if kinds != 1 {
 		return newValidationError("add",
-			"exactly one of add, remove_account_ids and update_self must be given")
+			"exactly one of add, remove_account_ids, replace and update_self must be given")
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -530,7 +585,9 @@ func (r MLSConversationStatusRequest) Validate() error {
 // MLSConversationStatusResponseData lets the app say "참여자 변경 반영 중"
 // before it tries to send, rather than after a refusal. RemovalLatch is the
 // accounts a send would be refused for now (CHAT_MLS_ROTATION_PENDING), judged
-// on the confirmed roster against this permit's list; empty, never null. When
+// on the confirmed roster against this permit's list; empty, never null.
+// LeafReplacementLatch is the same for CHAT_MLS_LEAF_REPLACEMENT_PENDING, in
+// the permit's entry shape. When
 // NeedsRekey is true the record is latched for a rewind and the other fields
 // are zero: nothing behind the latch is trusted to say anything.
 type MLSConversationStatusResponseData struct {
@@ -539,5 +596,7 @@ type MLSConversationStatusResponseData struct {
 	CommitPending         bool     `json:"commit_pending"`
 	PendingClientCommitID string   `json:"pending_client_commit_id"`
 	RemovalLatch          []string `json:"removal_latch_account_ids"`
-	NeedsRekey            bool     `json:"needs_rekey"`
+
+	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
+	NeedsRekey           bool                       `json:"needs_rekey"`
 }

@@ -190,8 +190,41 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	return commitResponse(result)
 }
 
-// HandleMLSCommitBuild builds one pending Commit: an Add, a Remove, or an
-// Update of this device's own leaf.
+// replaceMembers decodes the replace entries and pairs each with the key the
+// permit names for its account. The credential is checked against the account
+// here, as memberKeyPackages checks an Add's; the key is checked against the
+// permit where the Commit is built (mls.Cipher.BuildCommit). Validate has
+// already required every account to be listed.
+func replaceMembers(
+	d Deps, members []proto.MLSReplaceMember, listed []proto.ChatStateLeafReplacement,
+) ([]chatstate.ReplaceMember, proto.BaseResponse, bool) {
+	out := make([]chatstate.ReplaceMember, 0, len(members))
+	for _, m := range members {
+		kp, err := base64.StdEncoding.DecodeString(m.KeyPackageB64)
+		if err != nil {
+			return nil, chatStateInvalidInput("key_package_b64 must be valid standard Base64"), false
+		}
+		account, _, err := mls.KeyPackageIdentity(kp)
+		if err != nil {
+			return nil, chatStateFailure(d, "key package identity", err), false
+		}
+		if account != m.AccountID {
+			return nil, mlsLeafUntrustedResponse(d, "key package identity",
+				untrusted("key package names a different account than the one being replaced")), false
+		}
+		entry, ok := proto.LeafReplacementFor(listed, m.AccountID)
+		if !ok {
+			return nil, chatStateInvalidInput("replace names an account the permit does not list"), false
+		}
+		out = append(out, chatstate.ReplaceMember{
+			AccountID: m.AccountID, NewFingerprint: entry.NewSignatureKeyFP, KeyPackage: kp,
+		})
+	}
+	return out, proto.BaseResponse{}, true
+}
+
+// HandleMLSCommitBuild builds one pending Commit: an Add, a Remove, a replace
+// (design M4.4), or an Update of this device's own leaf.
 func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSCommitBuildRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSChatMaxRequestBytes)
@@ -212,6 +245,12 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		plan.AddKeyPackages = kps
 	case req.RemoveAccountIDs != nil:
 		plan.RemoveAccountIDs = req.RemoveAccountIDs
+	case req.Replace != nil:
+		members, resp, ok := replaceMembers(d, req.Replace, req.Permit.PendingLeafReplacements)
+		if !ok {
+			return resp
+		}
+		plan.Replace = members
 	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
@@ -517,6 +556,15 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		CommitPending:         status.CommitPending,
 		PendingClientCommitID: status.PendingClientCommitID,
 		RemovalLatch:          status.RemovalLatch,
+		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
 		NeedsRekey:            status.NeedsRekey,
 	}}
+}
+
+func permitLeafReplacements(entries []chatstate.LeafReplacement) []proto.ChatStateLeafReplacement {
+	out := make([]proto.ChatStateLeafReplacement, len(entries))
+	for i, e := range entries {
+		out[i] = proto.ChatStateLeafReplacement{AccountID: e.AccountID, NewSignatureKeyFP: e.NewFingerprint}
+	}
+	return out
 }

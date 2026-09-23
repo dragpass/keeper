@@ -196,12 +196,25 @@ func openChatStateStore(
 		NextHandshakeIndex:   permit.WatermarkNextHandshake,
 		NextApplicationIndex: permit.WatermarkNextApplication,
 		PendingRemovals:      permit.PendingRemovalAccountIDs,
+
+		PendingLeafReplacements: leafReplacementsOf(permit.PendingLeafReplacements),
 	}
 	if resp, ok := chatStateWatermarkNamesThisLeaf(d, store, conversationID, watermark); !ok {
 		store.Close()
 		return nil, chatstate.ServerWatermark{}, resp, false
 	}
 	return store, watermark, proto.BaseResponse{}, true
+}
+
+func leafReplacementsOf(entries []proto.ChatStateLeafReplacement) []chatstate.LeafReplacement {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]chatstate.LeafReplacement, len(entries))
+	for i, e := range entries {
+		out[i] = chatstate.LeafReplacement{AccountID: e.AccountID, NewFingerprint: e.NewSignatureKeyFP}
+	}
+	return out
 }
 
 // authorizeChatState is the permit gate without the store: decode, binding,
@@ -383,6 +396,12 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrRotationPending):
 		code, message = proto.ChatMLSErrorCodeRotationPending,
 			"a member removal is not yet applied on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrLeafReplacementPending):
+		code, message = proto.ChatMLSErrorCodeLeafReplacementPending,
+			"a device takeover is not yet applied on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrReplacementNotListed):
+		code, message = proto.ChatStateErrorCodeInvalidInput,
+			"the replace names a replacement this permit does not list"
 	case errors.Is(err, chatstate.ErrRekeyRequired):
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
