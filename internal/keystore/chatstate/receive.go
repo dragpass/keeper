@@ -212,6 +212,9 @@ func (s *Store) Receive(
 		if err != nil || !changed {
 			return err
 		}
+		if req.Handshake {
+			crashAt(CrashProcessAfterApply)
+		}
 		// One replacement carries the advanced state, the mark and the sealed
 		// copy. There is no arrangement of these three that can be observed
 		// half-done, which is what §8.4's first condition asks for.
@@ -354,6 +357,7 @@ func (s *Store) ReceiveBatch(
 		if !changed {
 			return nil
 		}
+		crashAt(CrashReceiveBatchAfterOpen)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}

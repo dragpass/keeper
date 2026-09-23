@@ -484,6 +484,7 @@ func (s *Store) ConfirmCommit(
 		if err != nil {
 			return err
 		}
+		crashAt(CrashConfirmAfterApply)
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil

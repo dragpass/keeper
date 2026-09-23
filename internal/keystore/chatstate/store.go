@@ -579,6 +579,7 @@ func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor
 	if err := s.writeRecord(p, rec, loadedGeneration); err != nil {
 		return err
 	}
+	crashAt(CrashCommitAfterFile)
 	anchor.Generation = rec.Generation
 	if rec.Epoch > anchor.Epoch {
 		// The anchor's half of Record.enterEpoch, which explains why the
