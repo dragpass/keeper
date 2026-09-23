@@ -118,6 +118,10 @@ import (
 type Session struct {
 	mu     sync.Mutex
 	handle *C.DpSession
+
+	// leafFingerprint is the active leaf NewDeviceSession opened this session
+	// as. Empty for a session built any other way.
+	leafFingerprint string
 }
 
 func Available() bool { return true }

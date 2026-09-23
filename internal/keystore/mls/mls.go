@@ -57,6 +57,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -465,12 +466,17 @@ func NewDeviceSession(store keychain.SecretStore) (*Session, DeviceLeaf, error) 
 	if !key.Usable() {
 		return nil, DeviceLeaf{}, ErrNoLeafDeclaration
 	}
+	fingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(key.PublicKey)
+	if err != nil {
+		return nil, DeviceLeaf{}, ErrLeafKeyUnreadable
+	}
 	session, err := openSession(
 		CredentialIdentity(key.AccountID, key.DeviceID), key.SecretKey, key.PublicKey, key.Declaration,
 	)
 	if err != nil {
 		return nil, DeviceLeaf{}, err
 	}
+	session.leafFingerprint = fingerprint
 	return session, DeviceLeaf{
 		AccountID: key.AccountID, DeviceID: key.DeviceID, PublicKey: key.PublicKey, Declaration: key.Declaration,
 	}, nil
@@ -555,8 +561,10 @@ func KeyPackageIdentity(keyPackage []byte) (accountID, deviceID string, err erro
 }
 
 // ErrNoKeyPackageForWelcome — this device holds no private keys for any
-// KeyPackage the Welcome is addressed to: it expired, was never kept, or was
-// already used.
+// KeyPackage the Welcome is addressed to: it expired, was never kept, was
+// already used, or belonged to a leaf a promote has since replaced
+// (chatstate.DropKeyPackagesExcept). None of these is retryable; the inviter
+// has to invite again.
 var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for this welcome")
 
 // JoinFromPool joins a conversation from a Welcome addressed to one of this
@@ -575,6 +583,12 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 // is the session's in-memory custody here, not a durable store, so its delete
 // is not a second atomicity unit: the only durable delete is the pool's, and
 // it follows the group state write.
+//
+// An entry minted under another leaf than the one this session signs as is
+// refused like a missing one (ErrNoKeyPackageForWelcome): its KeyPackage
+// embeds a leaf this device no longer signs with, so the group it joined
+// would name a key the session does not hold. The entry is kept, because a
+// refusal persists nothing; the next promote's drop removes it.
 //
 // What v would record (first-use pins) is the caller's to commit once this
 // returns nil, as with every verified operation.
@@ -597,9 +611,33 @@ func (s *Session) JoinFromPool(
 	if err != nil {
 		return err
 	}
-	err = s.installKeyPackage(entry.Private)
-	secure.Zeroize(entry.Private)
-	if err != nil {
+	defer secure.Zeroize(entry.Private)
+	return s.joinFromEntry(store, conversationID, wm, welcome, entry, v, now)
+}
+
+// joinFromEntry is JoinFromPool from the pool entry on.
+//
+// An entry with no leaf recorded was written before 0.0.50 and is still
+// used. If the active leaf has not changed since it was minted it is a valid
+// KeyPackage, and refusing it would make every invitation in flight across
+// the upgrade unjoinable. The cost is the one case the label exists for: a
+// device that promoted a rotation under 0.0.49 still holds unlabelled
+// entries of its old leaf, and a Welcome to one of them is joined with the
+// new leaf's session. That window closes at the device's next promote, which
+// drops every unlabelled entry.
+func (s *Session) joinFromEntry(
+	store *chatstate.Store,
+	conversationID string,
+	wm chatstate.ServerWatermark,
+	welcome []byte,
+	entry chatstate.KeyPackagePoolEntry,
+	v LeafVerifier,
+	now time.Time,
+) error {
+	if entry.Leaf != "" && entry.Leaf != s.leafFingerprint {
+		return ErrNoKeyPackageForWelcome
+	}
+	if err := s.installKeyPackage(entry.Private); err != nil {
 		return err
 	}
 	if err := s.JoinVerified(welcome, v); err != nil {

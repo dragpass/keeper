@@ -69,7 +69,8 @@ const (
 
 	// MLSJoin joins the conversation's group from a Welcome addressed to one
 	// of this device's KeyPackages, verifying every leaf of the tree. The
-	// group must be named by this conversation id.
+	// group must be named by this conversation id. A Welcome whose KeyPackage
+	// this device no longer holds is CHAT_MLS_WELCOME_UNUSABLE.
 	//
 	//   Inputs: permit, org_id, conversation_id, welcome_b64,
 	//           rotation_statements?
@@ -97,7 +98,9 @@ const (
 	// carve-out rather than adding one (M6.3): the response is
 	// ConversationDecryptBatchForAppDisplayResponseData, plaintext_b64 its only
 	// plaintext field. All or nothing: one message that fails refuses the
-	// batch with no plaintext and nothing written.
+	// batch with no plaintext and nothing written. On a conversation latched
+	// NeedsRekey a batch of history hits only is still answered; one new
+	// message refuses the batch with CHAT_STATE_REKEY_REQUIRED.
 	//
 	//   Inputs: permit, org_id, conversation_id,
 	//           messages[1..200] { seq, ciphertext_b64 (1..8208B) }

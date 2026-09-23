@@ -221,6 +221,11 @@ const MaxReceiveBatch = 200
 // accept sees each new plaintext before it is sealed; nil accepts everything.
 // Re-reads from the history are not shown to it: they were accepted when they
 // were first delivered.
+//
+// On a conversation latched NeedsRekey a batch made only of re-reads is still
+// answered, from the history and without MLS (loadLatched). A batch holding
+// even one sequence the history does not have is refused whole with
+// ErrRekeyRequired, by the same all-or-nothing rule.
 func (s *Store) ReceiveBatch(
 	conversationID string, wm ServerWatermark, reqs []ReceiveRequest,
 	accept func(plaintext []byte) error, cipher ReceiveCipher,
@@ -243,6 +248,24 @@ func (s *Store) ReceiveBatch(
 	}
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if errors.Is(err, ErrRekeyRequired) {
+			rec, err = s.loadLatched(p, conversationID)
+			if err != nil {
+				return err
+			}
+			for _, req := range reqs {
+				stored, ok := rec.findHistory(req.Seq)
+				if !ok {
+					return ErrRekeyRequired
+				}
+				result, err := s.reread(conversationID, rec, stored)
+				if err != nil {
+					return err
+				}
+				out = append(out, result)
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -408,13 +431,16 @@ func (s *Store) receiveOne(
 // ReadHistory answers a re-read without touching MLS at all. Receive does the
 // same thing when it is handed a sequence it already has; this is the call for
 // a caller that has no ciphertext to offer, which is the ordinary case for
-// scrolling back.
+// scrolling back. It answers on a conversation latched NeedsRekey too.
 func (s *Store) ReadHistory(
 	conversationID string, wm ServerWatermark, seq uint64,
 ) (ReceiveResult, error) {
 	var out ReceiveResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, _, err := s.loadChecked(p, conversationID, wm)
+		if errors.Is(err, ErrRekeyRequired) {
+			rec, err = s.loadLatched(p, conversationID)
+		}
 		if err != nil {
 			return err
 		}
@@ -429,6 +455,34 @@ func (s *Store) ReadHistory(
 		return ReceiveResult{}, err
 	}
 	return out, nil
+}
+
+// loadLatched reads the record of a conversation latched NeedsRekey, for a
+// history re-read and for nothing else. The recovery from the latch is a new
+// conversation, so this one stays read-only on this device, and its history is
+// what remains readable of it.
+//
+// Serving it without the rollback judgement is safe because a re-read encrypts
+// nothing, consumes no position and advances no MLS state: the latch exists to
+// stop a rewound record from reusing a (key, nonce) or re-deriving a consumed
+// key, and a re-read reaches neither. Every history entry is sealed under this
+// owner's history key with its seq, position and sender bound into the AAD
+// (history.go), so a rewound copy can only offer entries this device itself
+// sealed at their first delivery. What it can do is bring back an entry that
+// the current copy had since evicted from its ring. That is accepted: the
+// entry is genuine, and the same holds for any backup of the file.
+//
+// Nothing is written, so the latch stays set, and nothing here can clear it.
+// A file that is missing entirely has no history to offer.
+func (s *Store) loadLatched(p convPaths, conversationID string) (*Record, error) {
+	rec, err := s.readRecord(p, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, ErrRekeyRequired
+	}
+	return rec, nil
 }
 
 func (s *Store) reread(conversationID string, rec *Record, stored HistoryEntry) (ReceiveResult, error) {

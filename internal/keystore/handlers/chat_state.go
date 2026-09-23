@@ -365,8 +365,8 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 		code, message = proto.ChatStateErrorCodeConflict,
 			"the pending commit on this device has another client_commit_id"
 	case errors.Is(err, mls.ErrNoKeyPackageForWelcome):
-		code, message = proto.ChatMLSErrorCodeFailed,
-			"this device holds no key package the welcome is addressed to"
+		code, message = proto.ChatMLSErrorCodeWelcomeUnusable,
+			"this device holds no key package the welcome is addressed to; it has to be invited again"
 	case errors.Is(err, mls.ErrGroupMismatch):
 		code, message = proto.ChatMLSErrorCodeFailed,
 			"the welcome is for a different conversation"

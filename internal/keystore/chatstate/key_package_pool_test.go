@@ -2,19 +2,34 @@ package chatstate
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 var poolNow = time.Unix(1_790_000_000, 0)
 
+var (
+	poolLeafA = strings.Repeat("a1", 32)
+	poolLeafB = strings.Repeat("b2", 32)
+)
+
 func poolEntry(tag byte, notAfter time.Time) KeyPackagePoolEntry {
+	return poolEntryOf(poolLeafA, tag, notAfter)
+}
+
+func poolEntryOf(leaf string, tag byte, notAfter time.Time) KeyPackagePoolEntry {
 	return KeyPackagePoolEntry{
 		Ref:      bytes.Repeat([]byte{tag}, 32),
 		NotAfter: uint64(notAfter.Unix()),
+		Leaf:     leaf,
 		Private:  bytes.Repeat([]byte{tag ^ 0x5a}, 200),
 	}
 }
@@ -160,7 +175,10 @@ func TestKeyPackagePool_RefusesAnUnusableEntryAndWritesNothing(t *testing.T) {
 		"no private":   {Ref: good.Ref, NotAfter: good.NotAfter},
 		"no not_after": {Ref: good.Ref, Private: good.Private},
 		"huge private": {Ref: good.Ref, NotAfter: good.NotAfter, Private: make([]byte, MaxKeyPackageEntryBytes+1)},
-		"long ref":     {Ref: make([]byte, keyPackageRefMaxBytes+1), NotAfter: good.NotAfter, Private: good.Private},
+		"long ref":     {Ref: make([]byte, keyPackageRefMaxBytes+1), NotAfter: good.NotAfter, Leaf: good.Leaf, Private: good.Private},
+		"no leaf":      {Ref: good.Ref, NotAfter: good.NotAfter, Private: good.Private},
+		"upper leaf":   {Ref: good.Ref, NotAfter: good.NotAfter, Leaf: strings.ToUpper(good.Leaf), Private: good.Private},
+		"short leaf":   {Ref: good.Ref, NotAfter: good.NotAfter, Leaf: good.Leaf[:62], Private: good.Private},
 	} {
 		if err := store.AddKeyPackages([]KeyPackagePoolEntry{good, bad}, poolNow); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -206,3 +224,104 @@ func TestKeyPackagePool_PurgeRemovesThePoolAndItsKey(t *testing.T) {
 }
 
 func (e KeyPackagePoolEntry) expiresAt() time.Time { return time.Unix(int64(e.NotAfter), 0) }
+
+// writeRawPool seals body as the pool file, the way a Keeper of another
+// version would have written it.
+func writeRawPool(t *testing.T, s *Store, body string) {
+	t.Helper()
+	pool := &keyPackagePool{}
+	dec := json.NewDecoder(strings.NewReader(body))
+	if err := dec.Decode(pool); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeKeyPackagePool(s.ownerDir(), poolPath(s), pool); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A promote keeps the new leaf's entries and nothing else: the previous
+// leaf's, and an entry written before the pool recorded leaves.
+func TestKeyPackagePool_DropExceptKeepsOnlyTheNewLeaf(t *testing.T) {
+	store, secrets := newTestStore(t)
+	old1, old2 := poolEntryOf(poolLeafA, 1, poolNow.Add(time.Hour)), poolEntryOf(poolLeafA, 2, poolNow.Add(time.Hour))
+	if err := store.AddKeyPackages([]KeyPackagePoolEntry{old1, old2}, poolNow); err != nil {
+		t.Fatal(err)
+	}
+	// An entry with no leaf, as 0.0.49 wrote it: the field is absent.
+	legacy := poolEntryOf("", 3, poolNow.Add(time.Hour))
+	if err := store.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
+		pool.Entries = append(pool.Entries, KeyPackagePoolEntry{
+			Ref: legacy.Ref, NotAfter: legacy.NotAfter, Private: bytes.Clone(legacy.Private),
+		})
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.KeyPackagePoolSize(poolNow); n != 3 {
+		t.Fatalf("pool size before the promote = %d", n)
+	}
+
+	dropped, err := DropKeyPackagesExcept(secrets, testOwner, poolLeafB, poolNow)
+	if err != nil || dropped != 3 {
+		t.Fatalf("drop = %d, %v; want 3", dropped, err)
+	}
+	for _, e := range []KeyPackagePoolEntry{old1, old2, legacy} {
+		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); !errors.Is(err, ErrKeyPackageNotInPool) {
+			t.Fatalf("an entry of another leaf survived the promote: %v", err)
+		}
+	}
+
+	// Entries minted under the new leaf afterwards are untouched by a repeat.
+	fresh := poolEntryOf(poolLeafB, 4, poolNow.Add(time.Hour))
+	if err := store.AddKeyPackages([]KeyPackagePoolEntry{fresh}, poolNow); err != nil {
+		t.Fatal(err)
+	}
+	if dropped, err := DropKeyPackagesExcept(secrets, testOwner, poolLeafB, poolNow); err != nil || dropped != 0 {
+		t.Fatalf("a repeated drop = %d, %v", dropped, err)
+	}
+	got, err := store.LookupKeyPackage([][]byte{fresh.Ref}, poolNow)
+	if err != nil || got.Leaf != poolLeafB || !bytes.Equal(got.Private, fresh.Private) {
+		t.Fatalf("the new leaf's entry = %+v, %v", got.Leaf, err)
+	}
+}
+
+func TestKeyPackagePool_ALeafIsDecodedStrictly(t *testing.T) {
+	store, _ := newTestStore(t)
+	ref := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	private := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
+	entry := func(leaf string) string {
+		return `{"v":1,"entries":[{"ref":"` + ref + `","not_after":1890000000,` + leaf + `"private":"` + private + `"}]}`
+	}
+	writeRawPool(t, store, entry(`"leaf":"`+poolLeafA+`",`))
+	if got, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); err != nil || got.Leaf != poolLeafA {
+		t.Fatalf("a canonical leaf = %q, %v", got.Leaf, err)
+	}
+	writeRawPool(t, store, entry(""))
+	if got, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); err != nil || got.Leaf != "" {
+		t.Fatalf("an entry with no leaf = %q, %v", got.Leaf, err)
+	}
+	for _, bad := range []string{strings.ToUpper(poolLeafA), poolLeafA[:63], poolLeafA + "0", "zz" + poolLeafA[2:]} {
+		writeRawPool(t, store, entry(`"leaf":"`+bad+`",`))
+		if _, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); !errors.Is(err, errKeyPackagePoolMalformed) {
+			t.Fatalf("leaf %q read as %v; want malformed", bad, err)
+		}
+	}
+}
+
+// A promote on a device that never used chat does not mint a seal key.
+func TestKeyPackagePool_DropMintsNoSealKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
+	secrets := keychain.NewMemorySecretStore()
+	if dropped, err := DropKeyPackagesExcept(secrets, testOwner, poolLeafA, poolNow); err != nil || dropped != 0 {
+		t.Fatalf("drop without a seal key = %d, %v", dropped, err)
+	}
+	if _, err := loadSealKey(secrets, testOwner); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatalf("the drop minted a seal key: %v", err)
+	}
+	if _, err := DropKeyPackagesExcept(secrets, testOwner, "", poolNow); err == nil {
+		t.Fatal("a drop for no leaf was accepted")
+	}
+}

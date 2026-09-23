@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -176,6 +177,24 @@ func declareLocked(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse,
 // crash between the two leaves a pending entry identical to the active one;
 // loadMLSLeafSlots recognises that and drops it, so it never reads as a
 // declaration still waiting for the server.
+//
+// Before either, every KeyPackage pool entry not minted under the promoted
+// leaf is deleted (chatstate.DropKeyPackagesExcept). A KeyPackage embeds its
+// leaf, and the server stops serving the previous leaf's unconsumed ones once
+// the new declaration supersedes it, so both sides drop them together. A
+// Welcome already on its way to one of them fails with
+// CHAT_MLS_WELCOME_UNUSABLE and the inviter invites again.
+//
+// The pool goes first and the active slot second, under the same lock.
+// A failed pool write returns before the keyring is touched: pending is still
+// pending and a retry of the same acceptance runs the whole promote again.
+// A crash after the pool write and before the active write leaves the old leaf
+// active with its entries already gone. That is the harmless direction: the
+// server no longer serves those KeyPackages, anything generated meanwhile is
+// dropped by the retry, and no join can combine the new leaf with a
+// KeyPackage of the old one. The other order would leave exactly that
+// combination on disk — the new leaf active beside the old leaf's entries —
+// until something retried a promote that already reads as done.
 func HandleMLSLeafPromote(d Deps, req proto.MLSLeafPromoteRequest) proto.BaseResponse {
 	d.Logger.Println("mls leaf promote request processing...")
 
@@ -217,6 +236,15 @@ func promoteLocked(d Deps, accepted proto.MLSLeafAccepted) proto.BaseResponse {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "pending mls leaf declaration is unreadable")
 		}
 		if accepted.Names(decl) {
+			dropped, err := chatstate.DropKeyPackagesExcept(d.Store, pending.AccountID, decl.SignatureKeyFingerprint, d.Now())
+			if err != nil {
+				d.Logger.Println("mls leaf promote: the previous leaf's key packages could not be dropped")
+				return errs.CodeResponse(errs.ErrCodeStorageFailure,
+					"the previous leaf's key packages could not be dropped; nothing was promoted")
+			}
+			if dropped > 0 {
+				d.Logger.Printf("mls leaf promote: dropped %d key packages of the previous leaf", dropped)
+			}
 			if err := keychain.SaveMLSLeafKey(d.Store, *pending); err != nil {
 				return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf key could not be promoted")
 			}

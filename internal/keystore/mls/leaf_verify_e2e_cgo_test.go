@@ -1155,3 +1155,100 @@ func TestAStaleTreeLeafIsRefusedOnceTheGracePeriodHasPassed(t *testing.T) {
 		t.Fatalf("tree leaves moved dave's record to %+v; want %+v", rec, before)
 	}
 }
+
+// invitedFromThePool is bob with one KeyPackage in his pool and a confirmed
+// Add of it in alice's group: the Welcome and the pool entry it is addressed
+// to.
+func invitedFromThePool(t *testing.T) (g groupOf, bob *account, bobStore *chatstate.Store,
+	leaf proto.MLSLeafDeclaration, welcome []byte, entry chatstate.KeyPackagePoolEntry) {
+	t.Helper()
+	g = newGroup(t)
+	bob = newAccount(t, accountB)
+	leaf = bob.declare(t, device1, proto.MLSLeafReasonEnroll, time.Now().Unix())
+	kps := bob.keyPackagesFor(t, device1, 1)
+	bobStore = openStore(t, bob.store, bob.id)
+	in, err := g.add(g.alice.verifier(), kps[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.confirm(t, in.ClientCommitID)
+	refs, err := mls.WelcomeKeyPackageRefsForTest(in.Welcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err = bobStore.LookupKeyPackage(refs, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g, bob, bobStore, leaf, in.Welcome, entry
+}
+
+func assertJoinedAtEpochOne(t *testing.T, s *mls.Session, store *chatstate.Store) {
+	t.Helper()
+	if epoch, err := s.Epoch(); err != nil || epoch != 1 {
+		t.Fatalf("epoch = %d, %v", epoch, err)
+	}
+	if blob, err := store.LoadGroupState(conv, noWatermark); err != nil || len(blob) == 0 {
+		t.Fatalf("the joined group was not persisted: %v", err)
+	}
+	if n := poolSize(t, store); n != 0 {
+		t.Fatalf("pool holds %d after the join, want the entry used", n)
+	}
+}
+
+// An entry labelled with the leaf the session signs as is the ordinary case.
+func TestAPoolEntryOfTheActiveLeafIsJoined(t *testing.T) {
+	_, bob, bobStore, leaf, welcome, entry := invitedFromThePool(t)
+	if entry.Leaf != leaf.SignatureKeyFingerprint {
+		t.Fatalf("the pool entry names leaf %q, want the active %q", entry.Leaf, leaf.SignatureKeyFingerprint)
+	}
+	s := bob.session(t)
+	if err := s.JoinFromPool(bobStore, conv, noWatermark, welcome, bob.verifier(), time.Now()); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	assertJoinedAtEpochOne(t, s, bobStore)
+}
+
+// An entry labelled with another leaf is refused like a missing one, and the
+// refusal persists nothing: no group, no pin, and the entry is still there
+// for the next promote to drop.
+func TestAPoolEntryOfAnotherLeafIsRefusedAndKept(t *testing.T) {
+	g, bob, bobStore, _, welcome, entry := invitedFromThePool(t)
+	now := time.Now()
+	if err := bobStore.DeleteKeyPackage(entry.Ref, now); err != nil {
+		t.Fatal(err)
+	}
+	entry.Leaf = strings.Repeat("ab", 32)
+	if err := bobStore.AddKeyPackages([]chatstate.KeyPackagePoolEntry{entry}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	v := bob.verifier()
+	if err := bob.session(t).JoinFromPool(bobStore, conv, noWatermark, welcome, v, now); !errors.Is(err, mls.ErrNoKeyPackageForWelcome) {
+		t.Fatalf("join from another leaf's entry = %v; want ErrNoKeyPackageForWelcome", err)
+	}
+	if blob, err := bobStore.LoadGroupState(conv, noWatermark); err != nil || len(blob) != 0 {
+		t.Fatalf("the refused join persisted a group: %d bytes, %v", len(blob), err)
+	}
+	if err := v.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bob.pinOf(t, g.alice.id); ok {
+		t.Fatal("the refused join staged a pin")
+	}
+	if n := poolSize(t, bobStore); n != 1 {
+		t.Fatalf("pool holds %d after the refusal, want the entry kept", n)
+	}
+}
+
+// An entry with no leaf recorded, as a Keeper before 0.0.50 wrote it, is still
+// joined: the active leaf has not changed since it was minted.
+func TestAnUnlabelledPoolEntryIsStillJoined(t *testing.T) {
+	_, bob, bobStore, _, welcome, entry := invitedFromThePool(t)
+	entry.Leaf = ""
+	s := bob.session(t)
+	if err := s.JoinFromEntryForTest(bobStore, conv, noWatermark, welcome, entry, bob.verifier(), time.Now()); err != nil {
+		t.Fatalf("join from an unlabelled entry: %v", err)
+	}
+	assertJoinedAtEpochOne(t, s, bobStore)
+}

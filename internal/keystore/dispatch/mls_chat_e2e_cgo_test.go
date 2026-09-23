@@ -625,3 +625,115 @@ func TestMLSChatE2E_StatusReportsARewindLatch(t *testing.T) {
 	// Bob's copy is his own and is not affected.
 	c.bob.assertStatus(c.bob.status(), 1, "")
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Leaf rotation and the KeyPackage pool.
+// ────────────────────────────────────────────────────────────────────────
+
+func (k *keeper) poolSize() int {
+	k.t.Helper()
+	store, err := chatstate.Open(k.store, k.id)
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	defer store.Close()
+	n, err := store.KeyPackagePoolSize(time.Now())
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	return n
+}
+
+// Bob's KeyPackage is handed to Alice, and Bob rotates before her Welcome
+// arrives. The promote dropped the old leaf's pool entry, so the Welcome
+// cannot be joined: a distinct code that says to be invited again, and
+// nothing written.
+func TestMLSChatE2E_AWelcomeForAKeyPackageOfTheOldLeafIsUnusable(t *testing.T) {
+	e2eStateRoot(t)
+	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
+	kp := bob.keyPackage()
+	id := alice.nextCommitID()
+	built := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{kp},
+	}))
+	alice.confirm(id, proto.MLSCommitOutcomeAccepted, "")
+
+	bob.declare(proto.MLSLeafReasonRotate, time.Now().Unix()+60)
+	if n := bob.poolSize(); n != 0 {
+		t.Fatalf("bob's pool holds %d entries of the old leaf after the promote", n)
+	}
+	join := proto.MLSJoinRequest{Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64}
+	bob.refused(proto.MLSJoin, join, proto.ChatMLSErrorCodeWelcomeUnusable)
+	if got := bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || got.Epoch != 0 {
+		t.Fatalf("bob's status after the refused join = %+v", got)
+	}
+	if _, err := keychain.GetPeerKeyPin(bob.store, bob.id, alice.id); err == nil {
+		t.Fatal("the refused join recorded a pin")
+	}
+
+	// A KeyPackage of the new leaf is kept.
+	bob.keyPackage()
+	if n := bob.poolSize(); n != 1 {
+		t.Fatalf("bob's pool holds %d after a new generation, want 1", n)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// A conversation latched NeedsRekey is read-only on this device.
+// ────────────────────────────────────────────────────────────────────────
+
+// Alice read one message from Bob before her record was found rewound. That
+// message stays readable from her history; everything that touches MLS is
+// refused with CHAT_STATE_REKEY_REQUIRED, and so is a page that mixes the two.
+func TestMLSChatE2E_ALatchedConversationKeepsItsHistoryReadable(t *testing.T) {
+	c := newDM(t)
+	read := c.send(c.bob, 1, 1, "before the rewind")
+	assertShown(t, c.alice.decrypt(read), 0, "before the rewind", c.bob, false)
+	unread := c.send(c.bob, 2, 1, "after the rewind")
+
+	ahead := c.alice.permit()
+	ahead.WatermarkEpoch, ahead.WatermarkNextApplication = 9, 1
+	if got := c.alice.statusWith(ahead); !got.NeedsRekey {
+		t.Fatalf("status of a rewound record = %+v", got)
+	}
+
+	assertShown(t, c.alice.decrypt(read), 0, "before the rewind", c.bob, true)
+	c.alice.refused(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(unread), proto.ChatStateErrorCodeRekeyRequired)
+	resp := c.alice.call(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(read, unread))
+	if resp.Success || string(resp.ErrorCode) != proto.ChatStateErrorCodeRekeyRequired || resp.Data != nil {
+		t.Fatalf("a mixed batch under the latch = %+v", resp)
+	}
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(3), 1, "x"), proto.ChatStateErrorCodeRekeyRequired)
+	c.alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, UpdateSelf: true,
+	}, proto.ChatStateErrorCodeRekeyRequired)
+	update := c.bob.buildUpdate(1)
+	c.bob.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.refused(proto.MLSProcess, c.alice.processRequest(c.nextSeq(), 2, update.CommitB64),
+		proto.ChatStateErrorCodeRekeyRequired)
+
+	// A Welcome to one of Alice's KeyPackages, for the latched conversation:
+	// the join is refused on the latch and the pool entry is kept.
+	carol := newKeeper(t, "c3333333-3333-4333-8333-333333333333")
+	id := carol.nextCommitID()
+	invite := commitOf(carol.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: carol.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{c.alice.keyPackage()},
+	}))
+	carol.confirm(id, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.refused(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: invite.WelcomeB64,
+	}, proto.ChatStateErrorCodeRekeyRequired)
+	if n := c.alice.poolSize(); n != 1 {
+		t.Fatalf("alice's pool holds %d after the refused join, want the entry kept", n)
+	}
+
+	// The refusals changed nothing: the history is still there and the
+	// latch still holds.
+	assertShown(t, c.alice.decrypt(read), 0, "before the rewind", c.bob, true)
+	if got := c.alice.status(); !got.NeedsRekey {
+		t.Fatalf("the latch did not hold: %+v", got)
+	}
+}
