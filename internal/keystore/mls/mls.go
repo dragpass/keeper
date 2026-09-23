@@ -599,9 +599,10 @@ type Leaf struct {
 	// member's replacement leaf in an update path. It is false for a leaf a
 	// Welcome's tree already holds, which the members accepted when it
 	// entered. Freshness checks — is this the newest declaration seen for the
-	// account — apply only to entering leaves: a member who has since rotated
-	// still sits in older groups under the old leaf, and refusing that leaf in
-	// a Welcome would make every such group unjoinable.
+	// account, has it expired — apply in full only to entering leaves: a member
+	// who has since rotated still sits in older groups under the old leaf until
+	// it replaces it there, so a Welcome's tree is refused a superseded leaf
+	// only after a grace period, and never an expired one.
 	Entering bool
 }
 
@@ -667,8 +668,9 @@ func (s *Session) ProcessVerified(message []byte, v LeafVerifier) (Processed, er
 // the committer's, every other member's, and this device's own. A joiner has
 // no earlier state that vouched for any of them, so every leaf gets the
 // binding checks. None of them is entering: the tree is the group as its
-// members already accepted it, so no freshness check runs and nothing here
-// advances the newest-declaration record.
+// members already accepted it, so no expiry check runs, a superseded
+// declaration is refused only once its grace period has passed, and nothing
+// here advances the newest-declaration record.
 func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	leaves, err := s.joinCollect(welcome)
 	if err != nil {

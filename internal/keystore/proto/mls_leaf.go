@@ -39,6 +39,13 @@ const (
 	// MLSLeafMaxValiditySeconds bounds not_after - not_before. 30 days is a
 	// starting value, shared with ariadne, not a measured one.
 	MLSLeafMaxValiditySeconds = 2592000
+
+	// MLSLeafTreeGraceSeconds is how long after a Keeper first accepts an
+	// account's newer declaration it still takes that account's older leaf in
+	// a Welcome's tree. The window is for the rotating device to replace its
+	// leaf in its existing groups with an Update Commit. 7 days is a starting
+	// value, not a measured one.
+	MLSLeafTreeGraceSeconds = 604800
 )
 
 // MLSLeafDeclaration is the signed statement as it crosses the wire.
