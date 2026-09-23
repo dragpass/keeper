@@ -492,3 +492,31 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		Items:        items,
 	}}
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Status.
+// ────────────────────────────────────────────────────────────────────────
+
+// HandleMLSConversationStatus reports the conversation's state without
+// changing it.
+func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSConversationStatusRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	status, err := c.store.Status(c.conv, c.wm, mls.NewCipher(c.session, nil))
+	if err != nil {
+		return chatStateFailure(d, "mls conversation status", err)
+	}
+	return proto.BaseResponse{Success: true, Data: proto.MLSConversationStatusResponseData{
+		Epoch:                 status.Epoch,
+		HasGroupState:         status.HasGroupState,
+		CommitPending:         status.CommitPending,
+		PendingClientCommitID: status.PendingClientCommitID,
+		RemovalLatch:          status.RemovalLatch,
+		NeedsRekey:            status.NeedsRekey,
+	}}
+}

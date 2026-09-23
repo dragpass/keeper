@@ -22,5 +22,6 @@ func mlsChatActions() map[string]actionHandlerFunc {
 		proto.MLSJoin:                      handlers.HandleMLSJoin,
 		proto.MLSEncrypt:                   handlers.HandleMLSEncrypt,
 		proto.MLSDecryptBatchForAppDisplay: handlers.HandleMLSDecryptBatchForAppDisplay,
+		proto.MLSConversationStatus:        handlers.HandleMLSConversationStatus,
 	}
 }

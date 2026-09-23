@@ -210,7 +210,11 @@ func newDM(t *testing.T) *dm {
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}
+	if got := bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey {
+		t.Fatalf("bob's status before anything = %+v", got)
+	}
 	built := commitOf(alice.must(proto.MLSGroupCreate, create))
+	alice.assertStatus(alice.status(), 0, id)
 	if !built.Created || built.ExpectedEpoch != 0 || built.WelcomeB64 == "" || built.WelcomeReleasable {
 		t.Fatalf("group create = %+v", built)
 	}
@@ -231,6 +235,8 @@ func newDM(t *testing.T) *dm {
 	if joined.Epoch != 1 {
 		t.Fatalf("bob joined at epoch %d, want 1", joined.Epoch)
 	}
+	alice.assertStatus(alice.status(), 1, "")
+	bob.assertStatus(bob.status(), 1, "")
 	return &dm{alice: alice, bob: bob, seq: 1}
 }
 
@@ -282,6 +288,8 @@ func TestMLSChatE2E_ACommitRaceConverges(t *testing.T) {
 	c := newDM(t)
 	aliceCommit := c.alice.buildUpdate(1)
 	bobCommit := c.bob.buildUpdate(1)
+	c.alice.assertStatus(c.alice.status(), 1, aliceCommit.ClientCommitID)
+	c.bob.assertStatus(c.bob.status(), 1, bobCommit.ClientCommitID)
 
 	// Until the verdict arrives neither may build again.
 	c.bob.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
@@ -301,6 +309,8 @@ func TestMLSChatE2E_ACommitRaceConverges(t *testing.T) {
 	if won.Epoch != 2 || lost.Epoch != 2 || lost.WelcomeReleasable || won.WelcomeReleasable {
 		t.Fatalf("after the race: alice %+v, bob %+v", won, lost)
 	}
+	c.alice.assertStatus(c.alice.status(), 2, "")
+	c.bob.assertStatus(c.bob.status(), 2, "")
 	c.nextSeq()
 
 	next := c.bob.buildUpdate(2)
@@ -344,6 +354,8 @@ func TestMLSChatE2E_ARotatedLeafEntersThroughUpdateSelf(t *testing.T) {
 	update := c.bob.buildUpdate(1)
 	c.bob.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.process(c.nextSeq(), 2, update.CommitB64)
+	c.alice.assertStatus(c.alice.status(), 2, "")
+	c.bob.assertStatus(c.bob.status(), 2, "")
 
 	after, _, err := keychain.GetMLSLeafNewest(c.alice.store, c.alice.id, c.bob.id)
 	if err != nil {
@@ -479,6 +491,7 @@ func TestMLSChatE2E_AReReadComesFromHistory(t *testing.T) {
 	row := c.send(c.alice, 1, 1, "keep me")
 	assertShown(t, c.bob.decrypt(row), 0, "keep me", c.alice, false)
 	assertShown(t, c.bob.decrypt(row), 0, "keep me", c.alice, true)
+	c.bob.assertStatus(c.bob.status(), 1, "")
 
 	// Still readable after the group has moved on.
 	update := c.alice.buildUpdate(1)
@@ -514,6 +527,8 @@ func TestMLSChatE2E_ADisplayBatchIsAllOrNothing(t *testing.T) {
 // permit that stops naming him. Her own confirmed Remove lifts it.
 func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	c := newDM(t)
+	// Status shows the latch before anything is tried.
+	c.alice.assertStatus(c.alice.status(c.bob.id), 1, "", c.bob.id)
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob", c.bob.id),
 		proto.ChatMLSErrorCodeRotationPending)
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
@@ -526,7 +541,9 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	// Pending is not confirmed: still latched, and now also waiting.
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
 		proto.ChatMLSErrorCodeCommitPending)
+	c.alice.assertStatus(c.alice.status(c.bob.id), 1, remove.ClientCommitID, c.bob.id)
 	c.alice.confirm(remove.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.assertStatus(c.alice.status(c.bob.id), 2, "")
 
 	sent := c.alice.must(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 2, "bob is gone", c.bob.id)).
 		Data.(proto.MLSEncryptResponseData)
@@ -557,4 +574,54 @@ func TestMLSChatE2E_MessagesCrossAfterARaceAndARotation(t *testing.T) {
 	c.alice.process(c.nextSeq(), 3, update.CommitB64)
 	assertShown(t, c.alice.decrypt(c.send(c.bob, 2, 3, "new key")), 0, "new key", c.bob, false)
 	assertShown(t, c.bob.decrypt(c.send(c.alice, 3, 3, "got it")), 0, "got it", c.alice, false)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Status.
+// ────────────────────────────────────────────────────────────────────────
+
+func (k *keeper) statusWith(p proto.ChatStatePermit) proto.MLSConversationStatusResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSConversationStatus, proto.MLSConversationStatusRequest{
+		Permit: p, OrgID: e2eOrg, ConversationID: e2eConv,
+	}).Data.(proto.MLSConversationStatusResponseData)
+}
+
+func (k *keeper) status(removals ...string) proto.MLSConversationStatusResponseData {
+	k.t.Helper()
+	return k.statusWith(k.permit(removals...))
+}
+
+func (k *keeper) assertStatus(got proto.MLSConversationStatusResponseData, epoch uint64, pendingID string, latch ...string) {
+	k.t.Helper()
+	if latch == nil {
+		latch = []string{}
+	}
+	if got.NeedsRekey || !got.HasGroupState || got.Epoch != epoch || got.CommitPending != (pendingID != "") ||
+		got.PendingClientCommitID != pendingID || strings.Join(got.RemovalLatch, ",") != strings.Join(latch, ",") ||
+		got.RemovalLatch == nil {
+		k.t.Fatalf("%s status = %+v; want epoch %d, pending %q, latch %v", k.id[:8], got, epoch, pendingID, latch)
+	}
+}
+
+// A rewind — here, a server that has accepted a send this record does not
+// know about — latches the conversation. Status says so before a send is
+// tried, and every operation on it is refused with CHAT_STATE_REKEY_REQUIRED.
+func TestMLSChatE2E_StatusReportsARewindLatch(t *testing.T) {
+	c := newDM(t)
+	ahead := c.alice.permit()
+	ahead.WatermarkEpoch, ahead.WatermarkNextApplication = 9, 1
+	if got := c.alice.statusWith(ahead); !got.NeedsRekey || got.HasGroupState || got.RemovalLatch == nil {
+		t.Fatalf("status of a rewound record = %+v", got)
+	}
+	if got := c.alice.status(); !got.NeedsRekey {
+		t.Fatalf("the latch did not hold for the next permit: %+v", got)
+	}
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"), proto.ChatStateErrorCodeRekeyRequired)
+	c.alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, UpdateSelf: true,
+	}, proto.ChatStateErrorCodeRekeyRequired)
+	// Bob's copy is his own and is not affected.
+	c.bob.assertStatus(c.bob.status(), 1, "")
 }

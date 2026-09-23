@@ -105,4 +105,17 @@ const (
 	//             sender_device_id, epoch, sender_leaf_index, content_type,
 	//             generation, from_history } }
 	MLSDecryptBatchForAppDisplay = "mls_decrypt_batch_for_app_display"
+
+	// MLSConversationStatus reports this device's copy of the conversation:
+	// the confirmed epoch, whether a Commit is pending and under which
+	// client_commit_id, the accounts the S-1 latch would refuse a send for
+	// right now, whether the record is latched NeedsRekey, and whether a group
+	// exists at all. Read-only: it writes nothing of its own, and returns no
+	// secret and nothing derived from one.
+	//
+	//   Inputs: permit, org_id, conversation_id
+	//   Output: { epoch, has_group_state, commit_pending,
+	//             pending_client_commit_id, removal_latch_account_ids,
+	//             needs_rekey }
+	MLSConversationStatus = "mls_conversation_status"
 )

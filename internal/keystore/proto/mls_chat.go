@@ -502,3 +502,34 @@ type MLSDisplayItem struct {
 	Generation      uint64 `json:"generation"`
 	FromHistory     bool   `json:"from_history"`
 }
+
+// MLSConversationStatusRequest asks where this device's copy of the
+// conversation stands. Read-only.
+type MLSConversationStatusRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+}
+
+func (r MLSConversationStatusRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSConversationStatusRequest) Validate() error {
+	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+}
+
+// MLSConversationStatusResponseData lets the app say "참여자 변경 반영 중"
+// before it tries to send, rather than after a refusal. RemovalLatch is the
+// accounts a send would be refused for now (CHAT_MLS_ROTATION_PENDING), judged
+// on the confirmed roster against this permit's list; empty, never null. When
+// NeedsRekey is true the record is latched for a rewind and the other fields
+// are zero: nothing behind the latch is trusted to say anything.
+type MLSConversationStatusResponseData struct {
+	Epoch                 uint64   `json:"epoch"`
+	HasGroupState         bool     `json:"has_group_state"`
+	CommitPending         bool     `json:"commit_pending"`
+	PendingClientCommitID string   `json:"pending_client_commit_id"`
+	RemovalLatch          []string `json:"removal_latch_account_ids"`
+	NeedsRekey            bool     `json:"needs_rekey"`
+}

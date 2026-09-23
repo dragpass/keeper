@@ -76,6 +76,9 @@ func mlsChatCases() []mlsChatCase {
 				PlaintextB64: base64.StdEncoding.EncodeToString([]byte("hello")),
 			}
 		}},
+		{proto.MLSConversationStatus, HandleMLSConversationStatus, func(p proto.ChatStatePermit) any {
+			return proto.MLSConversationStatusRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
+		}},
 		{proto.MLSDecryptBatchForAppDisplay, HandleMLSDecryptBatchForAppDisplay, func(p proto.ChatStatePermit) any {
 			return proto.MLSDecryptBatchForAppDisplayRequest{
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,

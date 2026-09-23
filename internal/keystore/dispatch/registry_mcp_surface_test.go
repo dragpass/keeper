@@ -113,6 +113,7 @@ var mlsChatActionNames = []string{
 	proto.MLSJoin,
 	proto.MLSEncrypt,
 	proto.MLSDecryptBatchForAppDisplay,
+	proto.MLSConversationStatus,
 }
 
 func TestMCPCallableActions_ExcludeTheMLSChatActions(t *testing.T) {
