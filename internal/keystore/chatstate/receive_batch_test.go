@@ -78,3 +78,58 @@ func TestARefusedReceiveBatchWritesNothing(t *testing.T) {
 		t.Fatal("a batch naming one seq twice was accepted")
 	}
 }
+
+// A conversation latched NeedsRekey stays readable from its history and from
+// nothing else: re-reads are answered without MLS, anything the history does
+// not hold refuses the whole batch, and nothing clears the latch.
+func TestALatchedConversationStillReadsItsHistory(t *testing.T) {
+	store, secrets := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+	in := inbound(3, 0, "before the rewind")
+	in.opened.SenderAccountID, in.opened.SenderDeviceID = "acct", "dev"
+	if _, err := store.ReceiveBatch(testConvA, noWatermark, batchOf(1, 2), nil, in); err != nil {
+		t.Fatal(err)
+	}
+	// A server that accepted positions this record never saw: the next load
+	// latches.
+	ahead := ServerWatermark{Epoch: 9, NextApplicationIndex: 1}
+	if _, err := store.Reserve(testConvA, 1, ahead); !errors.Is(err, ErrRekeyRequired) {
+		t.Fatalf("reserve on a rewound record = %v", err)
+	}
+	before := readRecordForTest(t, store, testConvA).Generation
+	opens := in.opens
+
+	got, err := store.ReceiveBatch(testConvA, noWatermark, batchOf(1, 2), nil, in)
+	if err != nil || len(got) != 2 || !got[0].FromHistory || !got[1].FromHistory ||
+		string(got[0].Plaintext) != "before the rewind" || got[1].Sender != (Sender{"acct", "dev"}) {
+		t.Fatalf("a history-only batch under the latch = %+v, %v", got, err)
+	}
+	if one, err := store.ReadHistory(testConvA, noWatermark, 2); err != nil || !one.FromHistory {
+		t.Fatalf("read history under the latch = %+v, %v", one, err)
+	}
+	if _, err := store.ReadHistory(testConvA, noWatermark, 7); !errors.Is(err, ErrHistoryUnavailable) {
+		t.Fatalf("read history of an unknown seq under the latch = %v", err)
+	}
+
+	for name, reqs := range map[string][]ReceiveRequest{
+		"a new message":           batchOf(3),
+		"history and one new one": batchOf(1, 3),
+	} {
+		if got, err := store.ReceiveBatch(testConvA, noWatermark, reqs, nil, in); !errors.Is(err, ErrRekeyRequired) || got != nil {
+			t.Fatalf("%s under the latch = %+v, %v; want ErrRekeyRequired and nothing", name, got, err)
+		}
+	}
+	if _, err := store.Receive(testConvA, noWatermark, ReceiveRequest{Seq: 3, Message: []byte("wire")}, in); !errors.Is(err, ErrRekeyRequired) {
+		t.Fatalf("a single receive under the latch = %v", err)
+	}
+	if in.opens != opens {
+		t.Fatalf("MLS was asked to open %d messages under the latch", in.opens-opens)
+	}
+	if rec := readRecordForTest(t, store, testConvA); rec.Generation != before {
+		t.Fatal("a read under the latch wrote the record")
+	}
+	anchor, err := loadAnchor(secrets, store.paths(testConvA).tag)
+	if err != nil || !anchor.NeedsRekey {
+		t.Fatalf("the latch did not hold: %+v, %v", anchor, err)
+	}
+}

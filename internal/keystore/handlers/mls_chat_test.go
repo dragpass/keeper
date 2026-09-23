@@ -303,7 +303,7 @@ func TestMLSChat_FailuresMapToTheirProtocolCodes(t *testing.T) {
 		{chatstate.ErrGenerationUnknown, proto.ChatMLSErrorCodeFailed},
 		{chatstate.ErrBurnForward, proto.ChatMLSErrorCodeFailed},
 		{mls.ErrFailed, proto.ChatMLSErrorCodeFailed},
-		{mls.ErrNoKeyPackageForWelcome, proto.ChatMLSErrorCodeFailed},
+		{mls.ErrNoKeyPackageForWelcome, proto.ChatMLSErrorCodeWelcomeUnusable},
 		{mls.ErrGroupMismatch, proto.ChatMLSErrorCodeFailed},
 		{mls.ErrUnavailable, proto.ChatMLSErrorCodeCapabilityRequired},
 		{chatstate.ErrGroupExists, proto.ChatStateErrorCodeConflict},

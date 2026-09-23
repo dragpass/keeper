@@ -11,9 +11,10 @@
 //
 //	<owner dir>/key-packages.pool   magic "DPKP" | version | IV | AES-GCM(body)
 //
-// The body is {"v":1,"entries":[{"ref","not_after","private"}]}. ref is the
-// KeyPackage reference a Welcome names, not_after the KeyPackage's own end,
-// and private the opaque entry the MLS library produced. The file is sealed
+// The body is {"v":1,"entries":[{"ref","not_after","leaf","private"}]}. ref is
+// the KeyPackage reference a Welcome names, not_after the KeyPackage's own end,
+// leaf the signature key fingerprint of the leaf the KeyPackage embeds, and
+// private the opaque entry the MLS library produced. The file is sealed
 // under a subkey of the owner's seal key, so purging the owner (which deletes
 // the seal key) makes a leftover copy unopenable, and it is replaced whole
 // through replaceFile like every record here.
@@ -39,6 +40,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
@@ -77,7 +79,17 @@ var (
 type KeyPackagePoolEntry struct {
 	Ref      []byte `json:"ref"`
 	NotAfter uint64 `json:"not_after"`
-	Private  []byte `json:"private"`
+
+	// Leaf is the lowercase hex signature key fingerprint of the leaf the
+	// KeyPackage was minted under. An entry written before 0.0.50 has none,
+	// and nothing can tell which leaf it belongs to: it is treated as
+	// belonging to no leaf, so the next promote drops it
+	// (DropKeyPackagesExcept). Keeping it instead could hand a join a
+	// KeyPackage of a leaf that is no longer active. omitempty is what keeps
+	// that old shape readable; this version never writes an empty one.
+	Leaf string `json:"leaf,omitempty"`
+
+	Private []byte `json:"private"`
 }
 
 type keyPackagePool struct {
@@ -97,7 +109,7 @@ func (p *keyPackagePool) wipe() {
 // through. Expired entries are dropped on the same write.
 func (s *Store) AddKeyPackages(entries []KeyPackagePoolEntry, now time.Time) error {
 	for _, e := range entries {
-		if len(e.Ref) == 0 || len(e.Ref) > keyPackageRefMaxBytes ||
+		if len(e.Ref) == 0 || len(e.Ref) > keyPackageRefMaxBytes || e.Leaf == "" || !validLeafFingerprint(e.Leaf) ||
 			len(e.Private) == 0 || len(e.Private) > MaxKeyPackageEntryBytes || e.NotAfter == 0 {
 			return errors.New("key package pool entry is unusable")
 		}
@@ -107,7 +119,7 @@ func (s *Store) AddKeyPackages(entries []KeyPackagePoolEntry, now time.Time) err
 		for _, e := range entries {
 			pool.remove(e.Ref)
 			pool.Entries = append(pool.Entries, KeyPackagePoolEntry{
-				Ref: bytes.Clone(e.Ref), NotAfter: e.NotAfter, Private: bytes.Clone(e.Private),
+				Ref: bytes.Clone(e.Ref), NotAfter: e.NotAfter, Leaf: e.Leaf, Private: bytes.Clone(e.Private),
 			})
 		}
 		pool.bound()
@@ -126,7 +138,7 @@ func (s *Store) LookupKeyPackage(refs [][]byte, now time.Time) (KeyPackagePoolEn
 			for _, e := range pool.Entries {
 				if bytes.Equal(e.Ref, ref) && !e.expired(now) {
 					found = KeyPackagePoolEntry{
-						Ref: bytes.Clone(e.Ref), NotAfter: e.NotAfter, Private: bytes.Clone(e.Private),
+						Ref: bytes.Clone(e.Ref), NotAfter: e.NotAfter, Leaf: e.Leaf, Private: bytes.Clone(e.Private),
 					}
 					return false, nil
 				}
@@ -148,6 +160,60 @@ func (s *Store) DeleteKeyPackage(ref []byte, now time.Time) error {
 	})
 }
 
+// DropKeyPackagesExcept deletes every entry not minted under leaf, the
+// signature key fingerprint of the leaf a promote is making active, and
+// reports how many it dropped. A KeyPackage embeds its leaf, so once another
+// leaf is active its entries are for a leaf that no longer signs; the server
+// stops serving that leaf's KeyPackages when its declaration is superseded, so
+// both sides drop them. A Welcome already on its way to one can no longer be
+// joined (ErrKeyPackageNotInPool), and the inviter has to invite again.
+//
+// It keeps entries of leaf itself rather than deleting only the previous
+// leaf's: that is the same set on an ordinary promote, and it also drops
+// entries of no leaf and of any older one.
+//
+// An owner with no seal key has no pool that could be opened, and none is
+// created for it: a promote on a device that has never used chat does not
+// mint a seal key as a side effect.
+func DropKeyPackagesExcept(secrets keychain.SecretStore, ownerAccountID, leaf string, now time.Time) (int, error) {
+	if leaf == "" || !validLeafFingerprint(leaf) {
+		return 0, errors.New("key package pool leaf is not a fingerprint")
+	}
+	master, err := loadSealKey(secrets, ownerAccountID)
+	if errors.Is(err, keychain.ErrSecretNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	secure.Zeroize(master)
+	s, err := Open(secrets, ownerAccountID)
+	if err != nil {
+		return 0, err
+	}
+	defer s.Close()
+	dropped := 0
+	err = s.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
+		before := len(pool.Entries)
+		pool.prune(now)
+		kept := pool.Entries[:0]
+		for _, e := range pool.Entries {
+			if e.Leaf != leaf {
+				secure.Zeroize(e.Private)
+				continue
+			}
+			kept = append(kept, e)
+		}
+		pool.Entries = kept
+		dropped = before - len(kept)
+		return dropped > 0, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return dropped, nil
+}
+
 // KeyPackagePoolSize reports how many unexpired entries the pool holds. It is
 // for tests and diagnostics; the count is not secret, the entries are.
 func (s *Store) KeyPackagePoolSize(now time.Time) (int, error) {
@@ -161,6 +227,26 @@ func (s *Store) KeyPackagePoolSize(now time.Time) (int, error) {
 		return false, nil
 	})
 	return n, err
+}
+
+// validLeafFingerprint accepts "" (no leaf recorded) or exactly 64 lowercase
+// hex digits, the only spelling crypto.MLSLeafSignatureKeyFingerprint makes,
+// so one leaf never has two spellings that compare unequal. An explicit
+// "leaf":"" reads the same as an absent one, which is the direction that
+// drops the entry.
+func validLeafFingerprint(leaf string) bool {
+	if leaf == "" {
+		return true
+	}
+	if len(leaf) != 64 {
+		return false
+	}
+	for i := 0; i < len(leaf); i++ {
+		if c := leaf[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (e KeyPackagePoolEntry) expired(now time.Time) bool {
@@ -266,6 +352,12 @@ func (s *Store) readKeyPackagePool(dir, path string) (*keyPackagePool, error) {
 	if err := dec.Decode(&pool); err != nil || dec.More() || pool.V != keyPackagePoolVersion {
 		pool.wipe()
 		return nil, errKeyPackagePoolMalformed
+	}
+	for _, e := range pool.Entries {
+		if !validLeafFingerprint(e.Leaf) {
+			pool.wipe()
+			return nil, errKeyPackagePoolMalformed
+		}
 	}
 	return &pool, nil
 }

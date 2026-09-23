@@ -39,9 +39,17 @@ const (
 
 	// ChatMLSErrorCodeFailed — the MLS operation itself failed or refused: a
 	// message that does not open, a declaration that does not match the
-	// position, a Welcome for another conversation or with no KeyPackage of
-	// this device, a group state that does not exist yet. Nothing was written.
+	// position, a Welcome for another conversation, a group state that does
+	// not exist yet. Nothing was written.
 	ChatMLSErrorCodeFailed = "CHAT_MLS_FAILED"
+
+	// ChatMLSErrorCodeWelcomeUnusable — this device holds no private keys for
+	// any KeyPackage the Welcome is addressed to: the KeyPackage expired, was
+	// already used, or belonged to a leaf a promote has since replaced. The
+	// invitation cannot be used on this device, and retrying cannot change
+	// that; the member has to be invited again with a KeyPackage of the
+	// current leaf. Nothing was written and the pool is unchanged.
+	ChatMLSErrorCodeWelcomeUnusable = "CHAT_MLS_WELCOME_UNUSABLE"
 )
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in

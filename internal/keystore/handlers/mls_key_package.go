@@ -119,6 +119,11 @@ func generateKeyPackagesLocked(d Deps, req proto.MLSKeyPackageGenerateRequest) p
 			secure.Zeroize(e.Private)
 		}
 	}()
+	// The pool records the leaf so a promote can drop exactly the entries
+	// that stop being usable with it.
+	for i := range pool {
+		pool[i].Leaf = fingerprint
+	}
 
 	store, err := chatstate.Open(d.Store, req.AccountID)
 	if err != nil {

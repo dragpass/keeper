@@ -555,8 +555,10 @@ func KeyPackageIdentity(keyPackage []byte) (accountID, deviceID string, err erro
 }
 
 // ErrNoKeyPackageForWelcome — this device holds no private keys for any
-// KeyPackage the Welcome is addressed to: it expired, was never kept, or was
-// already used.
+// KeyPackage the Welcome is addressed to: it expired, was never kept, was
+// already used, or belonged to a leaf a promote has since replaced
+// (chatstate.DropKeyPackagesExcept). None of these is retryable; the inviter
+// has to invite again.
 var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for this welcome")
 
 // JoinFromPool joins a conversation from a Welcome addressed to one of this
