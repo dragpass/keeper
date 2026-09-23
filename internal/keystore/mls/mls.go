@@ -421,6 +421,14 @@ func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
 
 func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
 
+func (c *Cipher) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	return c.session.ExportSecret(label, context, n)
+}
+
+func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	return c.session.ExportPendingSecret(label, context, n)
+}
+
 // Open applies or decrypts one inbound message. For an application message it
 // also names the sender, from the credential of the leaf at SenderLeafIndex in
 // the group's own tree: the leaf that signed the message, in the epoch it was
@@ -450,6 +458,16 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 		KeyGeneration:     processed.KeyGeneration,
 		Plaintext:         processed.Plaintext,
 	}, nil
+}
+
+// SenderOf names the leaf at this index from the confirmed tree, for the
+// sealed copy of a message this device sends.
+func (c *Cipher) SenderOf(leafIndex uint32) (chatstate.Sender, error) {
+	account, device, err := c.senderOf(leafIndex)
+	if err != nil {
+		return chatstate.Sender{}, err
+	}
+	return chatstate.Sender{AccountID: account, DeviceID: device}, nil
 }
 
 func (c *Cipher) senderOf(leafIndex uint32) (accountID, deviceID string, err error) {

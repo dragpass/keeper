@@ -40,6 +40,8 @@ pub const DPMLS_ERR_ARG: i32 = -3;
 /// A leaf the Go side did not approve tried to enter the group, and the
 /// operation was refused with nothing applied.
 pub const DPMLS_ERR_UNTRUSTED: i32 = -4;
+/// The message was sent by this session's own leaf. Nothing was consumed.
+pub const DPMLS_ERR_FROM_SELF: i32 = -5;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -85,6 +87,8 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
         Ok(Err(msg)) => {
             let code = if msg.contains(gate::NOT_APPROVED) {
                 DPMLS_ERR_UNTRUSTED
+            } else if msg.contains(session::FROM_SELF) {
+                DPMLS_ERR_FROM_SELF
             } else {
                 DPMLS_ERR
             };
@@ -833,6 +837,85 @@ pub unsafe extern "C" fn dpmls_wire_form(
         }
         let form: WireForm = session::wire_form(slice(message, message_len)?)?;
         *out = form as u8;
+        Ok(DPMLS_OK)
+    })
+}
+
+// ─── exporter ───────────────────────────────────────────────────────────
+
+/// `MLS-Exporter(label, context, len)` of the confirmed epoch, for a key the
+/// Go side uses outside MLS (the room name). The bytes are wiped by
+/// dpmls_buf_free.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`; `out` must point
+/// to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_export_secret(
+    handle: *mut Session,
+    label: *const u8,
+    label_len: usize,
+    context: *const u8,
+    context_len: usize,
+    len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller guarantees `handle` is null or a live session
+        // from dpmls_session_new, and both input pointers name `*_len`
+        // readable bytes for this call; `slice` and `session_of` refuse null.
+        let (session, label, context) = unsafe {
+            (
+                session_of(handle)?,
+                slice(label, label_len)?,
+                slice(context, context_len)?,
+            )
+        };
+        let secret = session.export_secret(label, context, len)?;
+        // SAFETY: `out` is null or a writable DpBuf the caller owns; `put`
+        // refuses null.
+        unsafe { put(out, secret.to_vec())? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The same exporter output for the epoch the pending Commit would create,
+/// and that epoch in `epoch`, without applying the Commit (see
+/// `Session::export_pending_secret`).
+///
+/// # Safety
+/// As `dpmls_group_export_secret`; `epoch` must point to a writable u64.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn dpmls_group_export_pending_secret(
+    handle: *mut Session,
+    label: *const u8,
+    label_len: usize,
+    context: *const u8,
+    context_len: usize,
+    len: usize,
+    epoch: *mut u64,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        if epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: as in dpmls_group_export_secret.
+        let (session, label, context) = unsafe {
+            (
+                session_of(handle)?,
+                slice(label, label_len)?,
+                slice(context, context_len)?,
+            )
+        };
+        let (secret, next) = session.export_pending_secret(label, context, len)?;
+        // SAFETY: `epoch` was checked non-null above and the caller
+        // guarantees it is writable; `out` as in dpmls_group_export_secret.
+        unsafe {
+            *epoch = next;
+            put(out, secret.to_vec())?;
+        }
         Ok(DPMLS_OK)
     })
 }

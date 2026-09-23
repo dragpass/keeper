@@ -109,6 +109,10 @@ type CommitCipher interface {
 	// ConfirmedAccounts must not see a pending Commit. It is what keeps a
 	// built Remove from unlatching anything before the server accepts it.
 	RosterReader
+
+	// The exporter is how a Commit carries a room's name into the epoch it
+	// creates (roomname.go).
+	RoomNameExporter
 }
 
 // CommitPlan is what one Commit should contain. Empty means a Commit with no
@@ -173,6 +177,11 @@ type BeginCommitRequest struct {
 	// ExpectedEpoch refuses a build when the confirmed epoch is another one,
 	// before anything is built. Zero asserts nothing, as in SendRequest.
 	ExpectedEpoch uint64
+
+	// RoomName, when set, is resealed for the epoch the Commit creates, from
+	// the pending Commit and before the CAS, so the server can store it with
+	// the Commit in one row. The caller owns and wipes it.
+	RoomName []byte
 }
 
 // BeginCommitResult is what the caller posts to the server's CAS endpoint.
@@ -194,6 +203,29 @@ type BeginCommitResult struct {
 	Created bool
 
 	Generation uint64
+
+	// RoomName is the request's name sealed for ExpectedEpoch+1, or nil.
+	// A retry seals it again under a fresh IV; either answer opens.
+	RoomName *SealedRoomName
+}
+
+// resealPending answers a retried build's room name from the stored pending
+// Commit. Nothing is written.
+func resealPending(conversationID string, rec *Record, name []byte, cipher CommitCipher) (*SealedRoomName, error) {
+	if name == nil {
+		return nil, nil
+	}
+	if err := cipher.Load(rec.GroupState); err != nil {
+		return nil, err
+	}
+	return sealForPending(cipher, conversationID, rec.Pending.ExpectedEpoch, name)
+}
+
+func checkRoomName(name []byte) error {
+	if name == nil {
+		return nil
+	}
+	return validRoomName(name)
 }
 
 // CommitOutcomeKind is the server's verdict.
@@ -250,6 +282,9 @@ func (s *Store) BeginCommit(
 	if req.ClientCommitID == "" {
 		return BeginCommitResult{}, errors.New("commit needs a client commit id")
 	}
+	if err := checkRoomName(req.RoomName); err != nil {
+		return BeginCommitResult{}, err
+	}
 	var out BeginCommitResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, anchor, err := s.loadChecked(p, conversationID, wm)
@@ -263,7 +298,12 @@ func (s *Store) BeginCommit(
 			if rec.Pending.ClientCommitID != req.ClientCommitID {
 				return ErrCommitPending
 			}
+			name, err := resealPending(conversationID, rec, req.RoomName, cipher)
+			if err != nil {
+				return err
+			}
 			out = pendingResult(*rec.Pending, rec.Generation, false)
+			out.RoomName = name
 			return nil
 		}
 		// After the retry branch: a retry answers with bytes already built,
@@ -307,6 +347,14 @@ func (s *Store) BeginCommit(
 		if err != nil {
 			return err
 		}
+		// Before the write, so a name that cannot be resealed persists no
+		// Commit either.
+		var name *SealedRoomName
+		if req.RoomName != nil {
+			if name, err = sealForPending(cipher, conversationID, built.ExpectedEpoch, req.RoomName); err != nil {
+				return err
+			}
+		}
 		pending := PendingCommit{
 			ClientCommitID: req.ClientCommitID,
 			ExpectedEpoch:  built.ExpectedEpoch,
@@ -324,6 +372,7 @@ func (s *Store) BeginCommit(
 			return err
 		}
 		out = pendingResult(pending, rec.Generation, true)
+		out.RoomName = name
 		return nil
 	})
 	return out, err

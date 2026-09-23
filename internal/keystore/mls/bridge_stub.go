@@ -91,6 +91,14 @@ func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, er
 
 func (s *Session) BurnGeneration() error { return ErrUnavailable }
 
+func (s *Session) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	return nil, ErrUnavailable
+}
+
+func (s *Session) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	return nil, 0, ErrUnavailable
+}
+
 func (s *Session) Flush() ([]byte, error) { return nil, ErrUnavailable }
 
 func (s *Session) Load(blob []byte) error { return ErrUnavailable }

@@ -27,11 +27,29 @@ const (
 	// pending (§7.3): post it to the CAS endpoint, then report the verdict
 	// through MLSCommitConfirm. Idempotent on client_commit_id.
 	//
+	// For a room, room_name_plaintext_b64 is resealed for epoch 1 from the
+	// pending create, and the response carries it as name_* for the server to
+	// store with the Commit.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           members[1..32] { account_id, device_id, key_package_b64 },
-	//           rotation_statements?
+	//           rotation_statements?, room_name_plaintext_b64? (1..256B)
 	//   Output: MLSCommitResponseData
 	MLSGroupCreate = "mls_group_create"
+
+	// MLSGroupDiscardUnaccepted drops this device's own group create that was
+	// never accepted: the loser of two members opening the same DM at once.
+	// It succeeds only when the pending Commit is the one named and is the
+	// create (built against epoch 0) and the record was never confirmed past
+	// epoch 0; then the group state and the pending Commit go, and mls_join can
+	// take the winner's Welcome. Every other state is CHAT_STATE_CONFLICT and
+	// writes nothing. Idempotent: with no group left it answers discarded
+	// false. Call it only once the server has given the epoch to another
+	// create: an accepted create whose answer was lost looks the same here.
+	//
+	//   Inputs: permit, org_id, conversation_id, client_commit_id
+	//   Output: { discarded, generation }
+	MLSGroupDiscardUnaccepted = "mls_group_discard_unaccepted"
 
 	// MLSCommitBuild builds one pending Commit of exactly one kind against
 	// expected_epoch: add, remove_account_ids (every leaf of each account),
@@ -40,11 +58,17 @@ const (
 	// update_self (a path update that also moves the group onto the device's
 	// active leaf key after a rotation). A plan that mixes kinds is refused.
 	//
+	// For a room, room_name_plaintext_b64 — the name as this device last
+	// opened it — is resealed for the epoch the Commit creates, computed from
+	// the pending Commit before the CAS, and returned as name_* for the server
+	// to store atomically with the Commit.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           expected_epoch (>=1), exactly one of add[1..32] /
 	//           remove_account_ids[1..64] /
 	//           replace[1..32] { account_id, key_package_b64 } /
-	//           update_self, rotation_statements?
+	//           update_self, rotation_statements?,
+	//           room_name_plaintext_b64? (1..256B)
 	//   Output: MLSCommitResponseData
 	MLSCommitBuild = "mls_commit_build"
 
@@ -90,29 +114,71 @@ const (
 	// CHAT_MLS_LEAF_REPLACEMENT_PENDING while the M4.4 latch holds, before any
 	// position is consumed.
 	//
+	//
+	// The plaintext is also sealed into the local history in the same write as
+	// the outbox entry, keyed by client_message_id until MLSMarkSent gives it
+	// the server's seq: mls-rs never opens a message from its own leaf, so that
+	// copy is the only way this device reads what it sent.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_message_id,
 	//           expected_epoch (>=1), plaintext_b64 (1..6144B, UTF-8)
 	//   Output: { client_message_id, ciphertext_b64, epoch, leaf_index,
 	//             content_type, generation, created }
 	MLSEncrypt = "mls_encrypt"
 
+	// MLSMarkSent binds the sealed copy of a message this device sent to the
+	// seq POST /:id/messages returned. Idempotent on the same pair (bound:
+	// false, nothing written). Refused with CHAT_STATE_CONFLICT when the seq
+	// already carries another message's copy or the message is already bound
+	// to another seq, and CHAT_STATE_NOT_FOUND when no copy for the id is left.
+	//
+	//   Inputs: permit, org_id, conversation_id, client_message_id, seq (>=1)
+	//   Output: { client_message_id, seq, bound, generation }
+	MLSMarkSent = "mls_mark_sent"
+
 	// MLSDecryptBatchForAppDisplay opens a page of application messages for
 	// the DragPass app's own screen, through chatstate.Store.ReceiveBatch and
-	// the local history: a seq already delivered is answered from the sealed
-	// copy with from_history and no MLS key. It widens the v1 reveal's
-	// carve-out rather than adding one (M6.3): the response is
+	// the local history: a seq already delivered, or sent by this device and
+	// bound by MLSMarkSent, is answered from the sealed copy with from_history
+	// and no MLS key. It widens the v1 reveal's carve-out rather than adding
+	// one (M6.3): the response is
 	// ConversationDecryptBatchForAppDisplayResponseData, plaintext_b64 its only
 	// plaintext field. All or nothing: one message that fails refuses the
-	// batch with no plaintext and nothing written. On a conversation latched
-	// NeedsRekey a batch of history hits only is still answered; one new
-	// message refuses the batch with CHAT_STATE_REKEY_REQUIRED.
+	// batch with no plaintext and nothing written. The one exception is a
+	// message this device sent that has no sealed copy here: it is reported as
+	// state own_without_local_copy with an empty plaintext entry, and the rest
+	// of the batch proceeds. On a conversation latched NeedsRekey a batch of
+	// history hits only is still answered; one new message refuses the batch
+	// with CHAT_STATE_REKEY_REQUIRED.
 	//
 	//   Inputs: permit, org_id, conversation_id,
 	//           messages[1..200] { seq, ciphertext_b64 (1..8208B) }
-	//   Output: { plaintext_b64[], items[] { seq, sender_account_id,
+	//   Output: { plaintext_b64[], items[] { seq, state, sender_account_id,
 	//             sender_device_id, epoch, sender_leaf_index, content_type,
 	//             generation, from_history } }
 	MLSDecryptBatchForAppDisplay = "mls_decrypt_batch_for_app_display"
+
+	// MLSRoomNameSeal seals a room's name under the confirmed epoch's MLS
+	// exporter ("dragpass room name", context conversation_id, 32 bytes) with
+	// AES-256-GCM, a random IV and AAD dragpass.room.name|1|<conversation_id>|
+	// <epoch>. For a rename, and for the epoch 0 name a room is created with
+	// while its create is pending. Writes nothing.
+	//
+	//   Inputs: permit, org_id, conversation_id, plaintext_b64 (1..256B, UTF-8)
+	//   Output: { epoch, name_iv_b64, name_ciphertext_b64 }
+	MLSRoomNameSeal = "mls_room_name_seal"
+
+	// MLSRoomNameOpen opens a room's name for the DragPass app's own screen.
+	// Only the confirmed epoch's name opens (CHAT_MLS_EPOCH_STALE otherwise):
+	// an older epoch's exporter is gone. The response is
+	// ConversationDecryptBatchForAppDisplayResponseData with exactly one
+	// plaintext_b64 entry, the same carve-out as the display batch rather than
+	// a new one. Writes nothing.
+	//
+	//   Inputs: permit, org_id, conversation_id, epoch, name_iv_b64 (12B),
+	//           name_ciphertext_b64 (17..272B)
+	//   Output: { plaintext_b64: [name] }
+	MLSRoomNameOpen = "mls_room_name_open"
 
 	// MLSConversationStatus reports this device's copy of the conversation:
 	// the confirmed epoch, whether a Commit is pending and under which

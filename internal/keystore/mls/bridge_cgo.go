@@ -97,6 +97,15 @@ int32_t dpmls_group_process(DpSession *handle,
                             uint32_t *key_generation, uint8_t *key_generation_known);
 int32_t dpmls_wire_form(const uint8_t *message, size_t message_len, uint8_t *out);
 
+int32_t dpmls_group_export_secret(DpSession *handle,
+                                  const uint8_t *label, size_t label_len,
+                                  const uint8_t *context, size_t context_len,
+                                  size_t len, DpBuf *out);
+int32_t dpmls_group_export_pending_secret(DpSession *handle,
+                                          const uint8_t *label, size_t label_len,
+                                          const uint8_t *context, size_t context_len,
+                                          size_t len, uint64_t *epoch, DpBuf *out);
+
 int32_t dpmls_group_send_position(DpSession *handle,
                                   uint64_t *epoch, uint32_t *leaf_index, uint32_t *generation);
 int32_t dpmls_group_burn_generation(DpSession *handle);
@@ -111,6 +120,8 @@ import (
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 )
 
 // Session is one conversation's MLS client and group.
@@ -613,6 +624,50 @@ func WireFormOf(message []byte) (WireForm, error) {
 	return WireForm(form), nil
 }
 
+// ExportSecret is MLS-Exporter(label, context, n) of the confirmed epoch. The
+// result is a key: the caller wipes it.
+func (s *Session) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	rc := C.dpmls_group_export_secret(h,
+		bytePtr(label), C.size_t(len(label)), bytePtr(context), C.size_t(len(context)), C.size_t(n), &buf)
+	runtime.KeepAlive(label)
+	runtime.KeepAlive(context)
+	if rc != 0 {
+		return nil, statusError(rc)
+	}
+	return takeBuf(&buf), nil
+}
+
+// ExportPendingSecret is the same for the epoch the pending Commit would
+// create, and names that epoch. The Commit stays pending and the confirmed
+// epoch does not move.
+func (s *Session) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, 0, err
+	}
+	var (
+		buf   C.DpBuf
+		epoch C.uint64_t
+	)
+	rc := C.dpmls_group_export_pending_secret(h,
+		bytePtr(label), C.size_t(len(label)), bytePtr(context), C.size_t(len(context)), C.size_t(n), &epoch, &buf)
+	runtime.KeepAlive(label)
+	runtime.KeepAlive(context)
+	if rc != 0 {
+		return nil, 0, statusError(rc)
+	}
+	return takeBuf(&buf), uint64(epoch), nil
+}
+
 // SendPosition reports where this device's application ratchet stands without
 // moving it. Three things about it matter to the caller: it compiles only in a
 // build carrying both export_key_generation and secret_tree_access, the three
@@ -718,6 +773,11 @@ func statusError(rc C.int32_t) error {
 	// -4 is DPMLS_ERR_UNTRUSTED: a leaf nobody approved reached the gate.
 	if rc == -4 {
 		return fmt.Errorf("%w (status %d): %s", ErrLeafUntrusted, int(rc), msg)
+	}
+	// -5 is DPMLS_ERR_FROM_SELF: this session's own leaf sent the message.
+	// Not ErrFailed, because the display path answers it from local history.
+	if rc == -5 {
+		return fmt.Errorf("%w (status %d): %s", chatstate.ErrOwnMessage, int(rc), msg)
 	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

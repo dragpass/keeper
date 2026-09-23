@@ -83,7 +83,14 @@ var rawSecretResponseCarveOuts = map[string]string{
 	// application messages opened with keys the server never held, so it is
 	// gated on the conversation-state permit and not on a read permit
 	// (decision R2); the added `items` carry metadata only.
-	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34 and 0.0.49): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). 0.0.49: mls_decrypt_batch_for_app_display returns the same type for chat v2 MLS application messages, under the server-signed dragpass.chat.state permit (no read permit: the Keeper opens them with MLS keys the server never held, decision R2), each opened by chatstate.Store.ReceiveBatch with its sender taken from the MLS leaf credential and its declared position checked, or re-read from the sealed local history; items carries that metadata and no plaintext. []string element type is covered here too. Any tag/UTF-8/AAD/declaration failure refuses the whole batch with no partial plaintext and, for MLS, nothing written. Zeroized after encoding, never logged, not even by length; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, docs/exec-plans/active/dragpass-chat-v2-mls-integration.md M6.3 and §12.2, and docs/security/threat-model.md §4.10.",
+	//
+	// 0.0.52 widens it a fourth time, still without a new entry or field:
+	// mls_room_name_open returns a v2 room's name as the single entry of this
+	// type, the v2 counterpart of payload_kind=room_name. Its key is the
+	// confirmed epoch's MLS exporter, which the server never held, and the
+	// AAD is Keeper-built (dragpass.room.name|1|<conversation_id>|<epoch>), a
+	// domain neither chat message path uses.
+	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34, 0.0.49 and 0.0.52): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). 0.0.49: mls_decrypt_batch_for_app_display returns the same type for chat v2 MLS application messages, under the server-signed dragpass.chat.state permit (no read permit: the Keeper opens them with MLS keys the server never held, decision R2), each opened by chatstate.Store.ReceiveBatch with its sender taken from the MLS leaf credential and its declared position checked, or re-read from the sealed local history; items carries that metadata and no plaintext. []string element type is covered here too. Any tag/UTF-8/AAD/declaration failure refuses the whole batch with no partial plaintext and, for MLS, nothing written; the one MLS exception is a message this device sent with no sealed local copy, returned as an empty entry with items state own_without_local_copy (0.0.52). 0.0.52: mls_room_name_open returns a v2 room name as the single entry, under the same dragpass.chat.state permit, sealed with a key from the confirmed epoch's MLS exporter (label \"dragpass room name\", context conversation_id) and opened under the Keeper-built AAD dragpass.room.name|1|<conversation_id>|<epoch>, only for the confirmed epoch; a tag or UTF-8 failure refuses it with no plaintext and nothing is written. Zeroized after encoding, never logged, not even by length; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, docs/exec-plans/active/dragpass-chat-v2-mls-integration.md M6.3 and §12.2, and docs/security/threat-model.md §4.10.",
 }
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
@@ -103,6 +110,9 @@ var rawSecretRequestCarveOuts = map[string]string{
 	"DEKUnwrapAndEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
 	"MLSEncryptRequest.plaintext_b64":                 "encrypt direction: the chat v2 message to encrypt as an MLS application message is the action's input; zeroized after sealing, never returned or logged, not even by length.",
+	"MLSRoomNameSealRequest.plaintext_b64":            "encrypt direction: the v2 room name to seal under the confirmed epoch's MLS exporter is the action's input; zeroized after sealing, never returned or logged.",
+	"MLSGroupCreateRequest.room_name_plaintext_b64":   "encrypt direction: the v2 room name to reseal for the epoch the pending create makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
+	"MLSCommitBuildRequest.room_name_plaintext_b64":   "encrypt direction: the v2 room name to reseal for the epoch the pending Commit makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
 }
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)
@@ -249,7 +259,8 @@ func TestRawSecretResponseCarveOuts_ScopeIsStated(t *testing.T) {
 	}
 	// The room-name branch rides this one entry, so the entry has to say so.
 	for _, want := range []string{"room_name", "dragpass.room|1|", "dragpass.room.read",
-		"mls_decrypt_batch_for_app_display", "dragpass.chat.state", "items"} {
+		"mls_decrypt_batch_for_app_display", "dragpass.chat.state", "items",
+		"own_without_local_copy", "mls_room_name_open", "dragpass.room.name|1|", "MLS exporter"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("the chat carve-out rationale does not mention %q — "+
 				"payload_kind=room_name returns plaintext through this field and the "+

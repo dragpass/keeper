@@ -40,6 +40,7 @@ type mlsChat struct {
 	store   *chatstate.Store
 	wm      chatstate.ServerWatermark
 	session *mls.Session
+	leaf    mls.DeviceLeaf
 	permit  proto.ChatStatePermit
 	conv    string
 }
@@ -80,7 +81,7 @@ func openMLSChat(
 		store.Close()
 		return nil, chatStateNotAuthorized(d, "leaf account"), false
 	}
-	return &mlsChat{store: store, wm: wm, session: session, permit: permit, conv: conversationID}, proto.BaseResponse{}, true
+	return &mlsChat{store: store, wm: wm, session: session, leaf: leaf, permit: permit, conv: conversationID}, proto.BaseResponse{}, true
 }
 
 func mlsSessionFailure(d Deps, err error) proto.BaseResponse {
@@ -146,7 +147,7 @@ func memberKeyPackages(d Deps, members []proto.MLSMemberKeyPackage) ([][]byte, p
 }
 
 func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
-	return proto.BaseResponse{Success: true, Data: proto.MLSCommitResponseData{
+	data := proto.MLSCommitResponseData{
 		ClientCommitID:    r.ClientCommitID,
 		ExpectedEpoch:     r.ExpectedEpoch,
 		CommitB64:         base64.StdEncoding.EncodeToString(r.Commit),
@@ -154,7 +155,30 @@ func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
 		WelcomeReleasable: r.WelcomeReleasable,
 		Created:           r.Created,
 		Generation:        r.Generation,
-	}}
+	}
+	if r.RoomName != nil {
+		data.NameEpoch = r.RoomName.Epoch
+		data.NameIVb64 = base64.StdEncoding.EncodeToString(r.RoomName.IV)
+		data.NameCiphertextB64 = base64.StdEncoding.EncodeToString(r.RoomName.Ciphertext)
+	}
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// roomNameInput decodes an optional room name. Nil means none was given; the
+// caller wipes a non-nil result.
+func roomNameInput(b64 string) ([]byte, proto.BaseResponse, bool) {
+	if b64 == "" {
+		return nil, proto.BaseResponse{}, true
+	}
+	name, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, chatStateInvalidInput("the room name must be valid standard Base64"), false
+	}
+	if !utf8.Valid(name) {
+		secure.Zeroize(name)
+		return nil, chatStateInvalidInput("the room name must decode to UTF-8 text"), false
+	}
+	return name, proto.BaseResponse{}, true
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -175,10 +199,16 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
+	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
+	if !ok {
+		return resp
+	}
+	defer secure.Zeroize(name)
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
+		RoomName:       name,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
@@ -188,6 +218,27 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}
 	d.Logger.Println("mls group create successful")
 	return commitResponse(result)
+}
+
+// HandleMLSGroupDiscardUnaccepted drops this device's create that lost the
+// race for the conversation's first epoch (chatstate.DiscardUnacceptedGroup).
+func HandleMLSGroupDiscardUnaccepted(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSGroupDiscardUnacceptedRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	result, err := c.store.DiscardUnacceptedGroup(c.conv, c.wm, req.ClientCommitID)
+	if err != nil {
+		return chatStateFailure(d, "mls group discard", err)
+	}
+	d.Logger.Println("mls group discard successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSGroupDiscardUnacceptedResponseData{
+		Discarded:  result.Discarded,
+		Generation: result.Generation,
+	}}
 }
 
 // replaceMembers decodes the replace entries and pairs each with the key the
@@ -252,11 +303,17 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		}
 		plan.Replace = members
 	}
+	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
+	if !ok {
+		return resp
+	}
+	defer secure.Zeroize(name)
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
 		ExpectedEpoch:  req.ExpectedEpoch,
+		RoomName:       name,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)
@@ -461,8 +518,31 @@ func HandleMLSEncrypt(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}}
 }
 
+// HandleMLSMarkSent binds a sent message's sealed copy to the server's seq.
+func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSMarkSentRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	result, err := c.store.MarkSent(c.conv, c.wm, req.ClientMessageID, req.Seq)
+	if err != nil {
+		return chatStateFailure(d, "mls mark sent", err)
+	}
+	d.Logger.Println("mls mark sent successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSMarkSentResponseData{
+		ClientMessageID: req.ClientMessageID,
+		Seq:             req.Seq,
+		Bound:           result.Bound,
+		Generation:      result.Generation,
+	}}
+}
+
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
-// for the app's own screen, all or nothing.
+// for the app's own screen, all or nothing but for a message of this device
+// that has no local copy (chatstate.ReceiveBatch).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
@@ -508,6 +588,15 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	plaintexts := make([]string, len(results))
 	items := make([]proto.MLSDisplayItem, len(results))
 	for i, r := range results {
+		if r.OwnWithoutCopy {
+			items[i] = proto.MLSDisplayItem{
+				Seq:             req.Messages[i].Seq,
+				State:           proto.MLSDisplayItemStateOwnWithoutCopy,
+				SenderAccountID: c.leaf.AccountID,
+				SenderDeviceID:  c.leaf.DeviceID,
+			}
+			continue
+		}
 		// A copy that cannot say who sent it is refused rather than shown
 		// under nobody's name.
 		if r.Sender.AccountID == "" || r.Sender.DeviceID == "" {
@@ -516,6 +605,7 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		plaintexts[i] = base64.StdEncoding.EncodeToString(r.Plaintext)
 		items[i] = proto.MLSDisplayItem{
 			Seq:             req.Messages[i].Seq,
+			State:           proto.MLSDisplayItemStateShown,
 			SenderAccountID: r.Sender.AccountID,
 			SenderDeviceID:  r.Sender.DeviceID,
 			Epoch:           r.Position.Epoch,
@@ -529,6 +619,75 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	return proto.BaseResponse{Success: true, Data: proto.ConversationDecryptBatchForAppDisplayResponseData{
 		PlaintextB64: plaintexts,
 		Items:        items,
+	}}
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Room names (chatstate/roomname.go).
+//
+// mls_room_name_open returns its name through the display batch's response
+// type and its one plaintext field, as the v1 reveal does for
+// payload_kind=room_name: the carve-out is widened, not added. The gates are
+// the display batch's — a server-signed permit before anything is opened, a
+// Keeper-built AAD, UTF-8, zeroized buffers, nothing logged — and the key is
+// the confirmed epoch's MLS exporter, which the server never held.
+// ────────────────────────────────────────────────────────────────────────
+
+// HandleMLSRoomNameSeal seals a room name under the confirmed epoch.
+func HandleMLSRoomNameSeal(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSRoomNameSealRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	name, resp, ok := roomNameInput(req.PlaintextB64)
+	if !ok {
+		return resp
+	}
+	defer secure.Zeroize(name)
+	sealed, err := c.store.SealRoomName(c.conv, c.wm, name, mls.NewCipher(c.session, nil))
+	if err != nil {
+		return chatStateFailure(d, "mls room name seal", err)
+	}
+	d.Logger.Println("mls room name seal successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSRoomNameSealResponseData{
+		Epoch:             sealed.Epoch,
+		NameIVb64:         base64.StdEncoding.EncodeToString(sealed.IV),
+		NameCiphertextB64: base64.StdEncoding.EncodeToString(sealed.Ciphertext),
+	}}
+}
+
+// HandleMLSRoomNameOpen opens a room name sealed for the confirmed epoch.
+func HandleMLSRoomNameOpen(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSRoomNameOpenRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	iv, err := base64.StdEncoding.DecodeString(req.NameIVb64)
+	if err != nil {
+		return chatStateInvalidInput("name_iv_b64 must be valid standard Base64")
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(req.NameCiphertextB64)
+	if err != nil {
+		return chatStateInvalidInput("name_ciphertext_b64 must be valid standard Base64")
+	}
+	name, err := c.store.OpenRoomName(c.conv, c.wm, req.Epoch, iv, ciphertext, mls.NewCipher(c.session, nil))
+	defer secure.Zeroize(name)
+	if err != nil {
+		return chatStateFailure(d, "mls room name open", err)
+	}
+	if !utf8.Valid(name) {
+		d.Logger.Println("mls room name open refused a name that is not text")
+		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed), "the room name is not text")
+	}
+	d.Logger.Println("mls room name open successful")
+	return proto.BaseResponse{Success: true, Data: proto.ConversationDecryptBatchForAppDisplayResponseData{
+		PlaintextB64: []string{base64.StdEncoding.EncodeToString(name)},
 	}}
 }
 

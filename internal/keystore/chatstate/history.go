@@ -60,7 +60,10 @@ import (
 // period and must not be quoted as one; that number is M4.6.1's.
 const DefaultHistoryMaxEntries = 64
 
-const historyAADDomain = "dragpass.chat.state.history"
+const (
+	historyAADDomain     = "dragpass.chat.state.history"
+	sentHistoryAADDomain = "dragpass.chat.state.history.sent"
+)
 
 // HistoryPolicy is the part of the local history that is still open. Both
 // fields are here so the values can be filled in when they are decided,
@@ -83,11 +86,19 @@ func (h HistoryPolicy) maxEntries() int {
 	return h.MaxEntries
 }
 
-// HistoryEntry is one delivered message, sealed. Seq is the server's message
-// sequence, which is what a re-read asks by.
+// HistoryEntry is one delivered or sent message, sealed. Seq is the server's
+// message sequence, which is what a re-read asks by.
 type HistoryEntry struct {
 	Seq      uint64 `json:"seq"`
 	StoredAt int64  `json:"stored_at"`
+
+	// ClientMessageID is set on a message this device sent, and only there.
+	// mls-rs refuses to process a message from its own leaf
+	// (CantProcessMessageFromSelf), so this copy is the only way the sender
+	// ever reads its own message again. The server assigns the seq after the
+	// send, so the entry is sealed under this id and Seq stays 0 until
+	// MarkSent binds it.
+	ClientMessageID string `json:"client_message_id,omitempty"`
 
 	// Position is the one verifyDeclaration accepted at the first delivery,
 	// written in the same replacement that confirmed it. A re-read has no
@@ -107,13 +118,27 @@ type HistoryEntry struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 
+// findHistory never matches seq 0: that is a sent entry the server has not
+// numbered yet, and no re-read can ask for it.
 func (r *Record) findHistory(seq uint64) (HistoryEntry, bool) {
+	if seq == 0 {
+		return HistoryEntry{}, false
+	}
 	for _, e := range r.History {
 		if e.Seq == seq {
 			return e, true
 		}
 	}
 	return HistoryEntry{}, false
+}
+
+func (r *Record) findSentHistory(clientMessageID string) (int, bool) {
+	for i, e := range r.History {
+		if e.ClientMessageID == clientMessageID {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // appendHistory adds one entry, drops what the policy no longer keeps, and
@@ -128,7 +153,7 @@ func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Ti
 		cutoff = now.Add(-policy.MaxAge).Unix()
 	}
 	for _, existing := range r.History {
-		if existing.Seq == e.Seq || existing.StoredAt < cutoff {
+		if existing.StoredAt < cutoff || e.replaces(existing) {
 			continue
 		}
 		kept = append(kept, existing)
@@ -140,13 +165,34 @@ func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Ti
 	r.History = kept
 }
 
-func historyAAD(ownerAccountID, conversationID string, seq uint64, position Position, sender Sender) []byte {
+// replaces reports whether e is a newer copy of the same message as existing.
+// A sent entry is the same message by its client message id, a delivered one
+// by its seq; an unbound sent entry's seq 0 names nothing.
+func (e HistoryEntry) replaces(existing HistoryEntry) bool {
+	if e.ClientMessageID != "" {
+		return existing.ClientMessageID == e.ClientMessageID
+	}
+	return e.Seq != 0 && existing.Seq == e.Seq
+}
+
+// historyAAD binds a delivered entry to its seq and a sent entry to its client
+// message id, under separate domains so neither can be read as the other.
+//
+// A sent entry's seq is not in its AAD because the seq does not exist when the
+// entry is sealed, and resealing at MarkSent would put the plaintext through
+// memory a second time to gain nothing: the record's own seal already covers
+// Seq, and moving a bound seq onto another entry needs the seal key.
+func historyAAD(ownerAccountID, conversationID string, e HistoryEntry, position Position, sender Sender) []byte {
+	domain, key := historyAADDomain, strconv.FormatUint(e.Seq, 10)
+	if e.ClientMessageID != "" {
+		domain, key = sentHistoryAADDomain, e.ClientMessageID
+	}
 	return []byte(strings.Join([]string{
-		historyAADDomain,
+		domain,
 		strconv.Itoa(SchemaVersion),
 		ownerAccountID,
 		conversationID,
-		strconv.FormatUint(seq, 10),
+		key,
 		strconv.FormatUint(position.Epoch, 10),
 		strconv.FormatUint(uint64(position.SenderLeafIndex), 10),
 		string(position.ContentType),
@@ -156,11 +202,25 @@ func historyAAD(ownerAccountID, conversationID string, seq uint64, position Posi
 	}, "|"))
 }
 
-// sealHistory wraps one plaintext for storage. The caller still owns the
-// plaintext buffer and still has to wipe it, and position must be the one the
-// caller has just verified.
+// sealHistory wraps one delivered plaintext for storage. The caller still owns
+// the plaintext buffer and still has to wipe it, and position must be the one
+// the caller has just verified.
 func (s *Store) sealHistory(
 	conversationID string, seq uint64, position Position, sender Sender, plaintext []byte, now time.Time,
+) (HistoryEntry, error) {
+	return s.seal(conversationID, HistoryEntry{Seq: seq}, position, sender, plaintext, now)
+}
+
+// sealSentHistory wraps a plaintext this device is sending, at the position
+// the send took, before the server has numbered it.
+func (s *Store) sealSentHistory(
+	conversationID, clientMessageID string, position Position, sender Sender, plaintext []byte, now time.Time,
+) (HistoryEntry, error) {
+	return s.seal(conversationID, HistoryEntry{ClientMessageID: clientMessageID}, position, sender, plaintext, now)
+}
+
+func (s *Store) seal(
+	conversationID string, e HistoryEntry, position Position, sender Sender, plaintext []byte, now time.Time,
 ) (HistoryEntry, error) {
 	gcm, err := newGCM(s.historyKey)
 	if err != nil {
@@ -170,15 +230,12 @@ func (s *Store) sealHistory(
 	if _, err := rand.Read(iv); err != nil {
 		return HistoryEntry{}, err
 	}
-	return HistoryEntry{
-		Seq:             seq,
-		StoredAt:        now.Unix(),
-		Position:        &position,
-		SenderAccountID: sender.AccountID,
-		SenderDeviceID:  sender.DeviceID,
-		IV:              iv,
-		Ciphertext:      gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, seq, position, sender)),
-	}, nil
+	e.StoredAt = now.Unix()
+	e.Position = &position
+	e.SenderAccountID, e.SenderDeviceID = sender.AccountID, sender.DeviceID
+	e.IV = iv
+	e.Ciphertext = gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, e, position, sender))
+	return e, nil
 }
 
 // openHistory refuses an entry that carries no position rather than answering
@@ -198,7 +255,7 @@ func (s *Store) openHistory(conversationID string, e HistoryEntry) ([]byte, Posi
 		return nil, Position{}, errSealedRecordMalformed
 	}
 	plaintext, err := gcm.Open(nil, e.IV, e.Ciphertext,
-		historyAAD(s.owner, conversationID, e.Seq, *e.Position, Sender{AccountID: e.SenderAccountID, DeviceID: e.SenderDeviceID}))
+		historyAAD(s.owner, conversationID, e, *e.Position, Sender{AccountID: e.SenderAccountID, DeviceID: e.SenderDeviceID}))
 	if err != nil {
 		return nil, Position{}, errSealedRecordMalformed
 	}

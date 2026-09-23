@@ -107,12 +107,16 @@ func TestMCPCallableActions_ExcludeMLSKeyPackageGenerate(t *testing.T) {
 // move its epoch, or encrypt and read under this account's name.
 var mlsChatActionNames = []string{
 	proto.MLSGroupCreate,
+	proto.MLSGroupDiscardUnaccepted,
 	proto.MLSCommitBuild,
 	proto.MLSCommitConfirm,
 	proto.MLSProcess,
 	proto.MLSJoin,
 	proto.MLSEncrypt,
+	proto.MLSMarkSent,
 	proto.MLSDecryptBatchForAppDisplay,
+	proto.MLSRoomNameSeal,
+	proto.MLSRoomNameOpen,
 	proto.MLSConversationStatus,
 }
 
