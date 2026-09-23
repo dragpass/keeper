@@ -27,8 +27,9 @@
 //
 // All or nothing: one bad leaf and VerifyLeaves fails, and nothing it would
 // have recorded is kept. Even a success records nothing on its own — the pins
-// and newest-declaration records it would write are held until the caller has
-// seen the whole operation succeed and calls Commit. A Commit that adds one good
+// and newest-declaration records it would write are held until the MLS
+// operation they belong to has succeeded, when the session calls Commit, before
+// the group state is written (mls.LeafVerifier). A Commit that adds one good
 // and one bad leaf therefore writes no pin for the good one either.
 //
 // The pin state machine is not redefined here: evaluatePeerKeyTrust and
@@ -305,11 +306,12 @@ func supersededBy(j judgedLeaf, rec keychain.MLSLeafNewest) bool {
 
 // Commit writes what the last successful VerifyLeaves staged: first-use and
 // refreshed pins, and newest-declaration records that moved forward or had
-// their first_seen_at filled in from a version 1 record. Call it
-// only after the operation the verification was for has fully succeeded —
-// chatstate's write included. A crash between that write and this one leaves
-// the group state ahead of the pins, which costs a repeated first-use on the
-// next observation of the same key, not an acceptance of a different one.
+// their first_seen_at filled in from a version 1 record. The mls session calls
+// it once the MLS operation the verification was for has succeeded, and before
+// chatstate writes the group state. A crash between the two leaves a pin whose
+// state was never written; the retry of the same operation stages the same
+// key, which an existing pin keeps. The group state is never on disk ahead of
+// its pins, which is the order that let a different key in as a first use.
 func (v *MLSLeafVerifier) Commit() error {
 	for _, accountID := range sortedKeys(v.pins) {
 		if err := keychain.SavePeerKeyPin(v.d.Store, v.owner, accountID, v.pins[accountID]); err != nil {

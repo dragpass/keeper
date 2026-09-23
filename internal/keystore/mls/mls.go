@@ -187,9 +187,9 @@ func Restore(
 //
 // Every path that can bring a leaf into the group — applying somebody's
 // Commit, and building an Add — goes through verifier first. What a
-// successful verification would record (a first-use pin, a newer declaration)
-// is the verifier's to hold until the caller has seen the whole chatstate
-// transaction succeed; this type never writes it.
+// successful verification records (a first-use pin, a newer declaration) is
+// written by the session once the MLS operation has succeeded, before
+// chatstate writes the state (LeafVerifier); this type writes nothing itself.
 type Cipher struct {
 	session  *Session
 	verifier LeafVerifier
@@ -706,8 +706,9 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 // would name a key the session does not hold. The entry is kept, because a
 // refusal persists nothing; the next promote's drop removes it.
 //
-// What v would record (first-use pins) is the caller's to commit once this
-// returns nil, as with every verified operation.
+// What v records (first-use pins) is written when the Welcome has been
+// joined and before the group state is, as with every verified operation
+// (LeafVerifier). A refused join writes none.
 func (s *Session) JoinFromPool(
 	store *chatstate.Store,
 	conversationID string,
@@ -847,12 +848,24 @@ type Leaf struct {
 
 // LeafVerifier runs design §5.3 over the leaves one operation brings in.
 //
-// It judges them as one unit: nil only when every leaf passes. It must not
-// persist anything. Whatever a success would record belongs to the caller to
-// write after the whole operation has succeeded, because a leaf that passed
-// here can still be part of an operation that fails later.
+// VerifyLeaves judges them as one unit: nil only when every leaf passes. It
+// must not persist anything, because it runs before MLS has authenticated the
+// operation: a Commit's leaves are collected from a pass that admits every
+// leaf, so a message that later fails MLS could otherwise plant a first-use
+// pin for a key of its choosing.
+//
+// Commit writes what the last successful VerifyLeaves staged. The session
+// calls it once the MLS operation those leaves belong to has succeeded, and
+// before it returns, so before the caller writes the group state that holds
+// them. That order is what closes the crash window: the state is never on
+// disk with a leaf whose account key is not pinned, so a crash can at most
+// leave a pin whose state was not written, and the retry pins the same key
+// again. The other order let a crash leave the group without the pin, and the
+// next leaf of that account was then taken as a first use whatever key it
+// carried.
 type LeafVerifier interface {
 	VerifyLeaves(leaves []Leaf) error
+	Commit() error
 }
 
 // verifyLeaves is the Go half. A nil verifier with leaves to judge is a
@@ -865,6 +878,16 @@ func verifyLeaves(v LeafVerifier, leaves []Leaf) error {
 		return ErrLeafUntrusted
 	}
 	return v.VerifyLeaves(leaves)
+}
+
+// recordVerified is Commit for an operation whose MLS half has just
+// succeeded. With no leaves VerifyLeaves never ran, so whatever v holds is
+// from some earlier operation and is not written.
+func recordVerified(v LeafVerifier, leaves []Leaf) error {
+	if len(leaves) == 0 {
+		return nil
+	}
+	return v.Commit()
 }
 
 // ProcessVerified applies one inbound message, verifying every leaf it brings
@@ -899,6 +922,15 @@ func (s *Session) ProcessVerified(message []byte, v LeafVerifier) (Processed, er
 		if err := s.approve(leaves); err != nil {
 			return Processed{}, err
 		}
+		processed, err := s.Process(message)
+		if err != nil {
+			return Processed{}, err
+		}
+		if err := recordVerified(v, leaves); err != nil {
+			secure.Zeroize(processed.Plaintext)
+			return Processed{}, err
+		}
+		return processed, nil
 	}
 	return s.Process(message)
 }
@@ -921,7 +953,10 @@ func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	if err := s.approve(leaves); err != nil {
 		return err
 	}
-	return s.Join(welcome)
+	if err := s.Join(welcome); err != nil {
+		return err
+	}
+	return recordVerified(v, leaves)
 }
 
 // CommitAddMembersVerified verifies the leaves these KeyPackages would add, as
@@ -948,7 +983,13 @@ func (s *Session) CommitAddMembersVerified(
 	if err := s.approve(leaves); err != nil {
 		return nil, nil, 0, err
 	}
-	return s.CommitAddMembers(keyPackages)
+	if commit, welcome, expectedEpoch, err = s.CommitAddMembers(keyPackages); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return commit, welcome, expectedEpoch, nil
 }
 
 // CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
@@ -975,7 +1016,13 @@ func (s *Session) CommitReplaceMembersVerified(
 	if err := s.approve(leaves); err != nil {
 		return nil, nil, 0, err
 	}
-	return s.CommitReplaceMembers(leafIndices, keyPackages)
+	if commit, welcome, expectedEpoch, err = s.CommitReplaceMembers(leafIndices, keyPackages); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return commit, welcome, expectedEpoch, nil
 }
 
 // CommitAddMemberVerified is CommitAddMembersVerified for one member.

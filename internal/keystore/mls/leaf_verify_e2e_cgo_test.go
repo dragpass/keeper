@@ -215,6 +215,7 @@ func keyPackage(t testing.TB, s *mls.Session) []byte {
 type trustAll struct{}
 
 func (trustAll) VerifyLeaves([]mls.Leaf) error { return nil }
+func (trustAll) Commit() error                 { return nil }
 
 func openStore(t testing.TB, secrets keychain.SecretStore, owner string) *chatstate.Store {
 	t.Helper()
@@ -473,9 +474,11 @@ func TestV3_AMemberRefusesACommitThatBringsInAnUntrustedLeaf(t *testing.T) {
 }
 
 // TOFU: an unpinned member verifies from the key its leaf carries, and the pin
-// appears only once the whole operation has succeeded — at the Add, and at a
-// receiver applying somebody else's Commit.
-func TestTOFU_ThePinIsWrittenOnlyAfterTheWholeCommitSucceeds(t *testing.T) {
+// is on disk by the time the operation returns, at the Add and at a receiver
+// applying somebody else's Commit: it is written once the MLS half has
+// succeeded and before the group state is (mls.LeafVerifier). The refusals
+// that must write none are the tests on either side of this one.
+func TestTOFU_ThePinIsWrittenOnceTheMLSOperationSucceeds(t *testing.T) {
 	g := newGroup(t)
 	bob := newAccount(t, accountB)
 	_, bobStore := g.memberOf(t, bob, device1)
@@ -486,16 +489,9 @@ func TestTOFU_ThePinIsWrittenOnlyAfterTheWholeCommitSucceeds(t *testing.T) {
 	carolKP := keyPackage(t, carol.device(t, device1))
 
 	// The Add.
-	v := g.alice.verifier()
-	in, err := g.add(v, carolKP)
+	in, err := g.add(g.alice.verifier(), carolKP)
 	if err != nil {
 		t.Fatalf("add carol: %v", err)
-	}
-	if _, found := g.alice.pinOf(t, accountC); found {
-		t.Fatal("alice pinned carol before the operation was reported as done")
-	}
-	if err := v.Commit(); err != nil {
-		t.Fatal(err)
 	}
 	pin, found := g.alice.pinOf(t, accountC)
 	if !found || pin.State != keychain.PeerKeyPinStateTOFU ||
@@ -504,16 +500,9 @@ func TestTOFU_ThePinIsWrittenOnlyAfterTheWholeCommitSucceeds(t *testing.T) {
 	}
 
 	// The receiver.
-	bv := bob.verifier()
 	if _, err := bobStore.Receive(conv, noWatermark, chatstate.ReceiveRequest{Seq: 1, Message: in.Commit},
-		mls.NewCipher(bob.session(t), bv)); err != nil {
+		mls.NewCipher(bob.session(t), bob.verifier())); err != nil {
 		t.Fatalf("bob receive: %v", err)
-	}
-	if _, found := bob.pinOf(t, accountC); found {
-		t.Fatal("bob pinned carol before the operation was reported as done")
-	}
-	if err := bv.Commit(); err != nil {
-		t.Fatal(err)
 	}
 	if pin, found := bob.pinOf(t, accountC); !found || pin.State != keychain.PeerKeyPinStateTOFU {
 		t.Fatalf("bob's pin for carol = %+v, %v", pin, found)
@@ -729,6 +718,8 @@ func (r *recordLeaves) VerifyLeaves(leaves []mls.Leaf) error {
 	r.leaves = append(r.leaves, leaves...)
 	return nil
 }
+
+func (r *recordLeaves) Commit() error { return nil }
 
 // The server stores a KeyPackage in VARBINARY(8192). This is the measured
 // size of a real one, with an RSA-2048 account key and its PSS signature in

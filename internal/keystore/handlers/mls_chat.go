@@ -8,9 +8,9 @@
 //	  → the permit owner's store opens
 //	  → the device session opens as the active leaf, which must belong to
 //	    the permit's account
-//	  → one chatstate transaction, with every leaf it brings in verified
-//	  → only after that transaction is on disk, the verifier's pins and
-//	    newest-declaration records are written
+//	  → one chatstate transaction, with every leaf it brings in verified,
+//	    and the verifier's pins and newest-declaration records written once
+//	    the MLS operation has succeeded and before the state is
 //
 // so a refusal at any step persists nothing, and an unauthorized caller does
 // not even open the state directory.
@@ -111,18 +111,6 @@ func statementsByAccount(statements []proto.KeyRotationStatement) map[string][]p
 	return out
 }
 
-// commitVerified writes what the verifier staged, once the chatstate write it
-// was for is on disk. A failure here is reported rather than swallowed: the
-// group moved, but a pin that was not saved is a first use the next time.
-func commitVerified(d Deps, stage string, v *MLSLeafVerifier) (proto.BaseResponse, bool) {
-	if err := v.Commit(); err != nil {
-		d.Logger.Printf("mls chat %s: the verified leaves could not be recorded", stage)
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatStateErrorCodeStorageFailure),
-			"the group moved but its verified leaves could not be recorded"), false
-	}
-	return proto.BaseResponse{}, true
-}
-
 // memberKeyPackages decodes the KeyPackages and refuses any whose credential
 // is not the account and device the caller asked the server for. Validate has
 // already bounded and Base64-checked each one.
@@ -212,9 +200,6 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
-	}
-	if resp, ok := commitVerified(d, "group create", v); !ok {
-		return resp
 	}
 	d.Logger.Println("mls group create successful")
 	return commitResponse(result)
@@ -339,9 +324,6 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)
 	}
-	if resp, ok := commitVerified(d, "commit build", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls commit build successful")
 	return commitResponse(result)
 }
@@ -387,9 +369,6 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 	if err != nil {
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
-	if resp, ok := commitVerified(d, "commit confirm", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls commit confirm successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSCommitConfirmResponseData{
 		Outcome:           req.Outcome,
@@ -429,9 +408,6 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
-	if resp, ok := commitVerified(d, "process", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls process successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSProcessResponseData{
 		Seq:        req.Seq,
@@ -457,9 +433,6 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 	v := c.verifier(d, req.RotationStatements)
 	if err := c.session.JoinFromPool(c.store, c.conv, c.wm, welcome, v, d.Now()); err != nil {
 		return chatStateFailure(d, "mls join", err)
-	}
-	if resp, ok := commitVerified(d, "join", v); !ok {
-		return resp
 	}
 	epoch, err := c.session.Epoch()
 	if err != nil {

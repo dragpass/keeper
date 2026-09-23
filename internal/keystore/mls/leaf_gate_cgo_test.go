@@ -120,6 +120,8 @@ func (r *refuseAll) VerifyLeaves(leaves []Leaf) error {
 	return ErrLeafUntrusted
 }
 
+func (r *refuseAll) Commit() error { return nil }
+
 func TestARefusingVerifierLeavesTheGroupUntouched(t *testing.T) {
 	bob, commit, _ := threeMemberAttempt(t)
 	before, err := bob.Flush()

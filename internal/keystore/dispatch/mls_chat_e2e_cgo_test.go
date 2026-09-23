@@ -270,7 +270,7 @@ func (c *dm) nextSeq() uint64 {
 func TestMLSChatE2E_ADMIsCreatedConfirmedAndJoined(t *testing.T) {
 	c := newDM(t)
 
-	// Bob's pins now hold Alice, recorded only once the join was on disk.
+	// Bob's pins now hold Alice, recorded before the joined state was written.
 	if _, err := keychain.GetPeerKeyPin(c.bob.store, c.bob.id, c.alice.id); err != nil {
 		t.Fatalf("bob has no pin for alice after joining: %v", err)
 	}

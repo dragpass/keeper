@@ -28,6 +28,7 @@ const (
 type trustAll struct{}
 
 func (trustAll) VerifyLeaves([]Leaf) error { return nil }
+func (trustAll) Commit() error             { return nil }
 
 func newSession(t testing.TB, identity string) *Session {
 	t.Helper()
