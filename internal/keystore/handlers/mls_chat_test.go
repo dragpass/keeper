@@ -46,6 +46,11 @@ func mlsChatCases() []mlsChatCase {
 				ClientCommitID: mlsTestCommitID, Members: member,
 			}
 		}},
+		{proto.MLSGroupDiscardUnaccepted, HandleMLSGroupDiscardUnaccepted, func(p proto.ChatStatePermit) any {
+			return proto.MLSGroupDiscardUnacceptedRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, ClientCommitID: mlsTestCommitID,
+			}
+		}},
 		{proto.MLSCommitBuild, HandleMLSCommitBuild, func(p proto.ChatStatePermit) any {
 			return proto.MLSCommitBuildRequest{
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,

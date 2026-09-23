@@ -105,3 +105,74 @@ func TestMLSChatE2E_AnOwnMessageDoesNotExcuseADamagedOne(t *testing.T) {
 	// Nothing was written: Bob's good message is still a first delivery.
 	assertShown(t, c.alice.decrypt(good), 0, "fine", c.bob, false)
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// 2. A lost DM create is discarded and the winner's group joined.
+// ────────────────────────────────────────────────────────────────────────
+
+func (k *keeper) discardRequest(id string) proto.MLSGroupDiscardUnacceptedRequest {
+	return proto.MLSGroupDiscardUnacceptedRequest{
+		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: id,
+	}
+}
+
+func (k *keeper) discard(id string) proto.MLSGroupDiscardUnacceptedResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSGroupDiscardUnaccepted, k.discardRequest(id)).Data.(proto.MLSGroupDiscardUnacceptedResponseData)
+}
+
+func TestMLSChatE2E_ALostDMCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
+	e2eStateRoot(t)
+	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
+
+	// Both open the DM at the same moment. Each builds a create under the one
+	// conversation id; the server takes Alice's.
+	aliceID, bobID := alice.nextCommitID(), bob.nextCommitID()
+	aliceCreate := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: aliceID, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
+	}))
+	bobCreate := commitOf(bob.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: bobID, Members: []proto.MLSMemberKeyPackage{alice.keyPackage()},
+	}))
+	alice.confirm(aliceID, proto.MLSCommitOutcomeAccepted, "")
+
+	// Nothing else settles Bob's create: Alice's Commit is another group's and
+	// does not apply, and the pending create refuses the join.
+	bob.refused(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
+		Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: bobID,
+		Outcome: proto.MLSCommitOutcomeSuperseded, WinnerCommitB64: aliceCreate.CommitB64,
+	}, proto.ChatMLSErrorCodeFailed)
+	join := proto.MLSJoinRequest{Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: aliceCreate.WelcomeB64}
+	bob.refused(proto.MLSJoin, join, proto.ChatMLSErrorCodeCommitPending)
+
+	// Refusals first: another id, and Alice's accepted group. Neither writes.
+	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(alice.nextCommitID()), proto.ChatStateErrorCodeConflict)
+	bob.assertStatus(bob.status(), 0, bobID)
+	alice.refused(proto.MLSGroupDiscardUnaccepted, alice.discardRequest(aliceID), proto.ChatStateErrorCodeConflict)
+	alice.assertStatus(alice.status(), 1, "")
+
+	if got := bob.discard(bobID); !got.Discarded {
+		t.Fatalf("discard = %+v", got)
+	}
+	if got := bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || got.Epoch != 0 {
+		t.Fatalf("bob's status after the discard = %+v", got)
+	}
+	if again := bob.discard(bobID); again.Discarded {
+		t.Fatalf("discard again = %+v; want nothing to drop", again)
+	}
+	if bobCreate.WelcomeB64 == "" {
+		t.Fatal("bob's create had no welcome; the race did not happen")
+	}
+
+	if joined := bob.must(proto.MLSJoin, join).Data.(proto.MLSJoinResponseData); joined.Epoch != 1 {
+		t.Fatalf("bob joined alice's group at epoch %d", joined.Epoch)
+	}
+	c := &dm{alice: alice, bob: bob, seq: 1}
+	assertShown(t, c.alice.decrypt(c.send(c.bob, 1, 1, "joined yours")), 0, "joined yours", c.bob, false)
+	assertShown(t, c.bob.decrypt(c.send(c.alice, 2, 1, "welcome")), 0, "welcome", c.alice, false)
+
+	// Once joined, the group is confirmed and cannot be discarded.
+	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(bobID), proto.ChatStateErrorCodeConflict)
+}

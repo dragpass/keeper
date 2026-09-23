@@ -33,6 +33,20 @@ const (
 	//   Output: MLSCommitResponseData
 	MLSGroupCreate = "mls_group_create"
 
+	// MLSGroupDiscardUnaccepted drops this device's own group create that was
+	// never accepted: the loser of two members opening the same DM at once.
+	// It succeeds only when the pending Commit is the one named and is the
+	// create (built against epoch 0) and the record was never confirmed past
+	// epoch 0; then the group state and the pending Commit go, and mls_join can
+	// take the winner's Welcome. Every other state is CHAT_STATE_CONFLICT and
+	// writes nothing. Idempotent: with no group left it answers discarded
+	// false. Call it only once the server has given the epoch to another
+	// create: an accepted create whose answer was lost looks the same here.
+	//
+	//   Inputs: permit, org_id, conversation_id, client_commit_id
+	//   Output: { discarded, generation }
+	MLSGroupDiscardUnaccepted = "mls_group_discard_unaccepted"
+
 	// MLSCommitBuild builds one pending Commit of exactly one kind against
 	// expected_epoch: add, remove_account_ids (every leaf of each account),
 	// replace (each account's leaves swapped for the leaf of the device that

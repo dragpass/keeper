@@ -386,6 +386,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrHistoryUnavailable):
 		code, message = proto.ChatMLSErrorCodeFailed,
 			"this device has no usable local copy of that message"
+	case errors.Is(err, chatstate.ErrNotUnacceptedCreate):
+		code, message = proto.ChatStateErrorCodeConflict,
+			"the group on this device is not an unaccepted create of this device"
 	case errors.Is(err, chatstate.ErrSeqBound):
 		code, message = proto.ChatStateErrorCodeConflict,
 			"that seq or that message is already bound to another one"

@@ -191,6 +191,27 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	return commitResponse(result)
 }
 
+// HandleMLSGroupDiscardUnaccepted drops this device's create that lost the
+// race for the conversation's first epoch (chatstate.DiscardUnacceptedGroup).
+func HandleMLSGroupDiscardUnaccepted(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSGroupDiscardUnacceptedRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	result, err := c.store.DiscardUnacceptedGroup(c.conv, c.wm, req.ClientCommitID)
+	if err != nil {
+		return chatStateFailure(d, "mls group discard", err)
+	}
+	d.Logger.Println("mls group discard successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSGroupDiscardUnacceptedResponseData{
+		Discarded:  result.Discarded,
+		Generation: result.Generation,
+	}}
+}
+
 // replaceMembers decodes the replace entries and pairs each with the key the
 // permit names for its account. The credential is checked against the account
 // here, as memberKeyPackages checks an Add's; the key is checked against the

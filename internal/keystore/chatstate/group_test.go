@@ -71,3 +71,93 @@ func TestAJoinOverAPendingCommitIsRefused(t *testing.T) {
 		t.Fatalf("join over a pending commit = %v", err)
 	}
 }
+
+// fakeCreator is fakeCommitter with the one call that makes a group at
+// epoch 0 out of nothing.
+type fakeCreator struct{ fakeCommitter }
+
+func (c *fakeCreator) CreateGroup([]byte) error {
+	c.epoch, c.leaf, c.generation, c.pending, c.loaded = 0, 0, 0, 0, true
+	return nil
+}
+
+func createForTest(t *testing.T, store *Store, clientCommitID string) {
+	t.Helper()
+	if _, err := store.CreateGroup(testConvA, noWatermark, BeginCommitRequest{
+		ClientCommitID: clientCommitID,
+		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+	}, &fakeCreator{}); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+}
+
+// The DM race's loser: its create is dropped, a second call finds nothing to
+// drop, and the winner's group can then be joined.
+func TestAnUnacceptedCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
+	store, _ := newTestStore(t)
+	createForTest(t, store, testCommitA)
+
+	got, err := store.DiscardUnacceptedGroup(testConvA, noWatermark, testCommitA)
+	if err != nil || !got.Discarded {
+		t.Fatalf("discard = %+v, %v", got, err)
+	}
+	rec := readRecordForTest(t, store, testConvA)
+	if len(rec.GroupState) != 0 || rec.Pending != nil || rec.Epoch != 0 || rec.Generation != got.Generation {
+		t.Fatalf("record after the discard = %+v", rec)
+	}
+	again, err := store.DiscardUnacceptedGroup(testConvA, noWatermark, testCommitA)
+	if err != nil || again.Discarded || again.Generation != got.Generation {
+		t.Fatalf("discard again = %+v, %v; want nothing written", again, err)
+	}
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1); err != nil {
+		t.Fatalf("join after the discard: %v", err)
+	}
+	// A conversation that never had anything is the same no-op.
+	if none, err := store.DiscardUnacceptedGroup(testConvB, noWatermark, testCommitA); err != nil || none.Discarded {
+		t.Fatalf("discard of an empty conversation = %+v, %v", none, err)
+	}
+}
+
+// Every state that is not this device's unaccepted create is refused, and a
+// refusal writes nothing.
+func TestADiscardIsRefusedForAnyOtherState(t *testing.T) {
+	refuse := func(t *testing.T, store *Store, id string, want error) {
+		t.Helper()
+		before := readRecordForTest(t, store, testConvA)
+		if _, err := store.DiscardUnacceptedGroup(testConvA, noWatermark, id); !errors.Is(err, want) {
+			t.Fatalf("discard = %v, want %v", err, want)
+		}
+		after := readRecordForTest(t, store, testConvA)
+		if after.Generation != before.Generation || len(after.GroupState) == 0 {
+			t.Fatal("a refused discard wrote the record")
+		}
+	}
+
+	t.Run("another commit id", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		createForTest(t, store, testCommitA)
+		refuse(t, store, testCommitB, ErrCommitMismatch)
+	})
+	t.Run("an accepted create", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		createForTest(t, store, testCommitA)
+		if _, err := store.ConfirmCommit(testConvA, noWatermark,
+			CommitOutcome{ClientCommitID: testCommitA, Kind: CommitAccepted}, &fakeCommitter{}); err != nil {
+			t.Fatal(err)
+		}
+		refuse(t, store, testCommitA, ErrNotUnacceptedCreate)
+	})
+	t.Run("a pending commit that is not a create", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		seedGroupState(t, store, testConvA, 1, 0, 0)
+		beginForTest(t, store, testCommitA, &fakeCommitter{})
+		refuse(t, store, testCommitA, ErrNotUnacceptedCreate)
+	})
+	t.Run("a joined group", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+			t.Fatal(err)
+		}
+		refuse(t, store, testCommitA, ErrNotUnacceptedCreate)
+	})
+}

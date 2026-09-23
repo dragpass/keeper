@@ -190,6 +190,34 @@ func (r MLSGroupCreateRequest) Validate() error {
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
 
+// MLSGroupDiscardUnacceptedRequest drops this device's own group create whose
+// create Commit the server gave to another device, so a Welcome to the
+// winner's group can be joined.
+type MLSGroupDiscardUnacceptedRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+	ClientCommitID string          `json:"client_commit_id"`
+}
+
+func (r MLSGroupDiscardUnacceptedRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSGroupDiscardUnacceptedRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	return requireMessageUUID(r.ClientCommitID, "client_commit_id")
+}
+
+// MLSGroupDiscardUnacceptedResponseData — Discarded is false when there was
+// no group left to drop and nothing was written.
+type MLSGroupDiscardUnacceptedResponseData struct {
+	Discarded  bool   `json:"discarded"`
+	Generation uint64 `json:"generation"`
+}
+
 // MLSReplaceMember is one account to replace (design M4.4): the account a new
 // device took over, and that device's KeyPackage as the server handed it out.
 // There is no fingerprint field: the only key the Keeper accepts for the

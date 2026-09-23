@@ -16,6 +16,7 @@ import (
 func mlsChatActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
 		proto.MLSGroupCreate:               handlers.HandleMLSGroupCreate,
+		proto.MLSGroupDiscardUnaccepted:    handlers.HandleMLSGroupDiscardUnaccepted,
 		proto.MLSCommitBuild:               handlers.HandleMLSCommitBuild,
 		proto.MLSCommitConfirm:             handlers.HandleMLSCommitConfirm,
 		proto.MLSProcess:                   handlers.HandleMLSProcess,
