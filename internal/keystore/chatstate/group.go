@@ -49,6 +49,9 @@ func (s *Store) CreateGroup(
 	if err := checkRoomName(req.RoomName); err != nil {
 		return BeginCommitResult{}, err
 	}
+	if err := checkAppContext(req.AppContext); err != nil {
+		return BeginCommitResult{}, err
+	}
 	var out BeginCommitResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, anchor, err := s.loadChecked(p, conversationID, wm)
@@ -93,6 +96,8 @@ func (s *Store) CreateGroup(
 			ExpectedEpoch:  built.ExpectedEpoch,
 			Commit:         built.Commit,
 			Welcome:        built.Welcome,
+			AppContext:     req.AppContext,
+			Name:           storedName(name),
 		}
 		loaded := rec.Generation
 		rec.GroupState = state

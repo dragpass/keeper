@@ -33,7 +33,8 @@ const (
 	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           members[1..32] { account_id, device_id, key_package_b64 },
-	//           rotation_statements?, room_name_plaintext_b64? (1..256B)
+	//           rotation_statements?, room_name_plaintext_b64? (1..256B),
+	//           app_context_b64? (1..65536B, 0.0.55)
 	//   Output: MLSCommitResponseData
 	MLSGroupCreate = "mls_group_create"
 
@@ -82,8 +83,15 @@ const (
 	//           remove_account_ids[1..64] /
 	//           replace[1..32] { account_id, key_package_b64 } /
 	//           update_self, rotation_statements?,
-	//           room_name_plaintext_b64? (1..256B)
+	//           room_name_plaintext_b64? (1..256B),
+	//           app_context_b64? (1..65536B, 0.0.55)
 	//   Output: MLSCommitResponseData
+	//
+	// app_context_b64 is the app's own note of the Commit, kept with it and
+	// returned by MLSConversationStatus until the verdict, so an app that
+	// lost that note can still repost the Commit. A retry under the same id
+	// keeps the first note. The name the first build sealed is reported by
+	// MLSConversationStatus too.
 	MLSCommitBuild = "mls_commit_build"
 
 	// MLSCommitConfirm settles the pending Commit with the server's CAS
@@ -200,7 +208,10 @@ const (
 	//
 	//   Inputs: permit, org_id, conversation_id
 	//   Output: { epoch, has_group_state, commit_pending,
-	//             pending_client_commit_id, removal_latch_account_ids,
-	//             needs_rekey, removed_from_group }
+	//             pending_client_commit_id, pending_app_context_b64?,
+	//             pending_name_epoch?, pending_name_iv_b64?,
+	//             pending_name_ciphertext_b64?,
+	//             removal_latch_account_ids, needs_rekey, rekey_cause?,
+	//             removed_from_group }
 	MLSConversationStatus = "mls_conversation_status"
 )

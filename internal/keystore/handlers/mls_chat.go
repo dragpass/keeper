@@ -173,6 +173,18 @@ func roomNameInput(b64 string) ([]byte, proto.BaseResponse, bool) {
 // Membership and handshake.
 // ────────────────────────────────────────────────────────────────────────
 
+// appContextInput decodes app_context_b64. Validate has already bounded it.
+func appContextInput(b64 string) ([]byte, proto.BaseResponse, bool) {
+	if b64 == "" {
+		return nil, proto.BaseResponse{}, true
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, chatStateInvalidInput("app_context_b64 must be valid standard Base64"), false
+	}
+	return raw, proto.BaseResponse{}, true
+}
+
 // HandleMLSGroupCreate creates the conversation's group and builds the pending
 // Add for its first members, in one chatstate transaction.
 func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
@@ -192,11 +204,16 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return resp
 	}
 	defer secure.Zeroize(name)
+	appContext, resp, ok := appContextInput(req.AppContextB64)
+	if !ok {
+		return resp
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
 		RoomName:       name,
+		AppContext:     appContext,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
@@ -314,12 +331,17 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return resp
 	}
 	defer secure.Zeroize(name)
+	appContext, resp, ok := appContextInput(req.AppContextB64)
+	if !ok {
+		return resp
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
 		ExpectedEpoch:  req.ExpectedEpoch,
 		RoomName:       name,
+		AppContext:     appContext,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)
@@ -701,17 +723,31 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	if err != nil {
 		return chatStateFailure(d, "mls conversation status", err)
 	}
-	return proto.BaseResponse{Success: true, Data: proto.MLSConversationStatusResponseData{
+	data := proto.MLSConversationStatusResponseData{
 		Epoch:                 status.Epoch,
 		HasGroupState:         status.HasGroupState,
 		CommitPending:         status.CommitPending,
 		PendingClientCommitID: status.PendingClientCommitID,
+		PendingAppContextB64:  appContextOutput(status.PendingAppContext),
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
 		NeedsRekey:            status.NeedsRekey,
 		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
-	}}
+	}
+	if name := status.PendingName; name != nil {
+		data.PendingNameEpoch = name.Epoch
+		data.PendingNameIVb64 = base64.StdEncoding.EncodeToString(name.IV)
+		data.PendingNameCiphertextB64 = base64.StdEncoding.EncodeToString(name.Ciphertext)
+	}
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+func appContextOutput(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func rekeyCauseOf(status chatstate.ConversationStatus) string {

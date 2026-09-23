@@ -121,6 +121,28 @@ type PendingCommit struct {
 
 	// Welcome is released only once the Commit is accepted (RFC 9420 §14).
 	Welcome []byte `json:"welcome,omitempty"`
+
+	// AppContext is the caller's own description of this Commit, opaque here
+	// and never a secret by contract: what the app needs to post it again
+	// (the member set it declares, which flow built it) once its own note of
+	// the Commit is gone. Without it an app that lost that note cannot tell
+	// the server what the Commit is, and the conversation stays pending.
+	// Absent on a Commit built before 0.0.55.
+	AppContext []byte `json:"app_context,omitempty"`
+
+	// Name is the room name the first build sealed for ExpectedEpoch+1, kept
+	// because an app that lost the build's answer holds no plaintext to seal
+	// it again. Ciphertext only, the same bytes the server stores. Reported by
+	// Status, not by a retried build: an app that asks a retry for no name
+	// refuses an answer that carries one.
+	Name *PendingRoomName `json:"name,omitempty"`
+}
+
+// PendingRoomName is SealedRoomName as the record stores it. The epoch is the
+// pending Commit's ExpectedEpoch+1 and is not repeated.
+type PendingRoomName struct {
+	IV         []byte `json:"iv"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 
 // Record is one conversation's whole state. Everything that has to change

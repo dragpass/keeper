@@ -50,6 +50,7 @@ package chatstate
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -182,6 +183,29 @@ type BeginCommitRequest struct {
 	// the pending Commit and before the CAS, so the server can store it with
 	// the Commit in one row. The caller owns and wipes it.
 	RoomName []byte
+
+	// AppContext is stored with the pending Commit (PendingCommit.AppContext).
+	// A retry keeps the first build's.
+	AppContext []byte
+}
+
+// MaxPendingAppContextBytes bounds PendingCommit.AppContext. The app's
+// description of a Commit names at most a room's members and their claimed
+// KeyPackages; the bound keeps a caller from growing the record with it.
+const MaxPendingAppContextBytes = 65536
+
+func checkAppContext(context []byte) error {
+	if len(context) > MaxPendingAppContextBytes {
+		return fmt.Errorf("app context is over %d bytes", MaxPendingAppContextBytes)
+	}
+	return nil
+}
+
+func storedName(name *SealedRoomName) *PendingRoomName {
+	if name == nil {
+		return nil
+	}
+	return &PendingRoomName{IV: name.IV, Ciphertext: name.Ciphertext}
 }
 
 // BeginCommitResult is what the caller posts to the server's CAS endpoint.
@@ -285,6 +309,9 @@ func (s *Store) BeginCommit(
 	if err := checkRoomName(req.RoomName); err != nil {
 		return BeginCommitResult{}, err
 	}
+	if err := checkAppContext(req.AppContext); err != nil {
+		return BeginCommitResult{}, err
+	}
 	var out BeginCommitResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, anchor, err := s.loadChecked(p, conversationID, wm)
@@ -360,6 +387,8 @@ func (s *Store) BeginCommit(
 			ExpectedEpoch:  built.ExpectedEpoch,
 			Commit:         built.Commit,
 			Welcome:        built.Welcome,
+			AppContext:     req.AppContext,
+			Name:           storedName(name),
 		}
 		loaded := rec.Generation
 		rec.GroupState = state

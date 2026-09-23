@@ -309,6 +309,10 @@ func TestMLSChat_WireBoundsMatchTheLayersThatEnforceThem(t *testing.T) {
 		t.Errorf("key package bytes %d != mls.MaxKeyPackageBytes %d",
 			proto.MLSChatMaxKeyPackageBytes, mls.MaxKeyPackageBytes)
 	}
+	if proto.MLSAppContextMaxBytes != chatstate.MaxPendingAppContextBytes {
+		t.Errorf("app context bytes %d != chatstate.MaxPendingAppContextBytes %d",
+			proto.MLSAppContextMaxBytes, chatstate.MaxPendingAppContextBytes)
+	}
 	if proto.MLSChatMaxCommitBytes != chatstate.MaxCommitBytes {
 		t.Errorf("commit bytes %d != chatstate.MaxCommitBytes %d",
 			proto.MLSChatMaxCommitBytes, chatstate.MaxCommitBytes)

@@ -96,6 +96,10 @@ const (
 	// name_ciphertext column holds 272 bytes, the name and a 16-byte tag.
 	MLSRoomNameMaxBytes = 256
 
+	// MLSAppContextMaxBytes mirrors chatstate.MaxPendingAppContextBytes, the
+	// bound on the app's description of a pending Commit (0.0.55).
+	MLSAppContextMaxBytes = 65536
+
 	// MLSRoomNameIVBytes is the AES-GCM IV of a sealed room name.
 	MLSRoomNameIVBytes = 12
 
@@ -111,6 +115,13 @@ const (
 // validateRoomNamePlaintext bounds an optional room name input. The name
 // rules (1..64 code points, no control characters) are the client's; the
 // Keeper checks the size the server can store and, once decoded, UTF-8.
+func validateAppContext(b64 string) error {
+	if b64 == "" {
+		return nil
+	}
+	return requireMessageBase64Len(b64, "app_context_b64", 1, MLSAppContextMaxBytes)
+}
+
 func validateRoomNamePlaintext(b64, field string, required bool) error {
 	if b64 == "" && !required {
 		return nil
@@ -207,6 +218,10 @@ type MLSGroupCreateRequest struct {
 	// RoomNamePlaintextB64 is a room's name, resealed for epoch 1 in the
 	// response. Omitted for a DM. Encrypt direction; zeroized after sealing.
 	RoomNamePlaintextB64 string `json:"room_name_plaintext_b64,omitempty"`
+
+	// AppContextB64 is kept with the pending Commit and comes back in
+	// mls_conversation_status (0.0.55); see MLSCommitBuildRequest.
+	AppContextB64 string `json:"app_context_b64,omitempty"`
 }
 
 func (r MLSGroupCreateRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -224,6 +239,9 @@ func (r MLSGroupCreateRequest) Validate() error {
 		return err
 	}
 	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
+		return err
+	}
+	if err := validateAppContext(r.AppContextB64); err != nil {
 		return err
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
@@ -349,6 +367,14 @@ type MLSCommitBuildRequest struct {
 	// resealed for the epoch the Commit creates. Omitted for a DM. Encrypt
 	// direction; zeroized after sealing.
 	RoomNamePlaintextB64 string `json:"room_name_plaintext_b64,omitempty"`
+
+	// AppContextB64 is the app's own description of the Commit, opaque to the
+	// Keeper and not a secret by contract (0.0.55). It is stored with the
+	// pending Commit, a retry under the same id keeps the first one, and
+	// mls_conversation_status returns it while the Commit is pending: an app
+	// that lost its own note of the Commit reposts it from there instead of
+	// leaving the conversation pending for good.
+	AppContextB64 string `json:"app_context_b64,omitempty"`
 }
 
 func (r MLSCommitBuildRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -395,6 +421,9 @@ func (r MLSCommitBuildRequest) Validate() error {
 			"exactly one of add, remove_account_ids, replace and update_self must be given")
 	}
 	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
+		return err
+	}
+	if err := validateAppContext(r.AppContextB64); err != nil {
 		return err
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
@@ -829,6 +858,17 @@ type MLSConversationStatusResponseData struct {
 	CommitPending         bool     `json:"commit_pending"`
 	PendingClientCommitID string   `json:"pending_client_commit_id"`
 	RemovalLatch          []string `json:"removal_latch_account_ids"`
+
+	// PendingAppContextB64 is the app_context_b64 the pending Commit was built
+	// with (0.0.55), absent when none is pending or it was built without one.
+	PendingAppContextB64 string `json:"pending_app_context_b64,omitempty"`
+
+	// PendingName* is the room name the pending Commit's first build sealed
+	// (0.0.55), the name_* fields that build answered with; absent when it
+	// sealed none.
+	PendingNameEpoch         uint64 `json:"pending_name_epoch,omitempty"`
+	PendingNameIVb64         string `json:"pending_name_iv_b64,omitempty"`
+	PendingNameCiphertextB64 string `json:"pending_name_ciphertext_b64,omitempty"`
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
 	NeedsRekey           bool                       `json:"needs_rekey"`
