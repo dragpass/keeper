@@ -37,7 +37,11 @@ type fakeCommitter struct {
 	clears   int
 	appliedA []uint64 // the confirmed epoch each ApplyMessage ran against
 	buildErr error
+
+	roster []string
 }
+
+func (c *fakeCommitter) ConfirmedAccounts() ([]string, error) { return c.roster, nil }
 
 func fakePendingState(epoch uint64, leaf uint32, generation, pendingEpoch uint64) []byte {
 	return fmt.Appendf(nil, "fake|%d|%d|%d|pending|%d", epoch, leaf, generation, pendingEpoch)

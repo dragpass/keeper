@@ -79,6 +79,12 @@ type ServerWatermark struct {
 	LeafIndex            uint32
 	NextHandshakeIndex   uint64
 	NextApplicationIndex uint64
+
+	// PendingRemovals rides in the same signed permit and is not a watermark:
+	// it is the server's claim of which accounts left the organization and
+	// still await a Remove Commit here (design §6.4.1). It can only add to
+	// Record.RemovalLatch; see latch.go.
+	PendingRemovals []string
 }
 
 // HasAccepted reports whether the server has ever taken a position from this

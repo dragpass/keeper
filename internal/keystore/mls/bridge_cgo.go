@@ -70,6 +70,10 @@ int32_t dpmls_group_commit_add_members(DpSession *handle,
                                        const uint8_t *key_packages, size_t key_packages_len,
                                        DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
 int32_t dpmls_group_commit_update(DpSession *handle, DpBuf *commit, uint64_t *expected_epoch);
+int32_t dpmls_group_commit_remove_members(DpSession *handle,
+                                          const uint8_t *leaf_indices, size_t leaf_indices_len,
+                                          DpBuf *commit, uint64_t *expected_epoch);
+int32_t dpmls_group_roster(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_commit_apply(DpSession *handle);
 int32_t dpmls_group_commit_clear(DpSession *handle);
 int32_t dpmls_group_has_pending_commit(DpSession *handle, uint8_t *out);
@@ -285,6 +289,44 @@ func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error
 		return nil, 0, statusError(rc)
 	}
 	return takeBuf(&c), uint64(epoch), nil
+}
+
+// CommitRemoveMembers builds a Commit that removes these leaves. Pending in the
+// same way CommitAddMember is: the leaves stay in Roster until
+// ApplyPendingCommit.
+func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expectedEpoch uint64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, 0, err
+	}
+	framed := frameLeafIndices(leafIndices)
+	var (
+		c     C.DpBuf
+		epoch C.uint64_t
+	)
+	rc := C.dpmls_group_commit_remove_members(h, bytePtr(framed), C.size_t(len(framed)), &c, &epoch)
+	runtime.KeepAlive(framed)
+	if rc != 0 {
+		return nil, 0, statusError(rc)
+	}
+	return takeBuf(&c), uint64(epoch), nil
+}
+
+// Roster is every leaf of the confirmed tree. A pending Commit is not in it.
+func (s *Session) Roster() ([]Leaf, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	if rc := C.dpmls_group_roster(h, &buf); rc != 0 {
+		return nil, statusError(rc)
+	}
+	return decodeLeaves(takeBuf(&buf))
 }
 
 // ApplyPendingCommit promotes the pending Commit to confirmed. Nothing else

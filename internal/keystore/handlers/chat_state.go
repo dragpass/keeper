@@ -187,6 +187,7 @@ func openChatState(
 		LeafIndex:            permit.WatermarkLeafIndex,
 		NextHandshakeIndex:   permit.WatermarkNextHandshake,
 		NextApplicationIndex: permit.WatermarkNextApplication,
+		PendingRemovals:      permit.PendingRemovalAccountIDs,
 	}
 	if resp, ok := chatStateWatermarkNamesThisLeaf(d, store, conversationID, watermark); !ok {
 		store.Close()
@@ -314,6 +315,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	switch {
 	case errors.Is(err, mls.ErrLeafUntrusted):
 		return mlsLeafUntrustedResponse(d, stage, err)
+	case errors.Is(err, chatstate.ErrRotationPending):
+		code, message = proto.ChatMLSErrorCodeRotationPending,
+			"a member removal is not yet applied on this device; new messages cannot be encrypted"
 	case errors.Is(err, chatstate.ErrRekeyRequired):
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"

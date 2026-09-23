@@ -37,6 +37,10 @@ type fakeCipher struct {
 	lastAAD  []byte
 	sealErr  error
 	beforeAt func()
+
+	// roster is what ConfirmedAccounts reports; rosterReads counts the reads.
+	roster      []string
+	rosterReads int
 }
 
 func fakeState(epoch uint64, leaf uint32, generation uint64) []byte {
@@ -100,6 +104,14 @@ func (c *fakeCipher) Seal(plaintext, authenticatedData []byte) ([]byte, error) {
 	c.seals++
 	c.lastAAD = append([]byte(nil), authenticatedData...)
 	return fmt.Appendf(nil, "ct|%d|%d|%d|%s", c.epoch, c.leaf, used, plaintext), nil
+}
+
+func (c *fakeCipher) ConfirmedAccounts() ([]string, error) {
+	if !c.loaded {
+		return nil, errors.New("fake cipher: roster read before loading")
+	}
+	c.rosterReads++
+	return c.roster, nil
 }
 
 func (c *fakeCipher) State() ([]byte, error) {
@@ -444,7 +456,11 @@ type fakeInbound struct {
 	// beforeState runs after the decrypt and before the confirmation is
 	// serialized, which is the only place a crash could split the pair.
 	beforeState func()
+
+	roster []string
 }
+
+func (c *fakeInbound) ConfirmedAccounts() ([]string, error) { return c.roster, nil }
 
 func (c *fakeInbound) Load(blob []byte) error {
 	if len(blob) == 0 {

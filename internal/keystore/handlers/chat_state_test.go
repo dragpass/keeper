@@ -71,12 +71,13 @@ func newChatStateFixture(t *testing.T) *chatStateFixture {
 func (f *chatStateFixture) unsignedPermit() proto.ChatStatePermit {
 	now := f.clock.now().Unix()
 	return proto.ChatStatePermit{
-		AccountID:        chatAccountID,
-		OrgID:            chatOrgID,
-		ConversationID:   chatConvID,
-		IssuedAt:         now,
-		ExpiresAt:        now + proto.ChatStatePermitTTLSeconds,
-		ServerKeyVersion: msgServerKeyVersion,
+		AccountID:                chatAccountID,
+		OrgID:                    chatOrgID,
+		ConversationID:           chatConvID,
+		PendingRemovalAccountIDs: []string{},
+		IssuedAt:                 now,
+		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
+		ServerKeyVersion:         msgServerKeyVersion,
 	}
 }
 

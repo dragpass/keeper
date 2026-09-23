@@ -77,6 +77,10 @@ type ReceiveCipher interface {
 
 	// State serializes the session as it now stands.
 	State() ([]byte, error)
+
+	// ConfirmedAccounts is read after Open, so a Commit that Open applied is
+	// already part of the roster it reports.
+	RosterReader
 }
 
 // ReceiveRequest is one inbound message. Seq is the server's sequence, which
@@ -171,12 +175,24 @@ func (s *Store) Receive(
 			}
 		}
 
+		// Judged on the state Open left behind: somebody else's Commit that
+		// took the leaf out is confirmed the moment it is applied. A device
+		// that was itself removed has no group left to read a roster from and
+		// will never encrypt in it again, so its latch is left as it was.
+		latch := rec.RemovalLatch
+		if !opened.Removed {
+			if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+				return err
+			}
+		}
+
 		state, err := cipher.State()
 		if err != nil {
 			return err
 		}
 		loaded := rec.Generation
 		rec.GroupState = state
+		rec.RemovalLatch = latch
 		rec.enterEpoch(opened.Epoch)
 		first := true
 		if opened.Application {

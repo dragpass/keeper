@@ -324,6 +324,24 @@ pub fn decode_key_packages(buf: &[u8]) -> Result<Vec<&[u8]>, &'static str> {
     Ok(out)
 }
 
+/// Leaf indices for one Remove Commit are framed as `u32 count` then one
+/// big-endian u32 each.
+pub fn decode_leaf_indices(buf: &[u8]) -> Result<Vec<u32>, &'static str> {
+    let mut cur = Reader { buf, at: 0 };
+    let count = usize::try_from(cur.u32()?).map_err(|_| "leaf index count does not fit")?;
+    if count == 0 || count > MAX_LEAVES {
+        return Err("leaf index count is out of range");
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        out.push(cur.u32()?);
+    }
+    if cur.at != buf.len() {
+        return Err("leaf index list has trailing bytes");
+    }
+    Ok(out)
+}
+
 /// Report the leaves in `after` that `before` does not hold identically at the
 /// same index. A leaf whose declaration changed through an update path counts
 /// as new: the declaration is what the Go side vouched for, not the index.
@@ -388,6 +406,20 @@ mod tests {
             BasicCredential::new(id.to_vec()).into_credential(),
             key.to_vec().into(),
         )
+    }
+
+    #[test]
+    fn leaf_indices_are_decoded_strictly() {
+        let mut framed = 2u32.to_be_bytes().to_vec();
+        framed.extend_from_slice(&7u32.to_be_bytes());
+        framed.extend_from_slice(&9u32.to_be_bytes());
+        assert_eq!(decode_leaf_indices(&framed), Ok(vec![7, 9]));
+
+        assert!(decode_leaf_indices(&0u32.to_be_bytes()).is_err());
+        assert!(decode_leaf_indices(&framed[..framed.len() - 1]).is_err());
+        let mut trailing = framed.clone();
+        trailing.push(0);
+        assert!(decode_leaf_indices(&trailing).is_err());
     }
 
     #[test]

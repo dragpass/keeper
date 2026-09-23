@@ -49,6 +49,7 @@ package chatstate
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // maxBurnForward bounds the recovery loop. One burn is all a crash between the
@@ -80,6 +81,8 @@ type SendCipher interface {
 	// State serializes the session as it now stands. Nothing the MLS library
 	// did is durable until what this returns is written.
 	State() ([]byte, error)
+
+	RosterReader
 }
 
 // SendRequest is one outbound message.
@@ -160,6 +163,16 @@ func (s *Store) Send(
 		if err := cipher.Load(rec.GroupState); err != nil {
 			return err
 		}
+		// Ahead of burnUnfinished and the peek, not only ahead of the seal: a
+		// refused send must leave the ratchet exactly where it found it.
+		latch, err := judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher)
+		if err != nil {
+			return err
+		}
+		if len(latch) > 0 {
+			return s.refuseWhileLatched(p, rec, anchor, latch)
+		}
+		rec.RemovalLatch = nil
 		burned, err := burnUnfinished(rec, cipher)
 		if err != nil {
 			return err
@@ -250,6 +263,20 @@ func (s *Store) Send(
 		return nil
 	})
 	return out, err
+}
+
+// refuseWhileLatched keeps what this send learned about the latch and refuses
+// it. The write is what makes a permit's list outlive the permit: the next
+// permit may leave the account out, and that must not reopen sending.
+func (s *Store) refuseWhileLatched(p convPaths, rec *Record, anchor Anchor, latch []string) error {
+	if !slices.Equal(latch, rec.RemovalLatch) {
+		loaded := rec.Generation
+		rec.RemovalLatch = latch
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+	}
+	return ErrRotationPending
 }
 
 // burnUnfinished abandons a position whose fate the record cannot settle.
