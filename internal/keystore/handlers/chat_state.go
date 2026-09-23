@@ -114,6 +114,8 @@ func HandleChatStateReadOutbox(d Deps, payload json.RawMessage) proto.BaseRespon
 		ChainIndex:    entry.Position.Generation,
 		IVB64:         base64.StdEncoding.EncodeToString(entry.IV),
 		CiphertextB64: base64.StdEncoding.EncodeToString(entry.Ciphertext),
+		LeafIndex:     entry.Position.SenderLeafIndex,
+		ContentType:   string(entry.Position.ContentType),
 	}}
 }
 

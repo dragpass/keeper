@@ -430,6 +430,13 @@ type ChatStateReadOutboxResponseData struct {
 	ChainIndex    uint64 `json:"chain_index"`
 	IVB64         string `json:"iv_b64"`
 	CiphertextB64 string `json:"ciphertext_b64"`
+
+	// LeafIndex and ContentType complete the position an mls_encrypt entry
+	// was sealed at (0.0.55), which is what POST /:id/messages declares. An
+	// app that lost mls_encrypt's answer and keeps no plaintext can only post
+	// the message from here. A chat_state_commit_outbox entry has neither.
+	LeafIndex   uint32 `json:"leaf_index"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // ChatStateMarkReceivedRequest names one inbound position. Four slots and not

@@ -58,8 +58,13 @@ const (
 	// carries; the permit is required because the set of conversations this
 	// device has state for is not.
 	//
+	// For an mls_encrypt entry it also names the leaf and the content type, so
+	// an app that lost mls_encrypt's answer can post the stored bytes without
+	// the plaintext (0.0.55).
+	//
 	//   Inputs: permit, org_id, conversation_id, client_message_id
-	//   Output: { epoch, chain_index, iv_b64, ciphertext_b64 }
+	//   Output: { epoch, chain_index, iv_b64, ciphertext_b64, leaf_index,
+	//             content_type? }
 	ChatStateReadOutbox = "chat_state_read_outbox"
 
 	// ChatStateMarkReceived records an inbound position and says whether this
