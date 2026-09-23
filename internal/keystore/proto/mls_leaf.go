@@ -177,9 +177,13 @@ type MLSLeafChallenge struct {
 // token has one spelling. Single use is the server's to enforce: it consumes
 // the nonce together with the declaration write.
 func ParseMLSLeafChallenge(token string) (MLSLeafChallenge, error) {
-	invalid := newValidationError("challenge_token", "is not an mls leaf challenge")
+	return parsePurposeChallenge(token, MLSLeafChallengeDomain, MLSLeafChallengeVersion,
+		newValidationError("challenge_token", "is not an mls leaf challenge"))
+}
+
+func parsePurposeChallenge(token, domain string, version int, invalid error) (MLSLeafChallenge, error) {
 	parts := strings.Split(token, "|")
-	if len(parts) != 6 || parts[0] != MLSLeafChallengeDomain || parts[1] != strconv.Itoa(MLSLeafChallengeVersion) {
+	if len(parts) != 6 || parts[0] != domain || parts[1] != strconv.Itoa(version) {
 		return MLSLeafChallenge{}, invalid
 	}
 	if requireMessageUUID(parts[2], "challenge_token") != nil ||
@@ -411,17 +415,30 @@ func (e MLSLeafExtension) Validate() error {
 // the handlers package keeps them equal.
 const MLSKeyPackageGenerateMaxCount = 32
 
-// MLSKeyPackageGenerateRequest is gated like the conversation-state actions:
-// a dragpass.chat.state permit, bound to the org and conversation it names.
+// MLSKeyPackageGenerateRequest is gated like mls_leaf_declare: a server
+// signature over a challenge bound to this purpose, account and device. Not a
+// conversation-state permit — a device with no conversation yet needs
+// KeyPackages to be added to its first one.
 type MLSKeyPackageGenerateRequest struct {
-	Permit         ChatStatePermit `json:"permit"`
-	OrgID          string          `json:"org_id"`
-	ConversationID string          `json:"conversation_id"`
-	Count          int             `json:"count"`
+	ChallengeToken   string `json:"challenge_token"`
+	ServerSignature  string `json:"server_signature"`
+	ServerKeyVersion uint   `json:"server_key_version,omitempty"`
+	AccountID        string `json:"account_id"`
+	DeviceID         string `json:"device_id"`
+	Count            int    `json:"count"`
 }
 
 func (r MLSKeyPackageGenerateRequest) Validate() error {
-	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+	if err := requireString(r.ChallengeToken, "challenge_token"); err != nil {
+		return err
+	}
+	if err := requireString(r.ServerSignature, "server_signature"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.DeviceID, "device_id"); err != nil {
 		return err
 	}
 	if r.Count < 1 || r.Count > MLSKeyPackageGenerateMaxCount {
@@ -430,8 +447,22 @@ func (r MLSKeyPackageGenerateRequest) Validate() error {
 	return nil
 }
 
-func (r MLSKeyPackageGenerateRequest) ChatStateContext() (ChatStatePermit, string, string) {
-	return r.Permit, r.OrgID, r.ConversationID
+// The challenge ariadne issues for one mls_key_package_generate call and
+// consumes with the upload it authorizes. Its own domain, so a leaf
+// declaration challenge never opens this gate and this one never opens that.
+//
+//	dragpass.mls.keypackage.challenge|1|<account_id>|<device_id>|<nonce>|<expires_at_unix>
+const (
+	MLSKeyPackageChallengeDomain     = "dragpass.mls.keypackage.challenge"
+	MLSKeyPackageChallengeVersion    = 1
+	MLSKeyPackageChallengeTTLSeconds = 300
+)
+
+// ParseMLSKeyPackageChallenge accepts only the exact bytes the issuer
+// produces, under the same rules as ParseMLSLeafChallenge.
+func ParseMLSKeyPackageChallenge(token string) (MLSLeafChallenge, error) {
+	return parsePurposeChallenge(token, MLSKeyPackageChallengeDomain, MLSKeyPackageChallengeVersion,
+		newValidationError("challenge_token", "is not an mls key package challenge"))
 }
 
 // MLSKeyPackage is one KeyPackage (an MLSMessage, at most 8192 bytes) and the

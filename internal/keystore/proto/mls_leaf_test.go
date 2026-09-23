@@ -209,3 +209,30 @@ func TestMLSLeafAccepted_GoldenVectorAndStrictParse(t *testing.T) {
 		}
 	}
 }
+
+// The two MLS challenges share their rules and never each other's domain.
+func TestParseMLSKeyPackageChallenge_IsItsOwnDomain(t *testing.T) {
+	const nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tail := "|1|" + mlsLeafGoldenAccountID + "|" + mlsLeafGoldenDeviceID + "|" + nonce + "|1788999300"
+	kp, leaf := MLSKeyPackageChallengeDomain+tail, MLSLeafChallengeDomain+tail
+
+	got, err := ParseMLSKeyPackageChallenge(kp)
+	if err != nil || got.AccountID != mlsLeafGoldenAccountID || got.DeviceID != mlsLeafGoldenDeviceID || got.ExpiresAt != 1788999300 {
+		t.Fatalf("well-formed key package challenge: %+v, %v", got, err)
+	}
+	if _, err := ParseMLSKeyPackageChallenge(leaf); err == nil {
+		t.Fatal("a leaf challenge parsed as a key package challenge")
+	}
+	if _, err := ParseMLSLeafChallenge(kp); err == nil {
+		t.Fatal("a key package challenge parsed as a leaf challenge")
+	}
+	for _, bad := range []string{
+		strings.Replace(kp, "|1|", "|2|", 1),
+		kp + "|x",
+		strings.Replace(kp, "1788999300", "01788999300", 1),
+	} {
+		if _, err := ParseMLSKeyPackageChallenge(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

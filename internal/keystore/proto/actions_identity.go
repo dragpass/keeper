@@ -261,4 +261,19 @@ const (
 	ActionMLSLeafPromote = "mls_leaf_promote"
 	ActionMLSLeafAbort   = "mls_leaf_abort"
 	ActionMLSLeafStatus  = "mls_leaf_status"
+
+	// MLSKeyPackageGenerate produces single-use KeyPackages for this device's
+	// active leaf, each carrying the active leaf declaration in a LeafNode
+	// extension and ending no later than it, for the caller to upload to the
+	// pool; their private keys go into the owner's sealed KeyPackage pool
+	// before the response is built. There is no last-resort KeyPackage.
+	// Gated by the purpose-bound dragpass.mls.keypackage.challenge, like
+	// mls_leaf_declare and for the same reason: a tool call must not be able
+	// to put this device into groups. Not a conversation-state permit, which a
+	// device with no conversation yet cannot have.
+	//
+	//   Inputs: challenge_token, server_signature, server_key_version?,
+	//           account_id, device_id, count (1..32)
+	//   Output: { key_packages: [{ key_package_b64, not_after }] }
+	MLSKeyPackageGenerate = "mls_key_package_generate"
 )

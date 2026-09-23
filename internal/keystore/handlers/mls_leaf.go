@@ -370,18 +370,30 @@ const mlsLeafChallengeClockSkewSeconds = 5
 // requireMLSLeafChallenge binds the verified token to this request. Expiry has
 // no grace, as with the chat permits: at expires_at the token is dead.
 func requireMLSLeafChallenge(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse, bool) {
-	challenge, err := proto.ParseMLSLeafChallenge(req.ChallengeToken)
+	return requirePurposeChallenge(d, req.ChallengeToken, req.AccountID, req.DeviceID,
+		proto.ParseMLSLeafChallenge, proto.MLSLeafChallengeTTLSeconds)
+}
+
+// requirePurposeChallenge is the rule both MLS challenges share, after the
+// server signature has verified: parse holds the exact field count, domain and
+// version; then the request's account and device, and an expiry that has not
+// passed on the Keeper clock nor lies further out than TTL + skew.
+func requirePurposeChallenge(
+	d Deps, token, accountID, deviceID string,
+	parse func(string) (proto.MLSLeafChallenge, error), ttlSeconds int64,
+) (proto.BaseResponse, bool) {
+	challenge, err := parse(token)
 	if err != nil {
 		return errs.Response(err), false
 	}
-	if challenge.AccountID != req.AccountID || challenge.DeviceID != req.DeviceID {
+	if challenge.AccountID != accountID || challenge.DeviceID != deviceID {
 		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token was issued for a different account or device"), false
 	}
 	now := d.Now().Unix()
 	if now >= challenge.ExpiresAt {
 		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token has expired"), false
 	}
-	if challenge.ExpiresAt > now+proto.MLSLeafChallengeTTLSeconds+mlsLeafChallengeClockSkewSeconds {
+	if challenge.ExpiresAt > now+ttlSeconds+mlsLeafChallengeClockSkewSeconds {
 		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token expires too far in the future"), false
 	}
 	return proto.BaseResponse{}, true

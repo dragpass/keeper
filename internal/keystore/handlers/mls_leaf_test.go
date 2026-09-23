@@ -407,6 +407,7 @@ func TestHandleMLSLeafDeclare_ChallengeIsBoundToPurposeAndIdentity(t *testing.T)
 	refused := map[string]string{
 		"rotation challenge":   "rotate-challenge-001",
 		"other domain":         "dragpass.keyrotation|1|" + leafTestAccountID + "|" + leafTestDeviceID + "|" + leafTestNonce + "|" + strconv.FormatInt(valid, 10),
+		"key package domain":   keyPackageChallengeToken(leafTestAccountID, leafTestDeviceID, valid),
 		"version 2":            "dragpass.mls.leaf.challenge|2|" + leafTestAccountID + "|" + leafTestDeviceID + "|" + leafTestNonce + "|" + strconv.FormatInt(valid, 10),
 		"extra field":          leafChallenge(leafTestAccountID, leafTestDeviceID, valid) + "|x",
 		"short nonce":          "dragpass.mls.leaf.challenge|1|" + leafTestAccountID + "|" + leafTestDeviceID + "|abcd|" + strconv.FormatInt(valid, 10),

@@ -52,6 +52,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -356,36 +357,135 @@ const MaxKeyPackagesPerCall = 32
 const MaxKeyPackageBytes = 8192
 
 // KeyPackage is one single-use KeyPackage and the end of its lifetime, which
-// is the not_after the client declares when it uploads it.
+// is the not_after the client declares when it uploads it. Public material
+// only.
 type KeyPackage struct {
 	Message  []byte
 	NotAfter uint64
 }
 
 // KeyPackages produces n single-use KeyPackages, each carrying the active
-// declaration this session was built with. There is no last-resort
-// KeyPackage. One over MaxKeyPackageBytes fails the call rather than being
-// dropped or cut: a short batch would read as success.
-func (s *Session) KeyPackages(n int) ([]KeyPackage, error) {
+// declaration this session was built with and ending no later than
+// notAfterCap — the declaration's own not_after, which a KeyPackage embedding
+// it must not outlive. There is no last-resort KeyPackage. One over
+// MaxKeyPackageBytes fails the call rather than being dropped or cut: a short
+// batch would read as success.
+//
+// The second result holds each KeyPackage's private keys, for the owner's
+// KeyPackage pool (chatstate.Store.AddKeyPackages). It must be stored before
+// the first result is handed to anyone — a KeyPackage whose keys were lost is
+// one nobody can be added through — and wiped after. The session keeps none
+// of it.
+func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatstate.KeyPackagePoolEntry, error) {
 	if n < 1 || n > MaxKeyPackagesPerCall {
-		return nil, errors.New("mls: key package count is out of range")
+		return nil, nil, errors.New("mls: key package count is out of range")
 	}
 	out := make([]KeyPackage, 0, n)
-	for i := 0; i < n; i++ {
-		kp, err := s.KeyPackage()
-		if err != nil {
-			return nil, err
+	pool := make([]chatstate.KeyPackagePoolEntry, 0, n)
+	fail := func(err error) ([]KeyPackage, []chatstate.KeyPackagePoolEntry, error) {
+		for _, e := range pool {
+			secure.Zeroize(e.Private)
 		}
+		return nil, nil, err
+	}
+	for i := 0; i < n; i++ {
+		kp, ref, private, err := s.keyPackage(notAfterCap)
+		if err != nil {
+			return fail(err)
+		}
+		pool = append(pool, chatstate.KeyPackagePoolEntry{Ref: ref, Private: private})
 		if len(kp) > MaxKeyPackageBytes {
-			return nil, errors.New("mls: a key package exceeds the size the server stores")
+			return fail(errors.New("mls: a key package exceeds the size the server stores"))
 		}
 		notAfter, err := keyPackageNotAfter(kp)
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
+		if notAfter > notAfterCap {
+			return fail(errors.New("mls: a key package outlives its leaf declaration"))
+		}
+		pool[i].NotAfter = notAfter
 		out = append(out, KeyPackage{Message: kp, NotAfter: notAfter})
 	}
-	return out, nil
+	return out, pool, nil
+}
+
+// ErrNoKeyPackageForWelcome — this device holds no private keys for any
+// KeyPackage the Welcome is addressed to: it expired, was never kept, or was
+// already used.
+var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for this welcome")
+
+// JoinFromPool joins a conversation from a Welcome addressed to one of this
+// device's KeyPackages, taking that KeyPackage's private keys from the
+// owner's pool, and persists the group.
+//
+// The order is the point. The group state is written first and the pool entry
+// deleted second. A crash between the two leaves an entry behind, which is
+// harmless: the server marked that KeyPackage consumed when it served it and
+// will not hand it out again. The other order could lose the invitation — the
+// keys gone and the group never written.
+//
+// mls-rs deletes the KeyPackage from its own repository when the joined group
+// is written to storage, outside any transaction (design §15). That repository
+// is the session's in-memory custody here, not a durable store, so its delete
+// is not a second atomicity unit: the only durable delete is the pool's, and
+// it follows the group state write.
+//
+// What v would record (first-use pins) is the caller's to commit once this
+// returns nil, as with every verified operation.
+func (s *Session) JoinFromPool(
+	store *chatstate.Store,
+	conversationID string,
+	wm chatstate.ServerWatermark,
+	welcome []byte,
+	v LeafVerifier,
+	now time.Time,
+) error {
+	refs, err := welcomeKeyPackageRefs(welcome)
+	if err != nil {
+		return err
+	}
+	entry, err := store.LookupKeyPackage(refs, now)
+	if errors.Is(err, chatstate.ErrKeyPackageNotInPool) {
+		return ErrNoKeyPackageForWelcome
+	}
+	if err != nil {
+		return err
+	}
+	err = s.installKeyPackage(entry.Private)
+	secure.Zeroize(entry.Private)
+	if err != nil {
+		return err
+	}
+	if err := s.JoinVerified(welcome, v); err != nil {
+		return err
+	}
+	if _, err := Persist(store, conversationID, wm, s); err != nil {
+		return err
+	}
+	return store.DeleteKeyPackage(entry.Ref, now)
+}
+
+// decodeRefs reads dpmls_welcome_key_package_refs' framing strictly.
+func decodeRefs(buf []byte) ([][]byte, error) {
+	bad := errors.New("mls: key package reference framing is malformed")
+	r := leafReader{buf: buf}
+	count, ok := r.u32()
+	if !ok || count > maxLeaves {
+		return nil, bad
+	}
+	refs := make([][]byte, 0, count)
+	for i := uint32(0); i < count; i++ {
+		ref, ok := r.prefixed()
+		if !ok {
+			return nil, bad
+		}
+		refs = append(refs, ref)
+	}
+	if len(r.buf) != r.at {
+		return nil, bad
+	}
+	return refs, nil
 }
 
 // ────────────────────────────────────────────────────────────────────────

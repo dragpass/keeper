@@ -78,5 +78,9 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote),
 		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort),
 		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus),
+
+		// KeyPackages for the active leaf, gated by the purpose-bound
+		// KeyPackage challenge; their private keys go to the sealed pool.
+		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate),
 	}
 }

@@ -35,7 +35,13 @@ func (s *Session) Close() {}
 
 func (s *Session) CreateGroup(groupID []byte) error { return ErrUnavailable }
 
-func (s *Session) KeyPackage() ([]byte, error) { return nil, ErrUnavailable }
+func (s *Session) keyPackage(notAfterCap uint64) (message, reference, private []byte, err error) {
+	return nil, nil, nil, ErrUnavailable
+}
+
+func (s *Session) installKeyPackage(private []byte) error { return ErrUnavailable }
+
+func welcomeKeyPackageRefs(welcome []byte) ([][]byte, error) { return nil, ErrUnavailable }
 
 func (s *Session) CommitAddMembers(keyPackages [][]byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	return nil, nil, 0, ErrUnavailable

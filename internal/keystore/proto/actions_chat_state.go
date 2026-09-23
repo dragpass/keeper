@@ -96,16 +96,4 @@ const (
 	//   Inputs: owner_account_id
 	//   Output: { removed_conversations }
 	ChatStatePurge = "chat_state_purge"
-
-	// MLSKeyPackageGenerate produces single-use KeyPackages for this device's
-	// declared leaf, each carrying the active leaf declaration in a LeafNode
-	// extension, for the caller to upload to the pool. There is no
-	// last-resort KeyPackage. Permit-gated like the actions above, for the
-	// same reason: a tool call must not be able to put this device into
-	// groups. It is not a chat_state_* action because it reads no
-	// conversation state.
-	//
-	//   Inputs: permit, org_id, conversation_id, count (1..32)
-	//   Output: { key_packages: [{ key_package_b64, not_after }] }
-	MLSKeyPackageGenerate = "mls_key_package_generate"
 )

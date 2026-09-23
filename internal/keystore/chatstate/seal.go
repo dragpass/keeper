@@ -19,8 +19,8 @@ import (
 
 const sealKeyBytes = 32
 
-// Labels for the three things the seal key is used for. One key with three
-// labels rather than three keyring entries: the derivation is what separates
+// Labels for the four things the seal key is used for. One key with four
+// labels rather than four keyring entries: the derivation is what separates
 // them, and a second entry would be a second thing to keep in step during a
 // purge.
 //
@@ -46,6 +46,10 @@ const (
 	// secret, so that the history can be destroyed without the state, is
 	// M4.6.3 and is not decided here.
 	historySubkeyLabel = "dragpass.chat.state.history|1"
+
+	// keyPackagePoolSubkeyLabel seals the private keys of this owner's
+	// outstanding KeyPackages (key_package_pool.go).
+	keyPackagePoolSubkeyLabel = "dragpass.chat.state.keypackages|1"
 )
 
 // ownerTagDomain separates the keyless owner tag from anything else that might
