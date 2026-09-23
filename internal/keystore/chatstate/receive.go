@@ -34,6 +34,7 @@
 package chatstate
 
 import (
+	"bytes"
 	"errors"
 	"time"
 
@@ -137,7 +138,7 @@ type ReceiveResult struct {
 	FromHistory bool
 
 	// OwnWithoutCopy is true for a message this device sent whose seq has no
-	// sealed copy here. There is no plaintext and no position, and nothing was
+	// sealed copy here, and none that bindUnmarkedSent could bind. There is no plaintext and no position, and nothing was
 	// consumed or written for it. Only ReceiveBatch reports it.
 	OwnWithoutCopy bool
 
@@ -164,8 +165,8 @@ var (
 // ErrOwnMessage — the MLS layer refused a message because this device's own
 // leaf sent it (mls-rs CantProcessMessageFromSelf). The refusal comes from
 // reading the sender data, before any content key is derived, so nothing was
-// consumed. ReceiveBatch reports it as OwnWithoutCopy; everywhere else it is a
-// refusal like any other.
+// consumed. ReceiveBatch answers it from the sealed copy or as OwnWithoutCopy;
+// everywhere else it is a refusal like any other.
 var ErrOwnMessage = errors.New("chat state was handed a message this device sent")
 
 // ErrHistoryUnavailable — the sealed copy for this sequence is not there, or
@@ -224,9 +225,11 @@ const MaxReceiveBatch = 200
 // plaintext at all.
 //
 // One outcome is not a refusal: a message this device sent, whose seq has no
-// sealed copy here (never bound by MarkSent, or evicted since). Its sealed
-// copy is the only place its plaintext could come from, because MLS will not
-// open a message from its own leaf, so its absence is a fact about this
+// sealed copy here. MLS will not open a message from its own leaf, so the
+// sealed copy is the only place its plaintext could come from. When MarkSent
+// never ran and the row's bytes are those of our own outbox entry, the copy is
+// bound to the seq here and shown from history (bindUnmarkedSent). Otherwise —
+// the copy was evicted, or it never existed — its absence is a fact about this
 // device's history and not a sign that anything is wrong with the page. It is
 // answered as OwnWithoutCopy, with no plaintext, and the rest of the batch
 // proceeds. The exception is exactly ErrOwnMessage from Open: a message that
@@ -298,7 +301,15 @@ func (s *Store) ReceiveBatch(
 		for _, req := range reqs {
 			result, wrote, err := s.receiveOne(conversationID, rec, wm, req, cipher, accept)
 			if errors.Is(err, ErrOwnMessage) {
-				out = append(out, ReceiveResult{Application: true, OwnWithoutCopy: true, Generation: rec.Generation})
+				bound, ok, err := s.bindUnmarkedSent(conversationID, rec, req)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					bound = ReceiveResult{Application: true, OwnWithoutCopy: true, Generation: rec.Generation}
+				}
+				out = append(out, bound)
+				changed = changed || ok
 				continue
 			}
 			if err != nil {
@@ -326,6 +337,48 @@ func (s *Store) ReceiveBatch(
 		return nil, err
 	}
 	return out, nil
+}
+
+// bindUnmarkedSent is MarkSent for a sent message whose mls_mark_sent never
+// ran: the process died after POST /:id/messages succeeded and before it. The
+// server's row for it comes back in a display batch as a message from this
+// device, and is bound here, in memory, if its bytes are exactly those of an
+// outbox entry whose sealed copy is still unbound. The caller's single write
+// carries the bind, so a batch refused later binds nothing.
+//
+// Byte equality with our own outbox is enough, and no more than that is being
+// trusted. The outbox holds the exact ciphertext Send built under the lock,
+// sealed in the same write as the copy of its plaintext. An MLS
+// PrivateMessage carries a fresh nonce and our leaf's signature, so no other
+// message has those bytes, and the server cannot make one match without
+// having received them from us — which makes the row the message the copy is
+// of. What the server still chooses is the seq, as it does for mls_mark_sent,
+// which takes the seq from the POST response: showing the message at the seq
+// the server numbers it with is what the explicit bind does too.
+//
+// A copy already bound to another seq is left alone: rebinding would make a
+// re-read of that seq answer with a different message.
+func (s *Store) bindUnmarkedSent(conversationID string, rec *Record, req ReceiveRequest) (ReceiveResult, bool, error) {
+	var clientMessageID string
+	for _, e := range rec.Outbox {
+		if bytes.Equal(e.Ciphertext, req.Message) {
+			clientMessageID = e.ClientMessageID
+			break
+		}
+	}
+	if clientMessageID == "" {
+		return ReceiveResult{}, false, nil
+	}
+	i, ok := rec.findSentHistory(clientMessageID)
+	if !ok || rec.History[i].Seq != 0 {
+		return ReceiveResult{}, false, nil
+	}
+	rec.History[i].Seq = req.Seq
+	out, err := s.reread(conversationID, rec, rec.History[i])
+	if err != nil {
+		return ReceiveResult{}, false, err
+	}
+	return out, true, nil
 }
 
 // ErrNotApplication — a message in a display batch was a handshake. Commits

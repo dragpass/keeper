@@ -230,3 +230,78 @@ func TestAnOwnMessageDoesNotExcuseAnotherFailure(t *testing.T) {
 		t.Fatal("a refused batch wrote the record")
 	}
 }
+
+func ownRow(seq uint64, sent SendResult) ReceiveRequest {
+	return ReceiveRequest{Seq: seq, Message: append([]byte(nil), sent.Entry.Ciphertext...)}
+}
+
+// The process died between POST /:id/messages and mls_mark_sent. The server's
+// row carries the exact bytes of our outbox entry, so the display batch binds
+// the copy to that seq and shows it, in the batch's one write.
+func TestADisplayBatchBindsAnOwnMessageMarkSentNeverReached(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+	sent := sendForTest(t, store, testClientA, "mine")
+	before := readRecordForTest(t, store, testConvA).Generation
+
+	in := ownAt(1, "theirs")
+	in.opened.SenderAccountID, in.opened.SenderDeviceID = "acct", "dev"
+	got, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{ownRow(7, sent), {Seq: 8, Message: []byte("m8")}}, nil, in)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("batch = %+v, %v", got, err)
+	}
+	if string(got[0].Plaintext) != "mine" || !got[0].FromHistory || got[0].OwnWithoutCopy || got[0].Sender != fakeSelf ||
+		got[0].Position != sent.Entry.Position {
+		t.Fatalf("own message = %+v", got[0])
+	}
+	if string(got[1].Plaintext) != "theirs" {
+		t.Fatalf("the other member's message = %+v", got[1])
+	}
+	rec := readRecordForTest(t, store, testConvA)
+	if i, ok := rec.findSentHistory(testClientA); !ok || rec.History[i].Seq != 7 || rec.Generation != before+1 {
+		t.Fatalf("history %+v at generation +%d; want the copy bound to 7 in one write", rec.History, rec.Generation-before)
+	}
+
+	// A late mark sent finds the pair already there, and a re-read needs no MLS.
+	if got, err := store.MarkSent(testConvA, noWatermark, testClientA, 7); err != nil || got.Bound {
+		t.Fatalf("mark sent after the bind = %+v, %v", got, err)
+	}
+	again := ownAt(1, "")
+	if got, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{ownRow(7, sent)}, nil, again); err != nil ||
+		string(got[0].Plaintext) != "mine" || again.opens != 0 {
+		t.Fatalf("re-read = %+v, %v (opens %d)", got, err, again.opens)
+	}
+	// The same bytes under another seq do not move the copy.
+	moved, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{ownRow(9, sent)}, nil, ownAt(1, ""))
+	if err != nil || !moved[0].OwnWithoutCopy || moved[0].Plaintext != nil {
+		t.Fatalf("own bytes under a second seq = %+v, %v", moved, err)
+	}
+}
+
+// Only our own outbox bytes bind, and only in a batch that is written.
+func TestAnOwnMessageBindsOnlyOnExactBytesInAWrittenBatch(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+	sent := sendForTest(t, store, testClientA, "mine")
+	unbound := func() {
+		t.Helper()
+		rec := readRecordForTest(t, store, testConvA)
+		if i, _ := rec.findSentHistory(testClientA); rec.History[i].Seq != 0 {
+			t.Fatalf("the copy was bound to %d", rec.History[i].Seq)
+		}
+	}
+
+	other := ownRow(7, sent)
+	other.Message[len(other.Message)-1] ^= 1
+	if got, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{other}, nil, ownAt(1, "")); err != nil || !got[0].OwnWithoutCopy {
+		t.Fatalf("near-identical bytes = %+v, %v", got, err)
+	}
+	unbound()
+
+	failing := ownAt(1, "theirs")
+	failing.errs[2] = errors.New("does not open")
+	if got, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{ownRow(7, sent), {Seq: 8, Message: []byte("m8")}}, nil, failing); err == nil || got != nil {
+		t.Fatalf("a batch with a failing message = %+v, %v", got, err)
+	}
+	unbound()
+}

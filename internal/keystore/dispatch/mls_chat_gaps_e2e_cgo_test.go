@@ -40,26 +40,40 @@ func TestMLSChatE2E_ADeviceReadsItsOwnSentMessages(t *testing.T) {
 	own := proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: mine.CiphertextB64}
 	theirs := c.send(c.bob, 2, 1, "from bob")
 
-	// Before the seq is bound the copy cannot be found by it. The page is not
-	// refused: Alice's own row comes back without plaintext, and Bob's message
-	// is delivered beside it.
+	// mls_mark_sent never ran: the process died after the POST. The page is
+	// not refused. The row carries the exact bytes of Alice's outbox entry, so
+	// the batch binds her sealed copy to its seq and shows it from there, and
+	// Bob's message is delivered beside it.
 	got := c.alice.decrypt(own, theirs)
-	if got.PlaintextB64[0] != "" || got.Items[0].State != proto.MLSDisplayItemStateOwnWithoutCopy ||
+	assertShown(t, got, 0, "from alice", c.alice, true)
+	assertShown(t, got, 1, "from bob", c.bob, false)
+	if got.Items[0].State != proto.MLSDisplayItemStateShown || got.Items[1].State != proto.MLSDisplayItemStateShown {
+		t.Fatalf("item states = %q, %q", got.Items[0].State, got.Items[1].State)
+	}
+	// The late mark sent finds the pair already bound and writes nothing.
+	if late := c.alice.markSent(messageID(1), own.Seq); late.Bound {
+		t.Fatalf("mark sent after the display bind = %+v; want nothing written", late)
+	}
+	// The same bytes under another seq do not move the copy: that row has no
+	// copy of its own.
+	dup := proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: own.CiphertextB64}
+	if got := c.alice.decrypt(dup); got.PlaintextB64[0] != "" ||
+		got.Items[0].State != proto.MLSDisplayItemStateOwnWithoutCopy ||
 		got.Items[0].SenderAccountID != c.alice.id || got.Items[0].SenderDeviceID != e2eDevice ||
 		got.Items[0].FromHistory {
-		t.Fatalf("own message before mark sent = %q %+v", got.PlaintextB64[0], got.Items[0])
-	}
-	assertShown(t, got, 1, "from bob", c.bob, false)
-	if got.Items[1].State != proto.MLSDisplayItemStateShown {
-		t.Fatalf("a delivered message has state %q", got.Items[1].State)
+		t.Fatalf("own bytes under a second seq = %q %+v", got.PlaintextB64[0], got.Items[0])
 	}
 
-	if bound := c.alice.markSent(messageID(1), own.Seq); !bound.Bound {
+	// The ordinary order: mark sent binds first, the display reads the copy.
+	second := c.alice.encrypt(messageID(3), 1, "marked first")
+	marked := proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: second.CiphertextB64}
+	if bound := c.alice.markSent(messageID(3), marked.Seq); !bound.Bound {
 		t.Fatalf("mark sent = %+v", bound)
 	}
-	if again := c.alice.markSent(messageID(1), own.Seq); again.Bound {
+	if again := c.alice.markSent(messageID(3), marked.Seq); again.Bound {
 		t.Fatalf("mark sent again = %+v; want nothing written", again)
 	}
+	assertShown(t, c.alice.decrypt(marked), 0, "marked first", c.alice, true)
 
 	shown := c.alice.decrypt(own)
 	assertShown(t, shown, 0, "from alice", c.alice, true)
