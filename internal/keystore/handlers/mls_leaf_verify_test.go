@@ -8,10 +8,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
@@ -522,5 +524,141 @@ func TestMLSLeafVerifier_AGroupOlderThanTheWindowStaysJoinable(t *testing.T) {
 	}
 	if err := v.Commit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func treeLeaf(t *testing.T, s leafSpec) mls.Leaf {
+	t.Helper()
+	l := s.leaf(t)
+	l.Entering = false
+	return l
+}
+
+// A tree leaf under a superseded declaration is accepted up to and including
+// MLSLeafTreeGraceSeconds after this owner first saw the newer one, and
+// refused from the second after, all or nothing and without touching the record.
+func TestMLSLeafVerifier_AStaleTreeLeafIsRefusedOnceTheGracePeriodHasPassed(t *testing.T) {
+	f := newVerifyFixture(t)
+	peer := newTrustKey(t)
+	old := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	newer := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	newer.notBefore, newer.reason = verifyNB+60, proto.MLSLeafReasonRotate
+	sameNotBefore := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	sameNotBefore.notBefore = newer.notBefore // a different key at the record's not_before
+	acceptLeaf(t, f, newer.leaf(t))
+	before, _ := f.newest(t, verifyPeer)
+	if before.FirstSeenAt != verifyNow {
+		t.Fatalf("first_seen_at = %d; want the clock when the record advanced (%d)", before.FirstSeenAt, verifyNow)
+	}
+
+	for _, stale := range []leafSpec{old, sameNotBefore} {
+		*f.now = verifyNow + proto.MLSLeafTreeGraceSeconds
+		acceptLeaf(t, f, treeLeaf(t, stale))
+
+		*f.now = verifyNow + proto.MLSLeafTreeGraceSeconds + 1
+		bystander := goodLeafSpec(t, verifyOther, verifyDevice2, newTrustKey(t))
+		v := f.verifier()
+		requireUntrusted(t, v.VerifyLeaves([]mls.Leaf{treeLeaf(t, bystander), treeLeaf(t, stale)}), "grace period")
+		if err := v.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := f.pin(t, verifyOther); found {
+			t.Fatal("a refused Welcome pinned the other member")
+		}
+		if _, found := f.newest(t, verifyOther); found {
+			t.Fatal("a refused Welcome wrote a record")
+		}
+	}
+	if rec, _ := f.newest(t, verifyPeer); rec != before {
+		t.Fatalf("record = %+v; want %+v unchanged", rec, before)
+	}
+}
+
+// Past the grace period a tree leaf that is the recorded declaration, or newer
+// than it, still passes, and neither moves the record nor its first_seen_at.
+func TestMLSLeafVerifier_ACurrentOrNewerTreeLeafIsUnaffectedByTheGracePeriod(t *testing.T) {
+	f := newVerifyFixture(t)
+	peer := newTrustKey(t)
+	current := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	acceptLeaf(t, f, current.leaf(t))
+	before, _ := f.newest(t, verifyPeer)
+
+	newer := goodLeafSpec(t, verifyPeer, verifyDevice2, peer)
+	newer.notBefore = verifyNB + 60
+	*f.now = verifyNow + 10*proto.MLSLeafTreeGraceSeconds
+	acceptLeaf(t, f, treeLeaf(t, current))
+	acceptLeaf(t, f, treeLeaf(t, newer))
+	if rec, _ := f.newest(t, verifyPeer); rec != before {
+		t.Fatalf("a tree leaf moved the record to %+v; want %+v", rec, before)
+	}
+}
+
+// Seeing the recorded declaration again on an entering leaf keeps first_seen_at.
+func TestMLSLeafVerifier_FirstSeenAtStaysWhenTheSameDeclarationEntersAgain(t *testing.T) {
+	f := newVerifyFixture(t)
+	spec := goodLeafSpec(t, verifyPeer, verifyDevice, newTrustKey(t))
+	acceptLeaf(t, f, spec.leaf(t))
+	*f.now = verifyNow + 3600
+	acceptLeaf(t, f, spec.leaf(t))
+	if rec, _ := f.newest(t, verifyPeer); rec.FirstSeenAt != verifyNow {
+		t.Fatalf("first_seen_at = %d; want %d", rec.FirstSeenAt, verifyNow)
+	}
+}
+
+// A record 0.0.44–0.0.47 wrote has no first_seen_at. The first read takes it
+// as seen now, refuses nothing, and writes that time back, which is what makes
+// the grace period end.
+func TestMLSLeafVerifier_ALegacyRecordStartsTheGracePeriodOnFirstRead(t *testing.T) {
+	f := newVerifyFixture(t)
+	peer := newTrustKey(t)
+	old := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	newer := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
+	newer.notBefore = verifyNB + 60
+	fp, err := crypto.MLSLeafSignatureKeyFingerprint(newer.declKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"v":1,"not_before":` + strconv.FormatInt(newer.notBefore, 10) + `,"fingerprint":"` + fp + `"}`
+	if err := f.store.Set(config.Service, keychain.MLSLeafNewestAccount(verifyOwner, verifyPeer), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	upgradedAt := verifyNow + 100*proto.MLSLeafTreeGraceSeconds
+	*f.now = upgradedAt
+	acceptLeaf(t, f, treeLeaf(t, old))
+	rec, _ := f.newest(t, verifyPeer)
+	if rec.V != keychain.MLSLeafNewestVersion || rec.FirstSeenAt != upgradedAt ||
+		rec.NotBefore != newer.notBefore || rec.Fingerprint != fp {
+		t.Fatalf("record after the first read = %+v; want the same declaration first seen at %d", rec, upgradedAt)
+	}
+
+	*f.now = upgradedAt + proto.MLSLeafTreeGraceSeconds
+	acceptLeaf(t, f, treeLeaf(t, old))
+	*f.now = upgradedAt + proto.MLSLeafTreeGraceSeconds + 1
+	requireUntrusted(t, f.verifier().VerifyLeaves([]mls.Leaf{treeLeaf(t, old)}), "grace period")
+}
+
+// A refused operation does not backfill a legacy record either.
+func TestMLSLeafVerifier_ARefusedOperationDoesNotBackfillALegacyRecord(t *testing.T) {
+	f := newVerifyFixture(t)
+	spec := goodLeafSpec(t, verifyPeer, verifyDevice, newTrustKey(t))
+	fp, err := crypto.MLSLeafSignatureKeyFingerprint(spec.declKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"v":1,"not_before":` + strconv.FormatInt(spec.notBefore, 10) + `,"fingerprint":"` + fp + `"}`
+	if err := f.store.Set(config.Service, keychain.MLSLeafNewestAccount(verifyOwner, verifyPeer), legacy); err != nil {
+		t.Fatal(err)
+	}
+	bad := goodLeafSpec(t, verifyOther, verifyDevice2, newTrustKey(t)).leaf(t)
+	bad.Declaration = nil
+
+	v := f.verifier()
+	requireUntrusted(t, v.VerifyLeaves([]mls.Leaf{treeLeaf(t, spec), bad}), "")
+	if err := v.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := f.newest(t, verifyPeer); rec.FirstSeenAt != 0 {
+		t.Fatalf("a refused operation backfilled first_seen_at: %+v", rec)
 	}
 }

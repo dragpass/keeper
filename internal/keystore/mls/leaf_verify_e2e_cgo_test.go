@@ -990,3 +990,157 @@ func TestAJoinWhoseGroupStateIsNotWrittenKeepsThePoolEntry(t *testing.T) {
 		t.Fatalf("pool holds %d after a failed write, want the entry kept", n)
 	}
 }
+
+// invite builds a group holding the members' leaves, as a committer who checks
+// nothing would: what the joiner makes of the tree is what is under test.
+func invite(t testing.TB, host *account, groupID string, members ...[]byte) (*mls.Session, func(kp []byte) []byte) {
+	t.Helper()
+	s := host.session(t)
+	if err := s.CreateGroup([]byte(groupID)); err != nil {
+		t.Fatal(err)
+	}
+	add := func(kp []byte) []byte {
+		_, welcome, _, err := s.CommitAddMemberVerified(kp, trustAll{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ApplyPendingCommit(); err != nil {
+			t.Fatal(err)
+		}
+		return welcome
+	}
+	for _, kp := range members {
+		add(kp)
+	}
+	return s, add
+}
+
+// staleTreeScenario: bob's old leaf sits in alice's older group; bob rotates,
+// and dave accepts the newer declaration in a group of his own at a clock the
+// test controls. Dave has KeyPackages in his pool for the joins that follow.
+type staleTreeScenario struct {
+	t0         int64
+	bob, dave  *account
+	daveStore  *chatstate.Store
+	daveKPs    [][]byte
+	clock      *int64
+	firstSeen  int64
+	olderGroup func(kp []byte) []byte
+}
+
+func newStaleTreeScenario(t *testing.T) staleTreeScenario {
+	t.Helper()
+	stateRoot(t)
+	bob := newAccount(t, accountB)
+	t0 := time.Now().Unix()
+	bob.declare(t, device1, proto.MLSLeafReasonEnroll, t0)
+	alice := newAccount(t, accountA)
+	alice.device(t, device1)
+	_, olderGroup := invite(t, alice, "older group", keyPackage(t, bob.session(t)))
+
+	bob.declare(t, device1, proto.MLSLeafReasonRotate, t0+60)
+	dave := newAccount(t, accountC)
+	daveOwn := dave.device(t, device1)
+	daveKPs := dave.keyPackagesFor(t, device1, 4)
+	daveStore := openStore(t, dave.store, dave.id)
+
+	clock := time.Now().Unix()
+	dave.deps.Clock = func() time.Time { return time.Unix(clock, 0) }
+	if err := daveOwn.CreateGroup([]byte("dave's group")); err != nil {
+		t.Fatal(err)
+	}
+	v := dave.verifier()
+	if _, _, _, err := daveOwn.CommitAddMemberVerified(keyPackage(t, bob.session(t)), v); err != nil {
+		t.Fatalf("dave adds bob's current leaf: %v", err)
+	}
+	if err := v.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := dave.newestOf(t, accountB)
+	if rec.NotBefore != t0+60 || rec.FirstSeenAt != clock {
+		t.Fatalf("dave's record = %+v; want bob's rotated declaration first seen at %d", rec, clock)
+	}
+	return staleTreeScenario{
+		t0: t0, bob: bob, dave: dave, daveStore: daveStore, daveKPs: daveKPs,
+		clock: &clock, firstSeen: clock, olderGroup: olderGroup,
+	}
+}
+
+func (s staleTreeScenario) join(t *testing.T, conversationID string, welcome []byte) error {
+	t.Helper()
+	v := s.dave.verifier()
+	if err := s.dave.session(t).JoinFromPool(s.daveStore, conversationID, noWatermark, welcome, v, time.Now()); err != nil {
+		return err
+	}
+	return v.Commit()
+}
+
+const (
+	convGrace1 = "99999999-9999-4999-8999-000000000001"
+	convGrace2 = "99999999-9999-4999-8999-000000000002"
+	convGrace3 = "99999999-9999-4999-8999-000000000003"
+	convGrace4 = "99999999-9999-4999-8999-000000000004"
+)
+
+// P3. Up to MLSLeafTreeGraceSeconds after dave first saw bob's rotation, a
+// group whose tree still holds bob's old leaf is joinable, and the join does
+// not touch dave's record.
+func TestAStaleTreeLeafIsJoinableWithinTheGracePeriod(t *testing.T) {
+	s := newStaleTreeScenario(t)
+	before, _ := s.dave.newestOf(t, accountB)
+
+	*s.clock = s.firstSeen + proto.MLSLeafTreeGraceSeconds
+	if err := s.join(t, convGrace1, s.olderGroup(s.daveKPs[0])); err != nil {
+		t.Fatalf("join at the end of the grace period: %v", err)
+	}
+	if rec, _ := s.dave.newestOf(t, accountB); rec != before {
+		t.Fatalf("joining moved dave's record to %+v; want %+v", rec, before)
+	}
+	if blob, err := s.daveStore.LoadGroupState(convGrace1, noWatermark); err != nil || len(blob) == 0 {
+		t.Fatalf("the joined group was not persisted: %v", err)
+	}
+}
+
+// P3. One second later the same kind of Welcome is refused, all or nothing: no
+// group state, the pool entry kept, no pin for the members, the record as it
+// was. A tree holding bob's current leaf, or one newer than dave has seen, is
+// still joinable and moves nothing.
+func TestAStaleTreeLeafIsRefusedOnceTheGracePeriodHasPassed(t *testing.T) {
+	s := newStaleTreeScenario(t)
+	before, _ := s.dave.newestOf(t, accountB)
+	poolBefore := poolSize(t, s.daveStore)
+
+	*s.clock = s.firstSeen + proto.MLSLeafTreeGraceSeconds + 1
+	err := s.join(t, convGrace2, s.olderGroup(s.daveKPs[1]))
+	if !errors.Is(err, mls.ErrLeafUntrusted) || !strings.Contains(err.Error(), "grace period") {
+		t.Fatalf("join past the grace period = %v; want ErrLeafUntrusted for a superseded tree leaf", err)
+	}
+	if blob, err := s.daveStore.LoadGroupState(convGrace2, noWatermark); err != nil || len(blob) != 0 {
+		t.Fatalf("a refused Welcome persisted a group (%d bytes, %v)", len(blob), err)
+	}
+	if n := poolSize(t, s.daveStore); n != poolBefore {
+		t.Fatalf("pool holds %d after a refused join, want %d", n, poolBefore)
+	}
+	if _, found := s.dave.pinOf(t, accountA); found {
+		t.Fatal("a refused Welcome pinned its committer")
+	}
+	if rec, _ := s.dave.newestOf(t, accountB); rec != before {
+		t.Fatalf("a refused Welcome moved dave's record to %+v", rec)
+	}
+
+	alice := newAccount(t, accountA)
+	alice.device(t, device1)
+	_, current := invite(t, alice, "current group", keyPackage(t, s.bob.session(t)))
+	if err := s.join(t, convGrace3, current(s.daveKPs[2])); err != nil {
+		t.Fatalf("joining a tree holding bob's current leaf: %v", err)
+	}
+
+	s.bob.declare(t, device1, proto.MLSLeafReasonRotate, s.t0+120)
+	_, newer := invite(t, alice, "newer group", keyPackage(t, s.bob.session(t)))
+	if err := s.join(t, convGrace4, newer(s.daveKPs[3])); err != nil {
+		t.Fatalf("joining a tree holding a leaf newer than dave's record: %v", err)
+	}
+	if rec, _ := s.dave.newestOf(t, accountB); rec != before {
+		t.Fatalf("tree leaves moved dave's record to %+v; want %+v", rec, before)
+	}
+}

@@ -16,13 +16,14 @@
 //  6. the declaration's account and device equal the credential's
 //  7. the declaration's fingerprint equals the leaf's actual signature key
 //
-// and then the freshness checks, which apply to entering leaves only: the
-// declaration's not_after has not passed, and, across the batch, no
-// declaration is older than the newest this owner has accepted for its account
-// (the superseded-declaration check, below). A leaf a Welcome's tree already
-// holds is not entering: it gets steps 1–7 and no freshness check, and it
-// never moves the record. That is what keeps a group older than a
-// declaration's 30-day window joinable.
+// and then the freshness checks. On entering leaves: the declaration's
+// not_after has not passed, and, across the batch, no declaration is older
+// than the newest this owner has accepted for its account (the
+// superseded-declaration check, below). A leaf a Welcome's tree already holds
+// is not entering: it gets steps 1–7, no expiry check, and a superseded
+// declaration only once the grace period since this owner first saw the newer
+// one has passed. It never moves the record. That is what keeps a group older
+// than a declaration's 30-day window joinable.
 //
 // All or nothing: one bad leaf and VerifyLeaves fails, and nothing it would
 // have recorded is kept. Even a success records nothing on its own — the pins
@@ -120,7 +121,7 @@ func (v *MLSLeafVerifier) VerifyLeaves(leaves []mls.Leaf) error {
 		judged = append(judged, j)
 	}
 
-	newest, err := v.checkNewest(judged)
+	newest, err := v.checkNewest(judged, now)
 	if err != nil {
 		v.d.Logger.Printf("mls leaf verify refused a leaf: %v", err)
 		return err
@@ -221,7 +222,8 @@ func (v *MLSLeafVerifier) pinFor(accountID string, staged map[string]keychain.Pe
 	return pin, nil
 }
 
-// checkNewest refuses a superseded declaration on an entering leaf.
+// checkNewest refuses a superseded declaration: on an entering leaf always, on
+// a leaf a Welcome's tree already holds once the grace period has passed.
 //
 // A declaration embedded in a leaf is never checked against the directory, so
 // one the account has since replaced still verifies. What a device can do on
@@ -232,20 +234,21 @@ func (v *MLSLeafVerifier) pinFor(accountID string, staged map[string]keychain.Pe
 // must be that one. Equal not_before with a different key is refused too — two
 // keys cannot both be current.
 //
-// Only entering leaves take part, in the check and in advancing the record.
-// A leaf a Welcome's tree already holds was judged by the members when it
-// entered; a member who has since rotated still sits in older groups under
-// that leaf, and refusing it would make those groups unjoinable. Letting it
-// move the record could move the record backwards.
+// Only entering leaves advance the record; letting a tree leaf move it could
+// move it backwards. A tree leaf is held to the record more loosely: a member
+// who has just rotated still sits in its older groups under the old leaf until
+// it replaces that leaf there with an Update Commit, so an older declaration in
+// a tree is accepted for MLSLeafTreeGraceSeconds after this owner first saw the
+// newer one, and refused after. A tree leaf newer than the record is not
+// refused either: it was judged by the members when it entered, and this
+// device simply has not caught up.
 //
 // What it cannot do is protect a device that never saw the newer declaration:
-// that device accepts the stale one at the Add.
-func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf) (map[string]keychain.MLSLeafNewest, error) {
+// that device accepts the stale one, at the Add and in a tree alike.
+func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf, now int64) (map[string]keychain.MLSLeafNewest, error) {
 	byAccount := map[string][]judgedLeaf{}
 	for _, j := range judged {
-		if j.entering {
-			byAccount[j.accountID] = append(byAccount[j.accountID], j)
-		}
+		byAccount[j.accountID] = append(byAccount[j.accountID], j)
 	}
 	advanced := map[string]keychain.MLSLeafNewest{}
 	for accountID, js := range byAccount {
@@ -253,13 +256,26 @@ func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf) (map[string]keychain.
 		if err != nil {
 			return nil, errors.New("mls leaf verify: failed to read the newest leaf declaration record")
 		}
+		// A record 0.0.44–0.0.47 wrote has no first_seen_at. Taking it as seen
+		// now starts the grace period on upgrade instead of refusing at once:
+		// the rule did not exist when the rotation was seen, so nobody has had
+		// the window to move their groups to the new leaf yet. The value is
+		// written back on success, so the clock starts once and not on every read.
+		backfilled := found && stored.FirstSeenAt == 0
+		if backfilled {
+			stored.FirstSeenAt = now
+		}
 		top, have := stored, found
 		for _, j := range js {
-			if !have || j.notBefore > top.NotBefore {
-				top, have = keychain.MLSLeafNewest{NotBefore: j.notBefore, Fingerprint: j.fingerprint}, true
+			if j.entering && (!have || j.notBefore > top.NotBefore) {
+				top = keychain.MLSLeafNewest{NotBefore: j.notBefore, Fingerprint: j.fingerprint, FirstSeenAt: now}
+				have = true
 			}
 		}
 		for _, j := range js {
+			if !j.entering {
+				continue
+			}
 			if j.notBefore < top.NotBefore {
 				return nil, untrusted("leaf declaration is older than one already accepted for its account")
 			}
@@ -267,15 +283,29 @@ func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf) (map[string]keychain.
 				return nil, untrusted("two leaf declarations with the same not_before name different keys")
 			}
 		}
-		if !found || top != stored {
+		if have && now-top.FirstSeenAt > proto.MLSLeafTreeGraceSeconds {
+			for _, j := range js {
+				if !j.entering && supersededBy(j, top) {
+					return nil, untrusted("leaf in the tree carries a declaration superseded longer than the grace period ago")
+				}
+			}
+		}
+		if have && (!found || backfilled || !top.SameDeclaration(stored)) {
 			advanced[accountID] = top
 		}
 	}
 	return advanced, nil
 }
 
+// supersededBy is the record's notion of older: an earlier not_before, or the
+// same not_before with a different key.
+func supersededBy(j judgedLeaf, rec keychain.MLSLeafNewest) bool {
+	return j.notBefore < rec.NotBefore || (j.notBefore == rec.NotBefore && j.fingerprint != rec.Fingerprint)
+}
+
 // Commit writes what the last successful VerifyLeaves staged: first-use and
-// refreshed pins, and newest-declaration records that moved forward. Call it
+// refreshed pins, and newest-declaration records that moved forward or had
+// their first_seen_at filled in from a version 1 record. Call it
 // only after the operation the verification was for has fully succeeded —
 // chatstate's write included. A crash between that write and this one leaves
 // the group state ahead of the pins, which costs a repeated first-use on the
