@@ -123,7 +123,7 @@ func (a *account) device(t testing.TB, deviceID string) *mls.Session {
 
 func (a *account) session(t testing.TB) *mls.Session {
 	t.Helper()
-	s, err := mls.NewDeviceSession(a.store)
+	s, _, err := mls.NewDeviceSession(a.store)
 	if err != nil {
 		t.Fatalf("device session: %v", err)
 	}
@@ -826,7 +826,7 @@ func TestAPendingLeafKeyNeverSigns(t *testing.T) {
 	stateRoot(t)
 	bob := newAccount(t, accountB)
 	bob.declarePending(t, device1, proto.MLSLeafReasonEnroll, time.Now().Unix())
-	if _, err := mls.NewDeviceSession(bob.store); !errors.Is(err, mls.ErrNoLeafKey) {
+	if _, _, err := mls.NewDeviceSession(bob.store); !errors.Is(err, mls.ErrNoLeafKey) {
 		t.Fatalf("session with only a pending key = %v; want ErrNoLeafKey", err)
 	}
 

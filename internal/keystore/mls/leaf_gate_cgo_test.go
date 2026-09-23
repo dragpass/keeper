@@ -163,7 +163,7 @@ func TestNewDeviceSession_RefusesAKeyWithNoStoredDeclaration(t *testing.T) {
 	if err := store.Set(config.Service, config.MLSLeafSignatureKey, raw); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafDeclaration) {
+	if _, _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafDeclaration) {
 		t.Fatalf("NewDeviceSession = %v; want ErrNoLeafDeclaration", err)
 	}
 }
