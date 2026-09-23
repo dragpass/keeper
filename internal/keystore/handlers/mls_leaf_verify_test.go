@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -24,6 +25,10 @@ const (
 	verifyDevice  = "d0000000-0000-4000-8000-000000000004"
 	verifyDevice2 = "d0000000-0000-4000-8000-000000000005"
 	verifyNB      = int64(1758000000)
+
+	// verifyNow sits inside every default declaration window; tests that need
+	// a declaration to have expired move the fixture's clock past it.
+	verifyNow = verifyNB + 3600
 )
 
 // leafSpec is one leaf and the declaration it carries, each field something a
@@ -35,7 +40,7 @@ type leafSpec struct {
 
 	declAccount, declDevice string
 	declKey                 ed25519.PublicKey
-	notBefore               int64
+	notBefore, notAfter     int64
 	reason                  string
 	signer                  trustKey // signs the declaration
 	carriedPEM              string   // the account key the extension carries
@@ -50,7 +55,8 @@ func goodLeafSpec(t *testing.T, accountID, deviceID string, account trustKey) le
 	return leafSpec{
 		accountID: accountID, deviceID: deviceID, account: account, leafKey: pub,
 		declAccount: accountID, declDevice: deviceID, declKey: pub,
-		notBefore: verifyNB, reason: proto.MLSLeafReasonEnroll,
+		notBefore: verifyNB, notAfter: verifyNB + proto.MLSLeafMaxValiditySeconds,
+		reason: proto.MLSLeafReasonEnroll,
 		signer: account, carriedPEM: account.pair.PublicKey,
 	}
 }
@@ -67,6 +73,7 @@ func (s leafSpec) declaration(t *testing.T) proto.MLSLeafDeclaration {
 		SignatureKey:            base64.StdEncoding.EncodeToString(s.declKey),
 		SignatureKeyFingerprint: fp,
 		NotBefore:               s.notBefore,
+		NotAfter:                s.notAfter,
 		Reason:                  s.reason,
 	}
 	d.Signature = signTrust(t, s.signer.priv, d.Canonical())
@@ -91,16 +98,19 @@ type verifyFixture struct {
 	deps  Deps
 	store keychain.SecretStore
 	owner trustKey
+	now   *int64
 }
 
 func newVerifyFixture(t *testing.T) verifyFixture {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
+	now := verifyNow
+	deps.Clock = func() time.Time { return time.Unix(now, 0) }
 	owner := newTrustKey(t)
 	if err := keychain.SavePublicKey(store, owner.pair.PublicKey); err != nil {
 		t.Fatal(err)
 	}
-	return verifyFixture{deps: deps, store: store, owner: owner}
+	return verifyFixture{deps: deps, store: store, owner: owner, now: &now}
 }
 
 func (f verifyFixture) verifier() *MLSLeafVerifier {
@@ -465,5 +475,52 @@ func TestMLSLeafVerifier_APresentLeafDoesNotCreateTheRecord(t *testing.T) {
 	}
 	if _, found := f.pin(t, verifyPeer); !found {
 		t.Fatal("the binding checks' first-use pin was not written")
+	}
+}
+
+// Expiry is a freshness check: it refuses a declaration whose not_after has
+// passed on a leaf that is entering, from the second not_after names.
+func TestMLSLeafVerifier_AnExpiredDeclarationCannotEnter(t *testing.T) {
+	f := newVerifyFixture(t)
+	spec := goodLeafSpec(t, verifyPeer, verifyDevice, newTrustKey(t))
+
+	*f.now = spec.notAfter - 1
+	if err := f.verifier().VerifyLeaves([]mls.Leaf{spec.leaf(t)}); err != nil {
+		t.Fatalf("a declaration one second before not_after was refused: %v", err)
+	}
+	for _, at := range []int64{spec.notAfter, spec.notAfter + 86400} {
+		*f.now = at
+		v := f.verifier()
+		requireUntrusted(t, v.VerifyLeaves([]mls.Leaf{spec.leaf(t)}), "expired")
+		if err := v.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, found := f.pin(t, verifyPeer); found {
+		t.Fatal("a refused expired leaf wrote a pin")
+	}
+}
+
+// A group older than the 30-day window stays joinable: every leaf of a
+// Welcome's tree may carry a declaration that has since expired, and none of
+// them is entering.
+func TestMLSLeafVerifier_AGroupOlderThanTheWindowStaysJoinable(t *testing.T) {
+	f := newVerifyFixture(t)
+	peer, third := newTrustKey(t), newTrustKey(t)
+	tree := []mls.Leaf{
+		goodLeafSpec(t, verifyPeer, verifyDevice, peer).leaf(t),
+		goodLeafSpec(t, verifyOther, verifyDevice2, third).leaf(t),
+	}
+	for i := range tree {
+		tree[i].Entering = false
+	}
+	*f.now = verifyNB + 3*proto.MLSLeafMaxValiditySeconds
+
+	v := f.verifier()
+	if err := v.VerifyLeaves(tree); err != nil {
+		t.Fatalf("a Welcome whose tree is older than the window was refused: %v", err)
+	}
+	if err := v.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

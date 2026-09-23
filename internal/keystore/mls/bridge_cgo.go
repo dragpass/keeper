@@ -62,7 +62,10 @@ int32_t dpmls_group_process_collect(DpSession *handle, const uint8_t *message, s
 int32_t dpmls_group_join_collect(DpSession *handle, const uint8_t *welcome, size_t welcome_len, DpBuf *out);
 
 int32_t dpmls_group_create(DpSession *handle, const uint8_t *group_id, size_t group_id_len);
-int32_t dpmls_key_package(DpSession *handle, DpBuf *out);
+int32_t dpmls_key_package(DpSession *handle, uint64_t not_after_cap,
+                          DpBuf *message, DpBuf *reference, DpBuf *private_entry);
+int32_t dpmls_session_install_key_package(DpSession *handle, const uint8_t *entry, size_t entry_len);
+int32_t dpmls_welcome_key_package_refs(const uint8_t *welcome, size_t welcome_len, DpBuf *out);
 int32_t dpmls_group_commit_add_members(DpSession *handle,
                                        const uint8_t *key_packages, size_t key_packages_len,
                                        DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
@@ -191,18 +194,47 @@ func (s *Session) CreateGroup(groupID []byte) error {
 	return statusError(rc)
 }
 
-func (s *Session) KeyPackage() ([]byte, error) {
+// keyPackage produces one KeyPackage ending no later than notAfterCap, its
+// reference, and its private entry. Nothing of the private keys stays in the
+// session; private is the caller's to persist and wipe.
+func (s *Session) keyPackage(notAfterCap uint64) (message, reference, private []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
+	var m, r, p C.DpBuf
+	if rc := C.dpmls_key_package(h, C.uint64_t(notAfterCap), &m, &r, &p); rc != 0 {
+		return nil, nil, nil, statusError(rc)
+	}
+	return takeBuf(&m), takeBuf(&r), takeBuf(&p), nil
+}
+
+// installKeyPackage hands the session one private entry for the next join.
+// The join drops it again, whether it succeeds or not.
+func (s *Session) installKeyPackage(private []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	rc := C.dpmls_session_install_key_package(h, bytePtr(private), C.size_t(len(private)))
+	runtime.KeepAlive(private)
+	return statusError(rc)
+}
+
+// welcomeKeyPackageRefs lists the KeyPackage references a Welcome is
+// addressed to.
+func welcomeKeyPackageRefs(welcome []byte) ([][]byte, error) {
 	var buf C.DpBuf
-	if rc := C.dpmls_key_package(h, &buf); rc != 0 {
+	rc := C.dpmls_welcome_key_package_refs(bytePtr(welcome), C.size_t(len(welcome)), &buf)
+	runtime.KeepAlive(welcome)
+	if rc != 0 {
 		return nil, statusError(rc)
 	}
-	return takeBuf(&buf), nil
+	return decodeRefs(takeBuf(&buf))
 }
 
 // CommitAddMembers builds a Commit that adds these members and leaves it

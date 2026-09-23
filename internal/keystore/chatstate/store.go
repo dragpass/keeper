@@ -49,6 +49,7 @@ type Store struct {
 	nameKey     []byte
 	aeadKey     []byte
 	historyKey  []byte
+	poolKey     []byte
 	lockTimeout time.Duration
 }
 
@@ -87,6 +88,7 @@ func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
 		nameKey:     deriveSubkey(master, nameSubkeyLabel),
 		aeadKey:     deriveSubkey(master, aeadSubkeyLabel),
 		historyKey:  deriveSubkey(master, historySubkeyLabel),
+		poolKey:     deriveSubkey(master, keyPackagePoolSubkeyLabel),
 		lockTimeout: LockTimeout,
 	}, nil
 }
@@ -96,6 +98,7 @@ func (s *Store) Close() {
 	secure.Zeroize(s.nameKey)
 	secure.Zeroize(s.aeadKey)
 	secure.Zeroize(s.historyKey)
+	secure.Zeroize(s.poolKey)
 }
 
 // Reserve consumes count chain positions and returns them. The consumption is
@@ -364,7 +367,7 @@ func PurgeAll(secrets keychain.SecretStore) (int, error) {
 // it. What it reaches, and what it does not:
 //
 //   - The record files, which hold the group state and the sealed local
-//     history, and the temp files beside them.
+//     history, the KeyPackage pool, and the temp files beside them.
 //   - The keyring anchor of each conversation and the owner's seal key.
 //   - Not a copy of any of those made earlier. A filesystem backup still holds
 //     the records, and a keychain backup or a synced keychain still holds the

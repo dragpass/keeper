@@ -26,6 +26,7 @@ package handlers
 import (
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -38,6 +39,16 @@ type resetIdentitySlot struct {
 	name    string
 	present func(keychain.SecretStore) bool
 	delete  func(keychain.SecretStore) error
+}
+
+// resetLeafSlots are cleared under keychain.WithMLSLeafLock, so a reset never
+// interleaves with a declare or promote in another Keeper process. They are
+// kept apart from resetIdentitySlots because several of those accessors
+// (device key, personal DEK, key bundle) take the same non-reentrant lock and
+// would deadlock inside it.
+var resetLeafSlots = []resetIdentitySlot{
+	{config.MLSLeafSignatureKey, mlsLeafSlotPresent(keychain.GetMLSLeafKey), deleteMLSLeafSlot(keychain.DeleteMLSLeafKey)},
+	{config.MLSLeafSignatureKeyPending, mlsLeafSlotPresent(keychain.GetMLSLeafPending), deleteMLSLeafSlot(keychain.DeleteMLSLeafPending)},
 }
 
 // slotPresent reports whether a get accessor resolves to a non-empty value.
@@ -64,19 +75,36 @@ var resetIdentitySlots = []resetIdentitySlot{
 	// The leaf key's declaration is signed by the account key this reset
 	// destroys, and names the account being re-enrolled away from, so the key
 	// is account-scoped however device-scoped its record looks.
-	{config.MLSLeafSignatureKey, mlsLeafKeyPresent, deleteMLSLeafKey},
 }
 
 // An unreadable record counts as present so the reset still removes it.
-func mlsLeafKeyPresent(store keychain.SecretStore) bool {
-	key, found, err := keychain.GetMLSLeafKey(store)
-	secure.Zeroize(key.SecretKey)
-	return found || err != nil
+func mlsLeafSlotPresent(get func(keychain.SecretStore) (keychain.MLSLeafKey, bool, error)) func(keychain.SecretStore) bool {
+	return func(store keychain.SecretStore) bool {
+		key, found, err := get(store)
+		secure.Zeroize(key.SecretKey)
+		return found || err != nil
+	}
 }
 
-func deleteMLSLeafKey(store keychain.SecretStore) error {
-	_, err := keychain.DeleteMLSLeafKey(store)
-	return err
+func deleteMLSLeafSlot(del func(keychain.SecretStore) (bool, error)) func(keychain.SecretStore) error {
+	return func(store keychain.SecretStore) error {
+		_, err := del(store)
+		return err
+	}
+}
+
+// clearResetSlots deletes every present slot and appends its name. A slot that
+// raced away between the presence check and delete is fine (idempotent); the
+// check already gated the list.
+func clearResetSlots(store keychain.SecretStore, slots []resetIdentitySlot, cleared []string) []string {
+	for _, s := range slots {
+		if !s.present(store) {
+			continue
+		}
+		_ = s.delete(store)
+		cleared = append(cleared, s.name)
+	}
+	return cleared
 }
 
 // HandleResetDeviceIdentity wipes this device's account-scoped key material.
@@ -97,15 +125,12 @@ func HandleResetDeviceIdentity(d Deps, req proto.ResetDeviceIdentityRequest) pro
 	}
 
 	// Non-nil so an empty result serializes as `[]`, not `null`.
-	cleared := make([]string, 0, len(resetIdentitySlots))
-	for _, s := range resetIdentitySlots {
-		if !s.present(d.Store) {
-			continue
-		}
-		// Present → delete. A slot that raced away between the presence check
-		// and delete is fine (idempotent); the check already gated the list.
-		_ = s.delete(d.Store)
-		cleared = append(cleared, s.name)
+	cleared := clearResetSlots(d.Store, resetIdentitySlots, make([]string, 0, len(resetIdentitySlots)+len(resetLeafSlots)))
+	if err := keychain.WithMLSLeafLock(d.Store, func() error {
+		cleared = clearResetSlots(d.Store, resetLeafSlots, cleared)
+		return nil
+	}); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf lock could not be acquired")
 	}
 
 	d.Logger.Printf("reset device identity: cleared %d slot(s)", len(cleared))

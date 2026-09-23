@@ -3,7 +3,7 @@
 
 use mls_rs::client_builder::{
     BaseConfig, PaddingMode, WithCryptoProvider, WithGroupStateStorage, WithIdentityProvider,
-    WithMlsRules,
+    WithKeyPackageRepo, WithMlsRules,
 };
 use mls_rs::extension::built_in::RequiredCapabilitiesExt;
 use mls_rs::group::proposal::AddProposal;
@@ -11,6 +11,7 @@ use mls_rs::group::{CommitEffect, ReceivedMessage};
 use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
 use mls_rs::mls_rules::{DefaultMlsRules, EncryptionOptions};
+use mls_rs::time::MlsTime;
 use mls_rs::{
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
     MlsMessage,
@@ -19,7 +20,7 @@ use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use zeroize::Zeroizing;
 
 use crate::gate::{self, Approval, Leaf, LeafGate, LEAF_DECLARATION_EXTENSION};
-use crate::storage::RecordStorage;
+use crate::storage::{KeyPackageCustody, RecordStorage};
 
 /// RFC 9420 ciphersuite 1. The rustcrypto provider implements 1, 2, 3 and 7;
 /// 4, 5 and 6 are absent because the curves behind them are not implemented
@@ -27,24 +28,39 @@ use crate::storage::RecordStorage;
 /// untested branch, not because the others are ruled out.
 pub const CIPHER_SUITE: CipherSuite = CipherSuite::CURVE25519_AES128;
 
-/// How long a KeyPackage this device produces stays valid. mls-rs defaults to
-/// a year; ariadne accepts a declared `not_after` of at most 90 days ahead, and
-/// the declared value has to be the real one, so the real one is kept a day
-/// inside that ceiling for clock skew and upload delay.
+/// The longest a KeyPackage this device produces stays valid. mls-rs defaults
+/// to a year; ariadne accepts a declared `not_after` of at most 90 days ahead,
+/// and the declared value has to be the real one, so the real one is kept a day
+/// inside that ceiling for clock skew and upload delay. A KeyPackage never
+/// outlives the leaf declaration it embeds either, so the caller's cap usually
+/// ends it sooner (`key_package`).
 pub const KEY_PACKAGE_LIFETIME: std::time::Duration =
     std::time::Duration::from_secs(89 * 24 * 60 * 60);
 
-type Config = WithMlsRules<
-    DefaultMlsRules,
-    WithGroupStateStorage<
-        RecordStorage,
-        WithIdentityProvider<LeafGate, WithCryptoProvider<RustCryptoProvider, BaseConfig>>,
+type Config = WithKeyPackageRepo<
+    KeyPackageCustody,
+    WithMlsRules<
+        DefaultMlsRules,
+        WithGroupStateStorage<
+            RecordStorage,
+            WithIdentityProvider<LeafGate, WithCryptoProvider<RustCryptoProvider, BaseConfig>>,
+        >,
     >,
 >;
+
+/// One KeyPackage as generation hands it out: the public message, its
+/// KeyPackage reference, and the private entry the caller must persist before
+/// anyone can be given the message.
+pub struct GeneratedKeyPackage {
+    pub message: Vec<u8>,
+    pub reference: Vec<u8>,
+    pub private: Zeroizing<Vec<u8>>,
+}
 
 pub struct Session {
     client: Client<Config>,
     storage: RecordStorage,
+    custody: KeyPackageCustody,
     gate: LeafGate,
     /// This device's own leaf declaration, carried in every leaf it creates:
     /// its KeyPackages and the first leaf of a group it creates. Empty only
@@ -153,6 +169,17 @@ pub fn key_package_leaf(key_package: &[u8]) -> Res<Leaf> {
     ))
 }
 
+/// The KeyPackage references a Welcome is addressed to: one per new member it
+/// carries secrets for. Empty for anything that is not a Welcome.
+pub fn welcome_key_package_refs(welcome: &[u8]) -> Res<Vec<Vec<u8>>> {
+    let msg = MlsMessage::from_bytes(welcome).map_err(|e| err("welcome decode", e))?;
+    Ok(msg
+        .welcome_key_package_references()
+        .into_iter()
+        .map(|r| r.to_vec())
+        .collect())
+}
+
 /// The `not_after` of a KeyPackage's lifetime, in Unix seconds: what the
 /// client declares to the server when it uploads the KeyPackage.
 pub fn key_package_not_after(key_package: &[u8]) -> Res<u64> {
@@ -174,6 +201,7 @@ impl Session {
         declaration: &[u8],
     ) -> Res<Self> {
         let storage = RecordStorage::new();
+        let custody = KeyPackageCustody::new();
         let signing_identity = signing_identity(identity, public_key);
         let gate = LeafGate::new(signing_identity.clone());
 
@@ -209,12 +237,14 @@ impl Session {
             .identity_provider(gate.clone())
             .group_state_storage(storage.clone())
             .mls_rules(rules)
+            .key_package_repo(custody.clone())
             .signing_identity(signing_identity, secret_key.to_vec().into(), CIPHER_SUITE)
             .build();
 
         Ok(Self {
             client,
             storage,
+            custody,
             gate,
             leaf_extensions,
             approved: Vec::new(),
@@ -222,15 +252,57 @@ impl Session {
         })
     }
 
-    /// One single-use KeyPackage carrying this device's declaration. There is
+    /// One single-use KeyPackage carrying this device's declaration, ending no
+    /// later than `not_after_cap` (Unix seconds) — the declaration's own
+    /// `not_after`, which a KeyPackage embedding it must not outlive. There is
     /// no last-resort KeyPackage: every one produced here is meant to be
     /// consumed once.
-    pub fn key_package(&self) -> Res<Vec<u8>> {
-        self.client
-            .generate_key_package_message(Default::default(), self.leaf_extensions.clone(), None)
-            .map_err(|e| err("key package", e))?
+    ///
+    /// The private keys come back in the result and nothing of them stays in
+    /// this session. Until the caller has persisted them, the message must not
+    /// be handed to anyone: a Welcome to it could never be joined.
+    pub fn key_package(&self, not_after_cap: u64) -> Res<GeneratedKeyPackage> {
+        let now = MlsTime::now().seconds_since_epoch();
+        let remaining = not_after_cap
+            .checked_sub(now)
+            .filter(|s| *s > 0)
+            .ok_or_else(|| "mls: the leaf declaration has already expired".to_string())?;
+        let lifetime =
+            std::time::Duration::from_secs(remaining.min(KEY_PACKAGE_LIFETIME.as_secs()));
+        // A client per call because the lifetime is a client setting. It shares
+        // this session's custody, so the entry lands where `take` finds it.
+        // `now` is passed as the timestamp so not_before and the cap arithmetic
+        // read the same second.
+        let client = self
+            .client
+            .to_builder(None)
+            .key_package_lifetime(lifetime)
+            .build();
+        self.custody.clear();
+        let generated = client
+            .generate_key_package_message(
+                Default::default(),
+                self.leaf_extensions.clone(),
+                Some(MlsTime::from(now)),
+            )
+            .map_err(|e| err("key package", e));
+        let (reference, private) = self.custody.take().map_err(str::to_string)?;
+        let message = generated?
             .to_bytes()
-            .map_err(|e| err("key package encode", e))
+            .map_err(|e| err("key package encode", e))?;
+        Ok(GeneratedKeyPackage {
+            message,
+            reference,
+            private,
+        })
+    }
+
+    /// Hand this session the private entry of the KeyPackage a Welcome is
+    /// addressed to, for the next join only. `join` drops it again whether
+    /// the join succeeds or not.
+    pub fn install_key_package(&self, entry: &[u8]) -> Res<()> {
+        self.custody.install(entry).map_err(str::to_string)?;
+        Ok(())
     }
 
     /// Create a group that only members advertising the leaf declaration
@@ -309,6 +381,12 @@ impl Session {
     /// device's included, must have been approved: a joiner has no earlier
     /// state that vouched for anyone.
     pub fn join(&mut self, welcome: &[u8]) -> Res<()> {
+        let joined = self.join_once(welcome);
+        self.custody.clear();
+        joined
+    }
+
+    fn join_once(&mut self, welcome: &[u8]) -> Res<()> {
         let msg = MlsMessage::from_bytes(welcome).map_err(|e| err("welcome decode", e))?;
         let approved = std::mem::take(&mut self.approved);
         self.gate.enforce(
@@ -627,6 +705,22 @@ mod tests {
 
     use super::*;
 
+    /// A KeyPackage whose private entry goes straight back into the same
+    /// session, standing in for the Go pool the way a real join would use it.
+    fn kp(s: &Session) -> Vec<u8> {
+        let g = s.key_package(far_future()).unwrap();
+        s.install_key_package(&g.private).unwrap();
+        g.message
+    }
+
+    fn now() -> u64 {
+        MlsTime::now().seconds_since_epoch()
+    }
+
+    fn far_future() -> u64 {
+        now() + 10 * KEY_PACKAGE_LIFETIME.as_secs()
+    }
+
     fn member(name: &str) -> Session {
         let (sk, pk) = generate_signature_key().unwrap();
         let decl = format!("declaration of {name}");
@@ -644,7 +738,7 @@ mod tests {
     /// Alice creates a group and adds Bob with Bob's leaf approved, then
     /// confirms. Returns the Welcome.
     fn add(alice: &mut Session, bob: &Session) -> Vec<u8> {
-        let kp = bob.key_package().unwrap();
+        let kp = kp(bob);
         let leaf = key_package_leaf(&kp).unwrap();
         alice.approve(vec![approval(&leaf)]);
         let (_, welcome, _) = alice.commit_add_members(&[&kp]).unwrap();
@@ -655,7 +749,7 @@ mod tests {
     #[test]
     fn a_key_package_carries_the_declaration_unchanged() {
         let bob = member("bob");
-        let leaf = key_package_leaf(&bob.key_package().unwrap()).unwrap();
+        let leaf = key_package_leaf(&kp(&bob)).unwrap();
         assert_eq!(leaf.identity, b"bob");
         assert_eq!(
             leaf.declaration.as_deref(),
@@ -664,12 +758,92 @@ mod tests {
     }
 
     #[test]
+    fn a_key_package_never_outlives_the_cap_it_is_given() {
+        let bob = member("bob");
+        let cap = now() + 3600;
+        let not_after = key_package_not_after(&bob.key_package(cap).unwrap().message).unwrap();
+        assert!(not_after <= cap, "{not_after} vs {cap}");
+        assert!(not_after + 5 >= cap, "{not_after} vs {cap}");
+    }
+
+    #[test]
+    fn a_cap_that_has_passed_produces_nothing() {
+        let bob = member("bob");
+        for cap in [0, now() - 10, now()] {
+            let Err(e) = bob.key_package(cap) else {
+                panic!("a key package was produced past its cap");
+            };
+            assert!(e.contains("expired"), "{e}");
+            assert_eq!(bob.custody.len(), 0);
+        }
+    }
+
+    #[test]
+    fn generation_leaves_no_private_key_in_the_session() {
+        let bob = member("bob");
+        let generated = bob.key_package(far_future()).unwrap();
+        assert_eq!(bob.custody.len(), 0);
+        assert!(!generated.private.is_empty());
+        assert!(!generated.reference.is_empty());
+    }
+
+    // The case that motivated custody: the session that generated the
+    // KeyPackage is gone, and a later one joins from the persisted entry.
+    #[test]
+    fn a_later_session_joins_from_the_persisted_entry_and_keeps_nothing() {
+        let (sk, pk) = generate_signature_key().unwrap();
+        let generated = Session::new(b"bob", &sk, &pk, b"declaration of bob")
+            .unwrap()
+            .key_package(far_future())
+            .unwrap();
+
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let leaf = key_package_leaf(&generated.message).unwrap();
+        alice.approve(vec![approval(&leaf)]);
+        let (_, welcome, _) = alice.commit_add_members(&[&generated.message]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        assert_eq!(
+            welcome_key_package_refs(&welcome).unwrap(),
+            vec![generated.reference.clone()]
+        );
+
+        let mut without = Session::new(b"bob", &sk, &pk, b"declaration of bob").unwrap();
+        assert!(without.join_collect(&welcome).is_err());
+
+        let mut later = Session::new(b"bob", &sk, &pk, b"declaration of bob").unwrap();
+        later.install_key_package(&generated.private).unwrap();
+        let tree = later.join_collect(&welcome).unwrap();
+        later.approve(tree.iter().map(approval).collect());
+        later.join(&welcome).unwrap();
+        assert_eq!(later.epoch().unwrap(), 1);
+        assert_eq!(later.custody.len(), 0, "a join must drop the entry");
+    }
+
+    #[test]
+    fn a_failed_join_drops_the_entry_too() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+        bob.approve(Vec::new());
+        assert!(bob.join(&welcome).is_err());
+        assert_eq!(bob.custody.len(), 0);
+    }
+
+    #[test]
+    fn something_that_is_not_a_welcome_names_no_key_package() {
+        let bob = member("bob");
+        assert!(welcome_key_package_refs(&kp(&bob)).unwrap().is_empty());
+    }
+
+    #[test]
     fn a_key_package_lives_at_most_the_configured_lifetime() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let not_after = key_package_not_after(&member("bob").key_package().unwrap()).unwrap();
+        let not_after = key_package_not_after(&kp(&member("bob"))).unwrap();
         let lifetime = KEY_PACKAGE_LIFETIME.as_secs();
         assert!(not_after <= now + lifetime + 5, "{not_after} vs {now}");
         assert!(not_after + 5 >= now + lifetime, "{not_after} vs {now}");
@@ -680,7 +854,7 @@ mod tests {
         let mut alice = member("alice");
         alice.create_group(b"g").unwrap();
         let bob = member("bob");
-        let kp = bob.key_package().unwrap();
+        let kp = kp(&bob);
 
         assert!(alice.commit_add_members(&[&kp]).is_err());
         assert!(!alice.has_pending_commit().unwrap());
@@ -694,12 +868,10 @@ mod tests {
         alice.create_group(b"g").unwrap();
         let bob = member("bob");
         let carol = member("carol");
-        let carol_leaf = key_package_leaf(&carol.key_package().unwrap()).unwrap();
+        let carol_leaf = key_package_leaf(&kp(&carol)).unwrap();
 
         alice.approve(vec![approval(&carol_leaf)]);
-        let e = alice
-            .commit_add_members(&[&bob.key_package().unwrap()])
-            .unwrap_err();
+        let e = alice.commit_add_members(&[&kp(&bob)]).unwrap_err();
         assert!(e.contains("not approved"), "{e}");
         assert!(!alice.has_pending_commit().unwrap());
     }
@@ -709,7 +881,7 @@ mod tests {
         let mut alice = member("alice");
         alice.create_group(b"g").unwrap();
         let bob = member("bob");
-        let kp = bob.key_package().unwrap();
+        let kp = kp(&bob);
         alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
         alice.commit_add_members(&[&kp]).unwrap();
         alice.clear_pending_commit().unwrap();
@@ -721,8 +893,8 @@ mod tests {
     fn one_unapproved_member_refuses_the_whole_add() {
         let mut alice = member("alice");
         alice.create_group(b"g").unwrap();
-        let bob = member("bob").key_package().unwrap();
-        let carol = member("carol").key_package().unwrap();
+        let bob = kp(&member("bob"));
+        let carol = kp(&member("carol"));
         alice.approve(vec![approval(&key_package_leaf(&bob).unwrap())]);
 
         assert!(alice.commit_add_members(&[&bob, &carol]).is_err());
@@ -754,7 +926,7 @@ mod tests {
 
         let (sk, pk) = generate_signature_key().unwrap();
         let bare = Session::new(b"mallory", &sk, &pk, &[]).unwrap();
-        let kp = bare.key_package().unwrap();
+        let kp = kp(&bare);
         let leaf = key_package_leaf(&kp).unwrap();
         assert_eq!(leaf.declaration, None);
         let admit = Approval {
@@ -788,7 +960,7 @@ mod tests {
         let mut alice = member("alice");
         alice.create_group(b"g").unwrap();
         let bob = member("bob");
-        let kp = bob.key_package().unwrap();
+        let kp = kp(&bob);
         let mut forged = approval(&key_package_leaf(&kp).unwrap());
         forged.declaration = b"what go checked".to_vec();
         alice.approve(vec![forged]);
@@ -842,7 +1014,12 @@ mod tests {
         let mut alice = member("alice");
         alice.create_group(b"g").unwrap();
         let mut bob = member("bob");
-        let welcome = add(&mut alice, &bob);
+        let generated = bob.key_package(far_future()).unwrap();
+        bob.install_key_package(&generated.private).unwrap();
+        let leaf = key_package_leaf(&generated.message).unwrap();
+        alice.approve(vec![approval(&leaf)]);
+        let (_, welcome, _) = alice.commit_add_members(&[&generated.message]).unwrap();
+        alice.apply_pending_commit().unwrap();
 
         let leaves = bob.join_collect(&welcome).unwrap();
         assert_eq!(leaves.len(), 2);
@@ -857,6 +1034,9 @@ mod tests {
         assert!(bob.join(&welcome).is_err());
         assert!(bob.epoch().is_err(), "a refused join must leave no group");
 
+        // The refused join dropped the entry; a retry takes it from the pool
+        // again, as the Go side does.
+        bob.install_key_package(&generated.private).unwrap();
         bob.approve(leaves.iter().map(approval).collect());
         bob.join(&welcome).unwrap();
         assert_eq!(bob.epoch().unwrap(), 1);
@@ -873,7 +1053,7 @@ mod tests {
         bob.join(&welcome).unwrap();
 
         let carol = member("carol");
-        let kp = carol.key_package().unwrap();
+        let kp = kp(&carol);
         alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
         let (commit, _, _) = alice.commit_add_members(&[&kp]).unwrap();
 

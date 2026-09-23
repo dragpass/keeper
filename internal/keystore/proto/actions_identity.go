@@ -28,8 +28,9 @@ const (
 	//
 	// Clears: active keypair (keeper_private_key / keeper_public_key), pending
 	// keypair (pending_keeper_private_key / pending_keeper_public_key),
-	// session_code, device_key, and the MLS leaf signature key
-	// (mls_leaf_signature_key), plus every owner's chat state (the sealed
+	// session_code, device_key, and the MLS leaf signature key, active and
+	// pending (mls_leaf_signature_key, mls_leaf_signature_key_pending), plus
+	// every owner's chat state (the sealed
 	// files, the anchors, and the seal keys). server_public_key is an
 	// account-independent trust anchor and is deliberately preserved.
 	//
@@ -238,12 +239,41 @@ const (
 	ActionRotateRequestKeyPromote = "rotate_request_key_promote"
 	ActionRotateRequestKeyAbort   = "rotate_request_key_abort"
 
-	// MLSLeafDeclare creates (enroll) or replaces (rotate) this device's MLS
-	// leaf signature key — a per-device Ed25519 key, never the account RSA
-	// key — and returns a declaration binding (account_id, device_id, key
-	// fingerprint) under the account identity key. Gated by a server-signed
-	// challenge like rotate_user_keypair_prepare, the other action that signs
-	// a peer-visible statement with that key. The private half never leaves
-	// the Keeper.
+	// MLS leaf signature key, two-phase like the account keypair rotation.
+	//
+	// MLSLeafDeclare mints this device's MLS leaf signature key — a
+	// per-device Ed25519 key, never the account RSA key — for enroll or
+	// rotate, and returns a declaration binding (account_id, device_id, key
+	// fingerprint, validity window) under the account identity key. Key and
+	// declaration go to the pending slot; the active slot does not change.
+	// While a pending entry exists every declare call returns it and mints
+	// nothing, so a retry after a lost response cannot fork the key. Gated by
+	// a server-signed challenge like rotate_user_keypair_prepare, the other
+	// action that signs a peer-visible statement with that key. The private
+	// half never leaves the Keeper.
+	//
+	// MLSLeafPromote moves pending to active once ariadne's signed acceptance
+	// names exactly the pending entry; a token naming the active entry is a
+	// duplicate promote and succeeds without changing anything.
+	// MLSLeafAbort discards the pending entry (idempotent). MLSLeafStatus
+	// reports which entries exist, by fingerprint only.
 	ActionMLSLeafDeclare = "mls_leaf_declare"
+	ActionMLSLeafPromote = "mls_leaf_promote"
+	ActionMLSLeafAbort   = "mls_leaf_abort"
+	ActionMLSLeafStatus  = "mls_leaf_status"
+
+	// MLSKeyPackageGenerate produces single-use KeyPackages for this device's
+	// active leaf, each carrying the active leaf declaration in a LeafNode
+	// extension and ending no later than it, for the caller to upload to the
+	// pool; their private keys go into the owner's sealed KeyPackage pool
+	// before the response is built. There is no last-resort KeyPackage.
+	// Gated by the purpose-bound dragpass.mls.keypackage.challenge, like
+	// mls_leaf_declare and for the same reason: a tool call must not be able
+	// to put this device into groups. Not a conversation-state permit, which a
+	// device with no conversation yet cannot have.
+	//
+	//   Inputs: challenge_token, server_signature, server_key_version?,
+	//           account_id, device_id, count (1..32)
+	//   Output: { key_packages: [{ key_package_b64, not_after }] }
+	MLSKeyPackageGenerate = "mls_key_package_generate"
 )

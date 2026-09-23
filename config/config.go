@@ -39,6 +39,12 @@ const (
 	// message and is vouched for to peers by a leaf declaration.
 	MLSLeafSignatureKey = "mls_leaf_signature_key"
 
+	// The leaf key and declaration mls_leaf_declare minted and ariadne has not
+	// yet accepted. A separate entry rather than a field of the active record:
+	// two declarations with their account key PEMs exceed the 2560-byte cap
+	// Windows Credential Manager puts on one entry.
+	MLSLeafSignatureKeyPending = "mls_leaf_signature_key_pending"
+
 	// Per-org Archive / Recovery keypair (RSA-2048).
 	//
 	// A break-glass recovery key held on the org owner's device. Completely

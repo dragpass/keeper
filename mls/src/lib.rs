@@ -265,13 +265,95 @@ pub unsafe extern "C" fn dpmls_group_create(
     })
 }
 
+/// One KeyPackage ending no later than `not_after_cap` (Unix seconds).
+/// `message` receives the KeyPackage, `reference` its KeyPackage reference and
+/// `private` the entry holding its two private keys, which the caller must
+/// persist before handing out the message and must pass back through
+/// `dpmls_session_install_key_package` to join a Welcome addressed to it.
+/// Nothing of the private keys stays in the session.
+///
 /// # Safety
-/// Pointer rules as in `slice`; `handle` as in `session_of`.
+/// `handle` as in `session_of`; the three outputs must point to writable
+/// DpBufs.
 #[no_mangle]
-pub unsafe extern "C" fn dpmls_key_package(handle: *mut Session, out: *mut DpBuf) -> i32 {
+pub unsafe extern "C" fn dpmls_key_package(
+    handle: *mut Session,
+    not_after_cap: u64,
+    message: *mut DpBuf,
+    reference: *mut DpBuf,
+    private: *mut DpBuf,
+) -> i32 {
     guard(|| {
-        let kp = session_of(handle)?.key_package()?;
-        put(out, kp)?;
+        if message.is_null() || reference.is_null() || private.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let mut generated = unsafe { session_of(handle)? }.key_package(not_after_cap)?;
+        // SAFETY: the three outputs were checked for null above and the caller
+        // promises each points to a writable DpBuf; `put` overwrites them
+        // without reading them. The private entry moves into a DpBuf, which
+        // dpmls_buf_free wipes before releasing.
+        unsafe {
+            put(message, generated.message)?;
+            put(reference, generated.reference)?;
+            put(private, std::mem::take(&mut *generated.private))?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Hand the session the private entry of the KeyPackage a Welcome is addressed
+/// to, for the next join only. The join drops it whether it succeeds or not.
+///
+/// # Safety
+/// `handle` as in `session_of`; `entry` follows the rules in `slice`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_session_install_key_package(
+    handle: *mut Session,
+    entry: *const u8,
+    entry_len: usize,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `entry` points to `entry_len`
+        // readable bytes for the duration of this call. The bytes are decoded
+        // into owned values before the call returns.
+        let (session, entry) = unsafe { (session_of(handle)?, slice(entry, entry_len)?) };
+        session.install_key_package(entry)?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The KeyPackage references a Welcome is addressed to, framed as a u32 count
+/// followed by each reference u32-length-prefixed, big-endian.
+///
+/// # Safety
+/// `welcome` follows the rules in `slice`; `out` must point to a writable
+/// DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_welcome_key_package_refs(
+    welcome: *const u8,
+    welcome_len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `welcome` points to `welcome_len`
+        // readable bytes for the duration of this call; the borrow ends before
+        // this block does.
+        let refs = session::welcome_key_package_refs(unsafe { slice(welcome, welcome_len)? })?;
+        let count =
+            u32::try_from(refs.len()).map_err(|_| "mls: too many references".to_string())?;
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&count.to_be_bytes());
+        for r in &refs {
+            let len = u32::try_from(r.len()).map_err(|_| "mls: reference too long".to_string())?;
+            framed.extend_from_slice(&len.to_be_bytes());
+            framed.extend_from_slice(r);
+        }
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, framed)? };
         Ok(DPMLS_OK)
     })
 }

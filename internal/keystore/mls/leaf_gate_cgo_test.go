@@ -5,6 +5,7 @@ package mls
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,27 +170,55 @@ func TestNewDeviceSession_RefusesAKeyWithNoStoredDeclaration(t *testing.T) {
 
 func TestKeyPackagesAreBoundedAndCarryTheirLifetime(t *testing.T) {
 	s := newSession(t, "bob@device-1")
-	if _, err := s.KeyPackages(0); err == nil {
+	now := uint64(time.Now().Unix())
+	far := now + 10*365*24*60*60
+	if _, _, err := s.KeyPackages(0, far); err == nil {
 		t.Fatal("zero key packages accepted")
 	}
-	if _, err := s.KeyPackages(MaxKeyPackagesPerCall + 1); err == nil {
+	if _, _, err := s.KeyPackages(MaxKeyPackagesPerCall+1, far); err == nil {
 		t.Fatal("too many key packages accepted")
 	}
-	kps, err := s.KeyPackages(3)
-	if err != nil || len(kps) != 3 {
-		t.Fatalf("key packages = %d, %v", len(kps), err)
+	kps, pool, err := s.KeyPackages(3, far)
+	if err != nil || len(kps) != 3 || len(pool) != 3 {
+		t.Fatalf("key packages = %d / %d, %v", len(kps), len(pool), err)
 	}
-	now := uint64(time.Now().Unix())
-	for _, kp := range kps {
+	for i, kp := range kps {
 		if len(kp.Message) > MaxKeyPackageBytes {
 			t.Fatalf("key package of %d bytes", len(kp.Message))
 		}
 		if kp.NotAfter <= now || kp.NotAfter > now+90*24*60*60 {
 			t.Fatalf("not_after %d is not within 90 days of %d", kp.NotAfter, now)
 		}
+		if len(pool[i].Ref) == 0 || len(pool[i].Private) == 0 || pool[i].NotAfter != kp.NotAfter {
+			t.Fatalf("pool entry %d does not describe its key package", i)
+		}
+		if bytes.Contains(kp.Message, pool[i].Private) {
+			t.Fatal("a key package carries its own private entry")
+		}
 	}
-	if bytes.Equal(kps[0].Message, kps[1].Message) {
-		t.Fatal("two key packages are the same bytes; each must be single-use")
+	if bytes.Equal(kps[0].Message, kps[1].Message) || bytes.Equal(pool[0].Ref, pool[1].Ref) {
+		t.Fatal("two key packages are the same; each must be single-use")
+	}
+}
+
+// No KeyPackage outlives the cap, which the caller sets to the declaration's
+// not_after; a cap that has passed produces nothing.
+func TestKeyPackagesNeverOutliveTheirCap(t *testing.T) {
+	s := newSession(t, "bob@device-1")
+	now := uint64(time.Now().Unix())
+	kps, _, err := s.KeyPackages(2, now+3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kp := range kps {
+		if kp.NotAfter > now+3600 || kp.NotAfter+5 < now+3600 {
+			t.Fatalf("not_after %d, want the cap %d", kp.NotAfter, now+3600)
+		}
+	}
+	for _, cap := range []uint64{0, now - 60, now} {
+		if _, _, err := s.KeyPackages(1, cap); err == nil {
+			t.Fatalf("cap %d produced a key package", cap)
+		}
 	}
 }
 
@@ -230,4 +259,24 @@ func BenchmarkProcessAddCommit(b *testing.B) {
 			}
 		}
 	})
+}
+
+// A damaged pool entry is refused with a fixed message: the entry holds two
+// private keys, so the error names neither their bytes nor their size.
+func TestAMalformedPoolEntryIsRefusedWithoutDescribingIt(t *testing.T) {
+	s := newSession(t, "bob@device-1")
+	_, pool, err := s.KeyPackages(1, uint64(time.Now().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := pool[0].Private
+	for _, bad := range [][]byte{entry[:len(entry)-1], append(bytes.Clone(entry), 0), {1, 2, 3}} {
+		err := s.installKeyPackage(bad)
+		if err == nil || !strings.HasSuffix(err.Error(), ": mls: key package entry is malformed") {
+			t.Fatalf("install of a damaged entry = %v", err)
+		}
+	}
+	if err := s.installKeyPackage(entry); err != nil {
+		t.Fatalf("install of the real entry: %v", err)
+	}
 }

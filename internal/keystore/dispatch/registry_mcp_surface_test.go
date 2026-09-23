@@ -68,12 +68,20 @@ func TestMCPCallableActions_ExcludeChatState(t *testing.T) {
 	}
 }
 
-// A model that could reach this could vouch for a leaf key under the user's
-// account key, which is the one statement the MLS identity check trusts.
-func TestMCPCallableActions_ExcludeMLSLeafDeclare(t *testing.T) {
-	for _, action := range mcpCallableActions {
-		if action == proto.ActionMLSLeafDeclare {
-			t.Fatal("mls_leaf_declare is on the MCP surface")
+// A model that could reach declare could vouch for a leaf key under the
+// user's account key, which is the one statement the MLS identity check
+// trusts; one that could reach promote or abort could choose which key signs.
+func TestMCPCallableActions_ExcludeTheMLSLeafLifecycle(t *testing.T) {
+	for _, leaf := range []string{
+		proto.ActionMLSLeafDeclare, proto.ActionMLSLeafPromote, proto.ActionMLSLeafAbort, proto.ActionMLSLeafStatus,
+	} {
+		if _, ok := actionRegistry[leaf]; !ok {
+			t.Fatalf("%s is not registered; this guard checks nothing", leaf)
+		}
+		for _, action := range mcpCallableActions {
+			if action == leaf {
+				t.Fatalf("%s is on the MCP surface", leaf)
+			}
 		}
 	}
 }

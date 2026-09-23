@@ -1,11 +1,14 @@
 // storage.rs — the GroupStateStorage mls-rs writes into, and the framing that
-// turns what it wrote into the one opaque blob Keeper stores.
+// turns what it wrote into the one opaque blob Keeper stores; and the
+// KeyPackageStorage that hands KeyPackage private keys to Go and back.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
+use mls_rs_core::crypto::HpkeSecretKey;
 use mls_rs_core::group::{EpochRecord, GroupState, GroupStateStorage};
+use mls_rs_core::key_package::{KeyPackageData, KeyPackageStorage};
 use zeroize::Zeroizing;
 
 /// Magic and version of the blob this module produces. It is not an mls-rs
@@ -134,6 +137,144 @@ impl GroupStateStorage for RecordStorage {
     }
 }
 
+/// Magic and version of one KeyPackage private entry as Go stores it. Go treats
+/// the bytes as opaque; only this module reads them.
+const KEY_PACKAGE_MAGIC: &[u8; 8] = b"DPMLSKP1";
+
+/// KeyPackageCustody is where mls-rs puts a KeyPackage's private keys (the HPKE
+/// init key and the leaf encryption key) when it generates one, and where it
+/// looks for them when a Welcome arrives.
+///
+/// It is a hand-off point, not a store. Persistence belongs to the Go side,
+/// which seals every entry into the owner's chat state directory, so a
+/// Welcome that arrives in a later process can still be joined. Generation
+/// takes the new entry straight back out (`take`), so a session never keeps a
+/// private key it produced; a join puts back exactly the one entry the Welcome
+/// names (`install`), and `clear` drops it once that join is over. mls-rs's own
+/// `delete` after a successful join lands here too, and it is not durable:
+/// the durable delete is the Go side's, ordered after the group state write.
+///
+/// Dropping an entry zeroizes its keys: `HpkeSecretKey` is `ZeroizeOnDrop`.
+#[derive(Clone, Default)]
+pub struct KeyPackageCustody(Arc<Mutex<BTreeMap<Vec<u8>, KeyPackageData>>>);
+
+impl KeyPackageCustody {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remove the one entry a generation just inserted, framed for Go, with
+    /// its KeyPackage reference. Anything but exactly one entry is an error:
+    /// it would mean a key the caller is not about to persist.
+    pub fn take(&self) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), &'static str> {
+        let mut inner = self.0.lock().expect("key package custody mutex poisoned");
+        if inner.len() != 1 {
+            inner.clear();
+            return Err("mls: key package custody did not hold exactly one new entry");
+        }
+        let (reference, data) = inner
+            .pop_first()
+            .ok_or("mls: key package custody did not hold exactly one new entry")?;
+        let entry = encode_key_package_entry(&reference, &data);
+        Ok((reference, entry))
+    }
+
+    /// Put one entry Go kept back, for the join that needs it. Returns its
+    /// reference.
+    pub fn install(&self, entry: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let (reference, data) = decode_key_package_entry(entry)?;
+        let mut inner = self.0.lock().expect("key package custody mutex poisoned");
+        inner.clear();
+        inner.insert(reference.clone(), data);
+        Ok(reference)
+    }
+
+    pub fn clear(&self) {
+        self.0
+            .lock()
+            .expect("key package custody mutex poisoned")
+            .clear();
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.0
+            .lock()
+            .expect("key package custody mutex poisoned")
+            .len()
+    }
+}
+
+impl KeyPackageStorage for KeyPackageCustody {
+    type Error = Infallible;
+
+    fn delete(&mut self, id: &[u8]) -> Result<(), Self::Error> {
+        self.0
+            .lock()
+            .expect("key package custody mutex poisoned")
+            .remove(id);
+        Ok(())
+    }
+
+    fn insert(&mut self, id: Vec<u8>, pkg: KeyPackageData) -> Result<(), Self::Error> {
+        self.0
+            .lock()
+            .expect("key package custody mutex poisoned")
+            .insert(id, pkg);
+        Ok(())
+    }
+
+    fn get(&self, id: &[u8]) -> Result<Option<KeyPackageData>, Self::Error> {
+        Ok(self
+            .0
+            .lock()
+            .expect("key package custody mutex poisoned")
+            .get(id)
+            .cloned())
+    }
+}
+
+fn encode_key_package_entry(reference: &[u8], data: &KeyPackageData) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::with_capacity(
+        KEY_PACKAGE_MAGIC.len()
+            + 4 * 4
+            + reference.len()
+            + data.key_package_bytes.len()
+            + data.init_key.len()
+            + data.leaf_node_key.len()
+            + 8,
+    ));
+    out.extend_from_slice(KEY_PACKAGE_MAGIC);
+    put_bytes(&mut out, reference);
+    put_bytes(&mut out, &data.key_package_bytes);
+    put_bytes(&mut out, &data.init_key);
+    put_bytes(&mut out, &data.leaf_node_key);
+    out.extend_from_slice(&data.expiration.to_be_bytes());
+    out
+}
+
+// The messages never describe the entry's contents or size: it carries two
+// private keys.
+fn decode_key_package_entry(entry: &[u8]) -> Result<(Vec<u8>, KeyPackageData), &'static str> {
+    let malformed = "mls: key package entry is malformed";
+    let mut cur = Cursor::new(entry);
+    if cur.take(KEY_PACKAGE_MAGIC.len()).map_err(|_| malformed)? != KEY_PACKAGE_MAGIC {
+        return Err(malformed);
+    }
+    let reference = cur.take_prefixed().map_err(|_| malformed)?.to_vec();
+    let key_package = cur.take_prefixed().map_err(|_| malformed)?.to_vec();
+    let init_key = HpkeSecretKey::from(cur.take_prefixed().map_err(|_| malformed)?.to_vec());
+    let leaf_node_key = HpkeSecretKey::from(cur.take_prefixed().map_err(|_| malformed)?.to_vec());
+    let expiration = cur.take_u64().map_err(|_| malformed)?;
+    if !cur.done() || reference.is_empty() || key_package.is_empty() {
+        return Err(malformed);
+    }
+    Ok((
+        reference,
+        KeyPackageData::new(key_package, init_key, leaf_node_key, expiration),
+    ))
+}
+
 fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u32).to_be_bytes());
     out.extend_from_slice(b);
@@ -220,6 +361,62 @@ mod tests {
         s.write(state(b"gid", b"body"), vec![], vec![]).unwrap();
         assert!(s.state(b"other").unwrap().is_none());
         assert!(s.max_epoch_id(b"other").unwrap().is_none());
+    }
+
+    fn key_package_data() -> KeyPackageData {
+        KeyPackageData::new(
+            b"key package".to_vec(),
+            HpkeSecretKey::from(b"init".to_vec()),
+            HpkeSecretKey::from(b"leaf".to_vec()),
+            1_791_591_000,
+        )
+    }
+
+    #[test]
+    fn a_generated_entry_is_taken_out_and_installs_back_unchanged() {
+        let mut custody = KeyPackageCustody::new();
+        custody.insert(b"ref".to_vec(), key_package_data()).unwrap();
+
+        let (reference, entry) = custody.take().unwrap();
+        assert_eq!(reference, b"ref");
+        assert_eq!(custody.len(), 0, "take must leave nothing behind");
+
+        let other = KeyPackageCustody::new();
+        assert_eq!(other.install(&entry).unwrap(), b"ref");
+        assert!(other.get(b"ref").unwrap() == Some(key_package_data()));
+        other.clear();
+        assert_eq!(other.len(), 0);
+    }
+
+    #[test]
+    fn take_refuses_anything_but_exactly_one_entry() {
+        let mut custody = KeyPackageCustody::new();
+        assert!(custody.take().is_err());
+        custody.insert(b"a".to_vec(), key_package_data()).unwrap();
+        custody.insert(b"b".to_vec(), key_package_data()).unwrap();
+        assert!(custody.take().is_err());
+        assert_eq!(custody.len(), 0, "a refused take must not keep the keys");
+    }
+
+    #[test]
+    fn a_damaged_entry_is_refused_without_describing_it() {
+        let mut custody = KeyPackageCustody::new();
+        custody.insert(b"ref".to_vec(), key_package_data()).unwrap();
+        let (_, entry) = custody.take().unwrap();
+
+        let mut longer = entry.to_vec();
+        longer.push(0);
+        let mut other_magic = entry.to_vec();
+        other_magic[0] ^= 1;
+        for bad in [
+            &entry[..entry.len() - 1],
+            &longer[..],
+            &other_magic[..],
+            b"",
+        ] {
+            let e = KeyPackageCustody::new().install(bad).unwrap_err();
+            assert_eq!(e, "mls: key package entry is malformed");
+        }
     }
 
     #[test]
