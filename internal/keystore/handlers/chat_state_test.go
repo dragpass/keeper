@@ -723,20 +723,27 @@ func (f *chatStateFixture) watermarkPermit(t *testing.T, leaf uint32, nextApplic
 	return f.sign(t, p)
 }
 
-// A permit describing another leaf's chain is refused rather than used to judge
-// this one's. It is an authorization failure and not a rewind, so the next
-// permit naming the right leaf still works — nothing was latched.
-func TestChatState_AWatermarkNamingAnotherLeafIsRefused(t *testing.T) {
+// A permit describing another leaf's chain is not used to judge this one's:
+// it is ignored rather than refused, so it neither latches nor moves the
+// anchor, and the chain it would have judged carries on from where it was.
+// Refusing it would lock out a second device of the account, which is handed
+// the other device's chain because the server keeps one watermark per
+// account.
+func TestChatState_AWatermarkNamingAnotherLeafIsIgnored(t *testing.T) {
 	f := newChatStateFixture(t)
 	seedSendPositionAtLeaf(t, f, 3)
 
-	wrong := f.reserveRequest(f.watermarkPermit(t, 9, 1), 1)
-	assertChatStateFailure(t, f.reserve(t, wrong), proto.ChatStateErrorCodeNotAuthorized)
+	wrong := f.reserveRequest(f.watermarkPermit(t, 9, 5), 1)
+	if resp := f.reserve(t, wrong); !resp.Success {
+		t.Fatalf("a watermark on another leaf was judged against this one: %s (%s)", resp.Error, resp.ErrorCode)
+	}
 
 	right := f.reserveRequest(f.watermarkPermit(t, 3, 1), 1)
 	if resp := f.reserve(t, right); !resp.Success {
 		t.Fatalf("a watermark on this device's own leaf was refused: %s (%s)", resp.Error, resp.ErrorCode)
 	}
+	ahead := f.reserveRequest(f.watermarkPermit(t, 3, 9), 1)
+	assertChatStateFailure(t, f.reserve(t, ahead), proto.ChatStateErrorCodeRekeyRequired)
 }
 
 // Until the server has accepted a position there is no chain for the leaf slot

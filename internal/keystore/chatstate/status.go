@@ -37,6 +37,10 @@ type ConversationStatus struct {
 	// NeedsRekey is the rewind latch. When it is set nothing else is read:
 	// the record behind it is not trusted to say anything.
 	NeedsRekey bool
+
+	// RekeyCause is why NeedsRekey latched, and "" when it is not latched or
+	// the latch predates the cause being recorded.
+	RekeyCause RekeyCause
 }
 
 // StatusCipher is what Status needs from MLS: the confirmed roster, to judge
@@ -61,7 +65,8 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
 			out.NeedsRekey = true
-			return nil
+			out.RekeyCause, err = s.rekeyCause(p)
+			return err
 		}
 		if err != nil {
 			return err

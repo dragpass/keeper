@@ -97,6 +97,9 @@ func (s *Store) CreateGroup(
 		rec.GroupState = state
 		rec.Pending = &pending
 		rec.RemovedFromGroup = false
+		// A new group is a tree of one, and its creator is leaf 0 of it
+		// (RFC 9420 §11), from epoch 0.
+		rec.OwnLeaf = &OwnLeaf{}
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -108,25 +111,36 @@ func (s *Store) CreateGroup(
 }
 
 // SaveJoinedGroupState stores the group a Welcome produced, and moves the
-// record onto the epoch the group joined at.
+// record onto the epoch the group joined at and the leaf this device holds in
+// it. ownLeaf is read from the joined group state (the session's own member
+// index), never from anything the server said.
 //
 // SaveGroupState leaves Record.Epoch alone, which is right for a blob that has
 // not moved the confirmed epoch and wrong for a join: a joiner enters at the
 // committer's epoch, and a record left at 0 would report that — and judge the
 // anchor against it — until the first send or delivery corrected it.
 //
+// The rollback judgement is split around the join. The local half (the
+// anchor's generation, ceiling and epoch, and a missing file) is judged on the
+// record as it was before the join, because that is the file the anchor
+// describes. The watermark half is judged after the record has entered the
+// join epoch as ownLeaf: before that the record is at an epoch this device
+// never sent in, and every chain the server can name is somebody else's. A
+// rewind the watermark does catch still latches here, and the join is not
+// written.
+//
 // A pending Commit refuses the join. Replacing the group state under it would
 // leave a record that says a Commit is waiting on a group that no longer holds
 // it.
 func (s *Store) SaveJoinedGroupState(
-	conversationID string, wm ServerWatermark, blob []byte, epoch uint64,
+	conversationID string, wm ServerWatermark, blob []byte, epoch uint64, ownLeaf uint32,
 ) (uint64, error) {
 	if len(blob) == 0 {
 		return 0, errors.New("group state blob is empty")
 	}
 	var generation uint64
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadLocal(p, conversationID)
 		if err != nil {
 			return err
 		}
@@ -137,6 +151,10 @@ func (s *Store) SaveJoinedGroupState(
 		rec.GroupState = blob
 		rec.RemovedFromGroup = false
 		rec.enterEpoch(epoch)
+		rec.OwnLeaf = &OwnLeaf{Index: ownLeaf, SinceEpoch: epoch}
+		if rec, anchor, err = s.judgeWatermark(p, rec, anchor, wm); err != nil {
+			return err
+		}
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -215,6 +233,7 @@ func (s *Store) DiscardUnacceptedGroup(
 		loaded := rec.Generation
 		rec.GroupState = nil
 		rec.Pending = nil
+		rec.OwnLeaf = nil
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -284,6 +303,7 @@ func (s *Store) ForgetRemovedGroup(conversationID string, wm ServerWatermark) (F
 		rec.RemovalLatch = nil
 		rec.LeafReplacementLatch = nil
 		rec.RemovedFromGroup = false
+		rec.OwnLeaf = nil
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}

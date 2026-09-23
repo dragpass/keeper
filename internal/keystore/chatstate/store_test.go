@@ -656,7 +656,7 @@ func TestAnchorJSONStaysSmallEnoughForEveryKeyring(t *testing.T) {
 		Generation: 1 << 40, ReservedBefore: 1 << 40, Epoch: 1 << 40,
 		WatermarkEpoch: 1 << 40, WatermarkLeafIndex: 1 << 20,
 		WatermarkNextHandshake: 1 << 40, WatermarkNextApplication: 1 << 40,
-		NeedsRekey: true,
+		NeedsRekey: true, RekeyCause: RekeyCauseRollback,
 	})
 	if err != nil {
 		t.Fatal(err)

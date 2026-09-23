@@ -774,10 +774,21 @@ func (s *Session) joinFromEntry(
 	if err != nil {
 		return err
 	}
-	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch); err != nil {
+	ownLeaf, err := s.OwnLeafIndex()
+	if err != nil {
+		return err
+	}
+	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch, ownLeaf); err != nil {
 		return err
 	}
 	return store.DeleteKeyPackage(entry.Ref, now)
+}
+
+// OwnLeafIndex is this device's leaf in the group the session holds: the
+// library's current member index, read from the group state itself.
+func (s *Session) OwnLeafIndex() (uint32, error) {
+	_, leaf, _, err := s.SendPosition()
+	return leaf, err
 }
 
 // decodeRefs reads dpmls_welcome_key_package_refs' framing strictly.

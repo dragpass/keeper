@@ -291,32 +291,6 @@ func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byt
 	return blob, err
 }
 
-// LocalLeafIndex reports this device's leaf in the conversation's MLS group,
-// and false when the conversation has never learned one — no record, no group,
-// or nothing sent yet. False is an answer: a leaf nobody knows cannot be
-// compared against the leaf a server watermark names.
-//
-// It reads the record without judging it against the anchor, unlike every
-// other call here. The value it takes out is one this device wrote about
-// itself and a rewound copy of the file carries the same leaf as a current
-// one, so nothing is decided on the unjudged bytes; the caller's real
-// operation runs the judgement immediately afterwards.
-func (s *Store) LocalLeafIndex(conversationID string) (uint32, bool, error) {
-	var (
-		leaf  uint32
-		known bool
-	)
-	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, err := s.readRecord(p, conversationID)
-		if err != nil || rec == nil {
-			return err
-		}
-		leaf, known = rec.localLeafIndex()
-		return nil
-	})
-	return leaf, known, err
-}
-
 // Purge erases every trace of one owner's chat state: the files, the anchors,
 // and the seal key.
 func Purge(secrets keychain.SecretStore, ownerAccountID string) (int, error) {
@@ -484,6 +458,18 @@ func ensureOwnerOnlyDir(dirs ...string) error {
 func (s *Store) loadChecked(
 	p convPaths, conversationID string, wm ServerWatermark,
 ) (*Record, Anchor, error) {
+	rec, anchor, err := s.loadLocal(p, conversationID)
+	if err != nil {
+		return nil, anchor, err
+	}
+	return s.judgeWatermark(p, rec, anchor, wm)
+}
+
+// loadLocal is loadChecked's first half: the checks that need only the file
+// and the keyring. SaveJoinedGroupState runs the halves apart, because the
+// watermark describes a chain that only exists once the join has moved the
+// record onto its epoch and leaf.
+func (s *Store) loadLocal(p convPaths, conversationID string) (*Record, Anchor, error) {
 	anchor, err := loadAnchor(s.secrets, p.tag)
 	if err != nil {
 		return nil, Anchor{}, err
@@ -500,22 +486,46 @@ func (s *Store) loadChecked(
 		// deletion, not a first use: those positions were handed out and the
 		// only record of that is gone.
 		if anchor.Generation > 0 || anchor.ReservedBefore > 0 {
-			return nil, anchor, s.latchRekey(p.tag, anchor)
+			return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseStateMissing)
 		}
 		rec = newRecord(s.owner, conversationID)
 	}
-	if anchor.rewound(rec, wm) {
-		return nil, anchor, s.latchRekey(p.tag, anchor)
+	if anchor.rewoundLocally(rec) {
+		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseRollback)
 	}
-	return rec, anchor.withWatermark(wm), nil
+	return rec, anchor, nil
 }
 
-func (s *Store) latchRekey(tag string, anchor Anchor) error {
+// judgeWatermark is loadChecked's second half.
+func (s *Store) judgeWatermark(
+	p convPaths, rec *Record, anchor Anchor, wm ServerWatermark,
+) (*Record, Anchor, error) {
+	if anchor.watermarkAhead(rec, wm) {
+		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseWatermarkAhead)
+	}
+	return rec, anchor.advancedBy(rec, wm), nil
+}
+
+// latchRekey sets NeedsRekey. Nothing in this package clears it again.
+func (s *Store) latchRekey(tag string, anchor Anchor, cause RekeyCause) error {
 	anchor.NeedsRekey = true
+	if anchor.RekeyCause == "" {
+		anchor.RekeyCause = cause
+	}
 	if err := saveAnchor(s.secrets, tag, anchor); err != nil {
 		return err
 	}
 	return ErrRekeyRequired
+}
+
+// rekeyCause reads why the conversation is latched, and "" when it is not or
+// when the latch predates the cause being recorded. It judges nothing.
+func (s *Store) rekeyCause(p convPaths) (RekeyCause, error) {
+	anchor, err := loadAnchor(s.secrets, p.tag)
+	if err != nil || !anchor.NeedsRekey {
+		return "", err
+	}
+	return anchor.RekeyCause, nil
 }
 
 // commit bumps the generation, replaces the file, and then raises the anchor to

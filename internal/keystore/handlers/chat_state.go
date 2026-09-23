@@ -175,15 +175,18 @@ func openChatState(
 	if resp, ok := authorizeChatState(d, payload, req); !ok {
 		return nil, chatstate.ServerWatermark{}, resp, false
 	}
-	permit, _, conversationID := req.ChatStateContext()
-	return openChatStateStore(d, permit, conversationID)
+	permit, _, _ := req.ChatStateContext()
+	return openChatStateStore(d, permit)
 }
 
 // openChatStateStore is openChatState after the gate: it opens the permit
-// owner's store and checks the watermark names this device's leaf. Only a
-// caller that has already run authorizeChatState may reach it.
+// owner's store and carries the permit's watermark to it. Whether that
+// watermark describes this device's chain at all is the store's to judge
+// (chatstate.Record.ownsChain), because only the record knows this device's
+// leaf and the epoch it entered at. Only a caller that has already run
+// authorizeChatState may reach it.
 func openChatStateStore(
-	d Deps, permit proto.ChatStatePermit, conversationID string,
+	d Deps, permit proto.ChatStatePermit,
 ) (*chatstate.Store, chatstate.ServerWatermark, proto.BaseResponse, bool) {
 	store, err := chatstate.Open(d.Store, permit.AccountID)
 	if err != nil {
@@ -197,10 +200,6 @@ func openChatStateStore(
 		PendingRemovals:      permit.PendingRemovalAccountIDs,
 
 		PendingLeafReplacements: leafReplacementsOf(permit.PendingLeafReplacements),
-	}
-	if resp, ok := chatStateWatermarkNamesThisLeaf(d, store, conversationID, watermark); !ok {
-		store.Close()
-		return nil, chatstate.ServerWatermark{}, resp, false
 	}
 	return store, watermark, proto.BaseResponse{}, true
 }
@@ -247,36 +246,6 @@ func authorizeChatStateCapped(
 		// version; neither belongs in a reply to a caller that just failed to
 		// prove authorization.
 		return chatStateNotAuthorized(d, "signature"), false
-	}
-	return proto.BaseResponse{}, true
-}
-
-// chatStateWatermarkNamesThisLeaf refuses a watermark that describes some other
-// sender's chain.
-//
-// The leaf slot only means something once the server has accepted a position:
-// until then there is no chain for it to name and it is ignored, which is also
-// the answer for a conversation that has no group yet and therefore no leaf of
-// its own to compare. Once the server has accepted one, the two must agree —
-// judging this device's positions against a record of somebody else's is the
-// one way a signed, in-window, correctly bound permit can still be the wrong
-// permit.
-//
-// A disagreement is an authorization failure and not a rewind, so it does not
-// latch the conversation: the anchor is left where it is and a permit naming
-// the right leaf still works.
-func chatStateWatermarkNamesThisLeaf(
-	d Deps, store *chatstate.Store, conversationID string, wm chatstate.ServerWatermark,
-) (proto.BaseResponse, bool) {
-	if !wm.HasAccepted() {
-		return proto.BaseResponse{}, true
-	}
-	leaf, known, err := store.LocalLeafIndex(conversationID)
-	if err != nil {
-		return chatStateFailure(d, "watermark leaf", err), false
-	}
-	if known && leaf != wm.LeafIndex {
-		return chatStateNotAuthorized(d, "watermark leaf"), false
 	}
 	return proto.BaseResponse{}, true
 }

@@ -784,6 +784,29 @@ func (r MLSConversationStatusRequest) Validate() error {
 	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
 }
 
+// Why a conversation is latched needs_rekey. The recovery is the same for all
+// of them; they differ in what the user is told happened.
+const (
+	// ChatStateRekeyCauseRollback — the local state file is older than the
+	// keyring anchor says it is: a restored backup or a copied file.
+	ChatStateRekeyCauseRollback = "rollback_detected"
+
+	// ChatStateRekeyCauseStateMissing — the state file is gone while the
+	// anchor says it was used.
+	ChatStateRekeyCauseStateMissing = "state_missing"
+
+	// ChatStateRekeyCauseWatermarkAhead — the server says this device's own
+	// leaf sent further than the local state knows.
+	ChatStateRekeyCauseWatermarkAhead = "watermark_ahead"
+
+	// ChatStateRekeyCauseAnchorUnreadable — the keyring anchor is unreadable.
+	ChatStateRekeyCauseAnchorUnreadable = "anchor_unreadable"
+
+	// ChatStateRekeyCauseUnknown — latched by a Keeper that did not record a
+	// cause.
+	ChatStateRekeyCauseUnknown = "unknown"
+)
+
 // MLSConversationStatusResponseData lets the app say "참여자 변경 반영 중"
 // before it tries to send, rather than after a refusal. RemovalLatch is the
 // accounts a send would be refused for now (CHAT_MLS_ROTATION_PENDING), judged
@@ -801,6 +824,11 @@ type MLSConversationStatusResponseData struct {
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
 	NeedsRekey           bool                       `json:"needs_rekey"`
+
+	// RekeyCause says why needs_rekey latched (0.0.55): one of the
+	// ChatStateRekeyCause* values, "unknown" for a latch recorded before the
+	// cause was, and absent when needs_rekey is false.
+	RekeyCause string `json:"rekey_cause,omitempty"`
 
 	// RemovedFromGroup — the last Commit applied here removed this device, so
 	// mls_conversation_forget_removed must run before mls_join (0.0.53).

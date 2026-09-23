@@ -5,7 +5,7 @@
 //	the chat-state gate (size cap → strict decode → validation → binding →
 //	  permit window → server signature), exactly authorizeChatState's
 //	  → the MLS library is linked
-//	  → the permit owner's store opens and the watermark names this leaf
+//	  → the permit owner's store opens
 //	  → the device session opens as the active leaf, which must belong to
 //	    the permit's account
 //	  → one chatstate transaction, with every leaf it brings in verified
@@ -64,7 +64,7 @@ func openMLSChat(
 			"this Keeper was built without the MLS library"), false
 	}
 	permit, _, conversationID := req.ChatStateContext()
-	store, wm, resp, ok := openChatStateStore(d, permit, conversationID)
+	store, wm, resp, ok := openChatStateStore(d, permit)
 	if !ok {
 		return nil, resp, false
 	}
@@ -731,8 +731,20 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
 		NeedsRekey:            status.NeedsRekey,
+		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
 	}}
+}
+
+func rekeyCauseOf(status chatstate.ConversationStatus) string {
+	switch {
+	case !status.NeedsRekey:
+		return ""
+	case status.RekeyCause == "":
+		return proto.ChatStateRekeyCauseUnknown
+	default:
+		return string(status.RekeyCause)
+	}
 }
 
 func permitLeafReplacements(entries []chatstate.LeafReplacement) []proto.ChatStateLeafReplacement {

@@ -981,8 +981,10 @@ func TestAJoinWhoseGroupStateIsNotWrittenKeepsThePoolEntry(t *testing.T) {
 	g.confirm(t, in.ClientCommitID)
 
 	// A server watermark ahead of a conversation this device has never
-	// written is refused as a rewind, so the group state write fails.
-	ahead := chatstate.ServerWatermark{Epoch: 5, NextApplicationIndex: 5}
+	// written is refused as a rewind, so the group state write fails. It
+	// names leaf 1, the one Bob joins as: another leaf's chain would not be
+	// Bob's to be behind on.
+	ahead := chatstate.ServerWatermark{Epoch: 5, LeafIndex: 1, NextApplicationIndex: 5}
 	if err := bob.session(t).JoinFromPool(bobStore, conv, ahead, in.Welcome, bob.verifier(), time.Now()); err == nil {
 		t.Fatal("the join succeeded although its group state could not be written")
 	}

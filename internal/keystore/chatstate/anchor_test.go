@@ -123,26 +123,25 @@ func TestWithWatermarkNeverLowersASlot(t *testing.T) {
 	}
 }
 
-// The leaf a watermark is judged against comes out of the positions this
-// device's own send path wrote, and only those name their ratchet. An entry
-// that names none is not a device that sends from leaf 0; it is a device whose
-// leaf this record has never learned.
+// A record without OwnLeaf falls back to the positions this device's own send
+// path wrote, and only those name their ratchet. An entry that names none is
+// not a device that sends from leaf 0; it is a device whose leaf this record
+// has never learned.
 func TestLocalLeafIsUnknownUntilTheSendPathWritesOne(t *testing.T) {
 	store, _ := newTestStore(t)
-
-	if _, known, err := store.LocalLeafIndex(testConvA); err != nil || known {
-		t.Fatalf("a conversation with no record claimed a leaf: known=%v err=%v", known, err)
-	}
 
 	reservation, err := store.Reserve(testConvA, 1, noWatermark)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
+	if _, known := readRecordForTest(t, store, testConvA).ownLeaf(); known {
+		t.Fatal("a record with nothing sent claimed a leaf")
+	}
 	if _, _, err := store.CommitOutbox(testConvA, noWatermark, sampleEntry(reservation.FirstChainIndex)); err != nil {
 		t.Fatalf("commit outbox: %v", err)
 	}
-	if _, known, err := store.LocalLeafIndex(testConvA); err != nil || known {
-		t.Fatalf("an axis-less outbox entry read as leaf 0: known=%v err=%v", known, err)
+	if _, known := readRecordForTest(t, store, testConvA).ownLeaf(); known {
+		t.Fatal("an axis-less outbox entry read as leaf 0")
 	}
 
 	seedGroupState(t, store, testConvB, 0, 6, 0)
@@ -151,9 +150,9 @@ func TestLocalLeafIsUnknownUntilTheSendPathWritesOne(t *testing.T) {
 	}, &fakeCipher{}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	leaf, known, err := store.LocalLeafIndex(testConvB)
-	if err != nil || !known || leaf != 6 {
-		t.Fatalf("LocalLeafIndex after a send = %d, known=%v, err=%v; want 6, true", leaf, known, err)
+	own, known := readRecordForTest(t, store, testConvB).ownLeaf()
+	if !known || own != (OwnLeaf{Index: 6}) {
+		t.Fatalf("own leaf after a send = %+v, known=%v; want leaf 6 since 0", own, known)
 	}
 }
 

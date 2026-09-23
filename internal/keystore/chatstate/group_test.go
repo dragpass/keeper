@@ -9,7 +9,7 @@ import (
 // rule and the anchor are judged against the real confirmed epoch.
 func TestAJoinRecordsItsEpoch(t *testing.T) {
 	store, _ := newTestStore(t)
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(4, 1, 0), 4); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(4, 1, 0), 4, 1); err != nil {
 		t.Fatal(err)
 	}
 	if rec := readRecordForTest(t, store, testConvA); rec.Epoch != 4 {
@@ -21,7 +21,7 @@ func TestAJoinRecordsItsEpoch(t *testing.T) {
 // one. Both refusals come before the MLS layer is touched and write nothing.
 func TestAHandshakeOutOfEpochOrderIsRefusedBeforeMLS(t *testing.T) {
 	store, _ := newTestStore(t)
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); err != nil {
 		t.Fatal(err)
 	}
 	before := readRecordForTest(t, store, testConvA).Generation
@@ -67,7 +67,7 @@ func TestAJoinOverAPendingCommitIsRefused(t *testing.T) {
 		BeginCommitRequest{ClientCommitID: "c1"}, cipher); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(2, 1, 0), 2); !errors.Is(err, ErrCommitPending) {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(2, 1, 0), 2, 1); !errors.Is(err, ErrCommitPending) {
 		t.Fatalf("join over a pending commit = %v", err)
 	}
 }
@@ -109,7 +109,7 @@ func TestAnUnacceptedCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
 	if err != nil || again.Discarded || again.Generation != got.Generation {
 		t.Fatalf("discard again = %+v, %v; want nothing written", again, err)
 	}
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1, 1); err != nil {
 		t.Fatalf("join after the discard: %v", err)
 	}
 	// A conversation that never had anything is the same no-op.
@@ -155,7 +155,7 @@ func TestADiscardIsRefusedForAnyOtherState(t *testing.T) {
 	})
 	t.Run("a joined group", func(t *testing.T) {
 		store, _ := newTestStore(t)
-		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); err != nil {
 			t.Fatal(err)
 		}
 		refuse(t, store, testCommitA, ErrNotUnacceptedCreate)
@@ -224,7 +224,7 @@ func TestARemovedGroupIsForgottenAndItsHistoryKept(t *testing.T) {
 	if err != nil || again.Forgotten || again.Generation != got.Generation {
 		t.Fatalf("forget again = %+v, %v; want nothing written", again, err)
 	}
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); err != nil {
 		t.Fatalf("join after the forget: %v", err)
 	}
 	if rec := readRecordForTest(t, store, testConvA); rec.Epoch != 3 || rec.RemovedFromGroup {
@@ -274,7 +274,7 @@ func TestAForgetIsRefusedForAnyOtherState(t *testing.T) {
 	})
 	t.Run("a record latched for a rewind", func(t *testing.T) {
 		store, secrets := newTestStore(t)
-		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1); err != nil {
+		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1, 1); err != nil {
 			t.Fatal(err)
 		}
 		removeForTest(t, store, 2, 1)
