@@ -116,7 +116,9 @@ func Version() (string, error) {
 	return string(takeBuf(&buf)), nil
 }
 
-func GenerateSignatureKey() (secret, public []byte, err error) {
+// generateSignatureKey is for tests that need a throwaway member. A real
+// session signs with the device's declared key, which NewDeviceSession loads.
+func generateSignatureKey() (secret, public []byte, err error) {
 	var sk, pk C.DpBuf
 	if rc := C.dpmls_signature_key_generate(&sk, &pk); rc != 0 {
 		return nil, nil, statusError(rc)
@@ -124,10 +126,13 @@ func GenerateSignatureKey() (secret, public []byte, err error) {
 	return takeBuf(&sk), takeBuf(&pk), nil
 }
 
-// NewSession builds a client for one device identity. The caller owns the key
+// openSession builds a client for one device identity. The caller owns the key
 // material it passes and should wipe it afterwards; this package copies it
 // across the boundary and cannot reach the caller's copy again.
-func NewSession(identity, secretKey, publicKey []byte) (*Session, error) {
+//
+// Unexported so that no caller can hand a group a signer of its own: a key no
+// declaration vouches for would make the leaf unacceptable to every peer.
+func openSession(identity, secretKey, publicKey []byte) (*Session, error) {
 	var handle *C.DpSession
 	rc := C.dpmls_session_new(
 		bytePtr(identity), C.size_t(len(identity)),

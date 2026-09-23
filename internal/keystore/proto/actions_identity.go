@@ -28,7 +28,8 @@ const (
 	//
 	// Clears: active keypair (keeper_private_key / keeper_public_key), pending
 	// keypair (pending_keeper_private_key / pending_keeper_public_key),
-	// session_code, and device_key, plus every owner's chat state (the sealed
+	// session_code, device_key, and the MLS leaf signature key
+	// (mls_leaf_signature_key), plus every owner's chat state (the sealed
 	// files, the anchors, and the seal keys). server_public_key is an
 	// account-independent trust anchor and is deliberately preserved.
 	//
@@ -236,4 +237,13 @@ const (
 	ActionRotateRequestKeyPrepare = "rotate_request_key_prepare"
 	ActionRotateRequestKeyPromote = "rotate_request_key_promote"
 	ActionRotateRequestKeyAbort   = "rotate_request_key_abort"
+
+	// MLSLeafDeclare creates (enroll) or replaces (rotate) this device's MLS
+	// leaf signature key — a per-device Ed25519 key, never the account RSA
+	// key — and returns a declaration binding (account_id, device_id, key
+	// fingerprint) under the account identity key. Gated by a server-signed
+	// challenge like rotate_user_keypair_prepare, the other action that signs
+	// a peer-visible statement with that key. The private half never leaves
+	// the Keeper.
+	ActionMLSLeafDeclare = "mls_leaf_declare"
 )

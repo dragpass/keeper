@@ -1,10 +1,13 @@
 package crypto
 
-// fingerprint.go — the account key fingerprint.
+// fingerprint.go — the account key fingerprint and the MLS leaf key
+// fingerprint.
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 )
 
 // AccountKeyFingerprint returns lowercase hex(sha256(pem bytes)) — the one
@@ -23,4 +26,20 @@ import (
 func AccountKeyFingerprint(publicKeyPEM []byte) string {
 	sum := sha256.Sum256(publicKeyPEM)
 	return hex.EncodeToString(sum[:])
+}
+
+// MLSLeafSignatureKeyFingerprint returns lowercase hex(sha256(raw 32-byte
+// Ed25519 public key)).
+//
+// Both fingerprints are a SHA-256 in hex, which is exactly why they must not
+// share a function: the account one hashes whatever PEM it is handed, so a leaf
+// key routed through it would hash an encoding and still produce a
+// well-formed, wrong answer. Refusing any input that is not a raw key is what
+// makes that mistake fail instead.
+func MLSLeafSignatureKeyFingerprint(publicKey ed25519.PublicKey) (string, error) {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return "", errors.New("mls leaf signature key must be a raw 32-byte Ed25519 public key")
+	}
+	sum := sha256.Sum256(publicKey)
+	return hex.EncodeToString(sum[:]), nil
 }

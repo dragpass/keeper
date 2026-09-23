@@ -15,11 +15,7 @@ func Available() bool { return false }
 
 func Version() (string, error) { return "", ErrUnavailable }
 
-func GenerateSignatureKey() (secret, public []byte, err error) {
-	return nil, nil, ErrUnavailable
-}
-
-func NewSession(identity, secretKey, publicKey []byte) (*Session, error) {
+func openSession(identity, secretKey, publicKey []byte) (*Session, error) {
 	return nil, ErrUnavailable
 }
 

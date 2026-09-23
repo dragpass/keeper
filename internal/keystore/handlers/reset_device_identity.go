@@ -28,6 +28,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // resetIdentitySlot pairs a Keychain slot name (reported in the response) with
@@ -48,7 +49,8 @@ func slotPresent(get func(keychain.SecretStore) (string, error)) func(keychain.S
 }
 
 // resetIdentitySlots lists the account-scoped slots wiped by a reset, in a
-// stable order: active keypair, pending keypair, session code, device key.
+// stable order: active keypair, pending keypair, session code, device key,
+// MLS leaf key.
 // server_public_key is deliberately absent (account-independent trust anchor).
 var resetIdentitySlots = []resetIdentitySlot{
 	{config.DragPassKeeperPrivateKey, slotPresent(keychain.GetPrivateKey), keychain.DeletePrivateKey},
@@ -59,6 +61,22 @@ var resetIdentitySlots = []resetIdentitySlot{
 	{config.PendingPersonalKeyBundle, slotPresent(keychain.GetPendingPersonalKeyBundle), keychain.DeletePendingPersonalKeyBundle},
 	{config.PersonalDeviceWrappedDEK, slotPresent(keychain.GetPersonalDeviceWrappedDEK), keychain.DeletePersonalDeviceWrappedDEK},
 	{config.DeviceKey, slotPresent(keychain.GetDeviceKey), keychain.DeleteDeviceKey},
+	// The leaf key's declaration is signed by the account key this reset
+	// destroys, and names the account being re-enrolled away from, so the key
+	// is account-scoped however device-scoped its record looks.
+	{config.MLSLeafSignatureKey, mlsLeafKeyPresent, deleteMLSLeafKey},
+}
+
+// An unreadable record counts as present so the reset still removes it.
+func mlsLeafKeyPresent(store keychain.SecretStore) bool {
+	key, found, err := keychain.GetMLSLeafKey(store)
+	secure.Zeroize(key.SecretKey)
+	return found || err != nil
+}
+
+func deleteMLSLeafKey(store keychain.SecretStore) error {
+	_, err := keychain.DeleteMLSLeafKey(store)
+	return err
 }
 
 // HandleResetDeviceIdentity wipes this device's account-scoped key material.

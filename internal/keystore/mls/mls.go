@@ -48,9 +48,13 @@
 package mls
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // ErrUnavailable — this binary was built without the MLS library. Distinct from
@@ -247,4 +251,77 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 		KeyGeneration:     processed.KeyGeneration,
 		Plaintext:         processed.Plaintext,
 	}, nil
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// This device's leaf.
+// ────────────────────────────────────────────────────────────────────────
+
+// ErrNoLeafKey — the device has not enrolled a leaf key (mls_leaf_declare).
+var ErrNoLeafKey = errors.New("mls: this device has no leaf signature key")
+
+const (
+	credentialIdentityDomain  = "dragpass.mls.credential"
+	credentialIdentityVersion = "1"
+)
+
+// CredentialIdentity is the BasicCredential identity of a device's leaf. It
+// carries both halves of what a leaf declaration binds, which is what lets a
+// verifier match a leaf to its declaration (design §5.3 steps 2 and 6).
+//
+//	dragpass.mls.credential|1|<account_id>|<device_id>
+func CredentialIdentity(accountID, deviceID string) []byte {
+	return []byte(strings.Join([]string{
+		credentialIdentityDomain, credentialIdentityVersion, accountID, deviceID,
+	}, "|"))
+}
+
+// ParseCredentialIdentity accepts only the exact bytes CredentialIdentity
+// would produce, so one identity never has two spellings that compare unequal.
+func ParseCredentialIdentity(identity []byte) (accountID, deviceID string, err error) {
+	parts := strings.Split(string(identity), "|")
+	if len(parts) != 4 || parts[0] != credentialIdentityDomain || parts[1] != credentialIdentityVersion ||
+		!isLowerUUID(parts[2]) || !isLowerUUID(parts[3]) ||
+		!bytes.Equal(identity, CredentialIdentity(parts[2], parts[3])) {
+		return "", "", errors.New("mls: credential identity is not a dragpass device identity")
+	}
+	return parts[2], parts[3], nil
+}
+
+// isLowerUUID is the shape a leaf declaration requires of both ids, checked
+// here too so an identity no declaration could match is refused on sight.
+func isLowerUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case (c < '0' || c > '9') && (c < 'a' || c > 'f'):
+			return false
+		}
+	}
+	return true
+}
+
+// NewDeviceSession builds a session that signs as this device's declared leaf.
+// It is the only way to get a Session, so every group this device joins or
+// creates shares the one key its declaration names.
+func NewDeviceSession(store keychain.SecretStore) (*Session, error) {
+	if !Available() {
+		return nil, ErrUnavailable
+	}
+	key, found, err := keychain.GetMLSLeafKey(store)
+	if err != nil {
+		return nil, err
+	}
+	defer secure.Zeroize(key.SecretKey)
+	if !found {
+		return nil, ErrNoLeafKey
+	}
+	return openSession(CredentialIdentity(key.AccountID, key.DeviceID), key.SecretKey, key.PublicKey)
 }
