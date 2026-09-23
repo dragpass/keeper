@@ -151,6 +151,7 @@ func Persist(
 	if err != nil {
 		return 0, err
 	}
+	defer secure.Zeroize(blob)
 	return store.SaveGroupState(conversationID, wm, blob)
 }
 
@@ -170,6 +171,7 @@ func Restore(
 	if len(blob) == 0 {
 		return false, nil
 	}
+	defer secure.Zeroize(blob)
 	return true, s.Load(blob)
 }
 
@@ -772,6 +774,7 @@ func (s *Session) joinFromEntry(
 	if err != nil {
 		return err
 	}
+	defer secure.Zeroize(blob)
 	epoch, err := s.Epoch()
 	if err != nil {
 		return err

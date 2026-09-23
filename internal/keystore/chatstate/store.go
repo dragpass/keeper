@@ -15,6 +15,7 @@
 package chatstate
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -235,7 +236,7 @@ func (s *Store) MarkReceived(
 
 // SaveGroupState replaces the conversation's serialized MLS state with the
 // blob the library handed out and returns the record generation that now
-// carries it. Send and Receive persist the state themselves as part of their
+// carries it. The store writes a copy; the caller keeps blob and wipes it. Send and Receive persist the state themselves as part of their
 // transactions; this is for the paths that move the group without sending or
 // receiving, such as establishing it in the first place.
 //
@@ -264,7 +265,7 @@ func (s *Store) SaveGroupState(
 			return err
 		}
 		loaded := rec.Generation
-		rec.GroupState = blob
+		rec.GroupState = bytes.Clone(blob)
 		rec.RemovedFromGroup = false
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
@@ -275,8 +276,8 @@ func (s *Store) SaveGroupState(
 	return generation, err
 }
 
-// LoadGroupState returns the stored blob, or nil when this conversation has
-// never held one. Nil is an answer, not a failure: a conversation exists before
+// LoadGroupState returns a copy of the stored blob, which the caller owns and
+// wipes, or nil when this conversation has never held one. Nil is an answer, not a failure: a conversation exists before
 // its group does.
 func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byte, error) {
 	var blob []byte
@@ -285,7 +286,7 @@ func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byt
 		if err != nil {
 			return err
 		}
-		blob = rec.GroupState
+		blob = bytes.Clone(rec.GroupState)
 		return nil
 	})
 	return blob, err
@@ -383,6 +384,37 @@ type convPaths struct {
 	dir    string
 	record string
 	lock   string
+
+	// scrub is set by withConversation and collects the group state buffers
+	// of the cycle. Nil for paths built outside one.
+	scrub *groupStateScrub
+}
+
+// groupStateScrub is every group state one locked cycle held: the buffer
+// each record was read with, and whatever the record holds when the cycle
+// ends (the state the MLS layer handed back to be written). The serialized
+// state carries the leaf signature secret key, so none of it should outlive
+// the lock. What this cannot reach is listed on withConversation.
+type groupStateScrub struct {
+	records []*Record
+	buffers [][]byte
+}
+
+func (p convPaths) track(rec *Record) {
+	if p.scrub == nil {
+		return
+	}
+	p.scrub.records = append(p.scrub.records, rec)
+	p.scrub.buffers = append(p.scrub.buffers, rec.GroupState)
+}
+
+func (g *groupStateScrub) wipe() {
+	for _, b := range g.buffers {
+		secure.Zeroize(b)
+	}
+	for _, rec := range g.records {
+		secure.Zeroize(rec.GroupState)
+	}
 }
 
 func (s *Store) ownerDir() string { return filepath.Join(s.root, ownerTag(s.owner)) }
@@ -421,6 +453,15 @@ func conversationTagsIn(dir string) ([]string, error) {
 	return tags, nil
 }
 
+// withConversation runs fn under the conversation's lock and wipes every group
+// state buffer the cycle held when it ends, so an operation hands nothing of
+// it back except through a copy (LoadGroupState).
+//
+// Best effort, and only for the buffers this package owns. Not reached: the
+// copies the Go runtime makes of its own accord (a slice that grew, a moved
+// stack, memory the GC has not yet reused), the base64 decode json.Unmarshal
+// runs over the record body, and the pooled encoder buffer json.Marshal keeps
+// after writeRecord; the record body itself is wiped on both paths.
 func (s *Store) withConversation(conversationID string, fn func(convPaths) error) error {
 	p := s.paths(conversationID)
 	if err := ensureOwnerOnlyDir(s.root, p.dir); err != nil {
@@ -431,6 +472,8 @@ func (s *Store) withConversation(conversationID string, fn func(convPaths) error
 		return err
 	}
 	defer release()
+	p.scrub = &groupStateScrub{}
+	defer p.scrub.wipe()
 	return fn(p)
 }
 
@@ -489,6 +532,7 @@ func (s *Store) loadLocal(p convPaths, conversationID string) (*Record, Anchor, 
 			return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseStateMissing)
 		}
 		rec = newRecord(s.owner, conversationID)
+		p.track(rec)
 	}
 	if anchor.rewoundLocally(rec) {
 		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseRollback)
@@ -570,6 +614,7 @@ func (s *Store) readRecord(p convPaths, conversationID string) (*Record, error) 
 	if err := json.Unmarshal(body, &rec); err != nil {
 		return nil, errSealedRecordMalformed
 	}
+	p.track(&rec)
 	if rec.SchemaVersion != SchemaVersion ||
 		rec.Generation != generation ||
 		rec.OwnerAccountID != s.owner ||

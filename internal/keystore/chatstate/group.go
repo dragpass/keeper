@@ -151,7 +151,7 @@ func (s *Store) SaveJoinedGroupState(
 			return ErrCommitPending
 		}
 		loaded := rec.Generation
-		rec.GroupState = blob
+		rec.GroupState = bytes.Clone(blob)
 		rec.RemovedFromGroup = false
 		rec.enterEpoch(epoch)
 		rec.OwnLeaf = &OwnLeaf{Index: ownLeaf, SinceEpoch: epoch}
