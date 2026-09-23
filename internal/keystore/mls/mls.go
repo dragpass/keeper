@@ -334,6 +334,9 @@ var ErrNoLeafKey = errors.New("mls: this device has no leaf signature key")
 // mints a new key and, once promoted, replaces the record.
 var ErrNoLeafDeclaration = errors.New("mls: this device's leaf key has no current declaration; enroll again")
 
+// ErrLeafKeyUnreadable — the active leaf record is there but cannot be read.
+var ErrLeafKeyUnreadable = errors.New("mls: this device's leaf key record is unreadable")
+
 const (
 	credentialIdentityDomain  = "dragpass.mls.credential"
 	credentialIdentityVersion = "1"
@@ -382,28 +385,50 @@ func isLowerUUID(s string) bool {
 	return true
 }
 
+// DeviceLeaf is the public half of the leaf record a device session was built
+// from. Declaration is the extension payload the session embeds.
+type DeviceLeaf struct {
+	AccountID   string
+	DeviceID    string
+	PublicKey   []byte
+	Declaration []byte
+}
+
 // NewDeviceSession builds a session that signs as this device's declared leaf.
 // It is the only way to get a Session, so every group this device joins or
 // creates shares the one key its declaration names. It reads the active slot
 // only: a pending key, one the server has not accepted, never signs anything.
-func NewDeviceSession(store keychain.SecretStore) (*Session, error) {
+//
+// The slot is read once, and the leaf it held comes back with the session.
+// A caller that needs to know which leaf it is signing as uses that value and
+// never reads the slot again: a promote in between would make the second read
+// name a different key than the one the session holds. Whoever must keep the
+// leaf from changing while the session is in use holds
+// keychain.WithMLSLeafLock around the call; this function takes no lock.
+func NewDeviceSession(store keychain.SecretStore) (*Session, DeviceLeaf, error) {
 	if !Available() {
-		return nil, ErrUnavailable
+		return nil, DeviceLeaf{}, ErrUnavailable
 	}
 	key, found, err := keychain.GetMLSLeafKey(store)
 	if err != nil {
-		return nil, err
+		return nil, DeviceLeaf{}, ErrLeafKeyUnreadable
 	}
 	defer secure.Zeroize(key.SecretKey)
 	if !found {
-		return nil, ErrNoLeafKey
+		return nil, DeviceLeaf{}, ErrNoLeafKey
 	}
 	if !key.Usable() {
-		return nil, ErrNoLeafDeclaration
+		return nil, DeviceLeaf{}, ErrNoLeafDeclaration
 	}
-	return openSession(
+	session, err := openSession(
 		CredentialIdentity(key.AccountID, key.DeviceID), key.SecretKey, key.PublicKey, key.Declaration,
 	)
+	if err != nil {
+		return nil, DeviceLeaf{}, err
+	}
+	return session, DeviceLeaf{
+		AccountID: key.AccountID, DeviceID: key.DeviceID, PublicKey: key.PublicKey, Declaration: key.Declaration,
+	}, nil
 }
 
 // MaxKeyPackagesPerCall bounds one mls_key_package_generate call. The pool is

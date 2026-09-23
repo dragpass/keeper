@@ -792,7 +792,7 @@ func TestAPendingCommitEnlargesTheStoredBlob(t *testing.T) {
 // that the leaf it builds carries the declared key and identity.
 func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 	store := keychain.NewMemorySecretStore()
-	if _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafKey) {
+	if _, _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafKey) {
 		t.Fatalf("NewDeviceSession with no key = %v; want ErrNoLeafKey", err)
 	}
 
@@ -808,11 +808,15 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	alice, err := NewDeviceSession(store)
+	alice, used, err := NewDeviceSession(store)
 	if err != nil {
 		t.Fatalf("NewDeviceSession: %v", err)
 	}
 	t.Cleanup(alice.Close)
+	if used.AccountID != testOwner || used.DeviceID != device || !bytes.Equal(used.PublicKey, public) ||
+		!bytes.Equal(used.Declaration, []byte("the active declaration")) {
+		t.Fatal("NewDeviceSession did not report the leaf it was built from")
+	}
 	kp, err := alice.KeyPackage()
 	if err != nil {
 		t.Fatalf("key package: %v", err)
@@ -820,6 +824,9 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 	leaf, err := keyPackageLeaf(kp)
 	if err != nil || !bytes.Equal(leaf.Declaration, []byte("the active declaration")) {
 		t.Fatalf("the key package does not carry the stored declaration unchanged: %v", err)
+	}
+	if !bytes.Equal(leaf.SignatureKey, used.PublicKey) {
+		t.Fatal("the key package's leaf signs with a key other than the one reported")
 	}
 	if !bytes.Contains(kp, public) {
 		t.Fatal("key package does not carry the declared leaf signature key")

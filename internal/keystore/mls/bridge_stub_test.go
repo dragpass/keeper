@@ -21,7 +21,7 @@ func TestDefaultBuildAnswersUnavailable(t *testing.T) {
 	if _, err := openSession(nil, nil, nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("openSession() = %v; want ErrUnavailable", err)
 	}
-	if _, err := NewDeviceSession(keychain.NewMemorySecretStore()); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := NewDeviceSession(keychain.NewMemorySecretStore()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("NewDeviceSession() = %v; want ErrUnavailable", err)
 	}
 }

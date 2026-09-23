@@ -475,6 +475,11 @@ type MLSKeyPackage struct {
 
 // MLSKeyPackageGenerateResponseData carries public material only: each
 // KeyPackage is something the server stores and hands out once.
+//
+// LeafSignatureKeyFingerprint names the leaf every KeyPackage was built for.
+// The client passes it on upload, and the server refuses the batch unless it
+// is the live declaration's fingerprint.
 type MLSKeyPackageGenerateResponseData struct {
-	KeyPackages []MLSKeyPackage `json:"key_packages"`
+	KeyPackages                 []MLSKeyPackage `json:"key_packages"`
+	LeafSignatureKeyFingerprint string          `json:"leaf_signature_key_fingerprint"`
 }
