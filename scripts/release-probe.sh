@@ -21,7 +21,11 @@ req='{"action":"ping"}'
 printf "\\$(printf '%03o' "${#req}")\\000\\000\\000%s" "$req" \
   | KEEPER_E2E_MODE=1 "$bin" >"$tmp/out" 2>"$tmp/err" || true
 
-if ! grep -aq "\"version\":\"$want\"" "$tmp/out"; then
+# Drop the 4-byte length header before matching: its bytes vary with the
+# response length, and macOS grep in a UTF-8 locale skips a line holding an
+# invalid sequence, which a header byte of 0x80 or above is.
+tail -c +5 "$tmp/out" >"$tmp/body"
+if ! LC_ALL=C grep -aq "\"version\":\"$want\"" "$tmp/body"; then
   echo "probe: $bin did not answer ping with version $want" >&2
   cat "$tmp/err" >&2
   exit 1
