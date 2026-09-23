@@ -390,12 +390,12 @@ func TestSendAndReceiveThroughTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	if !again.FromHistory || !bytes.Equal(again.Plaintext, plaintext) {
+	if !again.FromHistory || !bytes.Equal(again.Plaintext, plaintext) || again.Position != got.Position {
 		t.Fatalf("re-read = %+v", again)
 	}
 	stored, err := bobStore.ReadHistory(testConv, chatstate.ServerWatermark{}, 7)
-	if err != nil || !bytes.Equal(stored, plaintext) {
-		t.Fatalf("ReadHistory = %q, %v", stored, err)
+	if err != nil || !bytes.Equal(stored.Plaintext, plaintext) || stored.Position != got.Position {
+		t.Fatalf("ReadHistory = %+v, %v", stored, err)
 	}
 }
 
