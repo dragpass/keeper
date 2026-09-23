@@ -15,9 +15,19 @@ func Available() bool { return false }
 
 func Version() (string, error) { return "", ErrUnavailable }
 
-func openSession(identity, secretKey, publicKey []byte) (*Session, error) {
+func openSession(identity, secretKey, publicKey, declaration []byte) (*Session, error) {
 	return nil, ErrUnavailable
 }
+
+func (s *Session) approve(leaves []Leaf) error { return ErrUnavailable }
+
+func (s *Session) processCollect(message []byte) ([]Leaf, error) { return nil, ErrUnavailable }
+
+func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) { return nil, ErrUnavailable }
+
+func keyPackageLeaf(keyPackage []byte) (Leaf, error) { return Leaf{}, ErrUnavailable }
+
+func keyPackageNotAfter(keyPackage []byte) (uint64, error) { return 0, ErrUnavailable }
 
 func WireFormOf(message []byte) (WireForm, error) { return WireFormOther, ErrUnavailable }
 
@@ -27,7 +37,7 @@ func (s *Session) CreateGroup(groupID []byte) error { return ErrUnavailable }
 
 func (s *Session) KeyPackage() ([]byte, error) { return nil, ErrUnavailable }
 
-func (s *Session) CommitAddMember(keyPackage []byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
+func (s *Session) CommitAddMembers(keyPackages [][]byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	return nil, nil, 0, ErrUnavailable
 }
 

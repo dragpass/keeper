@@ -32,6 +32,12 @@ import (
 // account and device (requireMLSLeafChallenge); both run before the stored key
 // is read.
 //
+// The signed declaration is stored with the key as the active declaration —
+// the extension payload every KeyPackage and every group this device creates
+// embeds — in the same keyring write, so the two never disagree. That write
+// happens on every success, re-declaration included: a KeyPackage must carry
+// the declaration the caller was just handed.
+//
 // On rotate the new key is written only after the declaration is signed, so a
 // failure leaves the old key and the declaration peers already hold in step.
 func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseResponse {
@@ -68,6 +74,10 @@ func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseRes
 		return errs.CodeResponse(errs.ErrCodeNotFound, "account keypair not found (signup required first)")
 	}
 	defer accountPriv.Destroy()
+	accountPublicKeyPEM, err := keychain.GetPublicKey(d.Store)
+	if err != nil || accountPublicKeyPEM == "" {
+		return errs.CodeResponse(errs.ErrCodeNotFound, "account public key not found (signup required first)")
+	}
 
 	leaf := stored
 	mint := !found || req.Reason == proto.MLSLeafReasonRotate
@@ -102,10 +112,12 @@ func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseRes
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "mls leaf declaration signing failed")
 	}
 
-	if mint {
-		if err := keychain.SaveMLSLeafKey(d.Store, leaf); err != nil {
-			return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf key could not be stored")
-		}
+	leaf.Declaration, err = proto.EncodeMLSLeafExtension(declaration, accountPublicKeyPEM)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "mls leaf declaration could not be encoded")
+	}
+	if err := keychain.SaveMLSLeafKey(d.Store, leaf); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf key could not be stored")
 	}
 
 	d.Logger.Printf("mls leaf declare successful (reason=%s, new key=%t)", req.Reason, mint)

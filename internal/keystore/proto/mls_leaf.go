@@ -14,6 +14,8 @@
 package proto
 
 import (
+	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -174,4 +176,112 @@ func requireMLSLeafReason(value, field string) error {
 	default:
 		return newValidationError(field, "must be enroll or rotate")
 	}
+}
+
+// ─── the leaf declaration extension (L2) ───────────────────────────────────
+
+const (
+	// MLSLeafExtensionType is the LeafNode extension that carries a leaf
+	// declaration. RFC 9420 §17.3 private-use range; the Rust side
+	// (gate::LEAF_DECLARATION_EXTENSION) owns the number and says why.
+	MLSLeafExtensionType = 0xF0D0
+
+	MLSLeafExtensionVersion = 1
+
+	// MLSLeafExtensionMaxBytes bounds the payload before it is parsed. An
+	// RSA-4096 PEM is about 800 bytes and the declaration about 500, so this
+	// leaves room without letting a hostile leaf size a parse.
+	MLSLeafExtensionMaxBytes = 8192
+)
+
+// MLSLeafExtension is the extension payload: the whole signed declaration and
+// the account public key that signed it.
+//
+// The key rides along for first contact. A verifier with no pin for the
+// account pins it on first use, which is the same trust the directory would
+// have given; a verifier with a pin compares it against the pin, so carrying
+// the key gives a server nothing it could not already try through the
+// directory.
+//
+// AccountPublicKey is the PEM exactly as the account's Keeper stores it. The
+// account fingerprint hashes those bytes, so they must reach the verifier
+// untouched.
+type MLSLeafExtension struct {
+	V                int                `json:"v"`
+	Declaration      MLSLeafDeclaration `json:"declaration"`
+	AccountPublicKey string             `json:"account_public_key"`
+}
+
+// EncodeMLSLeafExtension is the one place the payload is serialized. The
+// declaration is embedded as the struct it is, so a field added to the
+// declaration reaches the payload, and the strict decoder on the other side,
+// without either being edited.
+func EncodeMLSLeafExtension(decl MLSLeafDeclaration, accountPublicKeyPEM string) ([]byte, error) {
+	encoded, err := json.Marshal(MLSLeafExtension{
+		V:                MLSLeafExtensionVersion,
+		Declaration:      decl,
+		AccountPublicKey: accountPublicKeyPEM,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) > MLSLeafExtensionMaxBytes {
+		return nil, errors.New("mls leaf declaration extension exceeds its size bound")
+	}
+	return encoded, nil
+}
+
+// Validate is structural. Whether the declaration verifies, and against which
+// key, is the leaf verifier's.
+func (e MLSLeafExtension) Validate() error {
+	if e.V != MLSLeafExtensionVersion {
+		return newValidationError("leaf_extension.v", "is not a known version")
+	}
+	if err := requireString(e.AccountPublicKey, "leaf_extension.account_public_key"); err != nil {
+		return err
+	}
+	return e.Declaration.Validate()
+}
+
+// ─── mls_key_package_generate ──────────────────────────────────────────────
+
+// MLSKeyPackageGenerateMaxCount mirrors mls.MaxKeyPackagesPerCall; a test in
+// the handlers package keeps them equal.
+const MLSKeyPackageGenerateMaxCount = 32
+
+// MLSKeyPackageGenerateRequest is gated like the conversation-state actions:
+// a dragpass.chat.state permit, bound to the org and conversation it names.
+type MLSKeyPackageGenerateRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+	Count          int             `json:"count"`
+}
+
+func (r MLSKeyPackageGenerateRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if r.Count < 1 || r.Count > MLSKeyPackageGenerateMaxCount {
+		return newValidationError("count", "must be between 1 and 32")
+	}
+	return nil
+}
+
+func (r MLSKeyPackageGenerateRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+// MLSKeyPackage is one KeyPackage (an MLSMessage, at most 8192 bytes) and the
+// end of its lifetime in Unix seconds, which is the not_after the upload
+// declares.
+type MLSKeyPackage struct {
+	KeyPackageB64 string `json:"key_package_b64"`
+	NotAfter      uint64 `json:"not_after"`
+}
+
+// MLSKeyPackageGenerateResponseData carries public material only: each
+// KeyPackage is something the server stores and hands out once.
+type MLSKeyPackageGenerateResponseData struct {
+	KeyPackages []MLSKeyPackage `json:"key_packages"`
 }

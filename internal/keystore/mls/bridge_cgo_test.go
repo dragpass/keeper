@@ -19,13 +19,21 @@ const (
 	testConv  = "22222222-2222-4222-8222-222222222222"
 )
 
-func newSession(t *testing.T, identity string) *Session {
+// trustAll stands in for the handlers package's verifier in tests about
+// something other than leaf trust. It approves whatever the collect pass
+// reports, so the Rust gate still runs; the §5.3 checks themselves are tested
+// through real declarations in the handlers package.
+type trustAll struct{}
+
+func (trustAll) VerifyLeaves([]Leaf) error { return nil }
+
+func newSession(t testing.TB, identity string) *Session {
 	t.Helper()
 	secret, public, err := generateSignatureKey()
 	if err != nil {
 		t.Fatalf("generate signature key: %v", err)
 	}
-	s, err := openSession([]byte(identity), secret, public)
+	s, err := openSession([]byte(identity), secret, public, []byte("test declaration of "+identity))
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -35,7 +43,7 @@ func newSession(t *testing.T, identity string) *Session {
 
 // twoMemberGroup returns alice (the creator), bob (joined via Welcome) and the
 // commit alice produced, so tests can assert on the wire form of real output.
-func twoMemberGroup(t *testing.T) (alice, bob *Session, commit []byte) {
+func twoMemberGroup(t testing.TB) (alice, bob *Session, commit []byte) {
 	t.Helper()
 	alice = newSession(t, "alice@device-1")
 	bob = newSession(t, "bob@device-1")
@@ -47,7 +55,7 @@ func twoMemberGroup(t *testing.T) (alice, bob *Session, commit []byte) {
 	if err != nil {
 		t.Fatalf("key package: %v", err)
 	}
-	commit, welcome, _, err := alice.CommitAddMember(kp)
+	commit, welcome, _, err := alice.CommitAddMemberVerified(kp, trustAll{})
 	if err != nil {
 		t.Fatalf("commit add member: %v", err)
 	}
@@ -56,7 +64,7 @@ func twoMemberGroup(t *testing.T) (alice, bob *Session, commit []byte) {
 	if err := alice.ApplyPendingCommit(); err != nil {
 		t.Fatalf("apply pending commit: %v", err)
 	}
-	if err := bob.Join(welcome); err != nil {
+	if err := bob.JoinVerified(welcome, trustAll{}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
 	return alice, bob, commit
@@ -297,7 +305,7 @@ func TestCallsAfterCloseFailInsteadOfTouchingAFreedHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate signature key: %v", err)
 	}
-	s, err := openSession([]byte("alice@device-1"), secret, public)
+	s, err := openSession([]byte("alice@device-1"), secret, public, nil)
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -355,7 +363,7 @@ func TestSendAndReceiveThroughTheStore(t *testing.T) {
 	sent, err := aliceStore.Send(testConv, chatstate.ServerWatermark{}, chatstate.SendRequest{
 		ClientMessageID: "44444444-4444-4444-8444-444444444444",
 		Plaintext:       plaintext,
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -371,7 +379,7 @@ func TestSendAndReceiveThroughTheStore(t *testing.T) {
 
 	got, err := bobStore.Receive(testConv, chatstate.ServerWatermark{}, chatstate.ReceiveRequest{
 		Seq: 7, Message: sent.Entry.Ciphertext,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
@@ -387,7 +395,7 @@ func TestSendAndReceiveThroughTheStore(t *testing.T) {
 	// ciphertext back cannot work and is not what happens here.
 	again, err := bobStore.Receive(testConv, chatstate.ServerWatermark{}, chatstate.ReceiveRequest{
 		Seq: 7, Message: sent.Entry.Ciphertext,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
@@ -415,7 +423,7 @@ func TestBurnForwardLeavesAHoleTheReceiverTakesInStride(t *testing.T) {
 	if _, err := aliceStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "44444444-4444-4444-8444-444444444444",
 		Plaintext:       []byte("generation zero"),
-	}, NewCipher(alice)); err != nil {
+	}, NewCipher(alice, trustAll{})); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
 
@@ -423,7 +431,7 @@ func TestBurnForwardLeavesAHoleTheReceiverTakesInStride(t *testing.T) {
 	if _, err := aliceStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "55555555-5555-4555-8555-555555555555",
 		Plaintext:       []byte("never reaches the wire"),
-	}, sealAborts{NewCipher(alice)}); err == nil {
+	}, sealAborts{NewCipher(alice, trustAll{})}); err == nil {
 		t.Fatal("the aborted send reported success")
 	}
 
@@ -432,7 +440,7 @@ func TestBurnForwardLeavesAHoleTheReceiverTakesInStride(t *testing.T) {
 	recovered, err := aliceStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "66666666-6666-4666-8666-666666666666",
 		Plaintext:       []byte("generation two"),
-	}, NewCipher(restarted))
+	}, NewCipher(restarted, trustAll{}))
 	if err != nil {
 		t.Fatalf("send after the aborted one: %v", err)
 	}
@@ -446,7 +454,7 @@ func TestBurnForwardLeavesAHoleTheReceiverTakesInStride(t *testing.T) {
 
 	got, err := bobStore.Receive(testConv, wm, chatstate.ReceiveRequest{
 		Seq: 2, Message: recovered.Entry.Ciphertext,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("receive across the hole: %v", err)
 	}
@@ -464,12 +472,12 @@ func TestReceiveRefusesAForgedDeclaration(t *testing.T) {
 	sent, err := aliceStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "44444444-4444-4444-8444-444444444444",
 		Plaintext:       []byte("honestly declared"),
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
-	forged := &liesAboutTheDeclaration{Cipher: NewCipher(bob)}
+	forged := &liesAboutTheDeclaration{Cipher: NewCipher(bob, trustAll{})}
 	got, err := bobStore.Receive(testConv, wm, chatstate.ReceiveRequest{
 		Seq: 1, Message: sent.Entry.Ciphertext,
 	}, forged)
@@ -504,12 +512,12 @@ func TestReceiveRefusesWhenTheGenerationIsUnreportable(t *testing.T) {
 	sent, err := aliceStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "44444444-4444-4444-8444-444444444444",
 		Plaintext:       []byte("honestly declared"),
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
-	blind := &reportsNoGeneration{Cipher: NewCipher(bob)}
+	blind := &reportsNoGeneration{Cipher: NewCipher(bob, trustAll{})}
 	got, err := bobStore.Receive(testConv, wm, chatstate.ReceiveRequest{
 		Seq: 1, Message: sent.Entry.Ciphertext,
 	}, blind)
@@ -625,13 +633,13 @@ func TestALostRaceAppliesTheWinnerFromTheEpochThatNeverMoved(t *testing.T) {
 
 	aliceAttempt, err := aliceStore.BeginCommit(testConv, wm, chatstate.BeginCommitRequest{
 		ClientCommitID: aliceCommitID,
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("alice begin commit: %v", err)
 	}
 	bobAttempt, err := bobStore.BeginCommit(testConv, wm, chatstate.BeginCommitRequest{
 		ClientCommitID: bobCommitID,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("bob begin commit: %v", err)
 	}
@@ -645,14 +653,14 @@ func TestALostRaceAppliesTheWinnerFromTheEpochThatNeverMoved(t *testing.T) {
 		ClientCommitID: aliceCommitID,
 		Kind:           chatstate.CommitSuperseded,
 		WinnerMessage:  bobAttempt.Commit,
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("alice confirm superseded: %v", err)
 	}
 	bobOut, err := bobStore.ConfirmCommit(testConv, wm, chatstate.CommitOutcome{
 		ClientCommitID: bobCommitID,
 		Kind:           chatstate.CommitAccepted,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("bob confirm accepted: %v", err)
 	}
@@ -670,13 +678,13 @@ func TestALostRaceAppliesTheWinnerFromTheEpochThatNeverMoved(t *testing.T) {
 	sent, err := bobStore.Send(testConv, wm, chatstate.SendRequest{
 		ClientMessageID: "44444444-4444-4444-8444-444444444444",
 		Plaintext:       plaintext,
-	}, NewCipher(bob))
+	}, NewCipher(bob, trustAll{}))
 	if err != nil {
 		t.Fatalf("bob send after winning: %v", err)
 	}
 	got, err := aliceStore.Receive(testConv, wm, chatstate.ReceiveRequest{
 		Seq: 1, Message: sent.Entry.Ciphertext,
-	}, NewCipher(alice))
+	}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("alice receive after losing: %v", err)
 	}
@@ -704,7 +712,7 @@ func TestAPendingCommitRidesTheGroupStateBlob(t *testing.T) {
 		chatstate.BeginCommitRequest{
 			ClientCommitID: aliceCommitID,
 			Plan:           chatstate.CommitPlan{AddKeyPackages: [][]byte{keyPackage}},
-		}, NewCipher(alice))
+		}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("begin commit: %v", err)
 	}
@@ -727,14 +735,14 @@ func TestAPendingCommitRidesTheGroupStateBlob(t *testing.T) {
 
 	out, err := store.ConfirmCommit(testConv, chatstate.ServerWatermark{},
 		chatstate.CommitOutcome{ClientCommitID: aliceCommitID, Kind: chatstate.CommitAccepted},
-		NewCipher(restored))
+		NewCipher(restored, trustAll{}))
 	if err != nil {
 		t.Fatalf("confirm after restore: %v", err)
 	}
 	if out.Epoch != attempt.ExpectedEpoch+1 || !out.WelcomeReleasable {
 		t.Fatalf("confirm after restore = %+v", out)
 	}
-	if err := charlie.Join(out.Welcome); err != nil {
+	if err := charlie.JoinVerified(out.Welcome, trustAll{}); err != nil {
 		t.Fatalf("the released welcome did not admit the new member: %v", err)
 	}
 }
@@ -795,6 +803,7 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 	const device = "44444444-4444-4444-8444-444444444444"
 	if err := keychain.SaveMLSLeafKey(store, keychain.MLSLeafKey{
 		AccountID: testOwner, DeviceID: device, SecretKey: secret, PublicKey: public,
+		Declaration: []byte("the active declaration"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -807,6 +816,10 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 	kp, err := alice.KeyPackage()
 	if err != nil {
 		t.Fatalf("key package: %v", err)
+	}
+	leaf, err := keyPackageLeaf(kp)
+	if err != nil || !bytes.Equal(leaf.Declaration, []byte("the active declaration")) {
+		t.Fatalf("the key package does not carry the stored declaration unchanged: %v", err)
 	}
 	if !bytes.Contains(kp, public) {
 		t.Fatal("key package does not carry the declared leaf signature key")
@@ -825,14 +838,14 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, welcome, _, err := alice.CommitAddMember(bobKP)
+	_, welcome, _, err := alice.CommitAddMemberVerified(bobKP, trustAll{})
 	if err != nil {
 		t.Fatalf("commit add member: %v", err)
 	}
 	if err := alice.ApplyPendingCommit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := bob.Join(welcome); err != nil {
+	if err := bob.JoinVerified(welcome, trustAll{}); err != nil {
 		t.Fatalf("join a group created by a device session: %v", err)
 	}
 	ciphertext, err := alice.Encrypt([]byte("hello"), nil)

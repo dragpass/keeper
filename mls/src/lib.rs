@@ -22,6 +22,7 @@
 // native-messaging daemon means the process dies on input the extension merely
 // got wrong.
 
+mod gate;
 mod session;
 mod storage;
 
@@ -36,6 +37,9 @@ pub const DPMLS_OK: i32 = 0;
 pub const DPMLS_ERR: i32 = -1;
 pub const DPMLS_ERR_PANIC: i32 = -2;
 pub const DPMLS_ERR_ARG: i32 = -3;
+/// A leaf the Go side did not approve tried to enter the group, and the
+/// operation was refused with nothing applied.
+pub const DPMLS_ERR_UNTRUSTED: i32 = -4;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -79,8 +83,13 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(code)) => code,
         Ok(Err(msg)) => {
+            let code = if msg.contains(gate::NOT_APPROVED) {
+                DPMLS_ERR_UNTRUSTED
+            } else {
+                DPMLS_ERR
+            };
             set_error(msg);
-            DPMLS_ERR
+            code
         }
         Err(_) => {
             set_error("mls: panic crossed the C ABI boundary");
@@ -195,9 +204,14 @@ pub unsafe extern "C" fn dpmls_signature_key_generate(
     })
 }
 
+/// `declaration` is the payload of this device's leaf declaration extension,
+/// carried in every leaf the session creates. Empty means the leaf carries
+/// none, which only a test member does: every peer refuses such a leaf.
+///
 /// # Safety
-/// The three input pointers follow the rules in `slice`.
+/// The four input pointers follow the rules in `slice`.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn dpmls_session_new(
     identity: *const u8,
     identity_len: usize,
@@ -205,6 +219,8 @@ pub unsafe extern "C" fn dpmls_session_new(
     secret_len: usize,
     public: *const u8,
     public_len: usize,
+    declaration: *const u8,
+    declaration_len: usize,
     out: *mut *mut Session,
 ) -> i32 {
     guard(|| {
@@ -215,6 +231,7 @@ pub unsafe extern "C" fn dpmls_session_new(
             slice(identity, identity_len)?,
             slice(secret, secret_len)?,
             slice(public, public_len)?,
+            slice(declaration, declaration_len)?,
         )?;
         *out = Box::into_raw(Box::new(s));
         Ok(DPMLS_OK)
@@ -259,18 +276,142 @@ pub unsafe extern "C" fn dpmls_key_package(handle: *mut Session, out: *mut DpBuf
     })
 }
 
-/// Build an Add Commit and hold it pending. `expected_epoch` receives the
-/// confirmed epoch the Commit was built against, which is what the server
-/// compares under its CAS. Nothing in the group moves until
-/// `dpmls_group_commit_apply`.
+/// Set the leaves the Go side verified for the next group operation on this
+/// session: the next process, join or Add build. That operation consumes the
+/// list whether it succeeds or not.
 ///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`.
 #[no_mangle]
-pub unsafe extern "C" fn dpmls_group_commit_add_member(
+pub unsafe extern "C" fn dpmls_session_approve(
     handle: *mut Session,
+    approvals: *const u8,
+    approvals_len: usize,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `approvals` points to
+        // `approvals_len` readable bytes for the duration of this call. The
+        // bytes are decoded into owned values before the call returns.
+        let (session, buf) = unsafe { (session_of(handle)?, slice(approvals, approvals_len)?) };
+        let approved = gate::decode_approvals(buf).map_err(|e| format!("mls: {e}"))?;
+        session.approve(approved);
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Read the leaf a KeyPackage would add, without a session. `out` receives it
+/// in the leaf framing of `gate::encode_leaves`, as a list of one.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `out` must point to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_key_package_leaf(
     key_package: *const u8,
     key_package_len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `key_package` points to
+        // `key_package_len` readable bytes for the duration of this call; the
+        // borrow ends before this block does.
+        let leaf = session::key_package_leaf(unsafe { slice(key_package, key_package_len)? })?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, gate::encode_leaves(&[leaf]))? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The `not_after` of a KeyPackage's lifetime, in Unix seconds.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `out` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_key_package_not_after(
+    key_package: *const u8,
+    key_package_len: usize,
+    out: *mut u64,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `key_package` points to
+        // `key_package_len` readable bytes for the duration of this call; the
+        // borrow ends before this block does.
+        let not_after =
+            session::key_package_not_after(unsafe { slice(key_package, key_package_len)? })?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u64.
+        unsafe { *out = not_after };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The collect pass of processing: report the leaves `message` would bring
+/// in, leaving the group exactly as it was.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_process_collect(
+    handle: *mut Session,
+    message: *const u8,
+    message_len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `message` points to `message_len`
+        // readable bytes for the duration of this call.
+        let (session, msg) = unsafe { (session_of(handle)?, slice(message, message_len)?) };
+        let leaves = session.process_collect(msg)?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, gate::encode_leaves(&leaves))? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The collect pass of a join: report every leaf of the Welcome's tree and
+/// keep no group.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_join_collect(
+    handle: *mut Session,
+    welcome: *const u8,
+    welcome_len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `welcome` points to `welcome_len`
+        // readable bytes for the duration of this call.
+        let (session, msg) = unsafe { (session_of(handle)?, slice(welcome, welcome_len)?) };
+        let leaves = session.join_collect(msg)?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, gate::encode_leaves(&leaves))? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Build an Add Commit for one or more members and hold it pending.
+/// `key_packages` is framed as in `gate::decode_key_packages`.
+/// `expected_epoch` receives the confirmed epoch the Commit was built against,
+/// which is what the server compares under its CAS. Nothing in the group moves
+/// until `dpmls_group_commit_apply`.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_add_members(
+    handle: *mut Session,
+    key_packages: *const u8,
+    key_packages_len: usize,
     commit: *mut DpBuf,
     welcome: *mut DpBuf,
     expected_epoch: *mut u64,
@@ -279,8 +420,9 @@ pub unsafe extern "C" fn dpmls_group_commit_add_member(
         if expected_epoch.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let (c, w, epoch) =
-            session_of(handle)?.commit_add_member(slice(key_package, key_package_len)?)?;
+        let framed = slice(key_packages, key_packages_len)?;
+        let kps = gate::decode_key_packages(framed).map_err(|e| format!("mls: {e}"))?;
+        let (c, w, epoch) = session_of(handle)?.commit_add_members(&kps)?;
         *expected_epoch = epoch;
         put(commit, c)?;
         put(welcome, w)?;

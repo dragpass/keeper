@@ -86,6 +86,14 @@ const (
 	PeerKeyPinPrefix      = "peer-pin:"
 	PeerKeyPinIndexPrefix = "peer-pin-index:"
 
+	// The newest MLS leaf declaration this owner has accepted for each peer
+	// account (chat v2 L2), next to the pins and just as durable. One entry
+	// per (owner, account): `mls-leaf-newest:<owner>:<account>`, assembled in
+	// keychain/mls_leaf_newest.go. It is what refuses a superseded
+	// declaration, whose account-key signature still verifies. Not key
+	// material: a timestamp and a hash of a public key.
+	MLSLeafNewestPrefix = "mls-leaf-newest:"
+
 	// Peer key device policy (account key trust v1, strict mode).
 	//
 	// A single entry, deliberately not owner-scoped: this is a decision about
