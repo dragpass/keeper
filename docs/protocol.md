@@ -765,10 +765,20 @@ members replace the account's old leaf with it through a `replace` Commit. The
 old device may be lost or stolen and its leaf holds the current epoch keys, so
 the permit's `pending_leaf_replacements` latches encryption exactly as the
 removal list does, judged in the same four group-loading operations and stored
-in the record next to the removal latch. An entry `(account, fp)` latches while
-the **confirmed** group state holds a leaf of that account whose signature key
-fingerprint is not `fp`, and it is released only when every confirmed leaf of
-the account has fingerprint `fp` or the account has no leaf left. While it
+in the record next to the removal latch. The latch is keyed **by account** and
+holds one expected fingerprint each. An entry `(account, fp)` latches while the
+**confirmed** group state holds a leaf of that account whose signature key
+fingerprint is not `fp`. A later entry for an account already latched
+**replaces the expected fingerprint and lifts nothing**, so a takeover taken
+over again (Bob → Bob2 → Bob3 before the first replace lands) waits for Bob3's
+key. The latch is released only when every confirmed leaf of the account has
+the expected fingerprint or the account has no leaf left. Every fingerprint the
+latch has seen on a leaf being replaced is remembered, and an expected
+fingerprint that is one of them never releases it: otherwise a permit naming
+the old device's own key, the one key already in the tree, would lift the latch
+with no replace. Any other key can only enter the confirmed tree through a
+Commit whose new leaf passed §5.3, an account-key-signed declaration, which a
+server cannot mint. While it
 holds, the send refuses with `CHAT_MLS_LEAF_REPLACEMENT_PENDING`, before it
 peeks or burns a position; with both latches held it reports
 `CHAT_MLS_ROTATION_PENDING`. Commits are never refused. **A later permit that

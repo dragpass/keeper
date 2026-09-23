@@ -77,7 +77,7 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 			}
 		}
 		out.RemovalLatch = append(out.RemovalLatch, latch.removals...)
-		out.LeafReplacementLatch = append(out.LeafReplacementLatch, latch.replacements...)
+		out.LeafReplacementLatch = append(out.LeafReplacementLatch, latch.expected()...)
 		return nil
 	})
 	return out, err

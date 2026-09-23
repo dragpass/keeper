@@ -235,3 +235,49 @@ func TestMLSChatE2E_AReplaceThePermitDoesNotCoverIsRefused(t *testing.T) {
 		t.Fatalf("refused replaces left %+v", got)
 	}
 }
+
+// Double takeover: Bob2 takes over, then Bob3 takes over before any replace
+// lands. Alice's latch moves to Bob3's key without lifting, a replace with
+// Bob2's KeyPackage under the new permit is refused and writes nothing, and
+// the replace with Bob3's lifts it.
+func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
+	c := newDM(t)
+	oldBob, _, err := keychain.GetMLSLeafNewest(c.alice.store, c.alice.id, c.bob.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob2 := newTakeoverKeeper(t, c.bob, e2eDevice2)
+	decl2 := bob2.declare(proto.MLSLeafReasonRotate, oldBob.NotBefore+60)
+	bob2KP := bob2.keyPackage()
+	c.alice.replacing = []proto.ChatStateLeafReplacement{{AccountID: c.bob.id, NewSignatureKeyFP: decl2.SignatureKeyFingerprint}}
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"),
+		proto.ChatMLSErrorCodeLeafReplacementPending)
+
+	bob3 := newTakeoverKeeper(t, c.bob, "d3333333-3333-4333-8333-333333333333")
+	decl3 := bob3.declare(proto.MLSLeafReasonRotate, oldBob.NotBefore+120)
+	third := proto.ChatStateLeafReplacement{AccountID: c.bob.id, NewSignatureKeyFP: decl3.SignatureKeyFingerprint}
+	c.alice.replacing = []proto.ChatStateLeafReplacement{third}
+	bob3.replacing = c.alice.replacing
+	assertReplacementLatch(t, c.alice, third)
+
+	state := c.alice.storedGroupState()
+	resp := c.alice.buildReplace(1, replaceOf(bob2KP))
+	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeLeafUntrusted {
+		t.Fatalf("replace with bob2 under the bob3 permit = %+v", resp)
+	}
+	if got := c.alice.status(); got.CommitPending || got.Epoch != 1 || !bytes.Equal(state, c.alice.storedGroupState()) {
+		t.Fatalf("the refused replace left %+v", got)
+	}
+
+	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
+		Replace: []proto.MLSReplaceMember{replaceOf(bob3.keyPackage())},
+	}))
+	c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	assertReplacementLatch(t, c.alice)
+	bob3.must(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: bob3.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64,
+	})
+	assertShown(t, bob3.decrypt(c.send(c.alice, 2, 2, "third time")), 0, "third time", c.alice, false)
+}

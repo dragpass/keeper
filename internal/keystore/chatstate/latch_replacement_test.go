@@ -34,7 +34,7 @@ func leavesOf(fps ...string) []RosterLeaf {
 
 func replacementLatchOf(t *testing.T, store *Store) []LeafReplacement {
 	t.Helper()
-	return readRecordForTest(t, store, testConvA).LeafReplacementLatch
+	return latches{replacements: readRecordForTest(t, store, testConvA).LeafReplacementLatch}.expected()
 }
 
 func replacementSend(store *Store, wm ServerWatermark, cipher SendCipher) error {
@@ -103,7 +103,7 @@ func TestAReplacementLatchLiftsOnlyOnTheConfirmedRoster(t *testing.T) {
 				if err != nil {
 					t.Fatalf("send = %v; want the latch lifted", err)
 				}
-				if got := replacementLatchOf(t, store); got != nil {
+				if got := replacementLatchOf(t, store); len(got) != 0 {
 					t.Fatalf("latch after lifting = %v", got)
 				}
 				return
@@ -126,7 +126,7 @@ func TestAReplacementAlreadyInPlaceIsNotLatched(t *testing.T) {
 	if err := replacementSend(store, replacing(takeover()), &fakeCipher{leaves: leavesOf()}); err != nil {
 		t.Fatal(err)
 	}
-	if got := replacementLatchOf(t, store); got != nil {
+	if got := replacementLatchOf(t, store); len(got) != 0 {
 		t.Fatalf("latch = %v", got)
 	}
 }
@@ -142,7 +142,7 @@ func TestBothLatchesHeldReportTheRemoval(t *testing.T) {
 	}
 	rec := readRecordForTest(t, store, testConvA)
 	if !slices.Equal(rec.RemovalLatch, []string{latchRemoved}) ||
-		!slices.Equal(rec.LeafReplacementLatch, []LeafReplacement{takeover()}) {
+		!slices.Equal(latches{replacements: rec.LeafReplacementLatch}.expected(), []LeafReplacement{takeover()}) {
 		t.Fatalf("latches = %v, %v", rec.RemovalLatch, rec.LeafReplacementLatch)
 	}
 }
@@ -172,7 +172,7 @@ func TestAReplacementLatchSurvivesTheBuildAndGoesWithTheConfirmation(t *testing.
 	}, committer); err != nil {
 		t.Fatal(err)
 	}
-	if got := replacementLatchOf(t, store); got != nil {
+	if got := replacementLatchOf(t, store); len(got) != 0 {
 		t.Fatalf("latch after the confirmed replace = %v", got)
 	}
 }
@@ -250,5 +250,77 @@ func TestStatusReportsTheReplacementLatch(t *testing.T) {
 	}
 	if readRecordForTest(t, store, testConvA).Generation != before {
 		t.Fatal("status wrote the record")
+	}
+}
+
+// Double takeover: Bob → Bob2 → Bob3 before the first replace lands. The
+// latch is keyed by account, so the later permit moves the key it waits for
+// from fp2 to fp3 without lifting it, and only Bob3's key in the confirmed
+// roster lifts it.
+func TestADoubleTakeoverMovesTheExpectedKeyAndLiftsOnlyOnTheLatest(t *testing.T) {
+	fp3 := strings.Repeat("3", 64)
+	bob3 := LeafReplacement{AccountID: latchRemoved, NewFingerprint: fp3}
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+
+	if err := replacementSend(store, replacing(takeover()), &fakeCipher{leaves: leavesOf(oldFP)}); !errors.Is(err, ErrLeafReplacementPending) {
+		t.Fatal(err)
+	}
+	if err := replacementSend(store, replacing(bob3), &fakeCipher{leaves: leavesOf(oldFP)}); !errors.Is(err, ErrLeafReplacementPending) {
+		t.Fatalf("send under the fp3 permit = %v", err)
+	}
+	if got := replacementLatchOf(t, store); !slices.Equal(got, []LeafReplacement{bob3}) {
+		t.Fatalf("latch = %v; want it to expect fp3", got)
+	}
+	// Bob2's key is no longer the one that lifts it, under any later permit.
+	if err := replacementSend(store, noWatermark, &fakeCipher{leaves: leavesOf(newFP)}); !errors.Is(err, ErrLeafReplacementPending) {
+		t.Fatalf("send with only bob2's key confirmed = %v", err)
+	}
+	if err := replacementSend(store, noWatermark, &fakeCipher{leaves: leavesOf(fp3)}); err != nil {
+		t.Fatalf("send with only bob3's key confirmed = %v", err)
+	}
+	if got := replacementLatchOf(t, store); len(got) != 0 {
+		t.Fatalf("latch after bob3 = %v", got)
+	}
+}
+
+// A permit that rewrites the expected key to the old leaf's own key — the one
+// key already in the tree without any replace — does not lift the latch.
+func TestRewritingTheExpectedKeyToTheOldLeafDoesNotLift(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+	cipher := &fakeCipher{leaves: leavesOf(oldFP)}
+	if err := replacementSend(store, replacing(takeover()), cipher); !errors.Is(err, ErrLeafReplacementPending) {
+		t.Fatal(err)
+	}
+	back := LeafReplacement{AccountID: latchRemoved, NewFingerprint: oldFP}
+	for range 2 {
+		if err := replacementSend(store, replacing(back), cipher); !errors.Is(err, ErrLeafReplacementPending) {
+			t.Fatalf("send after the rewrite to the old key = %v", err)
+		}
+	}
+	// The account leaving the group still lifts it.
+	if err := replacementSend(store, noWatermark, &fakeCipher{leaves: leavesOf()}); err != nil {
+		t.Fatalf("send with no leaf of the account = %v", err)
+	}
+}
+
+// A replace built for fp2 under a permit that now says fp3 is refused before
+// anything is built or written.
+func TestAReplaceForASupersededTakeoverBuildsNothing(t *testing.T) {
+	fp3 := strings.Repeat("3", 64)
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+	before := readRecordForTest(t, store, testConvA).Generation
+	committer := &fakeCommitter{leaves: leavesOf(oldFP)}
+	_, err := store.BeginCommit(testConvA, replacing(LeafReplacement{AccountID: latchRemoved, NewFingerprint: fp3}),
+		BeginCommitRequest{ClientCommitID: testCommitA, Plan: CommitPlan{Replace: []ReplaceMember{
+			{AccountID: latchRemoved, NewFingerprint: newFP, KeyPackage: []byte("kp")},
+		}}}, committer)
+	if !errors.Is(err, ErrReplacementNotListed) {
+		t.Fatalf("begin = %v; want ErrReplacementNotListed", err)
+	}
+	if rec := readRecordForTest(t, store, testConvA); committer.builds != 0 || rec.Pending != nil || rec.Generation != before {
+		t.Fatal("a refused replace built or wrote something")
 	}
 }

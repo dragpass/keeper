@@ -88,7 +88,8 @@ type ServerWatermark struct {
 
 	// PendingLeafReplacements rides in the same signed permit on the same
 	// terms: the server's claim of which accounts a new device took over
-	// (design M4.4). It can only add to Record.LeafReplacementLatch.
+	// (design M4.4). It can add to Record.LeafReplacementLatch or change the key
+	// an entry waits for, never lift one.
 	PendingLeafReplacements []LeafReplacement
 }
 

@@ -83,15 +83,29 @@ func judgeRemovals(latched, named []string, roster RosterReader) ([]string, erro
 // remaining members replace the account's old leaf with it. Until that has
 // happened here, the old leaf is still in this device's confirmed group and
 // holds the current epoch's keys, and the old device may be the one that was
-// lost or stolen. So this latch is S-1 with a different exit: the same three
-// rules, judged in the same four operations, with a leaf of the account whose
-// key is the one the permit named counting as "the leaf is gone".
+// lost or stolen. So this latch is S-1 with a different exit: the same rules,
+// judged in the same four operations, with "every confirmed leaf of the
+// account signs with the expected key" counting as "the leaf is gone".
 //
-// It names a key and not only an account, so it cannot be satisfied by the
-// wrong one. A latch for (account, fp) holds while any confirmed leaf of the
-// account signs with another key, and lifts when every one of them signs with
-// fp or none is left. The same statement as §6.4.1 applies: a server that
-// omits the entry is not detected here.
+// It is keyed by account and holds one expected fingerprint each. A permit
+// entry for an account already latched updates the expected fingerprint and
+// lifts nothing, so a takeover that is itself taken over (Bob → Bob2 → Bob3
+// before the first replace lands) waits for Bob3's key rather than for a key
+// that will never arrive. Permits still only add: they can change which key
+// must appear, and only the confirmed roster lifts.
+//
+// Why a server that rewrites the fingerprint gains nothing: lifting needs every
+// confirmed leaf of the account on the expected key, and a leaf only enters the
+// confirmed tree through a Commit whose new leaf passed §5.3 — an account-key
+// signed declaration for exactly that key. The server cannot mint one. The one
+// key it could name without one is a key already in the tree: the old leaf
+// being replaced. So every fingerprint the latch has seen being replaced is
+// kept in Superseded, and a latch expecting one of those never lifts on it.
+// Without that, rewriting the entry to the old device's own key would lift the
+// latch with no replace at all.
+//
+// What this does not do, stated in §6.4.1's words: a server that omits the
+// entry is not detected here.
 // ────────────────────────────────────────────────────────────────────────
 
 // ErrLeafReplacementPending — this device's confirmed group still holds a
@@ -101,10 +115,24 @@ func judgeRemovals(latched, named []string, roster RosterReader) ([]string, erro
 var ErrLeafReplacementPending = errors.New("chat state is waiting for a leaf replacement commit before it may encrypt")
 
 // LeafReplacement is one account a new device took over and the signature
-// key fingerprint of that device's leaf.
+// key fingerprint of that device's leaf, as a permit states it.
 type LeafReplacement struct {
 	AccountID      string `json:"account_id"`
 	NewFingerprint string `json:"new_signature_key_fp"`
+}
+
+// ReplacementLatch is one latched account: the key that must replace its
+// leaves, and every key of it the confirmed roster held that was not that one
+// while latched. Superseded is sorted.
+type ReplacementLatch struct {
+	AccountID      string   `json:"account_id"`
+	NewFingerprint string   `json:"new_signature_key_fp"`
+	Superseded     []string `json:"superseded_fps,omitempty"`
+}
+
+func (r ReplacementLatch) equal(o ReplacementLatch) bool {
+	return r.AccountID == o.AccountID && r.NewFingerprint == o.NewFingerprint &&
+		slices.Equal(r.Superseded, o.Superseded)
 }
 
 // RosterLeaf is one leaf of the confirmed tree: whose it is and which key it
@@ -114,11 +142,12 @@ type RosterLeaf struct {
 	Fingerprint string
 }
 
-// judgeReplacements is judgeRemovals for the leaf-replacement latch: what was
-// latched plus what the permit named, kept only where a confirmed leaf of the
-// account signs with a key other than the named one. Sorted by account, then
-// fingerprint, with no repeats.
-func judgeReplacements(latched, named []LeafReplacement, roster RosterReader) ([]LeafReplacement, error) {
+// judgeReplacements is judgeRemovals for the leaf-replacement latch: the
+// stored latch with the permit's entries merged in by account (the permit's
+// fingerprint wins), kept where a confirmed leaf of the account signs with
+// another key, or where the only key left is one the latch saw being
+// replaced. Sorted by account.
+func judgeReplacements(latched []ReplacementLatch, named []LeafReplacement, roster RosterReader) ([]ReplacementLatch, error) {
 	if len(latched) == 0 && len(named) == 0 {
 		return nil, nil
 	}
@@ -126,30 +155,48 @@ func judgeReplacements(latched, named []LeafReplacement, roster RosterReader) ([
 	if err != nil {
 		return nil, err
 	}
-	var out []LeafReplacement
-	for _, r := range append(slices.Clone(latched), named...) {
-		if slices.Contains(out, r) {
+	merged := make([]ReplacementLatch, 0, len(latched)+len(named))
+	for _, l := range latched {
+		merged = append(merged, ReplacementLatch{
+			AccountID: l.AccountID, NewFingerprint: l.NewFingerprint, Superseded: slices.Clone(l.Superseded),
+		})
+	}
+	for _, n := range named {
+		i := slices.IndexFunc(merged, func(l ReplacementLatch) bool { return l.AccountID == n.AccountID })
+		if i < 0 {
+			merged = append(merged, ReplacementLatch{AccountID: n.AccountID, NewFingerprint: n.NewFingerprint})
 			continue
 		}
-		if slices.ContainsFunc(leaves, func(l RosterLeaf) bool {
-			return l.AccountID == r.AccountID && l.Fingerprint != r.NewFingerprint
-		}) {
-			out = append(out, r)
+		merged[i].NewFingerprint = n.NewFingerprint
+	}
+	var out []ReplacementLatch
+	for _, l := range merged {
+		held, other := false, false
+		for _, leaf := range leaves {
+			if leaf.AccountID != l.AccountID {
+				continue
+			}
+			held = true
+			if leaf.Fingerprint != l.NewFingerprint {
+				other = true
+				if !slices.Contains(l.Superseded, leaf.Fingerprint) {
+					l.Superseded = append(l.Superseded, leaf.Fingerprint)
+				}
+			}
+		}
+		if other || (held && slices.Contains(l.Superseded, l.NewFingerprint)) {
+			slices.Sort(l.Superseded)
+			out = append(out, l)
 		}
 	}
-	slices.SortFunc(out, func(a, b LeafReplacement) int {
-		if a.AccountID != b.AccountID {
-			return strings.Compare(a.AccountID, b.AccountID)
-		}
-		return strings.Compare(a.NewFingerprint, b.NewFingerprint)
-	})
+	slices.SortFunc(out, func(a, b ReplacementLatch) int { return strings.Compare(a.AccountID, b.AccountID) })
 	return out, nil
 }
 
 // latches is both latches after one operation.
 type latches struct {
 	removals     []string
-	replacements []LeafReplacement
+	replacements []ReplacementLatch
 }
 
 func (l latches) held() bool { return len(l.removals) > 0 || len(l.replacements) > 0 }
@@ -180,5 +227,14 @@ func (l latches) apply(rec *Record) {
 
 func (l latches) sameAs(rec *Record) bool {
 	return slices.Equal(l.removals, rec.RemovalLatch) &&
-		slices.Equal(l.replacements, rec.LeafReplacementLatch)
+		slices.EqualFunc(l.replacements, rec.LeafReplacementLatch, ReplacementLatch.equal)
+}
+
+// expected is the latch as the app sees it: which key each account waits for.
+func (l latches) expected() []LeafReplacement {
+	out := make([]LeafReplacement, len(l.replacements))
+	for i, r := range l.replacements {
+		out[i] = LeafReplacement{AccountID: r.AccountID, NewFingerprint: r.NewFingerprint}
+	}
+	return out
 }
