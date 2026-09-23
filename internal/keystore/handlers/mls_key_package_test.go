@@ -33,6 +33,7 @@ func (f *chatStateFixture) enrollAccount(t *testing.T, accountID string) {
 	req := leafDeclareRequest(proto.MLSLeafReasonEnroll)
 	req.AccountID = accountID
 	req.NotBefore = f.clock.now().Unix()
+	req.NotAfter = req.NotBefore + proto.MLSLeafMaxValiditySeconds
 	req.ChallengeToken = leafChallenge(accountID, req.DeviceID, f.clock.now().Unix()+proto.MLSLeafChallengeTTLSeconds)
 	sig, err := crypto.SignData(f.key, req.ChallengeToken)
 	if err != nil {
@@ -40,7 +41,17 @@ func (f *chatStateFixture) enrollAccount(t *testing.T, accountID string) {
 	}
 	req.ServerSignature = base64.StdEncoding.EncodeToString(sig)
 	req.ServerKeyVersion = msgServerKeyVersion
-	declareLeaf(t, f.deps, req)
+	decl := declareLeaf(t, f.deps, req)
+	accept := acceptanceFor(decl)
+	sig, err = crypto.SignData(f.key, accept.AcceptanceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept.ServerSignature = base64.StdEncoding.EncodeToString(sig)
+	accept.ServerKeyVersion = msgServerKeyVersion
+	if resp := HandleMLSLeafPromote(f.deps, accept); !resp.Success {
+		t.Fatalf("promote: %s", resp.Error)
+	}
 }
 
 func TestMLSKeyPackageGenerate_TheGateRunsFirst(t *testing.T) {

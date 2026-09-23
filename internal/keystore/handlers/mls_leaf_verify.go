@@ -16,11 +16,13 @@
 //  6. the declaration's account and device equal the credential's
 //  7. the declaration's fingerprint equals the leaf's actual signature key
 //
-// and then, across the entering leaves of the batch, that no declaration is
-// older than the newest this owner has accepted for its account (the
-// superseded-declaration check, below). A leaf a Welcome's tree already holds
-// is not entering: it gets steps 1–7 and no freshness check, and it never
-// moves the record.
+// and then the freshness checks, which apply to entering leaves only: the
+// declaration's not_after has not passed, and, across the batch, no
+// declaration is older than the newest this owner has accepted for its account
+// (the superseded-declaration check, below). A leaf a Welcome's tree already
+// holds is not entering: it gets steps 1–7 and no freshness check, and it
+// never moves the record. That is what keeps a group older than a
+// declaration's 30-day window joinable.
 //
 // All or nothing: one bad leaf and VerifyLeaves fails, and nothing it would
 // have recorded is kept. Even a success records nothing on its own — the pins
@@ -88,6 +90,7 @@ func NewMLSLeafVerifier(
 type judgedLeaf struct {
 	accountID   string
 	notBefore   int64
+	notAfter    int64
 	fingerprint string
 	entering    bool
 }
@@ -107,6 +110,9 @@ func (v *MLSLeafVerifier) VerifyLeaves(leaves []mls.Leaf) error {
 
 	for _, leaf := range leaves {
 		j, err := v.judge(leaf, pins, now)
+		if err == nil && j.entering && now >= j.notAfter {
+			err = untrusted("leaf declaration has expired")
+		}
 		if err != nil {
 			v.d.Logger.Printf("mls leaf verify refused a leaf: %v", err)
 			return err
@@ -197,7 +203,8 @@ func (v *MLSLeafVerifier) judge(
 	}
 
 	return judgedLeaf{
-		accountID: accountID, notBefore: decl.NotBefore, fingerprint: fingerprint, entering: leaf.Entering,
+		accountID: accountID, notBefore: decl.NotBefore, notAfter: decl.NotAfter,
+		fingerprint: fingerprint, entering: leaf.Entering,
 	}, nil
 }
 

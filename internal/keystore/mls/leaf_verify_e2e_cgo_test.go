@@ -78,8 +78,24 @@ func newAccount(t testing.TB, id string) *account {
 	}
 }
 
-// declare runs mls_leaf_declare on this Keeper and returns the declaration.
+// declare runs mls_leaf_declare and then mls_leaf_promote on this Keeper, the
+// way a device's key becomes the one it signs with, and returns the
+// declaration.
 func (a *account) declare(t testing.TB, deviceID, reason string, notBefore int64) proto.MLSLeafDeclaration {
+	t.Helper()
+	d := a.declarePending(t, deviceID, reason, notBefore)
+	resp := handlers.HandleMLSLeafPromote(a.deps, proto.MLSLeafPromoteRequest{
+		AcceptanceToken: proto.MLSLeafAcceptedToken(d.AccountID, d.DeviceID, d.SignatureKeyFingerprint, d.NotBefore, d.NotAfter),
+		ServerSignature: "any",
+	})
+	if !resp.Success {
+		t.Fatalf("promote %s: %s", reason, resp.Error)
+	}
+	return d
+}
+
+// declarePending runs mls_leaf_declare alone: the key it mints is pending.
+func (a *account) declarePending(t testing.TB, deviceID, reason string, notBefore int64) proto.MLSLeafDeclaration {
 	t.Helper()
 	req := proto.MLSLeafDeclareRequest{
 		ChallengeToken: "dragpass.mls.leaf.challenge|1|" + a.id + "|" + deviceID + "|" + leafNonce + "|" +
@@ -88,6 +104,7 @@ func (a *account) declare(t testing.TB, deviceID, reason string, notBefore int64
 		AccountID:       a.id,
 		DeviceID:        deviceID,
 		NotBefore:       notBefore,
+		NotAfter:        notBefore + proto.MLSLeafMaxValiditySeconds,
 		Reason:          reason,
 	}
 	resp := handlers.HandleMLSLeafDeclare(a.deps, req)
@@ -170,7 +187,8 @@ func declarationFor(accountID, deviceID string, leafKey ed25519.PublicKey, notBe
 	return proto.MLSLeafDeclaration{
 		AccountID: accountID, DeviceID: deviceID,
 		SignatureKey:            base64.StdEncoding.EncodeToString(leafKey),
-		SignatureKeyFingerprint: fp, NotBefore: notBefore, Reason: reason,
+		SignatureKeyFingerprint: fp, NotBefore: notBefore, NotAfter: notBefore + proto.MLSLeafMaxValiditySeconds,
+		Reason: reason,
 	}
 }
 
@@ -802,5 +820,71 @@ func TestAWelcomeTreeHoldingARotatedMembersOldLeafIsStillJoinable(t *testing.T) 
 	if _, _, _, err := daveOwn.CommitAddMemberVerified(keyPackage(t, bobOld), dave.verifier()); !errors.Is(err, mls.ErrLeafUntrusted) ||
 		!strings.Contains(err.Error(), "older than one already accepted") {
 		t.Fatalf("dave adds bob's old leaf = %v; want a refusal for an older declaration", err)
+	}
+}
+
+// Only the active entry signs. A key mls_leaf_declare minted and ariadne has
+// not accepted never reaches a session, a KeyPackage or a group.
+func TestAPendingLeafKeyNeverSigns(t *testing.T) {
+	stateRoot(t)
+	bob := newAccount(t, accountB)
+	bob.declarePending(t, device1, proto.MLSLeafReasonEnroll, time.Now().Unix())
+	if _, err := mls.NewDeviceSession(bob.store); !errors.Is(err, mls.ErrNoLeafKey) {
+		t.Fatalf("session with only a pending key = %v; want ErrNoLeafKey", err)
+	}
+
+	bob2 := newAccount(t, accountC)
+	enrolled := bob2.declare(t, device1, proto.MLSLeafReasonEnroll, time.Now().Unix())
+	staged := bob2.declarePending(t, device1, proto.MLSLeafReasonRotate, time.Now().Unix()+1)
+	spy := &recordLeaves{}
+	carrier := forged(t, accountA, device1, func(ed25519.PublicKey) []byte { return []byte("x") })
+	if err := carrier.CreateGroup([]byte("probe")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := carrier.CommitAddMemberVerified(keyPackage(t, bob2.session(t)), spy); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := base64.StdEncoding.DecodeString(enrolled.SignatureKey)
+	pending, _ := base64.StdEncoding.DecodeString(staged.SignatureKey)
+	if len(spy.leaves) != 1 || string(spy.leaves[0].SignatureKey) != string(want) ||
+		string(spy.leaves[0].SignatureKey) == string(pending) {
+		t.Fatal("a KeyPackage carried the pending key instead of the active one")
+	}
+}
+
+// Expiry through real MLS. Bob's KeyPackage carries a declaration whose
+// not_after has passed on alice's clock, so she will not Add him; but a group
+// whose every declaration has expired is still one a new member can join,
+// because nothing in a Welcome's tree is entering.
+func TestAnExpiredDeclarationCannotBeAddedButAnOldGroupCanBeJoined(t *testing.T) {
+	g := newGroup(t)
+	bob := newAccount(t, accountB)
+	bobKP := keyPackage(t, bob.device(t, device1))
+	later := time.Now().Add(40 * 24 * time.Hour)
+
+	aliceLater := g.alice.deps
+	aliceLater.Clock = func() time.Time { return later }
+	if _, err := g.add(handlers.NewMLSLeafVerifier(aliceLater, g.alice.id, nil), bobKP); !errors.Is(err, mls.ErrLeafUntrusted) ||
+		!strings.Contains(err.Error(), "expired") {
+		t.Fatalf("add with an expired declaration = %v; want ErrLeafUntrusted for expiry", err)
+	}
+
+	in, err := g.add(g.alice.verifier(), bobKP)
+	if err != nil {
+		t.Fatalf("add in the window: %v", err)
+	}
+	g.confirm(t, in.ClientCommitID)
+	carol := newAccount(t, accountC)
+	carolS := carol.device(t, device2)
+	in, err = g.add(g.alice.verifier(), keyPackage(t, carolS))
+	if err != nil {
+		t.Fatalf("add carol: %v", err)
+	}
+	g.confirm(t, in.ClientCommitID)
+
+	carolLater := carol.deps
+	carolLater.Clock = func() time.Time { return later }
+	if err := carolS.JoinVerified(in.Welcome, handlers.NewMLSLeafVerifier(carolLater, carol.id, nil)); err != nil {
+		t.Fatalf("joining a group whose declarations have all expired: %v", err)
 	}
 }

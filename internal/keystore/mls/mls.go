@@ -266,10 +266,11 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 // ErrNoLeafKey — the device has not enrolled a leaf key (mls_leaf_declare).
 var ErrNoLeafKey = errors.New("mls: this device has no leaf signature key")
 
-// ErrNoLeafDeclaration — the device's leaf key was stored before the Keeper
-// kept its declaration next to it (0.0.43). An `enroll` for the same identity
-// re-signs the declaration over the same key and stores both.
-var ErrNoLeafDeclaration = errors.New("mls: this device's leaf key has no stored declaration; enroll again")
+// ErrNoLeafDeclaration — the device's active leaf record was written by an
+// older Keeper: 0.0.43 kept no declaration, and 0.0.44's is signed over the
+// version 1 canonical every verifier now refuses. Neither is used. `enroll`
+// mints a new key and, once promoted, replaces the record.
+var ErrNoLeafDeclaration = errors.New("mls: this device's leaf key has no current declaration; enroll again")
 
 const (
 	credentialIdentityDomain  = "dragpass.mls.credential"
@@ -321,7 +322,8 @@ func isLowerUUID(s string) bool {
 
 // NewDeviceSession builds a session that signs as this device's declared leaf.
 // It is the only way to get a Session, so every group this device joins or
-// creates shares the one key its declaration names.
+// creates shares the one key its declaration names. It reads the active slot
+// only: a pending key, one the server has not accepted, never signs anything.
 func NewDeviceSession(store keychain.SecretStore) (*Session, error) {
 	if !Available() {
 		return nil, ErrUnavailable
@@ -334,7 +336,7 @@ func NewDeviceSession(store keychain.SecretStore) (*Session, error) {
 	if !found {
 		return nil, ErrNoLeafKey
 	}
-	if len(key.Declaration) == 0 {
+	if !key.Usable() {
 		return nil, ErrNoLeafDeclaration
 	}
 	return openSession(

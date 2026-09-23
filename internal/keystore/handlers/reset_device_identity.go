@@ -64,19 +64,24 @@ var resetIdentitySlots = []resetIdentitySlot{
 	// The leaf key's declaration is signed by the account key this reset
 	// destroys, and names the account being re-enrolled away from, so the key
 	// is account-scoped however device-scoped its record looks.
-	{config.MLSLeafSignatureKey, mlsLeafKeyPresent, deleteMLSLeafKey},
+	{config.MLSLeafSignatureKey, mlsLeafSlotPresent(keychain.GetMLSLeafKey), deleteMLSLeafSlot(keychain.DeleteMLSLeafKey)},
+	{config.MLSLeafSignatureKeyPending, mlsLeafSlotPresent(keychain.GetMLSLeafPending), deleteMLSLeafSlot(keychain.DeleteMLSLeafPending)},
 }
 
 // An unreadable record counts as present so the reset still removes it.
-func mlsLeafKeyPresent(store keychain.SecretStore) bool {
-	key, found, err := keychain.GetMLSLeafKey(store)
-	secure.Zeroize(key.SecretKey)
-	return found || err != nil
+func mlsLeafSlotPresent(get func(keychain.SecretStore) (keychain.MLSLeafKey, bool, error)) func(keychain.SecretStore) bool {
+	return func(store keychain.SecretStore) bool {
+		key, found, err := get(store)
+		secure.Zeroize(key.SecretKey)
+		return found || err != nil
+	}
 }
 
-func deleteMLSLeafKey(store keychain.SecretStore) error {
-	_, err := keychain.DeleteMLSLeafKey(store)
-	return err
+func deleteMLSLeafSlot(del func(keychain.SecretStore) (bool, error)) func(keychain.SecretStore) error {
+	return func(store keychain.SecretStore) error {
+		_, err := del(store)
+		return err
+	}
 }
 
 // HandleResetDeviceIdentity wipes this device's account-scoped key material.

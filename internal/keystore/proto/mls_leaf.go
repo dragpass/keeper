@@ -25,12 +25,20 @@ const (
 	// any other `dragpass.` statement signed by the same account key.
 	MLSLeafCanonicalDomain = "dragpass.mls.leaf"
 
-	MLSLeafCanonicalVersion = 1
+	// Version 2 added not_after. A version 1 declaration is refused wherever
+	// one is met: it has no end, and a leaf key that never expires is what the
+	// validity window exists to rule out.
+	MLSLeafCanonicalVersion = 2
 
 	// There is no revoke: a `rotate` declaration supersedes the previous one
-	// for the same device (M1.5).
+	// for the same device (M1.5). There is no renew either: re-declaring before
+	// not_after is a rotate with a new key.
 	MLSLeafReasonEnroll = "enroll"
 	MLSLeafReasonRotate = "rotate"
+
+	// MLSLeafMaxValiditySeconds bounds not_after - not_before. 30 days is a
+	// starting value, shared with ariadne, not a measured one.
+	MLSLeafMaxValiditySeconds = 2592000
 )
 
 // MLSLeafDeclaration is the signed statement as it crosses the wire.
@@ -42,18 +50,19 @@ type MLSLeafDeclaration struct {
 	SignatureKey            string `json:"signature_key"`
 	SignatureKeyFingerprint string `json:"signature_key_fingerprint"`
 	NotBefore               int64  `json:"not_before"`
+	NotAfter                int64  `json:"not_after"`
 	Reason                  string `json:"reason"`
 	Signature               string `json:"signature"`
 }
 
 func (d MLSLeafDeclaration) Canonical() string {
-	return MLSLeafCanonical(d.AccountID, d.DeviceID, d.SignatureKeyFingerprint, d.NotBefore, d.Reason)
+	return MLSLeafCanonical(d.AccountID, d.DeviceID, d.SignatureKeyFingerprint, d.NotBefore, d.NotAfter, d.Reason)
 }
 
 // MLSLeafCanonical renders the signing string. ariadne pins the same bytes.
 //
-//	dragpass.mls.leaf|1|<account_id>|<device_id>|<signature_key_fingerprint>|<not_before_unix>|<reason>
-func MLSLeafCanonical(accountID, deviceID, fingerprint string, notBefore int64, reason string) string {
+//	dragpass.mls.leaf|2|<account_id>|<device_id>|<signature_key_fingerprint>|<not_before_unix>|<not_after_unix>|<reason>
+func MLSLeafCanonical(accountID, deviceID, fingerprint string, notBefore, notAfter int64, reason string) string {
 	return strings.Join([]string{
 		MLSLeafCanonicalDomain,
 		strconv.Itoa(MLSLeafCanonicalVersion),
@@ -61,6 +70,7 @@ func MLSLeafCanonical(accountID, deviceID, fingerprint string, notBefore int64, 
 		deviceID,
 		fingerprint,
 		strconv.FormatInt(notBefore, 10),
+		strconv.FormatInt(notAfter, 10),
 		reason,
 	}, "|")
 }
@@ -80,7 +90,7 @@ func (d MLSLeafDeclaration) Validate() error {
 	if err := requireKeyFingerprint(d.SignatureKeyFingerprint, "leaf_declaration.signature_key_fingerprint"); err != nil {
 		return err
 	}
-	if err := requireRotatedAt(d.NotBefore, "leaf_declaration.not_before"); err != nil {
+	if err := requireMLSLeafValidity(d.NotBefore, d.NotAfter, "leaf_declaration."); err != nil {
 		return err
 	}
 	if err := requireMLSLeafReason(d.Reason, "leaf_declaration.reason"); err != nil {
@@ -89,8 +99,28 @@ func (d MLSLeafDeclaration) Validate() error {
 	return requireString(d.Signature, "leaf_declaration.signature")
 }
 
-// MLSLeafDeclareRequest asks the Keeper to create (enroll) or replace (rotate)
-// this device's leaf signature key and to sign a declaration for it.
+// requireMLSLeafValidity is the window rule both sides apply: not_before
+// strictly before not_after, and at most MLSLeafMaxValiditySeconds apart.
+func requireMLSLeafValidity(notBefore, notAfter int64, prefix string) error {
+	if err := requireRotatedAt(notBefore, prefix+"not_before"); err != nil {
+		return err
+	}
+	if err := requireRotatedAt(notAfter, prefix+"not_after"); err != nil {
+		return err
+	}
+	if notAfter <= notBefore {
+		return newValidationError(prefix+"not_after", "must be after not_before")
+	}
+	if notAfter-notBefore > MLSLeafMaxValiditySeconds {
+		return newValidationError(prefix+"not_after", "must be at most 30 days after not_before")
+	}
+	return nil
+}
+
+// MLSLeafDeclareRequest asks the Keeper to mint a leaf signature key for this
+// device — the first one (enroll) or a replacement (rotate) — and to sign a
+// declaration for it. The key and its declaration land in the pending slot;
+// nothing active changes until mls_leaf_promote.
 //
 // DeviceID is the Extension's X-Device-ID, the id the server already keys this
 // device's refresh tokens and request-signing key by. The Keeper has no device
@@ -102,6 +132,7 @@ type MLSLeafDeclareRequest struct {
 	AccountID        string `json:"account_id"`
 	DeviceID         string `json:"device_id"`
 	NotBefore        int64  `json:"not_before"`
+	NotAfter         int64  `json:"not_after"`
 	Reason           string `json:"reason"`
 }
 
@@ -118,7 +149,7 @@ func (r MLSLeafDeclareRequest) Validate() error {
 	if err := requireMessageUUID(r.DeviceID, "device_id"); err != nil {
 		return err
 	}
-	if err := requireRotatedAt(r.NotBefore, "not_before"); err != nil {
+	if err := requireMLSLeafValidity(r.NotBefore, r.NotAfter, ""); err != nil {
 		return err
 	}
 	return requireMLSLeafReason(r.Reason, "reason")
@@ -165,6 +196,137 @@ func ParseMLSLeafChallenge(token string) (MLSLeafChallenge, error) {
 
 type MLSLeafDeclareResponseData struct {
 	MLSLeafDeclaration
+}
+
+// ─── mls_leaf_promote / mls_leaf_abort / mls_leaf_status ───────────────────
+
+// The acceptance ariadne signs once it has stored a declaration. It names the
+// declaration by everything a verifier would compare, so the Keeper can tell
+// whether it is the pending entry, the active one, or neither.
+//
+//	dragpass.mls.leaf.accepted|1|<account_id>|<device_id>|<signature_key_fingerprint>|<not_before_unix>|<not_after_unix>
+const (
+	MLSLeafAcceptedDomain  = "dragpass.mls.leaf.accepted"
+	MLSLeafAcceptedVersion = 1
+)
+
+type MLSLeafAccepted struct {
+	AccountID   string
+	DeviceID    string
+	Fingerprint string
+	NotBefore   int64
+	NotAfter    int64
+}
+
+// Names reports whether the acceptance is for exactly this declaration. The
+// reason is not part of the token and not compared: the key and its window
+// already identify one declaration.
+func (a MLSLeafAccepted) Names(d MLSLeafDeclaration) bool {
+	return a.AccountID == d.AccountID && a.DeviceID == d.DeviceID &&
+		a.Fingerprint == d.SignatureKeyFingerprint &&
+		a.NotBefore == d.NotBefore && a.NotAfter == d.NotAfter
+}
+
+func MLSLeafAcceptedToken(accountID, deviceID, fingerprint string, notBefore, notAfter int64) string {
+	return strings.Join([]string{
+		MLSLeafAcceptedDomain,
+		strconv.Itoa(MLSLeafAcceptedVersion),
+		accountID,
+		deviceID,
+		fingerprint,
+		strconv.FormatInt(notBefore, 10),
+		strconv.FormatInt(notAfter, 10),
+	}, "|")
+}
+
+// ParseMLSLeafAccepted accepts only the exact bytes MLSLeafAcceptedToken
+// produces, so no second spelling can name the same declaration.
+func ParseMLSLeafAccepted(token string) (MLSLeafAccepted, error) {
+	invalid := newValidationError("acceptance_token", "is not an mls leaf acceptance")
+	parts := strings.Split(token, "|")
+	if len(parts) != 7 || parts[0] != MLSLeafAcceptedDomain || parts[1] != strconv.Itoa(MLSLeafAcceptedVersion) {
+		return MLSLeafAccepted{}, invalid
+	}
+	if requireMessageUUID(parts[2], "acceptance_token") != nil ||
+		requireMessageUUID(parts[3], "acceptance_token") != nil ||
+		requireKeyFingerprint(parts[4], "acceptance_token") != nil {
+		return MLSLeafAccepted{}, invalid
+	}
+	notBefore, ok := parseCanonicalUnix(parts[5])
+	if !ok {
+		return MLSLeafAccepted{}, invalid
+	}
+	notAfter, ok := parseCanonicalUnix(parts[6])
+	if !ok || requireMLSLeafValidity(notBefore, notAfter, "") != nil {
+		return MLSLeafAccepted{}, invalid
+	}
+	return MLSLeafAccepted{
+		AccountID: parts[2], DeviceID: parts[3], Fingerprint: parts[4], NotBefore: notBefore, NotAfter: notAfter,
+	}, nil
+}
+
+// parseCanonicalUnix reads a positive decimal with no sign, padding or
+// leading zero, the only spelling strconv.FormatInt produces.
+func parseCanonicalUnix(s string) (int64, bool) {
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || v <= 0 || strconv.FormatInt(v, 10) != s {
+		return 0, false
+	}
+	return v, true
+}
+
+// MLSLeafPromoteRequest carries ariadne's acceptance of the pending
+// declaration and the server signature over it.
+type MLSLeafPromoteRequest struct {
+	AcceptanceToken  string `json:"acceptance_token"`
+	ServerSignature  string `json:"server_signature"`
+	ServerKeyVersion uint   `json:"server_key_version,omitempty"`
+}
+
+func (r MLSLeafPromoteRequest) Validate() error {
+	if err := requireString(r.AcceptanceToken, "acceptance_token"); err != nil {
+		return err
+	}
+	return requireString(r.ServerSignature, "server_signature")
+}
+
+// MLSLeafPromoteResponseData — Promoted is false only for a duplicate promote,
+// one whose token names the entry that is already active.
+type MLSLeafPromoteResponseData struct {
+	Promoted    bool   `json:"promoted"`
+	Fingerprint string `json:"signature_key_fingerprint"`
+}
+
+type MLSLeafAbortRequest struct{}
+
+func (r MLSLeafAbortRequest) Validate() error { return nil }
+
+// MLSLeafAbortResponseData — Aborted is false when there was no pending entry.
+type MLSLeafAbortResponseData struct {
+	Aborted bool `json:"aborted"`
+}
+
+type MLSLeafStatusRequest struct{}
+
+func (r MLSLeafStatusRequest) Validate() error { return nil }
+
+// MLSLeafStatusResponseData names the entries by their signature key
+// fingerprints and validity windows, and nothing else. HasActive is false for
+// a record an older Keeper wrote, which no session will use; enroll replaces
+// it.
+//
+// The pending window is there for the caller's decision, not the Keeper's:
+// ariadne refuses a retried declaration once its not_before is more than 24
+// hours old or its not_after has passed, and from then on the only way forward
+// is mls_leaf_abort and a fresh declare. The Keeper never aborts on its own.
+type MLSLeafStatusResponseData struct {
+	HasActive          bool   `json:"has_active"`
+	ActiveFingerprint  string `json:"active_signature_key_fingerprint"`
+	ActiveNotAfter     int64  `json:"active_not_after"`
+	HasPending         bool   `json:"has_pending"`
+	PendingFingerprint string `json:"pending_signature_key_fingerprint"`
+	PendingNotBefore   int64  `json:"pending_not_before"`
+	PendingNotAfter    int64  `json:"pending_not_after"`
 }
 
 func requireMLSLeafReason(value, field string) error {
