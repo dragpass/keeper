@@ -24,5 +24,9 @@ func chatStateActions() map[string]actionHandlerFunc {
 		proto.ChatStateReadOutbox:   handlers.HandleChatStateReadOutbox,
 		proto.ChatStateMarkReceived: handlers.HandleChatStateMarkReceived,
 		proto.ChatStatePurge:        handlers.HandleChatStatePurge,
+
+		// Gated by the same permit and decoded by the same strict decoder,
+		// though it reads no conversation state.
+		proto.MLSKeyPackageGenerate: handlers.HandleMLSKeyPackageGenerate,
 	}
 }

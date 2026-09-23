@@ -57,6 +57,18 @@ const (
 	// ChatStateErrorCodeStorageFailure — the state directory or the keyring
 	// could not be read or written. Nothing was committed.
 	ChatStateErrorCodeStorageFailure = "CHAT_STATE_STORAGE_FAILURE"
+
+	// ChatMLSErrorCodeLeafUntrusted — a leaf that would enter the group is
+	// not vouched for by its account: no declaration, a malformed one, a bad
+	// signature, a declaration for another account, device or key, a
+	// superseded declaration, or an account whose key the pin reports as
+	// changed (design §5.3, §13). Nothing was applied and nothing was
+	// recorded. There is no "ignore and continue".
+	ChatMLSErrorCodeLeafUntrusted = "CHAT_MLS_LEAF_UNTRUSTED"
+
+	// ChatMLSErrorCodeCapabilityRequired — this Keeper binary was built
+	// without the MLS library (design §13).
+	ChatMLSErrorCodeCapabilityRequired = "CHAT_MLS_CAPABILITY_REQUIRED"
 )
 
 // Wire-shape constants.

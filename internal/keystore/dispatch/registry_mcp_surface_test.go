@@ -78,6 +78,19 @@ func TestMCPCallableActions_ExcludeMLSLeafDeclare(t *testing.T) {
 	}
 }
 
+// A model that could reach this could put this device's leaf into any group
+// whose member the server hands the KeyPackage to.
+func TestMCPCallableActions_ExcludeMLSKeyPackageGenerate(t *testing.T) {
+	for _, action := range mcpCallableActions {
+		if action == proto.MLSKeyPackageGenerate {
+			t.Fatal("mls_key_package_generate is on the MCP surface")
+		}
+	}
+	if _, ok := actionRegistry[proto.MLSKeyPackageGenerate]; !ok {
+		t.Fatal("mls_key_package_generate is not registered; this guard checks nothing")
+	}
+}
+
 // TestChatStateActions_AreExactlyTheFiveRegistered keeps the set this guard
 // checks honest: a sixth conversation-state action added without a thought
 // about the boundary fails here rather than passing unnoticed.

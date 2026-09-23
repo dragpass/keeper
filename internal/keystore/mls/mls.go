@@ -49,6 +49,7 @@ package mls
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strings"
 
@@ -166,9 +167,20 @@ func Restore(
 // Load is called on every transaction even when the session already holds the
 // group, because the record is the authority on where the ratchet is and
 // another process may have moved it since this session last looked.
-type Cipher struct{ session *Session }
+//
+// Every path that can bring a leaf into the group — applying somebody's
+// Commit, and building an Add — goes through verifier first. What a
+// successful verification would record (a first-use pin, a newer declaration)
+// is the verifier's to hold until the caller has seen the whole chatstate
+// transaction succeed; this type never writes it.
+type Cipher struct {
+	session  *Session
+	verifier LeafVerifier
+}
 
-func NewCipher(s *Session) *Cipher { return &Cipher{session: s} }
+func NewCipher(s *Session, verifier LeafVerifier) *Cipher {
+	return &Cipher{session: s, verifier: verifier}
+}
 
 func (c *Cipher) Load(groupState []byte) error { return c.session.Load(groupState) }
 
@@ -203,12 +215,6 @@ func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
 // one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
-	if len(plan.AddKeyPackages) > 1 {
-		// One Add per Commit is all the skeleton's FFI carries. Refusing is
-		// the honest answer; silently committing the first would produce a
-		// Commit that does not match the plan the caller was told was built.
-		return chatstate.BuiltCommit{}, errors.New("mls: a commit carries at most one add")
-	}
 	if len(plan.AddKeyPackages) == 0 {
 		commit, expected, err := c.session.CommitUpdate()
 		if err != nil {
@@ -216,7 +222,7 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 		}
 		return chatstate.BuiltCommit{Commit: commit, ExpectedEpoch: expected}, nil
 	}
-	commit, welcome, expected, err := c.session.CommitAddMember(plan.AddKeyPackages[0])
+	commit, welcome, expected, err := c.session.CommitAddMembersVerified(plan.AddKeyPackages, c.verifier)
 	if err != nil {
 		return chatstate.BuiltCommit{}, err
 	}
@@ -228,7 +234,7 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
-	processed, err := c.session.Process(message)
+	processed, err := c.session.ProcessVerified(message, c.verifier)
 	if err != nil {
 		return 0, false, err
 	}
@@ -238,7 +244,7 @@ func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
 func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
 
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
-	processed, err := c.session.Process(message)
+	processed, err := c.session.ProcessVerified(message, c.verifier)
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
@@ -259,6 +265,11 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 
 // ErrNoLeafKey — the device has not enrolled a leaf key (mls_leaf_declare).
 var ErrNoLeafKey = errors.New("mls: this device has no leaf signature key")
+
+// ErrNoLeafDeclaration — the device's leaf key was stored before the Keeper
+// kept its declaration next to it (0.0.43). An `enroll` for the same identity
+// re-signs the declaration over the same key and stores both.
+var ErrNoLeafDeclaration = errors.New("mls: this device's leaf key has no stored declaration; enroll again")
 
 const (
 	credentialIdentityDomain  = "dragpass.mls.credential"
@@ -323,5 +334,316 @@ func NewDeviceSession(store keychain.SecretStore) (*Session, error) {
 	if !found {
 		return nil, ErrNoLeafKey
 	}
-	return openSession(CredentialIdentity(key.AccountID, key.DeviceID), key.SecretKey, key.PublicKey)
+	if len(key.Declaration) == 0 {
+		return nil, ErrNoLeafDeclaration
+	}
+	return openSession(
+		CredentialIdentity(key.AccountID, key.DeviceID), key.SecretKey, key.PublicKey, key.Declaration,
+	)
+}
+
+// MaxKeyPackagesPerCall bounds one mls_key_package_generate call. The pool is
+// the extension's and the server's to size; this only keeps a single request
+// from asking for an unbounded amount of work.
+const MaxKeyPackagesPerCall = 32
+
+// MaxKeyPackageBytes is the largest KeyPackage this Keeper hands out. ariadne
+// stores each one in account_mls_key_packages.key_package VARBINARY(8192) and
+// refuses anything larger, so a bigger one would be minted only to be
+// rejected on upload.
+const MaxKeyPackageBytes = 8192
+
+// KeyPackage is one single-use KeyPackage and the end of its lifetime, which
+// is the not_after the client declares when it uploads it.
+type KeyPackage struct {
+	Message  []byte
+	NotAfter uint64
+}
+
+// KeyPackages produces n single-use KeyPackages, each carrying the active
+// declaration this session was built with. There is no last-resort
+// KeyPackage. One over MaxKeyPackageBytes fails the call rather than being
+// dropped or cut: a short batch would read as success.
+func (s *Session) KeyPackages(n int) ([]KeyPackage, error) {
+	if n < 1 || n > MaxKeyPackagesPerCall {
+		return nil, errors.New("mls: key package count is out of range")
+	}
+	out := make([]KeyPackage, 0, n)
+	for i := 0; i < n; i++ {
+		kp, err := s.KeyPackage()
+		if err != nil {
+			return nil, err
+		}
+		if len(kp) > MaxKeyPackageBytes {
+			return nil, errors.New("mls: a key package exceeds the size the server stores")
+		}
+		notAfter, err := keyPackageNotAfter(kp)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, KeyPackage{Message: kp, NotAfter: notAfter})
+	}
+	return out, nil
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Leaf verification: Go verifies, Rust enforces.
+// ────────────────────────────────────────────────────────────────────────
+
+// ErrLeafUntrusted — a leaf that would enter the group is not vouched for by
+// its account (design §5.3, §13 CHAT_MLS_LEAF_UNTRUSTED). Nothing was applied.
+var ErrLeafUntrusted = errors.New("mls: a leaf entering the group is not vouched for by its account")
+
+// Leaf is one leaf entering this device's view of a group.
+type Leaf struct {
+	// Index is the leaf's place in the tree. Zero and meaningless for the leaf
+	// a KeyPackage would add, which has no place yet.
+	Index        uint32
+	Identity     []byte
+	SignatureKey []byte
+
+	// Declaration is the payload of the leaf declaration extension, and nil
+	// when the leaf carries none — which is itself a refusal.
+	Declaration []byte
+
+	// Entering is true for a leaf this operation brings into the group: an
+	// Add, whether this device builds it or applies somebody's Commit, and a
+	// member's replacement leaf in an update path. It is false for a leaf a
+	// Welcome's tree already holds, which the members accepted when it
+	// entered. Freshness checks — is this the newest declaration seen for the
+	// account — apply only to entering leaves: a member who has since rotated
+	// still sits in older groups under the old leaf, and refusing that leaf in
+	// a Welcome would make every such group unjoinable.
+	Entering bool
+}
+
+// LeafVerifier runs design §5.3 over the leaves one operation brings in.
+//
+// It judges them as one unit: nil only when every leaf passes. It must not
+// persist anything. Whatever a success would record belongs to the caller to
+// write after the whole operation has succeeded, because a leaf that passed
+// here can still be part of an operation that fails later.
+type LeafVerifier interface {
+	VerifyLeaves(leaves []Leaf) error
+}
+
+// verifyLeaves is the Go half. A nil verifier with leaves to judge is a
+// refusal, not a pass: no caller gets to opt out by forgetting one.
+func verifyLeaves(v LeafVerifier, leaves []Leaf) error {
+	if len(leaves) == 0 {
+		return nil
+	}
+	if v == nil {
+		return ErrLeafUntrusted
+	}
+	return v.VerifyLeaves(leaves)
+}
+
+// ProcessVerified applies one inbound message, verifying every leaf it brings
+// in first.
+//
+// A PublicMessage — which is how every Commit this integration sends goes out
+// (encrypt_control_messages is pinned false) — is processed twice. The collect
+// pass applies it to a copy with every leaf admitted and reports the new
+// leaves; the Go verifier judges them; the enforce pass applies it for real
+// with the Rust gate admitting only what was approved. mls-rs persists nothing
+// until the caller flushes, so the collect pass leaves no trace. It is the
+// enforce pass that decides: the collect pass's view is only what the verifier
+// was asked about.
+//
+// Anything else is processed once under the resting gate, which admits the
+// current members and nobody new. A PrivateMessage Commit that adds a member
+// is therefore refused rather than verified; nothing this Keeper sends is one.
+func (s *Session) ProcessVerified(message []byte, v LeafVerifier) (Processed, error) {
+	form, err := WireFormOf(message)
+	if err != nil {
+		return Processed{}, err
+	}
+	if form == WireFormPublicMessage {
+		leaves, err := s.processCollect(message)
+		if err != nil {
+			return Processed{}, err
+		}
+		markEntering(leaves)
+		if err := verifyLeaves(v, leaves); err != nil {
+			return Processed{}, err
+		}
+		if err := s.approve(leaves); err != nil {
+			return Processed{}, err
+		}
+	}
+	return s.Process(message)
+}
+
+// JoinVerified joins from a Welcome after verifying every leaf of its tree —
+// the committer's, every other member's, and this device's own. A joiner has
+// no earlier state that vouched for any of them, so every leaf gets the
+// binding checks. None of them is entering: the tree is the group as its
+// members already accepted it, so no freshness check runs and nothing here
+// advances the newest-declaration record.
+func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
+	leaves, err := s.joinCollect(welcome)
+	if err != nil {
+		return err
+	}
+	if err := verifyLeaves(v, leaves); err != nil {
+		return err
+	}
+	if err := s.approve(leaves); err != nil {
+		return err
+	}
+	return s.Join(welcome)
+}
+
+// CommitAddMembersVerified verifies the leaves these KeyPackages would add, as
+// one unit, and only then builds the Add. The KeyPackages are read without a
+// group, so a refused set builds nothing and leaves no pending Commit.
+func (s *Session) CommitAddMembersVerified(
+	keyPackages [][]byte, v LeafVerifier,
+) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	if len(keyPackages) == 0 || len(keyPackages) > MaxKeyPackagesPerCall {
+		return nil, nil, 0, errors.New("mls: add member count is out of range")
+	}
+	leaves := make([]Leaf, 0, len(keyPackages))
+	for _, kp := range keyPackages {
+		leaf, err := keyPackageLeaf(kp)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		leaf.Entering = true
+		leaves = append(leaves, leaf)
+	}
+	if err := verifyLeaves(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := s.approve(leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return s.CommitAddMembers(keyPackages)
+}
+
+// CommitAddMemberVerified is CommitAddMembersVerified for one member.
+func (s *Session) CommitAddMemberVerified(
+	keyPackage []byte, v LeafVerifier,
+) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	return s.CommitAddMembersVerified([][]byte{keyPackage}, v)
+}
+
+// frameKeyPackages frames KeyPackages the way gate::decode_key_packages reads
+// them: u32 count, then each u32-length-prefixed, big-endian.
+func frameKeyPackages(keyPackages [][]byte) []byte {
+	var out []byte
+	out = binary.BigEndian.AppendUint32(out, uint32(len(keyPackages)))
+	for _, kp := range keyPackages {
+		out = binary.BigEndian.AppendUint32(out, uint32(len(kp)))
+		out = append(out, kp...)
+	}
+	return out
+}
+
+// markEntering flags every leaf a Commit brings in — its Adds and a
+// replacement leaf from an update path, which is exactly what the collect
+// pass's diff reports.
+func markEntering(leaves []Leaf) {
+	for i := range leaves {
+		leaves[i].Entering = true
+	}
+}
+
+// maxLeaves mirrors gate::MAX_LEAVES on the Rust side.
+const maxLeaves = 4096
+
+// encodeApprovals frames leaves the way gate::decode_approvals reads them:
+// u32 count, then per leaf a u32-length-prefixed identity, signature key and
+// declaration, big-endian.
+func encodeApprovals(leaves []Leaf) []byte {
+	var out []byte
+	out = binary.BigEndian.AppendUint32(out, uint32(len(leaves)))
+	for _, l := range leaves {
+		for _, field := range [][]byte{l.Identity, l.SignatureKey, l.Declaration} {
+			out = binary.BigEndian.AppendUint32(out, uint32(len(field)))
+			out = append(out, field...)
+		}
+	}
+	return out
+}
+
+// decodeLeaves reads gate::encode_leaves' framing strictly: a truncated,
+// oversized or trailing-byte buffer is an error, never a shorter list.
+func decodeLeaves(buf []byte) ([]Leaf, error) {
+	bad := errors.New("mls: leaf list framing is malformed")
+	r := leafReader{buf: buf}
+	count, ok := r.u32()
+	if !ok || count > maxLeaves {
+		return nil, bad
+	}
+	leaves := make([]Leaf, 0, count)
+	for i := uint32(0); i < count; i++ {
+		var l Leaf
+		if l.Index, ok = r.u32(); !ok {
+			return nil, bad
+		}
+		if l.Identity, ok = r.prefixed(); !ok {
+			return nil, bad
+		}
+		if l.SignatureKey, ok = r.prefixed(); !ok {
+			return nil, bad
+		}
+		present, ok := r.take(1)
+		if !ok {
+			return nil, bad
+		}
+		switch present[0] {
+		case 0:
+		case 1:
+			if l.Declaration, ok = r.prefixed(); !ok {
+				return nil, bad
+			}
+			// Present and empty stays distinguishable from absent.
+			if l.Declaration == nil {
+				l.Declaration = []byte{}
+			}
+		default:
+			return nil, bad
+		}
+		leaves = append(leaves, l)
+	}
+	if len(r.buf) != r.at {
+		return nil, bad
+	}
+	return leaves, nil
+}
+
+type leafReader struct {
+	buf []byte
+	at  int
+}
+
+func (r *leafReader) take(n int) ([]byte, bool) {
+	if n < 0 || n > len(r.buf)-r.at {
+		return nil, false
+	}
+	out := r.buf[r.at : r.at+n]
+	r.at += n
+	return out, true
+}
+
+func (r *leafReader) u32() (uint32, bool) {
+	b, ok := r.take(4)
+	if !ok {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(b), true
+}
+
+func (r *leafReader) prefixed() ([]byte, bool) {
+	n, ok := r.u32()
+	if !ok {
+		return nil, false
+	}
+	b, ok := r.take(int(n))
+	if !ok {
+		return nil, false
+	}
+	return append([]byte(nil), b...), true
 }

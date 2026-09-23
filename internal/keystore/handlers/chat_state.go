@@ -34,6 +34,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -172,24 +173,10 @@ func HandleChatStatePurge(d Deps, payload json.RawMessage) proto.BaseResponse {
 func openChatState(
 	d Deps, payload json.RawMessage, req proto.ChatStateBound,
 ) (*chatstate.Store, chatstate.ServerWatermark, proto.BaseResponse, bool) {
-	if resp, ok := decodeChatStateRequest(payload, req); !ok {
+	if resp, ok := authorizeChatState(d, payload, req); !ok {
 		return nil, chatstate.ServerWatermark{}, resp, false
 	}
-	permit, orgID, conversationID := req.ChatStateContext()
-	if permit.OrgID != orgID || permit.ConversationID != conversationID {
-		return nil, chatstate.ServerWatermark{}, chatStateNotAuthorized(d, "binding"), false
-	}
-	if !chatStatePermitWindowHolds(permit, d.Now().Unix()) {
-		return nil, chatstate.ServerWatermark{}, chatStateNotAuthorized(d, "permit window"), false
-	}
-	if err := d.ServerKeyVerifier.Verify(
-		proto.ChatStatePermitCanonical(permit), permit.Signature, permit.ServerKeyVersion,
-	); err != nil {
-		// The verifier's message names the failing step and sometimes the key
-		// version; neither belongs in a reply to a caller that just failed to
-		// prove authorization.
-		return nil, chatstate.ServerWatermark{}, chatStateNotAuthorized(d, "signature"), false
-	}
+	permit, _, conversationID := req.ChatStateContext()
 
 	store, err := chatstate.Open(d.Store, permit.AccountID)
 	if err != nil {
@@ -206,6 +193,31 @@ func openChatState(
 		return nil, chatstate.ServerWatermark{}, resp, false
 	}
 	return store, watermark, proto.BaseResponse{}, true
+}
+
+// authorizeChatState is the permit gate without the store: decode, binding,
+// window, signature. openChatState runs it first; an action that is gated by
+// the same permit but reads no conversation state runs only this.
+func authorizeChatState(d Deps, payload json.RawMessage, req proto.ChatStateBound) (proto.BaseResponse, bool) {
+	if resp, ok := decodeChatStateRequest(payload, req); !ok {
+		return resp, false
+	}
+	permit, orgID, conversationID := req.ChatStateContext()
+	if permit.OrgID != orgID || permit.ConversationID != conversationID {
+		return chatStateNotAuthorized(d, "binding"), false
+	}
+	if !chatStatePermitWindowHolds(permit, d.Now().Unix()) {
+		return chatStateNotAuthorized(d, "permit window"), false
+	}
+	if err := d.ServerKeyVerifier.Verify(
+		proto.ChatStatePermitCanonical(permit), permit.Signature, permit.ServerKeyVersion,
+	); err != nil {
+		// The verifier's message names the failing step and sometimes the key
+		// version; neither belongs in a reply to a caller that just failed to
+		// prove authorization.
+		return chatStateNotAuthorized(d, "signature"), false
+	}
+	return proto.BaseResponse{}, true
 }
 
 // chatStateWatermarkNamesThisLeaf refuses a watermark that describes some other
@@ -300,6 +312,8 @@ func chatStateNotAuthorized(d Deps, stage string) proto.BaseResponse {
 func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	code, message := proto.ChatStateErrorCodeStorageFailure, "chat state could not be read or written"
 	switch {
+	case errors.Is(err, mls.ErrLeafUntrusted):
+		return mlsLeafUntrustedResponse(d, stage, err)
 	case errors.Is(err, chatstate.ErrRekeyRequired):
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
@@ -318,4 +332,24 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	}
 	d.Logger.Printf("chat state %s failed: %s", stage, code)
 	return errs.CodeResponse(errs.ErrorCode(code), message)
+}
+
+// mlsLeafUntrustedResponse is CHAT_MLS_LEAF_UNTRUSTED. When the refusal was a
+// changed account key it carries both fingerprints, as peer_key_changed does,
+// so the UI can offer §5.5's three paths without asking the server for the
+// very key the refusal is about. The reason names a condition, never a value.
+func mlsLeafUntrustedResponse(d Deps, stage string, err error) proto.BaseResponse {
+	d.Logger.Printf("chat state %s failed: %s", stage, proto.ChatMLSErrorCodeLeafUntrusted)
+	resp := errs.CodeResponse(
+		errs.ErrorCode(proto.ChatMLSErrorCodeLeafUntrusted),
+		"a leaf entering the group is not vouched for by its account; nothing was applied",
+	)
+	var detail *MLSLeafUntrustedError
+	if errors.As(err, &detail) && detail.ObservedFingerprint != "" {
+		resp.Data = proto.PeerKeyChangedResponseData{
+			ObservedFingerprint: detail.ObservedFingerprint,
+			PinnedFingerprint:   detail.PinnedFingerprint,
+		}
+	}
+	return resp
 }

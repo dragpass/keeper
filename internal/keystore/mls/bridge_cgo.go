@@ -52,14 +52,20 @@ int32_t dpmls_signature_key_generate(DpBuf *secret, DpBuf *public);
 int32_t dpmls_session_new(const uint8_t *identity, size_t identity_len,
                           const uint8_t *secret, size_t secret_len,
                           const uint8_t *public, size_t public_len,
+                          const uint8_t *declaration, size_t declaration_len,
                           DpSession **out);
 void    dpmls_session_free(DpSession *handle);
+int32_t dpmls_session_approve(DpSession *handle, const uint8_t *approvals, size_t approvals_len);
+int32_t dpmls_key_package_leaf(const uint8_t *key_package, size_t key_package_len, DpBuf *out);
+int32_t dpmls_key_package_not_after(const uint8_t *key_package, size_t key_package_len, uint64_t *out);
+int32_t dpmls_group_process_collect(DpSession *handle, const uint8_t *message, size_t message_len, DpBuf *out);
+int32_t dpmls_group_join_collect(DpSession *handle, const uint8_t *welcome, size_t welcome_len, DpBuf *out);
 
 int32_t dpmls_group_create(DpSession *handle, const uint8_t *group_id, size_t group_id_len);
 int32_t dpmls_key_package(DpSession *handle, DpBuf *out);
-int32_t dpmls_group_commit_add_member(DpSession *handle,
-                                      const uint8_t *key_package, size_t key_package_len,
-                                      DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
+int32_t dpmls_group_commit_add_members(DpSession *handle,
+                                       const uint8_t *key_packages, size_t key_packages_len,
+                                       DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
 int32_t dpmls_group_commit_update(DpSession *handle, DpBuf *commit, uint64_t *expected_epoch);
 int32_t dpmls_group_commit_apply(DpSession *handle);
 int32_t dpmls_group_commit_clear(DpSession *handle);
@@ -128,21 +134,25 @@ func generateSignatureKey() (secret, public []byte, err error) {
 
 // openSession builds a client for one device identity. The caller owns the key
 // material it passes and should wipe it afterwards; this package copies it
-// across the boundary and cannot reach the caller's copy again.
+// across the boundary and cannot reach the caller's copy again. declaration is
+// the leaf declaration extension payload every leaf of this session carries;
+// empty means none, which every verifying peer refuses.
 //
 // Unexported so that no caller can hand a group a signer of its own: a key no
 // declaration vouches for would make the leaf unacceptable to every peer.
-func openSession(identity, secretKey, publicKey []byte) (*Session, error) {
+func openSession(identity, secretKey, publicKey, declaration []byte) (*Session, error) {
 	var handle *C.DpSession
 	rc := C.dpmls_session_new(
 		bytePtr(identity), C.size_t(len(identity)),
 		bytePtr(secretKey), C.size_t(len(secretKey)),
 		bytePtr(publicKey), C.size_t(len(publicKey)),
+		bytePtr(declaration), C.size_t(len(declaration)),
 		&handle,
 	)
 	runtime.KeepAlive(identity)
 	runtime.KeepAlive(secretKey)
 	runtime.KeepAlive(publicKey)
+	runtime.KeepAlive(declaration)
 	if rc != 0 {
 		return nil, statusError(rc)
 	}
@@ -195,26 +205,31 @@ func (s *Session) KeyPackage() ([]byte, error) {
 	return takeBuf(&buf), nil
 }
 
-// CommitAddMember builds a Commit that adds one member and leaves it pending.
-// The confirmed state does not move: RFC 9420 §14 forbids it, because at this
-// moment nobody knows whether this Commit or somebody else's will be the one
-// its epoch accepts. expectedEpoch is the confirmed epoch the Commit was built
-// against, which is the value the server compares under its CAS.
-func (s *Session) CommitAddMember(keyPackage []byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
+// CommitAddMembers builds a Commit that adds these members and leaves it
+// pending. The confirmed state does not move: RFC 9420 §14 forbids it, because
+// at this moment nobody knows whether this Commit or somebody else's will be
+// the one its epoch accepts. expectedEpoch is the confirmed epoch the Commit
+// was built against, which is the value the server compares under its CAS.
+//
+// Every member must have been approved first (approve); the Rust gate refuses
+// the whole Commit otherwise. CommitAddMembersVerified is the path that does
+// both.
+func (s *Session) CommitAddMembers(keyPackages [][]byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	framed := frameKeyPackages(keyPackages)
 	var (
 		c, w  C.DpBuf
 		epoch C.uint64_t
 	)
-	rc := C.dpmls_group_commit_add_member(
-		h, bytePtr(keyPackage), C.size_t(len(keyPackage)), &c, &w, &epoch,
+	rc := C.dpmls_group_commit_add_members(
+		h, bytePtr(framed), C.size_t(len(framed)), &c, &w, &epoch,
 	)
-	runtime.KeepAlive(keyPackage)
+	runtime.KeepAlive(framed)
 	if rc != 0 {
 		return nil, nil, 0, statusError(rc)
 	}
@@ -379,6 +394,86 @@ func (s *Session) Process(message []byte) (Processed, error) {
 	return out, nil
 }
 
+// approve hands the Rust gate the leaves Go verified for the next group
+// operation on this session. That operation consumes the list either way.
+func (s *Session) approve(leaves []Leaf) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	buf := encodeApprovals(leaves)
+	rc := C.dpmls_session_approve(h, bytePtr(buf), C.size_t(len(buf)))
+	runtime.KeepAlive(buf)
+	return statusError(rc)
+}
+
+// processCollect reports the leaves message would bring in and leaves the
+// group exactly as it was.
+func (s *Session) processCollect(message []byte) ([]Leaf, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	rc := C.dpmls_group_process_collect(h, bytePtr(message), C.size_t(len(message)), &buf)
+	runtime.KeepAlive(message)
+	if rc != 0 {
+		return nil, statusError(rc)
+	}
+	return decodeLeaves(takeBuf(&buf))
+}
+
+// joinCollect reports every leaf of a Welcome's tree and keeps no group.
+func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	rc := C.dpmls_group_join_collect(h, bytePtr(welcome), C.size_t(len(welcome)), &buf)
+	runtime.KeepAlive(welcome)
+	if rc != 0 {
+		return nil, statusError(rc)
+	}
+	return decodeLeaves(takeBuf(&buf))
+}
+
+// keyPackageLeaf reads the leaf a KeyPackage would add, without a session and
+// without applying anything.
+func keyPackageLeaf(keyPackage []byte) (Leaf, error) {
+	var buf C.DpBuf
+	rc := C.dpmls_key_package_leaf(bytePtr(keyPackage), C.size_t(len(keyPackage)), &buf)
+	runtime.KeepAlive(keyPackage)
+	if rc != 0 {
+		return Leaf{}, statusError(rc)
+	}
+	leaves, err := decodeLeaves(takeBuf(&buf))
+	if err != nil {
+		return Leaf{}, err
+	}
+	if len(leaves) != 1 {
+		return Leaf{}, errors.New("mls: key package leaf framing did not hold exactly one leaf")
+	}
+	return leaves[0], nil
+}
+
+// keyPackageNotAfter is the end of a KeyPackage's lifetime in Unix seconds.
+func keyPackageNotAfter(keyPackage []byte) (uint64, error) {
+	var out C.uint64_t
+	rc := C.dpmls_key_package_not_after(bytePtr(keyPackage), C.size_t(len(keyPackage)), &out)
+	runtime.KeepAlive(keyPackage)
+	if rc != 0 {
+		return 0, statusError(rc)
+	}
+	return uint64(out), nil
+}
+
 func WireFormOf(message []byte) (WireForm, error) {
 	var form C.uint8_t
 	rc := C.dpmls_wire_form(bytePtr(message), C.size_t(len(message)), &form)
@@ -490,6 +585,10 @@ func statusError(rc C.int32_t) error {
 	}
 	if msg == "" {
 		msg = "unknown failure"
+	}
+	// -4 is DPMLS_ERR_UNTRUSTED: a leaf nobody approved reached the gate.
+	if rc == -4 {
+		return fmt.Errorf("%w (status %d): %s", ErrLeafUntrusted, int(rc), msg)
 	}
 	return fmt.Errorf("mls (status %d): %s", int(rc), msg)
 }

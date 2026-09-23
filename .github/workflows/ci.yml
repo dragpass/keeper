@@ -96,7 +96,7 @@ jobs:
           CGO_ENABLED: 1
         run: |
           go build -tags mls ./...
-          go test -tags mls ./internal/keystore/mls/ ./internal/keystore/chatstate/ -count=1
+          go test -tags mls ./internal/keystore/mls/ ./internal/keystore/chatstate/ ./internal/keystore/handlers/ -count=1
 
   quality:
     name: format + vet + race

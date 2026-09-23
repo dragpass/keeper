@@ -5,14 +5,20 @@ use mls_rs::client_builder::{
     BaseConfig, PaddingMode, WithCryptoProvider, WithGroupStateStorage, WithIdentityProvider,
     WithMlsRules,
 };
+use mls_rs::extension::built_in::RequiredCapabilitiesExt;
+use mls_rs::group::proposal::AddProposal;
 use mls_rs::group::{CommitEffect, ReceivedMessage};
-use mls_rs::identity::basic::{BasicCredential, BasicIdentityProvider};
+use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
 use mls_rs::mls_rules::{DefaultMlsRules, EncryptionOptions};
-use mls_rs::{CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Group, MlsMessage};
+use mls_rs::{
+    CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
+    MlsMessage,
+};
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use zeroize::Zeroizing;
 
+use crate::gate::{self, Approval, Leaf, LeafGate, LEAF_DECLARATION_EXTENSION};
 use crate::storage::RecordStorage;
 
 /// RFC 9420 ciphersuite 1. The rustcrypto provider implements 1, 2, 3 and 7;
@@ -21,20 +27,32 @@ use crate::storage::RecordStorage;
 /// untested branch, not because the others are ruled out.
 pub const CIPHER_SUITE: CipherSuite = CipherSuite::CURVE25519_AES128;
 
+/// How long a KeyPackage this device produces stays valid. mls-rs defaults to
+/// a year; ariadne accepts a declared `not_after` of at most 90 days ahead, and
+/// the declared value has to be the real one, so the real one is kept a day
+/// inside that ceiling for clock skew and upload delay.
+pub const KEY_PACKAGE_LIFETIME: std::time::Duration =
+    std::time::Duration::from_secs(89 * 24 * 60 * 60);
+
 type Config = WithMlsRules<
     DefaultMlsRules,
     WithGroupStateStorage<
         RecordStorage,
-        WithIdentityProvider<
-            BasicIdentityProvider,
-            WithCryptoProvider<RustCryptoProvider, BaseConfig>,
-        >,
+        WithIdentityProvider<LeafGate, WithCryptoProvider<RustCryptoProvider, BaseConfig>>,
     >,
 >;
 
 pub struct Session {
     client: Client<Config>,
     storage: RecordStorage,
+    gate: LeafGate,
+    /// This device's own leaf declaration, carried in every leaf it creates:
+    /// its KeyPackages and the first leaf of a group it creates. Empty only
+    /// for the throwaway members tests build.
+    leaf_extensions: ExtensionList,
+    /// What the Go side approved for the next group operation, and only that
+    /// one. Every operation that can bring a leaf in takes it.
+    approved: Vec<Approval>,
     group: Option<Group<Config>>,
 }
 
@@ -89,13 +107,83 @@ pub fn generate_signature_key() -> Res<(Vec<u8>, Vec<u8>)> {
     Ok((secret.as_bytes().to_vec(), public.as_bytes().to_vec()))
 }
 
+fn signing_identity(identity: &[u8], signature_key: &[u8]) -> SigningIdentity {
+    SigningIdentity::new(
+        BasicCredential::new(identity.to_vec()).into_credential(),
+        signature_key.to_vec().into(),
+    )
+}
+
+fn leaves_of(group: &Group<Config>) -> Vec<Leaf> {
+    group
+        .roster()
+        .members_iter()
+        .map(|m| Leaf::from_parts(m.index, &m.signing_identity, &m.extensions))
+        .collect()
+}
+
+/// Refuse the operation unless every leaf it brought in is one the Go side
+/// approved, declaration bytes included. The gate already refused any
+/// credential and key nobody approved; this is the half of the check the gate
+/// cannot make, because mls-rs shows an IdentityProvider the signing identity
+/// and not the leaf's extensions.
+fn require_approved(new: &[Leaf], approved: &[Approval]) -> Res<()> {
+    if new
+        .iter()
+        .all(|leaf| approved.iter().any(|a| a.covers(leaf)))
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "mls: a leaf entering the group was {}",
+            gate::NOT_APPROVED
+        ))
+    }
+}
+
+/// Read the leaf a KeyPackage would add, without a group and without applying
+/// anything. The index is meaningless here and is 0.
+pub fn key_package_leaf(key_package: &[u8]) -> Res<Leaf> {
+    let msg = MlsMessage::from_bytes(key_package).map_err(|e| err("key package decode", e))?;
+    let add = AddProposal::try_from(msg).map_err(|e| err("key package decode", e))?;
+    Ok(Leaf::from_parts(
+        0,
+        add.signing_identity(),
+        &add.leaf_node_extensions(),
+    ))
+}
+
+/// The `not_after` of a KeyPackage's lifetime, in Unix seconds: what the
+/// client declares to the server when it uploads the KeyPackage.
+pub fn key_package_not_after(key_package: &[u8]) -> Res<u64> {
+    let kp = MlsMessage::from_bytes(key_package)
+        .map_err(|e| err("key package decode", e))?
+        .into_key_package()
+        .ok_or_else(|| "mls: message is not a key package".to_string())?;
+    Ok(kp
+        .expiration()
+        .map_err(|e| err("key package lifetime", e))?
+        .seconds_since_epoch())
+}
+
 impl Session {
-    pub fn new(identity: &[u8], secret_key: &[u8], public_key: &[u8]) -> Res<Self> {
+    pub fn new(
+        identity: &[u8],
+        secret_key: &[u8],
+        public_key: &[u8],
+        declaration: &[u8],
+    ) -> Res<Self> {
         let storage = RecordStorage::new();
-        let signing_identity = SigningIdentity::new(
-            BasicCredential::new(identity.to_vec()).into_credential(),
-            public_key.to_vec().into(),
-        );
+        let signing_identity = signing_identity(identity, public_key);
+        let gate = LeafGate::new(signing_identity.clone());
+
+        let mut leaf_extensions = ExtensionList::new();
+        if !declaration.is_empty() {
+            leaf_extensions.set(Extension::new(
+                LEAF_DECLARATION_EXTENSION.into(),
+                declaration.to_vec(),
+            ));
+        }
 
         // encrypt_control_messages is set here rather than left to Default.
         // EncryptionOptions derives Default, so false is already what we would
@@ -111,9 +199,14 @@ impl Session {
         let rules = DefaultMlsRules::new()
             .with_encryption_options(EncryptionOptions::new(false, PaddingMode::StepFunction));
 
+        // The capability is advertised by every leaf this client makes, which
+        // is what RFC 9420 §7.2 requires of a leaf that carries the extension
+        // and what lets a group list it in required_capabilities.
         let client = Client::builder()
+            .extension_type(LEAF_DECLARATION_EXTENSION.into())
+            .key_package_lifetime(KEY_PACKAGE_LIFETIME)
             .crypto_provider(RustCryptoProvider::default())
-            .identity_provider(BasicIdentityProvider::new())
+            .identity_provider(gate.clone())
             .group_state_storage(storage.clone())
             .mls_rules(rules)
             .signing_identity(signing_identity, secret_key.to_vec().into(), CIPHER_SUITE)
@@ -122,25 +215,44 @@ impl Session {
         Ok(Self {
             client,
             storage,
+            gate,
+            leaf_extensions,
+            approved: Vec::new(),
             group: None,
         })
     }
 
+    /// One single-use KeyPackage carrying this device's declaration. There is
+    /// no last-resort KeyPackage: every one produced here is meant to be
+    /// consumed once.
     pub fn key_package(&self) -> Res<Vec<u8>> {
         self.client
-            .generate_key_package_message(Default::default(), Default::default(), None)
+            .generate_key_package_message(Default::default(), self.leaf_extensions.clone(), None)
             .map_err(|e| err("key package", e))?
             .to_bytes()
             .map_err(|e| err("key package encode", e))
     }
 
+    /// Create a group that only members advertising the leaf declaration
+    /// extension can join. mls-rs checks required_capabilities against every
+    /// leaf it adds, so a KeyPackage from a client that does not know the
+    /// extension is refused before any Go check runs (fail closed).
     pub fn create_group(&mut self, group_id: &[u8]) -> Res<()> {
+        let mut context_extensions = ExtensionList::new();
+        context_extensions
+            .set_from(RequiredCapabilitiesExt {
+                extensions: vec![LEAF_DECLARATION_EXTENSION.into()],
+                proposals: Vec::new(),
+                credentials: Vec::new(),
+            })
+            .map_err(|e| err("required capabilities", e))?;
+        self.gate.enforce(Vec::new())?;
         self.group = Some(
             self.client
                 .create_group_with_id(
                     group_id.to_vec(),
-                    Default::default(),
-                    Default::default(),
+                    context_extensions,
+                    self.leaf_extensions.clone(),
                     None,
                 )
                 .map_err(|e| err("create group", e))?,
@@ -148,12 +260,67 @@ impl Session {
         Ok(())
     }
 
+    /// Set what the Go side approved for the next group operation. Replaces
+    /// any earlier approval that no operation consumed.
+    pub fn approve(&mut self, approved: Vec<Approval>) {
+        self.approved = approved;
+    }
+
+    /// Open the gate to the current members plus this operation's approvals,
+    /// and hand the approvals back for the post-check. Taking them here is what
+    /// makes an approval single-use.
+    fn arm(&mut self) -> Res<Vec<Approval>> {
+        let approved = std::mem::take(&mut self.approved);
+        let mut admitted: Vec<SigningIdentity> = match &self.group {
+            Some(g) => g
+                .roster()
+                .members_iter()
+                .map(|m| m.signing_identity)
+                .collect(),
+            None => Vec::new(),
+        };
+        admitted.extend(
+            approved
+                .iter()
+                .map(|a| signing_identity(&a.identity, &a.signature_key)),
+        );
+        self.gate.enforce(admitted)?;
+        Ok(approved)
+    }
+
+    fn disarm(&self) -> Res<()> {
+        self.gate.enforce(Vec::new())
+    }
+
+    /// The collect pass of a join: process the Welcome with every leaf
+    /// admitted, report the whole tree, and keep nothing. The group it built
+    /// is dropped here, and mls-rs only deletes the consumed KeyPackage when a
+    /// group is written to storage, so the enforce pass can use it again.
+    pub fn join_collect(&mut self, welcome: &[u8]) -> Res<Vec<Leaf>> {
+        let msg = MlsMessage::from_bytes(welcome).map_err(|e| err("welcome decode", e))?;
+        self.gate.collect()?;
+        let joined = self.client.join_group(None, &msg, None);
+        self.disarm()?;
+        let (group, _) = joined.map_err(|e| err("join group", e))?;
+        Ok(leaves_of(&group))
+    }
+
+    /// Join from a Welcome. Every leaf of the tree, the committer's and this
+    /// device's included, must have been approved: a joiner has no earlier
+    /// state that vouched for anyone.
     pub fn join(&mut self, welcome: &[u8]) -> Res<()> {
         let msg = MlsMessage::from_bytes(welcome).map_err(|e| err("welcome decode", e))?;
-        let (group, _) = self
-            .client
-            .join_group(None, &msg, None)
-            .map_err(|e| err("join group", e))?;
+        let approved = std::mem::take(&mut self.approved);
+        self.gate.enforce(
+            approved
+                .iter()
+                .map(|a| signing_identity(&a.identity, &a.signature_key))
+                .collect(),
+        )?;
+        let joined = self.client.join_group(None, &msg, None);
+        self.disarm()?;
+        let (group, _) = joined.map_err(|e| err("join group", e))?;
+        require_approved(&leaves_of(&group), &approved)?;
         self.group = Some(group);
         Ok(())
     }
@@ -171,13 +338,20 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn roster_len(&self) -> usize {
+        self.group
+            .as_ref()
+            .map_or(0, |g| g.roster().members_iter().count())
+    }
+
     fn group_mut(&mut self) -> Res<&mut Group<Config>> {
         self.group
             .as_mut()
             .ok_or_else(|| "mls: session has no group".to_string())
     }
 
-    /// Build a Commit that adds one member, **without applying it**.
+    /// Build a Commit that adds these members, **without applying it**.
     ///
     /// RFC 9420 §14: "The generation of Commit messages MUST NOT modify a
     /// client's state, since the client doesn't know at that time whether the
@@ -191,16 +365,23 @@ impl Session {
     /// built against. It is what the server compares under its CAS, and it is
     /// deliberately not the epoch the Commit would produce: nothing here knows
     /// yet whether that epoch will exist.
-    pub fn commit_add_member(&mut self, key_package: &[u8]) -> Res<(Vec<u8>, Vec<u8>, u64)> {
-        let kp = MlsMessage::from_bytes(key_package).map_err(|e| err("key package decode", e))?;
-        let group = self.group_mut()?;
-        let expected_epoch = group.current_epoch();
-        let output = group
-            .commit_builder()
-            .add_member(kp)
-            .map_err(|e| err("add member", e))?
-            .build()
-            .map_err(|e| err("commit build", e))?;
+    ///
+    /// Every member being added must have been approved for this call, and
+    /// the gate is what mls-rs consults while it validates each KeyPackage.
+    /// One unapproved member refuses the whole Commit.
+    pub fn commit_add_members(&mut self, key_packages: &[&[u8]]) -> Res<(Vec<u8>, Vec<u8>, u64)> {
+        let mut leaves = Vec::with_capacity(key_packages.len());
+        let mut messages = Vec::with_capacity(key_packages.len());
+        for kp in key_packages {
+            leaves.push(key_package_leaf(kp)?);
+            messages.push(MlsMessage::from_bytes(kp).map_err(|e| err("key package decode", e))?);
+        }
+        self.group_mut()?;
+        let approved = self.arm()?;
+        // Checked before the build, so a refusal leaves no pending Commit.
+        let built = require_approved(&leaves, &approved).and_then(|()| self.build_add(messages));
+        self.disarm()?;
+        let (output, expected_epoch) = built?;
         let welcome = match output.welcome_messages.first() {
             Some(w) => w.to_bytes().map_err(|e| err("welcome encode", e))?,
             None => Vec::new(),
@@ -212,21 +393,44 @@ impl Session {
         Ok((commit, welcome, expected_epoch))
     }
 
+    fn build_add(
+        &mut self,
+        key_packages: Vec<MlsMessage>,
+    ) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let group = self.group_mut()?;
+        let expected_epoch = group.current_epoch();
+        let mut builder = group.commit_builder();
+        for kp in key_packages {
+            builder = builder.add_member(kp).map_err(|e| err("add member", e))?;
+        }
+        let output = builder.build().map_err(|e| err("commit build", e))?;
+        Ok((output, expected_epoch))
+    }
+
     /// Build a Commit with no proposals — the path update that rotates this
     /// device's own key material. Same pending discipline as
     /// `commit_add_member`.
     pub fn commit_update(&mut self) -> Res<(Vec<u8>, u64)> {
+        self.group_mut()?;
+        self.arm()?;
+        let built = self.build_update();
+        self.disarm()?;
+        let (output, expected_epoch) = built?;
+        let commit = output
+            .commit_message
+            .to_bytes()
+            .map_err(|e| err("commit encode", e))?;
+        Ok((commit, expected_epoch))
+    }
+
+    fn build_update(&mut self) -> Res<(mls_rs::group::CommitOutput, u64)> {
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
         let output = group
             .commit_builder()
             .build()
             .map_err(|e| err("commit build", e))?;
-        let commit = output
-            .commit_message
-            .to_bytes()
-            .map_err(|e| err("commit encode", e))?;
-        Ok((commit, expected_epoch))
+        Ok((output, expected_epoch))
     }
 
     /// Promote the pending Commit to confirmed. Called only once the server's
@@ -279,12 +483,45 @@ impl Session {
             .map_err(|e| err("ciphertext encode", e))
     }
 
+    /// The collect pass of processing: apply `message` to a copy of the group
+    /// with every leaf admitted, report the leaves it would bring in, and put
+    /// the group back exactly as it was. The copy is taken through the storage
+    /// this session installed, the same bytes a flush would hand to Go.
+    pub fn process_collect(&mut self, message: &[u8]) -> Res<Vec<Leaf>> {
+        let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        let snapshot = self.flush()?;
+        let group = self.group_mut()?;
+        let before = leaves_of(group);
+        self.gate.collect()?;
+        let group = self.group_mut()?;
+        let applied = group
+            .process_incoming_message(msg)
+            .map(|_| leaves_of(group));
+        self.disarm()?;
+        self.load(&snapshot)?;
+        let after = applied.map_err(|e| err("process", e))?;
+        Ok(gate::new_leaves(&before, &after))
+    }
+
+    /// Apply one inbound message. A Commit that brings in a leaf the Go side
+    /// did not approve for this call is refused, and the session is left
+    /// without a group so nothing can build on the half-verified result; the
+    /// caller reloads from the record, which never saw it.
     pub fn process(&mut self, message: &[u8]) -> Res<Processed> {
         let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        let before = leaves_of(self.group_mut()?);
+        let approved = self.arm()?;
         let group = self.group_mut()?;
-        let received = group
-            .process_incoming_message(msg)
-            .map_err(|e| err("process", e))?;
+        let received = group.process_incoming_message(msg);
+        self.disarm()?;
+        let received = received.map_err(|e| err("process", e))?;
+        let group = self.group_mut()?;
+        let new = gate::new_leaves(&before, &leaves_of(group));
+        if let Err(e) = require_approved(&new, &approved) {
+            self.group = None;
+            return Err(e);
+        }
+        let group = self.group_mut()?;
         let mut out = Processed {
             epoch: 0,
             removed: false,
@@ -382,4 +619,276 @@ pub fn wire_form(message: &[u8]) -> Res<WireForm> {
         WireFormat::GroupInfo => WireForm::GroupInfo,
         _ => WireForm::Other,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use mls_rs::identity::basic::BasicIdentityProvider;
+
+    use super::*;
+
+    fn member(name: &str) -> Session {
+        let (sk, pk) = generate_signature_key().unwrap();
+        let decl = format!("declaration of {name}");
+        Session::new(name.as_bytes(), &sk, &pk, decl.as_bytes()).unwrap()
+    }
+
+    fn approval(leaf: &Leaf) -> Approval {
+        Approval {
+            identity: leaf.identity.clone(),
+            signature_key: leaf.signature_key.clone(),
+            declaration: leaf.declaration.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Alice creates a group and adds Bob with Bob's leaf approved, then
+    /// confirms. Returns the Welcome.
+    fn add(alice: &mut Session, bob: &Session) -> Vec<u8> {
+        let kp = bob.key_package().unwrap();
+        let leaf = key_package_leaf(&kp).unwrap();
+        alice.approve(vec![approval(&leaf)]);
+        let (_, welcome, _) = alice.commit_add_members(&[&kp]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        welcome
+    }
+
+    #[test]
+    fn a_key_package_carries_the_declaration_unchanged() {
+        let bob = member("bob");
+        let leaf = key_package_leaf(&bob.key_package().unwrap()).unwrap();
+        assert_eq!(leaf.identity, b"bob");
+        assert_eq!(
+            leaf.declaration.as_deref(),
+            Some(&b"declaration of bob"[..])
+        );
+    }
+
+    #[test]
+    fn a_key_package_lives_at_most_the_configured_lifetime() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let not_after = key_package_not_after(&member("bob").key_package().unwrap()).unwrap();
+        let lifetime = KEY_PACKAGE_LIFETIME.as_secs();
+        assert!(not_after <= now + lifetime + 5, "{not_after} vs {now}");
+        assert!(not_after + 5 >= now + lifetime, "{not_after} vs {now}");
+    }
+
+    #[test]
+    fn an_add_nobody_approved_is_refused_at_build() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let bob = member("bob");
+        let kp = bob.key_package().unwrap();
+
+        assert!(alice.commit_add_members(&[&kp]).is_err());
+        assert!(!alice.has_pending_commit().unwrap());
+    }
+
+    // Approving Carol does not let Bob in: the gate compares the credential
+    // and key it is shown, not "something was approved".
+    #[test]
+    fn the_gate_refuses_a_leaf_outside_a_narrower_approval() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let bob = member("bob");
+        let carol = member("carol");
+        let carol_leaf = key_package_leaf(&carol.key_package().unwrap()).unwrap();
+
+        alice.approve(vec![approval(&carol_leaf)]);
+        let e = alice
+            .commit_add_members(&[&bob.key_package().unwrap()])
+            .unwrap_err();
+        assert!(e.contains("not approved"), "{e}");
+        assert!(!alice.has_pending_commit().unwrap());
+    }
+
+    #[test]
+    fn an_approval_is_consumed_by_one_operation() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let bob = member("bob");
+        let kp = bob.key_package().unwrap();
+        alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
+        alice.commit_add_members(&[&kp]).unwrap();
+        alice.clear_pending_commit().unwrap();
+
+        assert!(alice.commit_add_members(&[&kp]).is_err());
+    }
+
+    #[test]
+    fn one_unapproved_member_refuses_the_whole_add() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let bob = member("bob").key_package().unwrap();
+        let carol = member("carol").key_package().unwrap();
+        alice.approve(vec![approval(&key_package_leaf(&bob).unwrap())]);
+
+        assert!(alice.commit_add_members(&[&bob, &carol]).is_err());
+        assert!(!alice.has_pending_commit().unwrap());
+
+        alice.approve(vec![
+            approval(&key_package_leaf(&bob).unwrap()),
+            approval(&key_package_leaf(&carol).unwrap()),
+        ]);
+        alice.commit_add_members(&[&bob, &carol]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        assert_eq!(alice.roster_len(), 3);
+    }
+
+    // The receiver half of V3 A1. A committer that skipped every check (here,
+    // the gated build called directly) adds a leaf with no declaration. The
+    // receiver's gate is even told to admit that credential and key, and the
+    // leaf is still refused: an approval always names declaration bytes, and
+    // "none" matches no bytes.
+    #[test]
+    fn a_commit_adding_a_leaf_without_a_declaration_is_refused() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+        let tree = bob.join_collect(&welcome).unwrap();
+        bob.approve(tree.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+
+        let (sk, pk) = generate_signature_key().unwrap();
+        let bare = Session::new(b"mallory", &sk, &pk, &[]).unwrap();
+        let kp = bare.key_package().unwrap();
+        let leaf = key_package_leaf(&kp).unwrap();
+        assert_eq!(leaf.declaration, None);
+        let admit = Approval {
+            identity: leaf.identity.clone(),
+            signature_key: leaf.signature_key.clone(),
+            declaration: Vec::new(),
+        };
+        alice.approve(vec![admit.clone()]);
+        alice.arm().unwrap();
+        let (output, _) = alice
+            .build_add(vec![MlsMessage::from_bytes(&kp).unwrap()])
+            .unwrap();
+        alice.disarm().unwrap();
+        let commit = output.commit_message.to_bytes().unwrap();
+
+        assert_eq!(
+            bob.process_collect(&commit).unwrap(),
+            vec![Leaf { index: 2, ..leaf }]
+        );
+        bob.approve(vec![admit]);
+        let Err(e) = bob.process(&commit) else {
+            panic!("a leaf with no declaration was applied");
+        };
+        assert!(e.contains(gate::NOT_APPROVED), "{e}");
+    }
+
+    // The gate sees credential and key only; the declaration bytes Go checked
+    // are compared by the session, and a mismatch builds nothing.
+    #[test]
+    fn an_approval_for_other_declaration_bytes_builds_nothing() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let bob = member("bob");
+        let kp = bob.key_package().unwrap();
+        let mut forged = approval(&key_package_leaf(&kp).unwrap());
+        forged.declaration = b"what go checked".to_vec();
+        alice.approve(vec![forged]);
+
+        let e = alice.commit_add_members(&[&kp]).unwrap_err();
+        assert!(e.contains("not approved"), "{e}");
+        assert!(!alice.has_pending_commit().unwrap());
+    }
+
+    #[test]
+    fn a_group_this_keeper_creates_requires_the_extension_capability() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+
+        // A client that never heard of the extension. Its leaf is approved,
+        // so the refusal below can only be mls-rs enforcing
+        // required_capabilities.
+        let (sk, pk) = generate_signature_key().unwrap();
+        let foreign = Client::builder()
+            .crypto_provider(RustCryptoProvider::default())
+            .identity_provider(BasicIdentityProvider::new())
+            .signing_identity(signing_identity(b"foreign", &pk), sk.into(), CIPHER_SUITE)
+            .build();
+        let kp = foreign
+            .generate_key_package_message(Default::default(), Default::default(), None)
+            .unwrap()
+            .to_bytes()
+            .unwrap();
+        let leaf = key_package_leaf(&kp).unwrap();
+        assert_eq!(leaf.declaration, None);
+
+        // The session would refuse this leaf itself for carrying no
+        // declaration. Going to the gated build directly, with the leaf
+        // admitted, leaves mls-rs as the only thing that can refuse it.
+        alice.approve(vec![Approval {
+            identity: leaf.identity,
+            signature_key: leaf.signature_key,
+            declaration: Vec::new(),
+        }]);
+        alice.arm().unwrap();
+        let built = alice.build_add(vec![MlsMessage::from_bytes(&kp).unwrap()]);
+        alice.disarm().unwrap();
+        let Err(e) = built else {
+            panic!("a leaf without the capability was added");
+        };
+        assert!(e.contains("required extension not found"), "{e}");
+    }
+
+    #[test]
+    fn a_welcome_needs_every_leaf_of_the_tree_approved() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+
+        let leaves = bob.join_collect(&welcome).unwrap();
+        assert_eq!(leaves.len(), 2);
+
+        // Only Bob's own leaf approved: Alice's is not, and the join fails.
+        let own: Vec<_> = leaves
+            .iter()
+            .filter(|l| l.identity == b"bob")
+            .map(approval)
+            .collect();
+        bob.approve(own);
+        assert!(bob.join(&welcome).is_err());
+        assert!(bob.epoch().is_err(), "a refused join must leave no group");
+
+        bob.approve(leaves.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+        assert_eq!(bob.epoch().unwrap(), 1);
+    }
+
+    #[test]
+    fn processing_a_commit_is_refused_unless_its_new_leaf_was_approved() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+        let tree = bob.join_collect(&welcome).unwrap();
+        bob.approve(tree.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+
+        let carol = member("carol");
+        let kp = carol.key_package().unwrap();
+        alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
+        let (commit, _, _) = alice.commit_add_members(&[&kp]).unwrap();
+
+        // The collect pass sees Carol and leaves Bob's group untouched.
+        let seen = bob.process_collect(&commit).unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].identity, b"carol");
+        assert_eq!(bob.epoch().unwrap(), 1);
+
+        // Without approval the gate refuses inside mls-rs, before anything
+        // moved.
+        let Err(e) = bob.process(&commit) else {
+            panic!("an unapproved leaf was applied");
+        };
+        assert!(e.contains("not approved"), "{e}");
+        assert_eq!(bob.epoch().unwrap(), 1);
+    }
 }
