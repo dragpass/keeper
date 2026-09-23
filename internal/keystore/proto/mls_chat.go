@@ -84,12 +84,12 @@ const (
 	// the overhead; a test in dispatch encrypts one of exactly this size.
 	MLSEncryptMaxPlaintextBytes = 6144
 
-	// MLSDecryptMaxMessages is the display batch, the same 200 as the v1
-	// reveal.
-	MLSDecryptMaxMessages = ConversationDecryptMaxMessages
+	// MLSDecryptMaxMessages is the display batch cap. A larger batch is
+	// refused rather than opened.
+	MLSDecryptMaxMessages = 200
 
 	// MLSDecryptMaxRequestBytes fits 200 ciphertexts of 8208 bytes in Base64
-	// plus fixed context. The v1 reveal's 2 MiB does not.
+	// plus fixed context.
 	MLSDecryptMaxRequestBytes = 3 * 1024 * 1024
 
 	// MLSRoomNameMaxBytes mirrors chatstate.MaxRoomNameBytes: the server's
@@ -98,6 +98,14 @@ const (
 
 	// MLSRoomNameIVBytes is the AES-GCM IV of a sealed room name.
 	MLSRoomNameIVBytes = 12
+
+	// ConversationIVBytes / ConversationCiphertextMinBytes /
+	// ConversationCiphertextMaxBytes — `ciphertext_b64` carries
+	// ciphertext ‖ GCM tag, so its floor is a 1-byte message plus the 16-byte
+	// tag and its ceiling matches the server's VARBINARY(8208) column.
+	ConversationIVBytes            = 12
+	ConversationCiphertextMinBytes = 17
+	ConversationCiphertextMaxBytes = 8208
 )
 
 // validateRoomNamePlaintext bounds an optional room name input. The name
@@ -636,9 +644,7 @@ type MLSDisplayMessage struct {
 }
 
 // MLSDecryptBatchForAppDisplayRequest opens a page of one conversation's
-// messages for display. It answers with the v1 reveal's response type, widened
-// (ConversationDecryptBatchForAppDisplayResponseData.items): one carve-out,
-// not a third (design M6.3).
+// messages for display. It answers with MLSDisplayResponseData.
 type MLSDecryptBatchForAppDisplayRequest struct {
 	Permit         ChatStatePermit     `json:"permit"`
 	OrgID          string              `json:"org_id"`
@@ -738,7 +744,7 @@ type MLSRoomNameSealResponseData struct {
 
 // MLSRoomNameOpenRequest opens a room's name for display. Epoch is the
 // server's name_epoch and must be this device's confirmed epoch. The answer is
-// ConversationDecryptBatchForAppDisplayResponseData with one plaintext entry.
+// MLSDisplayResponseData with one plaintext entry.
 type MLSRoomNameOpenRequest struct {
 	Permit            ChatStatePermit `json:"permit"`
 	OrgID             string          `json:"org_id"`
@@ -799,4 +805,21 @@ type MLSConversationStatusResponseData struct {
 	// RemovedFromGroup — the last Commit applied here removed this device, so
 	// mls_conversation_forget_removed must run before mls_join (0.0.53).
 	RemovedFromGroup bool `json:"removed_from_group"`
+}
+
+// MLSDisplayResponseData carries the decrypted payloads of
+// mls_decrypt_batch_for_app_display, parallel to request.messages, or the one
+// room name of mls_room_name_open.
+//
+// PlaintextB64 is the second TestNoRawSecretInResponseTypes carve-out (the
+// first is 0.0.29's GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64).
+// See the carve-out comment in no_raw_secret_response_test.go and
+// dragpass-control-plane docs/exec-plans/active/dragpass-chat-v2-mls-integration.md
+// M6.3.
+//
+// Items is the metadata of each plaintext, parallel to PlaintextB64, and no
+// plaintext of its own. mls_room_name_open leaves it out.
+type MLSDisplayResponseData struct {
+	PlaintextB64 []string         `json:"plaintext_b64"` // secret in RESPONSE — the approved chat carve-out; never logged
+	Items        []MLSDisplayItem `json:"items,omitempty"`
 }

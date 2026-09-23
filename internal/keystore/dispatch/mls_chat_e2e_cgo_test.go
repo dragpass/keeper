@@ -417,10 +417,10 @@ func (k *keeper) decryptRequest(msgs ...proto.MLSDisplayMessage) proto.MLSDecryp
 	}
 }
 
-func (k *keeper) decrypt(msgs ...proto.MLSDisplayMessage) proto.ConversationDecryptBatchForAppDisplayResponseData {
+func (k *keeper) decrypt(msgs ...proto.MLSDisplayMessage) proto.MLSDisplayResponseData {
 	k.t.Helper()
 	return k.must(proto.MLSDecryptBatchForAppDisplay, k.decryptRequest(msgs...)).
-		Data.(proto.ConversationDecryptBatchForAppDisplayResponseData)
+		Data.(proto.MLSDisplayResponseData)
 }
 
 func plaintextOf(t *testing.T, b64 string) string {
@@ -443,7 +443,7 @@ func (c *dm) send(from *keeper, n int, epoch uint64, text string) proto.MLSDispl
 	return proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: sent.CiphertextB64}
 }
 
-func assertShown(t *testing.T, got proto.ConversationDecryptBatchForAppDisplayResponseData, i int,
+func assertShown(t *testing.T, got proto.MLSDisplayResponseData, i int,
 	text string, sender *keeper, fromHistory bool) {
 	t.Helper()
 	if len(got.Items) != len(got.PlaintextB64) {

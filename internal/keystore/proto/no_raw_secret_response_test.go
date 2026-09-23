@@ -54,43 +54,18 @@ import (
 // message AAD is what prevents.
 var rawSecretResponseCarveOuts = map[string]string{
 	"GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64": "app-display carve-out: the decrypted secure message is the action's entire output, returned only under a server-signed display permit bound to a one-shot Keeper challenge and opened under a Keeper-built message AAD. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/security/secure-message-overlay-proposed-boundary.md.",
-	// Second carve-out (0.0.30, widened in 0.0.34): the DragPass chat reveal.
-	// The []string covers the slice element type too — each entry is a
-	// decrypted chat message, or the single decrypted room name when
-	// payload_kind is room_name, and it is the action's entire output. It is
-	// returned only under a server-signed read permit and opened under an AAD
-	// the Keeper built from structured fields, never one the request supplied.
-	// Any tag/UTF-8/AAD failure refuses the whole batch with no partial
-	// plaintext. Zeroized after encoding, never logged; clipboard actions still
-	// return no plaintext. 0.0.30 widened the browser-display carve-out from
-	// one message to a conversation's worth; 0.0.34 widens what it covers to
-	// N-member rooms and to room names, which is exactly the "reusing the
-	// action for a ciphertext that is not an AAD-bound message" case the block
-	// comment above names as needing approval at the wider scope — taken in
-	// dragpass-control-plane
-	// docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2.
-	// Neither widening adds a response field or a carve-out entry: the room
-	// name rides the same plaintext_b64 under its own domain
-	// (dragpass.room|1|... with a dragpass.room.read permit), so a chat
-	// ciphertext fails closed in room_name mode and a room name fails closed in
-	// message mode. Also approved in
-	// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and
-	// docs/security/threat-model.md §4.10 (control-plane).
-	//
-	// 0.0.49 widens it a third time, again without a new entry or a new
-	// plaintext field: mls_decrypt_batch_for_app_display returns this same
-	// response type for chat v2 (design M6.3). Its plaintexts are MLS
+	// Second carve-out: the DragPass chat reveal. It opened in 0.0.30 for the
+	// v1 conversation reveal, which 0.0.54 removed; what remains is the chat
+	// v2 MLS path. The []string covers the slice element type too.
+	// mls_decrypt_batch_for_app_display (0.0.49, design M6.3) returns MLS
 	// application messages opened with keys the server never held, so it is
-	// gated on the conversation-state permit and not on a read permit
-	// (decision R2); the added `items` carry metadata only.
-	//
-	// 0.0.52 widens it a fourth time, still without a new entry or field:
-	// mls_room_name_open returns a v2 room's name as the single entry of this
-	// type, the v2 counterpart of payload_kind=room_name. Its key is the
-	// confirmed epoch's MLS exporter, which the server never held, and the
-	// AAD is Keeper-built (dragpass.room.name|1|<conversation_id>|<epoch>), a
-	// domain neither chat message path uses.
-	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34, 0.0.49 and 0.0.52): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). 0.0.49: mls_decrypt_batch_for_app_display returns the same type for chat v2 MLS application messages, under the server-signed dragpass.chat.state permit (no read permit: the Keeper opens them with MLS keys the server never held, decision R2), each opened by chatstate.Store.ReceiveBatch with its sender taken from the MLS leaf credential and its declared position checked, or re-read from the sealed local history; items carries that metadata and no plaintext. []string element type is covered here too. Any tag/UTF-8/AAD/declaration failure refuses the whole batch with no partial plaintext and, for MLS, nothing written; the one MLS exception is a message this device sent with no sealed local copy, returned as an empty entry with items state own_without_local_copy (0.0.52); since 0.0.53 one whose ciphertext is byte for byte this device's own unbound outbox entry is first bound to its seq and returned from the sealed local history like any other re-read. 0.0.52: mls_room_name_open returns a v2 room name as the single entry, under the same dragpass.chat.state permit, sealed with a key from the confirmed epoch's MLS exporter (label \"dragpass room name\", context conversation_id) and opened under the Keeper-built AAD dragpass.room.name|1|<conversation_id>|<epoch>, only for the confirmed epoch; a tag or UTF-8 failure refuses it with no plaintext and nothing is written. Zeroized after encoding, never logged, not even by length; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, docs/exec-plans/active/dragpass-chat-v2-mls-integration.md M6.3 and §12.2, and docs/security/threat-model.md §4.10.",
+	// gated on the conversation-state permit (decision R2); the added `items`
+	// carry metadata only. mls_room_name_open (0.0.52) returns a v2 room's
+	// name as the single entry, under a key from the confirmed epoch's MLS
+	// exporter and a Keeper-built AAD
+	// (dragpass.room.name|1|<conversation_id>|<epoch>). Neither adds a
+	// response field or a carve-out entry.
+	"MLSDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, v1 reveal removed 0.0.54, MLS since 0.0.49 and 0.0.52): mls_decrypt_batch_for_app_display returns chat v2 MLS application messages as the action's entire output, under the server-signed dragpass.chat.state permit (no read permit: the Keeper opens them with MLS keys the server never held, decision R2), each opened by chatstate.Store.ReceiveBatch with its sender taken from the MLS leaf credential and its declared position checked, or re-read from the sealed local history; items carries that metadata and no plaintext. []string element type is covered here too. Any tag/UTF-8/declaration failure refuses the whole batch with no partial plaintext and nothing written; the one exception is a message this device sent with no sealed local copy, returned as an empty entry with items state own_without_local_copy (0.0.52); since 0.0.53 one whose ciphertext is byte for byte this device's own unbound outbox entry is first bound to its seq and returned from the sealed local history like any other re-read. 0.0.52: mls_room_name_open returns a v2 room name as the single entry, under the same dragpass.chat.state permit, sealed with a key from the confirmed epoch's MLS exporter (label \"dragpass room name\", context conversation_id) and opened under the Keeper-built AAD dragpass.room.name|1|<conversation_id>|<epoch>, only for the confirmed epoch; a tag or UTF-8 failure refuses it with no plaintext and nothing is written. Zeroized after encoding, never logged, not even by length; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-v2-mls-integration.md M6.3 and §12.2, and docs/security/threat-model.md §4.10.",
 }
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
@@ -239,12 +214,9 @@ func TestNoRawSecretInRequestTypes(t *testing.T) {
 
 // TestRawSecretResponseCarveOuts_ScopeIsStated — the two tests above catch a
 // new raw field and a stale entry, but not a carve-out whose *behavior* grew
-// while its rationale stayed where it was. 0.0.34 is exactly that case: the
-// chat carve-out now also covers a room name under a second AAD domain, with
-// no new entry and no new field. The contract
-// (dragpass-control-plane docs/exec-plans/active/dragpass-chat-grouproom-implementation.md
-// §6.2) calls widening the behavior without rewriting the rationale a
-// violation, so this test is where that is enforced.
+// while its rationale stayed where it was. The chat carve-out has grown that
+// way more than once (0.0.49 and 0.0.52 added MLS paths with no new entry and
+// no new field), so this test pins that the rationale names every path.
 func TestRawSecretResponseCarveOuts_ScopeIsStated(t *testing.T) {
 	if len(rawSecretResponseCarveOuts) != 2 {
 		t.Fatalf("rawSecretResponseCarveOuts has %d entries, want 2 — "+
@@ -252,19 +224,17 @@ func TestRawSecretResponseCarveOuts_ScopeIsStated(t *testing.T) {
 			len(rawSecretResponseCarveOuts))
 	}
 
-	const chatKey = "ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64"
+	const chatKey = "MLSDisplayResponseData.plaintext_b64"
 	reason, ok := rawSecretResponseCarveOuts[chatKey]
 	if !ok {
 		t.Fatalf("carve-out %q is missing", chatKey)
 	}
-	// The room-name branch rides this one entry, so the entry has to say so.
-	for _, want := range []string{"room_name", "dragpass.room|1|", "dragpass.room.read",
-		"mls_decrypt_batch_for_app_display", "dragpass.chat.state", "items",
+	for _, want := range []string{"mls_decrypt_batch_for_app_display", "dragpass.chat.state", "items",
 		"own_without_local_copy", "mls_room_name_open", "dragpass.room.name|1|", "MLS exporter"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("the chat carve-out rationale does not mention %q — "+
-				"payload_kind=room_name returns plaintext through this field and the "+
-				"approved scope must name it.", want)
+				"every path that returns plaintext through this field must be named "+
+				"in the approved scope.", want)
 		}
 	}
 }

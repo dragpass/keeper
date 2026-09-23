@@ -1,8 +1,7 @@
 // actions_chat_state.go — Wire-protocol Action* constants for DragPass chat
 // v2's conversation state.
 //
-// Its own domain fragment, like actions_conversation.go, and for the same kind
-// of reason: these five actions are the only ones that touch the sealed chat
+// Its own domain fragment: these five actions are the only ones that touch the sealed chat
 // state directory, they are the only ones gated on a conversation-state permit,
 // and none of them exists to move a payload — they exist to make sure a chain
 // position is consumed exactly once. Storage: internal/keystore/chatstate.

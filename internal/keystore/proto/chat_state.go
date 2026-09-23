@@ -92,9 +92,7 @@ const (
 // Wire-shape constants.
 const (
 	// ChatStatePermitDomain / ChatStatePermitCanonicalVersion — the first two
-	// slots of the 14-item conversation-state permit canonical. A separate
-	// domain from `dragpass.chat.read`, so a page of read permits cannot also
-	// advance a chain, and a state permit cannot open a message.
+	// slots of the 14-item conversation-state permit canonical.
 	ChatStatePermitDomain           = "dragpass.chat.state"
 	ChatStatePermitCanonicalVersion = 4
 
@@ -110,7 +108,7 @@ const (
 
 	// ChatStatePermitTTLSeconds — the server fixes
 	// `expires_at = issued_at + 300` and the Keeper requires exactly that
-	// span, the same rule the read permit follows. A wider window is not a
+	// span. A wider window is not a
 	// permit this contract issued.
 	ChatStatePermitTTLSeconds = 300
 

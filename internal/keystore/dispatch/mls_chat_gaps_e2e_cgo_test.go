@@ -228,7 +228,7 @@ func (k *keeper) openNameRequest(n sealedName) proto.MLSRoomNameOpenRequest {
 
 func (k *keeper) openName(n sealedName) string {
 	k.t.Helper()
-	got := k.must(proto.MLSRoomNameOpen, k.openNameRequest(n)).Data.(proto.ConversationDecryptBatchForAppDisplayResponseData)
+	got := k.must(proto.MLSRoomNameOpen, k.openNameRequest(n)).Data.(proto.MLSDisplayResponseData)
 	if len(got.PlaintextB64) != 1 || got.Items != nil {
 		k.t.Fatalf("room name open answered %d entries and items %v", len(got.PlaintextB64), got.Items)
 	}

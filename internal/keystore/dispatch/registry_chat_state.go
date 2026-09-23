@@ -4,7 +4,7 @@
 // their own security domain: the only actions that read or write conversation
 // state, and the only ones gated on a conversation-state permit.
 //
-// Like registry_conversation.go they register handlers directly rather than
+// Like registry_message.go they register handlers directly rather than
 // through wrap(). wrap() routes through `process`, which decodes with plain
 // json.Unmarshal; these requests are bound into a server signature, so they
 // need a decoder that refuses duplicate keys, unknown fields, and missing

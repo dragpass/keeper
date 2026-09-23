@@ -65,7 +65,6 @@ var actionFragments = []actionFragment{
 	peerKeyActions,
 	credentialActions,
 	messageActions,
-	conversationActions,
 	chatStateActions,
 	mlsChatActions,
 	archiveActions,

@@ -8,9 +8,10 @@
 // merely fail. A failure code proves the answer was refused; an untouched
 // directory proves nothing was opened to produce it.
 //
-// The harness (msgTestServerKey, msgTestVerifier, msgTestClock, newTestDeps,
-// chatMarshal) and the UUID constants are shared with the chat reveal tests in
-// the same package.
+// The harness (msgTestServerKey, msgTestVerifier, msgTestClock, newTestDeps)
+// is shared with the message display tests in the same package; chatMarshal
+// and the UUID constants below are shared with the other chat_state_* and
+// mls_chat tests.
 
 package handlers
 
@@ -31,6 +32,26 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
+
+const (
+	chatOrgID     = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	chatConvID    = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	chatAccountID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	chatOtherUUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+	// chatNowUnix — a fixed "now" equal to the permit's issued_at, comfortably
+	// inside the 300-second window.
+	chatNowUnix = 1700000000
+)
+
+func chatMarshal(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return raw
+}
 
 const chatStateClientMsgID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 

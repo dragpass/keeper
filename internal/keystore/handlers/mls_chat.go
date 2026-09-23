@@ -472,28 +472,22 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 // ────────────────────────────────────────────────────────────────────────
 // Messages.
 //
-// mls_decrypt_batch_for_app_display widens the v1 reveal's carve-out
-// (conversation_decrypt.go) instead of adding one, and keeps its gates except
-// the ones that belong to a key the server held:
+// mls_decrypt_batch_for_app_display is the chat carve-out's message path
+// (proto.MLSDisplayResponseData). What has to hold before any plaintext is
+// produced:
 //
-//	kept     a server-signed permit checked for binding, window and signature
-//	         before anything is opened (the conversation-state permit here)
-//	kept     strict decode and a request cap, at most 200 messages, each
-//	         ciphertext bounded to the 8208 bytes the server stores
-//	kept     the caller says nothing about binding: no AAD, no key, no
-//	         position. MLS framing and the sender's declaration, checked
-//	         against the generation the library derived, take the AAD's place
-//	kept     every plaintext is well-formed UTF-8
-//	kept     one failure refuses the whole batch with no partial plaintext,
-//	         and here also with nothing written
-//	kept     every plaintext buffer is zeroized, nothing about one is logged
-//	dropped  the read permit (dragpass.chat.read): decision R2, the Keeper
-//	         opens these with MLS keys the server never held, so there is no
-//	         server key possession to authorize
-//	dropped  the group handle: it proved the caller held the conversation
-//	         DEK; here the key never leaves the Keeper's own group state
-//	dropped  dek_version binding and payload_kind: the epoch is inside the
-//	         MLS framing, and room names are not on this path
+//	a server-signed conversation-state permit checked for binding, window
+//	  and signature before anything is opened. There is no read permit:
+//	  decision R2, the Keeper opens these with MLS keys the server never held
+//	strict decode and a request cap, at most 200 messages, each ciphertext
+//	  bounded to the 8208 bytes the server stores
+//	the caller says nothing about binding: no AAD, no key, no position. MLS
+//	  framing and the sender's declaration, checked against the generation
+//	  the library derived, bind each message
+//	every plaintext is well-formed UTF-8
+//	one failure refuses the whole batch with no partial plaintext and nothing
+//	  written
+//	every plaintext buffer is zeroized, nothing about one is logged
 // ────────────────────────────────────────────────────────────────────────
 
 var errDisplayNotText = errors.New("mls display plaintext is not UTF-8")
@@ -637,7 +631,7 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		}
 	}
 	d.Logger.Println("mls decrypt batch successful")
-	return proto.BaseResponse{Success: true, Data: proto.ConversationDecryptBatchForAppDisplayResponseData{
+	return proto.BaseResponse{Success: true, Data: proto.MLSDisplayResponseData{
 		PlaintextB64: plaintexts,
 		Items:        items,
 	}}
@@ -647,11 +641,10 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 // Room names (chatstate/roomname.go).
 //
 // mls_room_name_open returns its name through the display batch's response
-// type and its one plaintext field, as the v1 reveal does for
-// payload_kind=room_name: the carve-out is widened, not added. The gates are
-// the display batch's — a server-signed permit before anything is opened, a
-// Keeper-built AAD, UTF-8, zeroized buffers, nothing logged — and the key is
-// the confirmed epoch's MLS exporter, which the server never held.
+// type and its one plaintext field: the carve-out is widened, not added. The
+// gates are the display batch's — a server-signed permit before anything is
+// opened, a Keeper-built AAD, UTF-8, zeroized buffers, nothing logged — and
+// the key is the confirmed epoch's MLS exporter, which the server never held.
 // ────────────────────────────────────────────────────────────────────────
 
 // HandleMLSRoomNameSeal seals a room name under the confirmed epoch.
@@ -707,7 +700,7 @@ func HandleMLSRoomNameOpen(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed), "the room name is not text")
 	}
 	d.Logger.Println("mls room name open successful")
-	return proto.BaseResponse{Success: true, Data: proto.ConversationDecryptBatchForAppDisplayResponseData{
+	return proto.BaseResponse{Success: true, Data: proto.MLSDisplayResponseData{
 		PlaintextB64: []string{base64.StdEncoding.EncodeToString(name)},
 	}}
 }
