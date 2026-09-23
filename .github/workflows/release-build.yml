@@ -1,0 +1,255 @@
+# Builds and checks every release artifact without publishing anything.
+#
+# release.yml calls this for a v* tag and release-check.yml calls it on pull
+# requests that touch the build, so a pipeline change shows it is broken before
+# anyone tags. Signing, attestation and publishing stay in release.yml.
+#
+# Every binary links the MLS library (-tags mls) and is checked for it:
+#   - the Go build settings must carry -tags=mls;
+#   - scripts/release-probe.sh starts the binary, pings it, and requires the
+#     "MLS library linked" line that only a working C ABI link produces.
+# Linux binaries are built inside ubuntu:20.04 and must need no newer glibc
+# than 2.31. The .deb is installed and probed on ubuntu:20.04 and debian:11.
+name: release-build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Package version (X.Y.Z), also the version ping must report.
+        required: true
+        type: string
+      size-baseline:
+        description: Also build the library-free binaries and record both sizes.
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+env:
+  LINUX_BASELINE_IMAGE: ubuntu:20.04
+  LINUX_MAX_GLIBC: '2.31'
+
+jobs:
+  macos:
+    name: macOS (amd64 + arm64)
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - name: rust targets
+        run: |
+          rustc --version
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: library-free baseline (size only)
+        if: inputs.size-baseline
+        run: |
+          make build-macos MLS=0
+          mkdir -p baseline
+          mv dragpass-keeper-macos-* baseline/
+      - name: build + package (x86_64, arm64)
+        run: make pkg-macos VERSION="${{ inputs.version }}"
+      - name: each binary is its own arch and carries the mls tag
+        run: |
+          for pair in x86_64:x86_64 arm64:arm64; do
+            bin="dragpass-keeper-macos-${pair%%:*}"
+            archs="$(lipo -archs "$bin")"
+            echo "$bin: $archs"
+            [ "$archs" = "${pair##*:}" ]
+            go version -m "$bin" | grep -q -- '-tags=mls'
+          done
+      - name: install Rosetta for the x86_64 probe
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
+      - name: probe both binaries
+        run: |
+          scripts/release-probe.sh ./dragpass-keeper-macos-arm64 "${{ inputs.version }}"
+          scripts/release-probe.sh ./dragpass-keeper-macos-x86_64 "${{ inputs.version }}"
+      - name: record sizes
+        if: inputs.size-baseline
+        run: |
+          for bin in dragpass-keeper-macos-x86_64 dragpass-keeper-macos-arm64; do
+            echo "$bin $(wc -c < "baseline/$bin") $(wc -c < "$bin")"
+          done | tee sizes-macos.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-packages
+          path: output/macos/*.pkg
+          if-no-files-found: error
+      # The bare binary hashes go into the release notes' checksum table: the
+      # extension's release-hash check compares them with Keeper's self-hash.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-binaries
+          path: dragpass-keeper-macos-*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.size-baseline
+        with:
+          name: sizes-macos
+          path: sizes-macos.txt
+
+  # arm64 builds on a native arm64 runner inside the arm64 ubuntu:20.04 image
+  # rather than cross-compiling from amd64. A cgo cross build would need an
+  # aarch64 gcc, an arm64 libc6-dev and multiarch X11 headers set up by hand,
+  # a recipe the amd64 build never exercises, and the result could only be run
+  # under emulation. Native, both arches use the same script and the same checks.
+  linux:
+    name: Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            bin: dragpass-keeper-linux-x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            bin: dragpass-keeper-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - name: library-free baseline (size only)
+        if: inputs.size-baseline
+        run: |
+          make "build-linux-${{ matrix.arch }}" MLS=0
+          mkdir -p baseline
+          mv "${{ matrix.bin }}" baseline/
+      # The Go toolchain is statically linked, so the runner's own (the one
+      # setup-go verified) is mounted instead of downloading another.
+      - name: build on the glibc baseline (${{ env.LINUX_BASELINE_IMAGE }})
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -v "$(go env GOROOT):/usr/local/go:ro" \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            "$LINUX_BASELINE_IMAGE" \
+            scripts/linux-baseline-build.sh "${{ matrix.arch }}" "${{ inputs.version }}"
+      # -o keeps make from rebuilding the binary on the runner, whose glibc is
+      # far newer than the baseline.
+      - name: package .deb
+        run: make -o "${{ matrix.bin }}" "pkg-linux-${{ matrix.arch }}" VERSION="${{ inputs.version }}"
+      - name: mls tag and glibc baseline
+        run: |
+          go version -m "${{ matrix.bin }}" | grep -q -- '-tags=mls'
+          scripts/check-glibc-baseline.sh "${{ matrix.bin }}" "$LINUX_MAX_GLIBC"
+          dpkg-deb -f "output/linux/${{ matrix.bin }}.deb" Depends
+      - name: install the .deb and probe on ubuntu:20.04 and debian:11
+        run: |
+          for image in ubuntu:20.04 debian:11; do
+            echo "== $image"
+            docker run --rm -v "$PWD:/work:ro" -w /work "$image" sh -c '
+              set -e
+              ldd --version | head -n 1
+              scripts/release-probe.sh "./${{ matrix.bin }}" "${{ inputs.version }}"
+              dpkg -i "output/linux/${{ matrix.bin }}.deb" >/dev/null
+              scripts/release-probe.sh /opt/dragpass/dragpass-keeper "${{ inputs.version }}"
+            '
+          done
+      - name: record sizes
+        if: inputs.size-baseline
+        run: echo "${{ matrix.bin }} $(wc -c < "baseline/${{ matrix.bin }}") $(wc -c < "${{ matrix.bin }}")" | tee "sizes-linux-${{ matrix.arch }}.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-${{ matrix.arch }}-packages
+          path: output/linux/*.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-${{ matrix.arch }}-binaries
+          path: ${{ matrix.bin }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.size-baseline
+        with:
+          name: sizes-linux-${{ matrix.arch }}
+          path: sizes-linux-${{ matrix.arch }}.txt
+
+  windows:
+    name: Windows (mingw cross-build)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - name: mingw cross-compiler and rust target
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+          rustc --version
+          rustup target add x86_64-pc-windows-gnu
+      - name: library-free baseline (size only)
+        if: inputs.size-baseline
+        run: |
+          make build-windows MLS=0
+          mkdir -p baseline
+          mv dragpass-keeper.exe baseline/
+      - name: build + package windows installer
+        run: |
+          # The amake/innosetup container runs as a non-root user and cannot
+          # create output/windows in the runner-owned workspace (File access
+          # denied), so open the directories non-recursively beforehand.
+          mkdir -p output/windows
+          chmod a+rwX output output/windows
+          make pkg-windows VERSION="${{ inputs.version }}"
+      # A mingw runtime DLL (libwinpthread, libgcc_s, ...) would load on a
+      # runner that has mingw on PATH and fail on a user's machine, so the
+      # probe run alone cannot catch it.
+      - name: mls tag and system-only DLL imports
+        run: |
+          go version -m dragpass-keeper.exe | grep -q -- '-tags=mls'
+          dlls="$(x86_64-w64-mingw32-objdump -p dragpass-keeper.exe | sed -n 's/.*DLL Name: //p' | sort -u)"
+          echo "$dlls"
+          if printf '%s\n' "$dlls" | grep -qi '^lib'; then
+            echo "::error::dragpass-keeper.exe imports a mingw runtime DLL"
+            exit 1
+          fi
+      - name: record sizes
+        if: inputs.size-baseline
+        run: echo "dragpass-keeper.exe $(wc -c < baseline/dragpass-keeper.exe) $(wc -c < dragpass-keeper.exe)" | tee sizes-windows.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-packages
+          path: output/windows/*.exe
+          if-no-files-found: error
+      # The bare binary and the installer share a file name, so they travel as
+      # separate artifacts.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-binaries
+          path: dragpass-keeper.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.size-baseline
+        with:
+          name: sizes-windows
+          path: sizes-windows.txt
+
+  windows-probe:
+    name: Windows probe
+    needs: windows
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-binaries
+          path: bin
+      - name: probe
+        run: scripts/release-probe.sh ./bin/dragpass-keeper.exe "${{ inputs.version }}"

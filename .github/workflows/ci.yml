@@ -39,10 +39,12 @@ jobs:
       - run: go test ./... -count=1
 
   # The MLS build is separate from build-test on purpose. Linking mls-rs turns
-  # CGO_ENABLED on everywhere, and on Linux that alone gives up the static
-  # binary and adds an X11 build dependency, so the jobs above keep proving that
-  # the shipped recipe is untouched while this one proves the library links,
-  # runs and round-trips its state on all three platforms.
+  # CGO_ENABLED on everywhere, and on Linux that compiles the real clipboard,
+  # which needs the X11 headers (libX11 itself is a runtime dlopen, not a link
+  # dependency). The jobs above keep the default library-free build, the one
+  # used for local work, green, while this one proves the library links, runs
+  # and round-trips its state on all three platforms. The release artifacts
+  # themselves are built and checked by release-build.yml.
   mls:
     name: mls build + test (${{ matrix.os }})
     strategy:

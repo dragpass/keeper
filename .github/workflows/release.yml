@@ -1,8 +1,12 @@
 # Release CI builds platform packages for v* tags and publishes a GitHub Release.
 #
 #   macOS  : amd64 and arm64 Go builds plus pkgbuild (.pkg)
-#   Linux  : CGO-disabled cross-build plus dpkg-deb (.deb)
+#   Linux  : amd64 and arm64 cgo builds inside ubuntu:20.04 (glibc 2.31)
+#            on native runners, plus dpkg-deb (.deb)
 #   Windows: MinGW cross-build plus Inno Setup (.exe)
+#
+# Every binary links the MLS library. The builds and their checks live in
+# release-build.yml, which release-check.yml also runs on pull requests.
 #
 # The vX.Y.Z tag must match internal/keystore/version/version.go. Package
 # metadata receives the tag version through make VERSION=.
@@ -24,9 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: check version consistency
+        id: version
         run: |
           TAG_VER="${GITHUB_REF_NAME#v}"
           CODE_VER=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/keystore/version/version.go)
@@ -35,6 +42,7 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match version.go ($CODE_VER)"
             exit 1
           fi
+          echo "version=$TAG_VER" >> "$GITHUB_OUTPUT"
 
   sbom:
     name: generate SPDX SBOM
@@ -66,22 +74,36 @@ jobs:
           path: dragpass-keeper.spdx.json
           if-no-files-found: error
 
-  build-macos:
-    name: build macOS packages
+  build:
+    name: build + check
     needs: [verify, sbom]
-    runs-on: macos-14
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+
+  # Attestation runs in this workflow, not in release-build.yml, so the signer
+  # identity stays release.yml (the README's verify commands name it) and the
+  # PR-time check needs no id-token permission.
+  attest-macos:
+    name: attest macOS artifacts
+    needs: build
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
       attestations: write
       artifact-metadata: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          go-version-file: go.mod
-      - name: build + package (x86_64, arm64)
-        run: make pkg-macos VERSION="${GITHUB_REF_NAME#v}"
+          name: macos-packages
+          path: pkgs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: macos-binaries
+          path: bins
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-sbom
@@ -91,15 +113,15 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: |
-            output/macos/*.pkg
-            dragpass-keeper-macos-*
+            pkgs/*.pkg
+            bins/dragpass-keeper-macos-*
       - name: attest macOS SBOM
         id: macos_sbom
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: |
-            output/macos/*.pkg
-            dragpass-keeper-macos-*
+            pkgs/*.pkg
+            bins/dragpass-keeper-macos-*
           sbom-path: supply-chain/dragpass-keeper.spdx.json
       - name: collect offline attestation bundles
         run: |
@@ -110,25 +132,13 @@ jobs:
             attestations/macos-sbom.sigstore.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: macos-packages
-          path: output/macos/*.pkg
-          if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
           name: macos-attestations
           path: attestations/*.sigstore.json
           if-no-files-found: error
-      # bare 바이너리 해시는 릴리스 노트 체크섬 표에 필요 — extension 의
-      # release-hash 검증이 Keeper self-hash (설치된 바이너리) 와 대조한다.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: macos-binaries
-          path: dragpass-keeper-macos-*
-          if-no-files-found: error
 
-  build-linux-windows:
-    name: build Linux debs + Windows installer
-    needs: [verify, sbom]
+  attest-linux-windows:
+    name: attest Linux and Windows artifacts
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -136,23 +146,16 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          go-version-file: go.mod
-      - name: install mingw cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-      - name: build + package linux debs
-        run: make pkg-linux VERSION="${GITHUB_REF_NAME#v}"
-      - name: build + package windows installer
-        run: |
-          # amake/innosetup 컨테이너는 비루트 유저로 실행돼 runner 소유
-          # 워크스페이스에 output/windows 를 만들지 못한다 (File access
-          # denied). 디렉토리만 비재귀로 열어둔다 — 재귀 chmod 는 직전 deb
-          # 단계에서 docker root 가 만든 파일에 걸려 실패한다.
-          mkdir -p output/windows
-          chmod a+rwX output output/windows
-          make pkg-windows VERSION="${GITHUB_REF_NAME#v}"
+          pattern: '*-packages'
+          path: pkgs
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: '*-binaries'
+          path: bins
+          merge-multiple: true
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-sbom
@@ -162,19 +165,19 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: |
-            output/linux/*.deb
-            output/windows/*.exe
-            dragpass-keeper-linux-*
-            dragpass-keeper.exe
+            pkgs/*.deb
+            pkgs/*.exe
+            bins/dragpass-keeper-linux-*
+            bins/dragpass-keeper.exe
       - name: attest Linux and Windows SBOM
         id: linux_windows_sbom
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-path: |
-            output/linux/*.deb
-            output/windows/*.exe
-            dragpass-keeper-linux-*
-            dragpass-keeper.exe
+            pkgs/*.deb
+            pkgs/*.exe
+            bins/dragpass-keeper-linux-*
+            bins/dragpass-keeper.exe
           sbom-path: supply-chain/dragpass-keeper.spdx.json
       - name: collect offline attestation bundles
         run: |
@@ -185,29 +188,13 @@ jobs:
             attestations/linux-windows-sbom.sigstore.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: linux-windows-packages
-          path: |
-            output/linux/*.deb
-            output/windows/*.exe
-          if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
           name: linux-windows-attestations
           path: attestations/*.sigstore.json
-          if-no-files-found: error
-      # bare 바이너리 (repo 루트) — 릴리스 노트 체크섬 표용. Windows 는 bare
-      # 바이너리와 인스톨러가 같은 파일명이라 별 아티팩트로 분리해 충돌 방지.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: linux-windows-binaries
-          path: |
-            dragpass-keeper-linux-*
-            dragpass-keeper.exe
           if-no-files-found: error
 
   release:
     name: sign + checksums + publish
-    needs: [build-macos, build-linux-windows]
+    needs: [build, attest-macos, attest-linux-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -352,6 +339,9 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
+      # .goreleaser.yml's before hook builds the universal MLS archive.
+      - name: rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-sbom

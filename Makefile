@@ -44,25 +44,61 @@ test-clipboard-e2e:
 	DRAGPASS_KEEPER_CLIPBOARD_E2E=1 go test ./internal/keystore/clipboard -count=1 -run ProductionSmoke -v
 
 # ── MLS (Rust static library) ───────────────────────
-# Off the default path on purpose. Linking this turns CGO_ENABLED on for every
-# target, and on Linux that alone costs the static binary and adds an X11 build
-# dependency through golang.design/x/clipboard. Those are release decisions, not
-# a side effect of adding a library, so `build` and `pkg` stay exactly as they
-# were and the MLS build is asked for by name.
+# Release builds link the MLS library, so every build-* and pkg-* target below
+# builds the staticlib for its own target first. MLS=0 gives the old
+# library-free recipe for quick local work: on Linux that is also the static
+# CGO_ENABLED=0 binary.
+#
+# Linking MLS turns cgo on everywhere. On Linux that makes the binary dynamic
+# against glibc, which is why the release Linux binaries are built on the
+# glibc baseline (scripts/linux-baseline-build.sh). It also compiles the real
+# golang.design/x/clipboard instead of its nocgo stub. That needs the X11
+# headers (libx11-dev) at build time, but the library is opened at runtime
+# with dlopen("libX11.so") and nothing links against libX11.
+#
+# The cgo directives in internal/keystore/mls read the archive from
+# mls/target/release on macOS and Linux, and from the gnu triple's directory on
+# Windows. The per-target recipes below put the right archive in those places.
+MLS ?= 1
 MLS_DIR := mls
 MLS_LIB := $(MLS_DIR)/target/release/libdragpass_mls.a
+MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 
-.PHONY: mls-lib mls-lib-windows mls-test build-mls test-mls mls-clean
+ifeq ($(MLS),1)
+MLS_GO_TAGS := -tags mls
+LINUX_CGO := 1
+MAC_MLS_LIB := mls-lib-macos
+WIN_MLS_LIB := mls-lib-windows
+LINUX_MLS_LIB := mls-lib
+else
+MLS_GO_TAGS :=
+LINUX_CGO := 0
+MAC_MLS_LIB :=
+WIN_MLS_LIB :=
+LINUX_MLS_LIB :=
+endif
+
+.PHONY: mls-lib mls-lib-macos mls-lib-windows mls-test build-mls test-mls mls-clean
 
 mls-lib:
 	@echo "Building MLS static library..."
-	@cd $(MLS_DIR) && cargo build --release
+	@cd $(MLS_DIR) && cargo build --release --locked
+
+# One universal archive at the path the darwin cgo directive reads. Each GOARCH
+# link takes its own slice, and ld rejects an archive without a matching slice
+# rather than linking the other arch, so the two binaries cannot swap
+# libraries.
+mls-lib-macos:
+	@echo "Building MLS static library (universal: $(MLS_MAC_TRIPLES))..."
+	@cd $(MLS_DIR) && cargo build --release --locked $(addprefix --target ,$(MLS_MAC_TRIPLES))
+	@mkdir -p $(dir $(MLS_LIB))
+	@lipo -create -output $(MLS_LIB) $(foreach t,$(MLS_MAC_TRIPLES),$(MLS_DIR)/target/$(t)/release/libdragpass_mls.a)
 
 # Windows always links through mingw, so the archive has to be the gnu triple's
 # even when cargo's host default would be MSVC.
 mls-lib-windows:
 	@echo "Building MLS static library (x86_64-pc-windows-gnu)..."
-	@cd $(MLS_DIR) && cargo build --release --target x86_64-pc-windows-gnu
+	@cd $(MLS_DIR) && cargo build --release --locked --target x86_64-pc-windows-gnu
 
 mls-test:
 	@cd $(MLS_DIR) && cargo test
@@ -90,31 +126,35 @@ pkg: pkg-macos pkg-windows pkg-linux
 build-macos: build-macos-amd64 build-macos-arm64
 
 build-macos-amd64: $(MAC_BIN_AMD64)
-$(MAC_BIN_AMD64): main.go go.mod
+$(MAC_BIN_AMD64): main.go go.mod $(MAC_MLS_LIB)
 	@echo "Building macOS x86_64 binary: $(MAC_BIN_AMD64)..."
-	@CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o $(MAC_BIN_AMD64) .
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build $(MLS_GO_TAGS) -o $(MAC_BIN_AMD64) .
 
 build-macos-arm64: $(MAC_BIN_ARM64)
-$(MAC_BIN_ARM64): main.go go.mod
+$(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
 	@echo "Building macOS arm64 binary: $(MAC_BIN_ARM64)..."
-	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o $(MAC_BIN_ARM64) .
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(MLS_GO_TAGS) -o $(MAC_BIN_ARM64) .
 
 build-windows: $(WIN_BIN)
-$(WIN_BIN): main.go go.mod
+$(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
 	@echo "Building Windows binary: $(WIN_BIN)..."
-	@CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=$(WIN_CC) go build -o $(WIN_BIN) .
+	@CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=$(WIN_CC) go build $(MLS_GO_TAGS) -o $(WIN_BIN) .
 
 build-linux: build-linux-amd64 build-linux-arm64
 
+# With MLS these are cgo builds for the host's own arch and libc. The release
+# binaries come from scripts/linux-baseline-build.sh, which runs these targets
+# inside ubuntu:20.04 so the result needs nothing newer than glibc 2.31.
+
 build-linux-amd64: $(LINUX_BIN_AMD64)
-$(LINUX_BIN_AMD64): main.go go.mod
+$(LINUX_BIN_AMD64): main.go go.mod $(LINUX_MLS_LIB)
 	@echo "Building Linux amd64 binary: $(LINUX_BIN_AMD64)..."
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $(LINUX_BIN_AMD64) .
+	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=amd64 go build $(MLS_GO_TAGS) -o $(LINUX_BIN_AMD64) .
 
 build-linux-arm64: $(LINUX_BIN_ARM64)
-$(LINUX_BIN_ARM64): main.go go.mod
+$(LINUX_BIN_ARM64): main.go go.mod $(LINUX_MLS_LIB)
 	@echo "Building Linux arm64 binary: $(LINUX_BIN_ARM64)..."
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o $(LINUX_BIN_ARM64) .
+	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=arm64 go build $(MLS_GO_TAGS) -o $(LINUX_BIN_ARM64) .
 
 pkg-macos: pkg-macos-amd64 pkg-macos-arm64
 
@@ -164,6 +204,15 @@ $(WIN_PKG): $(WIN_BIN) setup.iss
 
 pkg-linux: pkg-linux-amd64 pkg-linux-arm64
 
+# The cgo binary needs glibc 2.31 or newer, the baseline it is built on, and
+# libgcc_s for the Rust library's unwinder (panic = "unwind", see
+# mls/Cargo.toml). Those are its NEEDED entries besides glibc's own.
+#
+# libX11 is deliberately not a dependency: the clipboard opens it with dlopen
+# at runtime, so a machine without X11 (a server, a Wayland-only session) still
+# installs and runs Keeper, and only decrypt-to-clipboard fails, explicitly.
+DEB_DEPENDS := libc6 (>= 2.31), libgcc-s1
+
 pkg-linux-amd64: $(LINUX_DEB_AMD64)
 $(LINUX_DEB_AMD64): $(LINUX_BIN_AMD64)
 	@echo "Creating Linux amd64 package structure in ./build_root_linux_amd64..."
@@ -181,7 +230,7 @@ $(LINUX_DEB_AMD64): $(LINUX_BIN_AMD64)
 
 	@echo "Building DEB amd64 package via Docker: $(LINUX_DEB_AMD64)..."
 	@mkdir -p build_root_linux_amd64/DEBIAN
-	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_amd64/DEBIAN/control
+	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_amd64/DEBIAN/control
 	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build build_root_linux_amd64 /work/$(LINUX_DEB_AMD64)"
 	@echo "Successfully built $(LINUX_DEB_AMD64)"
 
@@ -202,7 +251,7 @@ $(LINUX_DEB_ARM64): $(LINUX_BIN_ARM64)
 
 	@echo "Building DEB arm64 package via Docker: $(LINUX_DEB_ARM64)..."
 	@mkdir -p build_root_linux_arm64/DEBIAN
-	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: arm64\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_arm64/DEBIAN/control
+	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: arm64\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_arm64/DEBIAN/control
 	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build build_root_linux_arm64 /work/$(LINUX_DEB_ARM64)"
 	@echo "Successfully built $(LINUX_DEB_ARM64)"
 
