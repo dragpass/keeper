@@ -122,6 +122,45 @@ func (r MLSLeafDeclareRequest) Validate() error {
 	return requireMLSLeafReason(r.Reason, "reason")
 }
 
+// The challenge ariadne issues from POST /account/mls-leaves/challenge for one
+// declaration. Parsing it is what binds the gate to this purpose: the server
+// signature alone would accept any token the server has ever signed.
+//
+//	dragpass.mls.leaf.challenge|1|<account_id>|<device_id>|<nonce>|<expires_at_unix>
+const (
+	MLSLeafChallengeDomain     = "dragpass.mls.leaf.challenge"
+	MLSLeafChallengeVersion    = 1
+	MLSLeafChallengeTTLSeconds = 300
+)
+
+type MLSLeafChallenge struct {
+	AccountID string
+	DeviceID  string
+	Nonce     string
+	ExpiresAt int64
+}
+
+// ParseMLSLeafChallenge accepts only the exact bytes the issuer produces, so a
+// token has one spelling. Single use is the server's to enforce: it consumes
+// the nonce together with the declaration write.
+func ParseMLSLeafChallenge(token string) (MLSLeafChallenge, error) {
+	invalid := newValidationError("challenge_token", "is not an mls leaf challenge")
+	parts := strings.Split(token, "|")
+	if len(parts) != 6 || parts[0] != MLSLeafChallengeDomain || parts[1] != strconv.Itoa(MLSLeafChallengeVersion) {
+		return MLSLeafChallenge{}, invalid
+	}
+	if requireMessageUUID(parts[2], "challenge_token") != nil ||
+		requireMessageUUID(parts[3], "challenge_token") != nil ||
+		requireKeyFingerprint(parts[4], "challenge_token") != nil {
+		return MLSLeafChallenge{}, invalid
+	}
+	expiresAt, err := strconv.ParseInt(parts[5], 10, 64)
+	if err != nil || expiresAt <= 0 || strconv.FormatInt(expiresAt, 10) != parts[5] {
+		return MLSLeafChallenge{}, invalid
+	}
+	return MLSLeafChallenge{AccountID: parts[2], DeviceID: parts[3], Nonce: parts[4], ExpiresAt: expiresAt}, nil
+}
+
 type MLSLeafDeclareResponseData struct {
 	MLSLeafDeclaration
 }

@@ -105,3 +105,29 @@ func TestMLSLeafDeclareRequest_Validate(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMLSLeafChallenge(t *testing.T) {
+	const nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	token := "dragpass.mls.leaf.challenge|1|" + mlsLeafGoldenAccountID + "|" + mlsLeafGoldenDeviceID + "|" + nonce + "|1788999300"
+	got, err := ParseMLSLeafChallenge(token)
+	if err != nil {
+		t.Fatalf("well-formed challenge refused: %v", err)
+	}
+	want := MLSLeafChallenge{AccountID: mlsLeafGoldenAccountID, DeviceID: mlsLeafGoldenDeviceID, Nonce: nonce, ExpiresAt: 1788999300}
+	if got != want {
+		t.Fatalf("parsed %+v, want %+v", got, want)
+	}
+	for _, bad := range []string{
+		"",
+		"rotate-challenge-001",
+		strings.Replace(token, "|1|", "|01|", 1),
+		strings.Replace(token, nonce, strings.ToUpper(nonce), 1),
+		strings.Replace(token, "1788999300", "+1788999300", 1),
+		strings.Replace(token, "1788999300", "-1", 1),
+		token + "\n",
+	} {
+		if _, err := ParseMLSLeafChallenge(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

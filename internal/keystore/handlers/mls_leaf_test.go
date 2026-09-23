@@ -12,6 +12,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,15 +29,29 @@ const (
 	leafTestDeviceID  = "44444444-4444-4444-8444-444444444444"
 )
 
+const leafTestNonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func leafChallenge(accountID, deviceID string, expiresAt int64) string {
+	return "dragpass.mls.leaf.challenge|1|" + accountID + "|" + deviceID + "|" + leafTestNonce + "|" +
+		strconv.FormatInt(expiresAt, 10)
+}
+
 func leafDeclareRequest(reason string) proto.MLSLeafDeclareRequest {
-	return proto.MLSLeafDeclareRequest{
-		ChallengeToken:  "leaf-challenge",
+	req := proto.MLSLeafDeclareRequest{
 		ServerSignature: "any",
 		AccountID:       leafTestAccountID,
 		DeviceID:        leafTestDeviceID,
 		NotBefore:       time.Now().Unix(),
 		Reason:          reason,
 	}
+	return withLeafChallenge(req)
+}
+
+// withLeafChallenge re-issues the challenge for whatever identity req names,
+// so tests that change the identity exercise the key check, not the gate.
+func withLeafChallenge(req proto.MLSLeafDeclareRequest) proto.MLSLeafDeclareRequest {
+	req.ChallengeToken = leafChallenge(req.AccountID, req.DeviceID, time.Now().Unix()+proto.MLSLeafChallengeTTLSeconds)
+	return req
 }
 
 func accountPublicKey(t *testing.T, pemText string) *rsa.PublicKey {
@@ -166,7 +181,7 @@ func TestHandleMLSLeafDeclare_RefusesToRebindAnotherDevicesKey(t *testing.T) {
 		otherAccount := leafDeclareRequest(reason)
 		otherAccount.AccountID = "22222222-2222-4222-8222-222222222222"
 		for _, req := range []proto.MLSLeafDeclareRequest{otherDevice, otherAccount} {
-			if resp := HandleMLSLeafDeclare(deps, req); resp.Success {
+			if resp := HandleMLSLeafDeclare(deps, withLeafChallenge(req)); resp.Success {
 				t.Fatalf("%s for a different identity succeeded", reason)
 			}
 		}
@@ -206,6 +221,66 @@ func TestHandleMLSLeafDeclare_GatesBeforeTouchingTheKey(t *testing.T) {
 			t.Fatal("a key was stored with nothing to declare it under")
 		}
 	})
+}
+
+// Every token here carries a valid server signature (the verifier passes); what
+// is refused is a token not issued for this declaration. The enrolled key must
+// come through each refusal byte for byte.
+func TestHandleMLSLeafDeclare_ChallengeIsBoundToPurposeAndIdentity(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	declareLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
+	before, err := store.Get(config.Service, config.MLSLeafSignatureKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	valid := now + proto.MLSLeafChallengeTTLSeconds
+	otherID := "55555555-5555-4555-8555-555555555555"
+	refused := map[string]string{
+		"rotation challenge":   "rotate-challenge-001",
+		"other domain":         "dragpass.keyrotation|1|" + leafTestAccountID + "|" + leafTestDeviceID + "|" + leafTestNonce + "|" + strconv.FormatInt(valid, 10),
+		"version 2":            "dragpass.mls.leaf.challenge|2|" + leafTestAccountID + "|" + leafTestDeviceID + "|" + leafTestNonce + "|" + strconv.FormatInt(valid, 10),
+		"extra field":          leafChallenge(leafTestAccountID, leafTestDeviceID, valid) + "|x",
+		"short nonce":          "dragpass.mls.leaf.challenge|1|" + leafTestAccountID + "|" + leafTestDeviceID + "|abcd|" + strconv.FormatInt(valid, 10),
+		"padded expiry":        "dragpass.mls.leaf.challenge|1|" + leafTestAccountID + "|" + leafTestDeviceID + "|" + leafTestNonce + "|0" + strconv.FormatInt(valid, 10),
+		"other account":        leafChallenge(otherID, leafTestDeviceID, valid),
+		"other device":         leafChallenge(leafTestAccountID, otherID, valid),
+		"expired":              leafChallenge(leafTestAccountID, leafTestDeviceID, now-1),
+		"expires now":          leafChallenge(leafTestAccountID, leafTestDeviceID, now),
+		"issued in the future": leafChallenge(leafTestAccountID, leafTestDeviceID, now+proto.MLSLeafChallengeTTLSeconds+mlsLeafChallengeClockSkewSeconds+60),
+	}
+	for _, reason := range []string{proto.MLSLeafReasonEnroll, proto.MLSLeafReasonRotate} {
+		for name, token := range refused {
+			req := leafDeclareRequest(reason)
+			req.ChallengeToken = token
+			if resp := HandleMLSLeafDeclare(deps, req); resp.Success {
+				t.Errorf("%s/%s: accepted", reason, name)
+			}
+			after, err := store.Get(config.Service, config.MLSLeafSignatureKey)
+			if err != nil || after != before {
+				t.Fatalf("%s/%s: the keyring slot changed on a refused challenge", reason, name)
+			}
+		}
+	}
+
+	if resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonRotate)); !resp.Success {
+		t.Fatalf("a correctly formed challenge was refused: %s", resp.Error)
+	}
+}
+
+func TestHandleMLSLeafDeclare_RefusedChallengeCreatesNoKey(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	req := leafDeclareRequest(proto.MLSLeafReasonEnroll)
+	req.ChallengeToken = leafChallenge(leafTestAccountID, leafTestDeviceID, time.Now().Unix()-1)
+	if resp := HandleMLSLeafDeclare(deps, req); resp.Success {
+		t.Fatal("expired challenge accepted")
+	}
+	if _, err := store.Get(config.Service, config.MLSLeafSignatureKey); err == nil {
+		t.Fatal("a refused challenge created a key")
+	}
 }
 
 func TestResetDeviceIdentity_RemovesTheMLSLeafKey(t *testing.T) {

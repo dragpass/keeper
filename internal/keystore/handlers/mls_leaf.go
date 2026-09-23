@@ -28,6 +28,10 @@ import (
 // either way: rebinding it would let one device's key speak for another, and
 // the way out is reset_device_identity.
 //
+// The gate is the server signature plus a challenge bound to this purpose,
+// account and device (requireMLSLeafChallenge); both run before the stored key
+// is read.
+//
 // On rotate the new key is written only after the declaration is signed, so a
 // failure leaves the old key and the declaration peers already hold in step.
 func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseResponse {
@@ -37,6 +41,9 @@ func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseRes
 		return errs.Response(err)
 	}
 	if ok, resp := verifyServerSig(d, req.ChallengeToken, req.ServerSignature, req.ServerKeyVersion, "mls leaf declare"); !ok {
+		return resp
+	}
+	if resp, ok := requireMLSLeafChallenge(d, req); !ok {
 		return resp
 	}
 	if rotatedAtTooFarAhead(d, req.NotBefore) {
@@ -103,6 +110,32 @@ func HandleMLSLeafDeclare(d Deps, req proto.MLSLeafDeclareRequest) proto.BaseRes
 
 	d.Logger.Printf("mls leaf declare successful (reason=%s, new key=%t)", req.Reason, mint)
 	return proto.BaseResponse{Success: true, Data: proto.MLSLeafDeclareResponseData{MLSLeafDeclaration: declaration}}
+}
+
+// mlsLeafChallengeClockSkewSeconds matches the future-issue tolerance of the
+// chat permits (chatStatePermitClockSkewSeconds). The token carries no issue
+// time, but the issuer sets expires_at to it plus the TTL, so an expiry further
+// out than TTL + skew is a token issued in the future.
+const mlsLeafChallengeClockSkewSeconds = 5
+
+// requireMLSLeafChallenge binds the verified token to this request. Expiry has
+// no grace, as with the chat permits: at expires_at the token is dead.
+func requireMLSLeafChallenge(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse, bool) {
+	challenge, err := proto.ParseMLSLeafChallenge(req.ChallengeToken)
+	if err != nil {
+		return errs.Response(err), false
+	}
+	if challenge.AccountID != req.AccountID || challenge.DeviceID != req.DeviceID {
+		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token was issued for a different account or device"), false
+	}
+	now := d.Now().Unix()
+	if now >= challenge.ExpiresAt {
+		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token has expired"), false
+	}
+	if challenge.ExpiresAt > now+proto.MLSLeafChallengeTTLSeconds+mlsLeafChallengeClockSkewSeconds {
+		return errs.CodeResponse(errs.ErrCodeValidation, "challenge_token expires too far in the future"), false
+	}
+	return proto.BaseResponse{}, true
 }
 
 // VerifyLeafDeclaration checks a declaration against the account key it claims
