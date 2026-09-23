@@ -177,7 +177,15 @@ func openChatState(
 		return nil, chatstate.ServerWatermark{}, resp, false
 	}
 	permit, _, conversationID := req.ChatStateContext()
+	return openChatStateStore(d, permit, conversationID)
+}
 
+// openChatStateStore is openChatState after the gate: it opens the permit
+// owner's store and checks the watermark names this device's leaf. Only a
+// caller that has already run authorizeChatState may reach it.
+func openChatStateStore(
+	d Deps, permit proto.ChatStatePermit, conversationID string,
+) (*chatstate.Store, chatstate.ServerWatermark, proto.BaseResponse, bool) {
 	store, err := chatstate.Open(d.Store, permit.AccountID)
 	if err != nil {
 		return nil, chatstate.ServerWatermark{}, chatStateFailure(d, "open", err), false
@@ -200,7 +208,17 @@ func openChatState(
 // window, signature. openChatState runs it first; an action that is gated by
 // the same permit but reads no conversation state runs only this.
 func authorizeChatState(d Deps, payload json.RawMessage, req proto.ChatStateBound) (proto.BaseResponse, bool) {
-	if resp, ok := decodeChatStateRequest(payload, req); !ok {
+	return authorizeChatStateCapped(d, payload, req, proto.ChatStateMaxRequestBytes)
+}
+
+// authorizeChatStateCapped is authorizeChatState with the request's own size
+// cap. The MLS actions carry KeyPackages, Commits, Welcomes and batches that
+// one ciphertext's 32 KiB does not fit; everything after the cap is the same
+// gate in the same order.
+func authorizeChatStateCapped(
+	d Deps, payload json.RawMessage, req proto.ChatStateBound, maxBytes int,
+) (proto.BaseResponse, bool) {
+	if resp, ok := decodeChatStateRequestCapped(payload, req, maxBytes); !ok {
 		return resp, false
 	}
 	permit, orgID, conversationID := req.ChatStateContext()
@@ -257,7 +275,11 @@ func chatStateWatermarkNamesThisLeaf(
 // json.Unmarshal: a duplicate `conversation_id` would otherwise verify against
 // one value and advance the chain of another.
 func decodeChatStateRequest(payload json.RawMessage, req proto.Validator) (proto.BaseResponse, bool) {
-	if len(payload) > proto.ChatStateMaxRequestBytes {
+	return decodeChatStateRequestCapped(payload, req, proto.ChatStateMaxRequestBytes)
+}
+
+func decodeChatStateRequestCapped(payload json.RawMessage, req proto.Validator, maxBytes int) (proto.BaseResponse, bool) {
+	if len(payload) > maxBytes {
 		return chatStateInvalidInput("request exceeds the maximum size"), false
 	}
 	if err := strictDecodeJSON(payload, req); err != nil {
@@ -315,6 +337,49 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	switch {
 	case errors.Is(err, mls.ErrLeafUntrusted):
 		return mlsLeafUntrustedResponse(d, stage, err)
+	case errors.Is(err, mls.ErrUnavailable):
+		code, message = proto.ChatMLSErrorCodeCapabilityRequired,
+			"this Keeper was built without the MLS library"
+	case errors.Is(err, chatstate.ErrCommitPending):
+		code, message = proto.ChatMLSErrorCodeCommitPending,
+			"a commit from this device is waiting for its outcome; confirm it first"
+	case errors.Is(err, chatstate.ErrEpochStale):
+		code, message = proto.ChatMLSErrorCodeEpochStale,
+			"the request was built for another epoch than the one this device is on"
+	case errors.Is(err, chatstate.ErrHandshakeApplied):
+		code, message = proto.ChatMLSErrorCodeEpochStale,
+			"that handshake is already applied on this device"
+	case errors.Is(err, chatstate.ErrHandshakeSkipped):
+		code, message = proto.ChatMLSErrorCodeEpochStale,
+			"an earlier handshake has not been applied on this device"
+	case errors.Is(err, chatstate.ErrNoGroupState):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"this device holds no group for this conversation"
+	case errors.Is(err, chatstate.ErrGroupExists):
+		code, message = proto.ChatStateErrorCodeConflict,
+			"this device already holds a group for this conversation"
+	case errors.Is(err, chatstate.ErrNoPendingCommit):
+		code, message = proto.ChatStateErrorCodeConflict,
+			"this device has no pending commit to settle"
+	case errors.Is(err, chatstate.ErrCommitMismatch):
+		code, message = proto.ChatStateErrorCodeConflict,
+			"the pending commit on this device has another client_commit_id"
+	case errors.Is(err, mls.ErrNoKeyPackageForWelcome):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"this device holds no key package the welcome is addressed to"
+	case errors.Is(err, mls.ErrGroupMismatch):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"the welcome is for a different conversation"
+	case errors.Is(err, chatstate.ErrHistoryUnavailable):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"this device has no usable local copy of that message"
+	case errors.Is(err, chatstate.ErrNotHandshake),
+		errors.Is(err, chatstate.ErrNotApplication),
+		errors.Is(err, chatstate.ErrDeclarationMismatch),
+		errors.Is(err, chatstate.ErrGenerationUnknown),
+		errors.Is(err, chatstate.ErrBurnForward),
+		errors.Is(err, mls.ErrFailed):
+		code, message = proto.ChatMLSErrorCodeFailed, "the mls operation failed; nothing was applied"
 	case errors.Is(err, chatstate.ErrRotationPending):
 		code, message = proto.ChatMLSErrorCodeRotationPending,
 			"a member removal is not yet applied on this device; new messages cannot be encrypted"

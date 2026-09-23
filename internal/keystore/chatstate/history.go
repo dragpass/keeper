@@ -97,6 +97,12 @@ type HistoryEntry struct {
 	// entry's plaintext.
 	Position *Position `json:"position,omitempty"`
 
+	// SenderAccountID and SenderDeviceID are the sending leaf's credential at
+	// the first delivery, for the same reason Position is here: after that the
+	// key and possibly the leaf are gone. Bound into the AAD with it.
+	SenderAccountID string `json:"sender_account_id,omitempty"`
+	SenderDeviceID  string `json:"sender_device_id,omitempty"`
+
 	IV         []byte `json:"iv"`
 	Ciphertext []byte `json:"ciphertext"`
 }
@@ -134,7 +140,7 @@ func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Ti
 	r.History = kept
 }
 
-func historyAAD(ownerAccountID, conversationID string, seq uint64, position Position) []byte {
+func historyAAD(ownerAccountID, conversationID string, seq uint64, position Position, sender Sender) []byte {
 	return []byte(strings.Join([]string{
 		historyAADDomain,
 		strconv.Itoa(SchemaVersion),
@@ -145,6 +151,8 @@ func historyAAD(ownerAccountID, conversationID string, seq uint64, position Posi
 		strconv.FormatUint(uint64(position.SenderLeafIndex), 10),
 		string(position.ContentType),
 		strconv.FormatUint(position.Generation, 10),
+		sender.AccountID,
+		sender.DeviceID,
 	}, "|"))
 }
 
@@ -152,7 +160,7 @@ func historyAAD(ownerAccountID, conversationID string, seq uint64, position Posi
 // plaintext buffer and still has to wipe it, and position must be the one the
 // caller has just verified.
 func (s *Store) sealHistory(
-	conversationID string, seq uint64, position Position, plaintext []byte, now time.Time,
+	conversationID string, seq uint64, position Position, sender Sender, plaintext []byte, now time.Time,
 ) (HistoryEntry, error) {
 	gcm, err := newGCM(s.historyKey)
 	if err != nil {
@@ -163,11 +171,13 @@ func (s *Store) sealHistory(
 		return HistoryEntry{}, err
 	}
 	return HistoryEntry{
-		Seq:        seq,
-		StoredAt:   now.Unix(),
-		Position:   &position,
-		IV:         iv,
-		Ciphertext: gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, seq, position)),
+		Seq:             seq,
+		StoredAt:        now.Unix(),
+		Position:        &position,
+		SenderAccountID: sender.AccountID,
+		SenderDeviceID:  sender.DeviceID,
+		IV:              iv,
+		Ciphertext:      gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, seq, position, sender)),
 	}, nil
 }
 
@@ -188,7 +198,7 @@ func (s *Store) openHistory(conversationID string, e HistoryEntry) ([]byte, Posi
 		return nil, Position{}, errSealedRecordMalformed
 	}
 	plaintext, err := gcm.Open(nil, e.IV, e.Ciphertext,
-		historyAAD(s.owner, conversationID, e.Seq, *e.Position))
+		historyAAD(s.owner, conversationID, e.Seq, *e.Position, Sender{AccountID: e.SenderAccountID, DeviceID: e.SenderDeviceID}))
 	if err != nil {
 		return nil, Position{}, errSealedRecordMalformed
 	}

@@ -590,6 +590,25 @@ pub unsafe extern "C" fn dpmls_group_roster(handle: *mut Session, out: *mut DpBu
     })
 }
 
+/// The group's id, which this integration sets to the conversation id when it
+/// creates the group. A joiner compares the two before it keeps a group a
+/// Welcome produced.
+///
+/// # Safety
+/// `handle` as in `session_of`; `out` must point to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_id(handle: *mut Session, out: *mut DpBuf) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let id = unsafe { session_of(handle)? }.group_id()?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, id)? };
+        Ok(DPMLS_OK)
+    })
+}
+
 /// Promote the pending Commit to confirmed.
 ///
 /// # Safety

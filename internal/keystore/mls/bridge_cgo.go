@@ -78,6 +78,7 @@ int32_t dpmls_group_commit_apply(DpSession *handle);
 int32_t dpmls_group_commit_clear(DpSession *handle);
 int32_t dpmls_group_has_pending_commit(DpSession *handle, uint8_t *out);
 int32_t dpmls_group_epoch(DpSession *handle, uint64_t *out);
+int32_t dpmls_group_id(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_join(DpSession *handle, const uint8_t *welcome, size_t welcome_len);
 
 int32_t dpmls_group_encrypt(DpSession *handle,
@@ -367,6 +368,22 @@ func (s *Session) HasPendingCommit() (bool, error) {
 		return false, statusError(rc)
 	}
 	return out != 0, nil
+}
+
+// GroupID is the MLS group id. Groups this Keeper creates use the
+// conversation id, which is what a join is checked against.
+func (s *Session) GroupID() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	if rc := C.dpmls_group_id(h, &buf); rc != 0 {
+		return nil, statusError(rc)
+	}
+	return takeBuf(&buf), nil
 }
 
 // Epoch is the confirmed epoch. A pending Commit never shows up here, which is
@@ -664,5 +681,5 @@ func statusError(rc C.int32_t) error {
 	if rc == -4 {
 		return fmt.Errorf("%w (status %d): %s", ErrLeafUntrusted, int(rc), msg)
 	}
-	return fmt.Errorf("mls (status %d): %s", int(rc), msg)
+	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

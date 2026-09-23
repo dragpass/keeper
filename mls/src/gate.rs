@@ -181,19 +181,32 @@ impl IdentityProvider for LeafGate {
         Ok(basic(signing_identity)?.identifier.to_vec())
     }
 
-    // A member's leaf may change its HPKE key but not the key it signs with or
-    // the identity it claims. Either change would be a new leaf arriving
-    // through an update, past the approval list: the declaration that vouched
-    // for the old signature key says nothing about a new one.
+    // A member's leaf may never change the identity it claims. It may change
+    // the key it signs with only to a successor this operation admitted: a
+    // leaf rotation reaches existing groups as an Update carrying the new key
+    // (design P3), and the declaration that vouched for the old key says
+    // nothing about the new one, so the new leaf goes through the same
+    // approval list an Add does. In `Collect` everything is admitted, which is
+    // what lets the collect pass report the replacement for Go to verify.
     fn valid_successor(
         &self,
         predecessor: &SigningIdentity,
         successor: &SigningIdentity,
         _extensions: &ExtensionList,
     ) -> Result<bool, Self::Error> {
-        basic(predecessor)?;
-        basic(successor)?;
-        Ok(predecessor == successor)
+        let before = basic(predecessor)?;
+        let after = basic(successor)?;
+        if before.identifier != after.identifier {
+            return Ok(false);
+        }
+        if predecessor == successor {
+            return Ok(true);
+        }
+        match self.admits(successor) {
+            Ok(()) => Ok(true),
+            Err(GateError::NotApproved) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     fn supported_types(&self) -> Vec<CredentialType> {
@@ -440,16 +453,30 @@ mod tests {
         assert!(gate.admits(&identity(b"anyone", b"k")).is_ok());
     }
 
+    // The identity never changes. The key changes only to a successor the
+    // operation admitted, which is how a rotated leaf enters (design P3).
     #[test]
-    fn a_successor_must_keep_its_identity_and_signature_key() {
+    fn a_successor_keeps_its_identity_and_changes_its_key_only_when_admitted() {
         let gate = LeafGate::new(identity(b"me", b"k"));
         let a = identity(b"a", b"k1");
-        assert!(gate.valid_successor(&a, &a, &ExtensionList::new()).unwrap());
+        let rotated = identity(b"a", b"k2");
+        let none = ExtensionList::new();
+        assert!(gate.valid_successor(&a, &a, &none).unwrap());
+        assert!(!gate.valid_successor(&a, &rotated, &none).unwrap());
         assert!(!gate
-            .valid_successor(&a, &identity(b"a", b"k2"), &ExtensionList::new())
+            .valid_successor(&a, &identity(b"b", b"k1"), &none)
             .unwrap());
+
+        gate.enforce(vec![rotated.clone()]).unwrap();
+        assert!(gate.valid_successor(&a, &rotated, &none).unwrap());
         assert!(!gate
-            .valid_successor(&a, &identity(b"b", b"k1"), &ExtensionList::new())
+            .valid_successor(&a, &identity(b"b", b"k2"), &none)
+            .unwrap());
+
+        gate.collect().unwrap();
+        assert!(gate.valid_successor(&a, &rotated, &none).unwrap());
+        assert!(!gate
+            .valid_successor(&a, &identity(b"b", b"k1"), &none)
             .unwrap());
     }
 

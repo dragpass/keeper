@@ -66,6 +66,9 @@ func TestMCPCallableActions_ExcludeChatState(t *testing.T) {
 	if pinned[proto.ActionConversationDecryptBatchForAppDisplay] {
 		t.Error("the chat reveal action is on the MCP surface")
 	}
+	if pinned[proto.MLSDecryptBatchForAppDisplay] {
+		t.Error("the chat v2 reveal action is on the MCP surface")
+	}
 }
 
 // A model that could reach declare could vouch for a leaf key under the
@@ -96,6 +99,55 @@ func TestMCPCallableActions_ExcludeMLSKeyPackageGenerate(t *testing.T) {
 	}
 	if _, ok := actionRegistry[proto.MLSKeyPackageGenerate]; !ok {
 		t.Fatal("mls_key_package_generate is not registered; this guard checks nothing")
+	}
+}
+
+// mlsChatActionNames is every action that reads or writes the MLS group state.
+// A model that could reach any of them could add a leaf to a conversation,
+// move its epoch, or encrypt and read under this account's name.
+var mlsChatActionNames = []string{
+	proto.MLSGroupCreate,
+	proto.MLSCommitBuild,
+	proto.MLSCommitConfirm,
+	proto.MLSProcess,
+	proto.MLSJoin,
+	proto.MLSEncrypt,
+	proto.MLSDecryptBatchForAppDisplay,
+	proto.MLSConversationStatus,
+}
+
+func TestMCPCallableActions_ExcludeTheMLSChatActions(t *testing.T) {
+	pinned := map[string]bool{}
+	for _, action := range mcpCallableActions {
+		pinned[action] = true
+	}
+	for _, action := range mlsChatActionNames {
+		if _, ok := actionRegistry[action]; !ok {
+			t.Fatalf("%s is not registered; this guard checks nothing", action)
+		}
+		if pinned[action] {
+			t.Errorf("mls chat action %q is on the MCP surface", action)
+		}
+	}
+}
+
+// TestMLSChatActions_AreExactlyTheRegistered keeps mlsChatActionNames honest
+// the way the chat_state_* guard below keeps its set honest: an MLS chat
+// action registered without being named here fails rather than slipping past
+// the MCP check above.
+func TestMLSChatActions_AreExactlyTheRegistered(t *testing.T) {
+	want := map[string]bool{}
+	for _, action := range mlsChatActionNames {
+		want[action] = true
+	}
+	got := mlsChatActions()
+	if len(got) != len(want) {
+		t.Fatalf("registered mls chat actions = %d, want %d", len(got), len(want))
+	}
+	for action := range got {
+		if !want[action] {
+			t.Errorf("mls chat action %q is registered but not guarded", action)
+		}
 	}
 }
 

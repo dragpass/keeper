@@ -138,6 +138,10 @@ type BeginCommitRequest struct {
 	ClientCommitID string
 
 	Plan CommitPlan
+
+	// ExpectedEpoch refuses a build when the confirmed epoch is another one,
+	// before anything is built. Zero asserts nothing, as in SendRequest.
+	ExpectedEpoch uint64
 }
 
 // BeginCommitResult is what the caller posts to the server's CAS endpoint.
@@ -236,6 +240,15 @@ func (s *Store) BeginCommit(
 		}
 		if err := cipher.Load(rec.GroupState); err != nil {
 			return err
+		}
+		if req.ExpectedEpoch != 0 {
+			epoch, err := cipher.Epoch()
+			if err != nil {
+				return err
+			}
+			if epoch != req.ExpectedEpoch {
+				return ErrEpochStale
+			}
 		}
 		// Never a refusal here, whatever is latched: a Remove Commit is the
 		// only way a latched conversation gets out (§6.4.1 condition 2). The

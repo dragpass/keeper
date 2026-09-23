@@ -59,6 +59,12 @@ type Opened struct {
 	// looked" the same answer.
 	KeyGeneration *uint32
 
+	// SenderAccountID and SenderDeviceID are the credential of the leaf that
+	// sent an application message, read from the group's own tree and never
+	// from the server. Empty for anything else.
+	SenderAccountID string
+	SenderDeviceID  string
+
 	// Plaintext is set for an application message. The caller of Open keeps
 	// ownership; this package wipes it before returning on every path that
 	// does not hand it back.
@@ -88,6 +94,28 @@ type ReceiveCipher interface {
 type ReceiveRequest struct {
 	Seq     uint64
 	Message []byte
+
+	// Handshake marks a Commit taken from the server's handshake log, and
+	// ProducedEpoch is the epoch that log says it produced. Together they are
+	// the ordering rule for handshakes: the one applied next must produce the
+	// epoch after the confirmed one, no earlier and no later.
+	//
+	// The rule is on epochs and not on Seq because the server numbers
+	// handshakes and application messages on one gap-free axis, so a gap
+	// between two handshake seqs is ordinary and says nothing about a
+	// handshake having been skipped. The epoch does: the server keeps one
+	// handshake per epoch, and MLS binds the epoch into the Commit it
+	// authenticates, so the claimed value is checked against what applying
+	// the Commit actually produced before anything is written.
+	Handshake     bool
+	ProducedEpoch uint64
+}
+
+// Sender is who sent an application message, as the MLS credential of the
+// sending leaf named them.
+type Sender struct {
+	AccountID string
+	DeviceID  string
 }
 
 // ReceiveResult is what the caller may show.
@@ -96,6 +124,10 @@ type ReceiveResult struct {
 	Application bool
 	Removed     bool
 	Position    Position
+
+	// Sender is set for an application message, from the credential at the
+	// first delivery and from the sealed copy on a re-read.
+	Sender Sender
 
 	// FirstDelivery is false when this position was already marked.
 	FirstDelivery bool
@@ -108,6 +140,21 @@ type ReceiveResult struct {
 	// current one when nothing was written.
 	Generation uint64
 }
+
+var (
+	// ErrHandshakeApplied — the handshake produces an epoch this record is
+	// already at or past. A redelivery, or this device's own accepted Commit
+	// coming back from the log.
+	ErrHandshakeApplied = errors.New("chat state is already past the epoch this handshake produces")
+
+	// ErrHandshakeSkipped — the handshake produces an epoch more than one past
+	// the confirmed one, so at least one handshake before it was not applied.
+	ErrHandshakeSkipped = errors.New("chat state has not applied the handshake before this one")
+
+	// ErrNotHandshake — a message handed in as a handshake decrypted as an
+	// application message. Nothing was written.
+	ErrNotHandshake = errors.New("chat state was handed an application message as a handshake")
+)
 
 // ErrHistoryUnavailable — the sealed copy for this sequence is not there, or
 // cannot say who sent it. A re-read of a message whose history has been
@@ -132,103 +179,230 @@ func (s *Store) Receive(
 		if err != nil {
 			return err
 		}
-		if stored, ok := rec.findHistory(req.Seq); ok {
-			out, err = s.reread(conversationID, rec, stored)
-			return err
-		}
-		// A re-read above is served from the sealed copy and never reaches
-		// here, so an unsettled Commit does not stop anyone from reading what
-		// they already have. What it does stop is feeding a new message to
-		// MLS. A Commit handed to Open while ours is pending would be applied
-		// by the library and would silently drop our pending along with it,
-		// settling the race behind the record's back; ConfirmCommit is where
-		// that message belongs (§7.3.2).
-		if rec.Pending != nil {
-			return ErrCommitPending
-		}
-		if len(rec.GroupState) == 0 {
-			return ErrNoGroupState
-		}
-		if err := cipher.Load(rec.GroupState); err != nil {
-			return err
-		}
-
-		opened, err := cipher.Open(req.Message)
-		if err != nil {
-			return err
-		}
-		defer secure.Zeroize(opened.Plaintext)
-
-		position := Position{
-			Epoch:           opened.Epoch,
-			SenderLeafIndex: opened.SenderLeafIndex,
-			ContentType:     ContentTypeApplication,
-		}
-		if opened.Application {
-			if opened.KeyGeneration != nil {
-				position.Generation = uint64(*opened.KeyGeneration)
-			}
-			if err := verifyDeclaration(
-				opened.AuthenticatedData, position, opened.KeyGeneration,
-			); err != nil {
-				return err
-			}
-		}
-
-		// Judged on the state Open left behind: somebody else's Commit that
-		// took the leaf out is confirmed the moment it is applied. A device
-		// that was itself removed has no group left to read a roster from and
-		// will never encrypt in it again, so its latch is left as it was.
-		latch := rec.RemovalLatch
-		if !opened.Removed {
-			if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
-				return err
-			}
-		}
-
-		state, err := cipher.State()
-		if err != nil {
-			return err
-		}
 		loaded := rec.Generation
-		rec.GroupState = state
-		rec.RemovalLatch = latch
-		rec.enterEpoch(opened.Epoch)
-		first := true
-		if opened.Application {
-			first = !rec.receivedContains(position)
-			if first {
-				rec.appendReceived(position)
-			}
-			entry, err := s.sealHistory(conversationID, req.Seq, position, opened.Plaintext, time.Now())
-			if err != nil {
-				return err
-			}
-			rec.appendHistory(entry, s.HistoryPolicy, time.Now())
+		var changed bool
+		out, changed, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
+		if err != nil || !changed {
+			return err
 		}
 		// One replacement carries the advanced state, the mark and the sealed
 		// copy. There is no arrangement of these three that can be observed
 		// half-done, which is what §8.4's first condition asks for.
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			secure.Zeroize(out.Plaintext)
 			return err
 		}
-
-		out = ReceiveResult{
-			Application:   opened.Application,
-			Removed:       opened.Removed,
-			Position:      position,
-			FirstDelivery: first,
-			Generation:    rec.Generation,
-		}
-		if opened.Application {
-			out.Plaintext = append([]byte(nil), opened.Plaintext...)
-		}
+		out.Generation = rec.Generation
 		return nil
 	})
 	if err != nil {
 		return ReceiveResult{}, err
 	}
 	return out, nil
+}
+
+// MaxReceiveBatch bounds one ReceiveBatch: the display page the app asks for.
+const MaxReceiveBatch = 200
+
+// ReceiveBatch confirms a page of application messages as one transaction:
+// every message is opened, checked and sealed into the history in memory, and
+// the record is replaced once at the end. One refusal anywhere — a message that
+// does not open, a declaration that does not match, something that is not an
+// application message, or accept saying no — writes nothing and returns no
+// plaintext at all.
+//
+// A refused batch leaves the disk believing the keys of the messages before
+// the refusal are unused, although the library consumed them in memory. That
+// is the direction receive.go already takes for a refused message, for the
+// same reason: re-deriving a decryption key for one ciphertext is not the reuse
+// this design cannot take back, and confirming a delivery whose plaintext the
+// caller never got would be.
+//
+// accept sees each new plaintext before it is sealed; nil accepts everything.
+// Re-reads from the history are not shown to it: they were accepted when they
+// were first delivered.
+func (s *Store) ReceiveBatch(
+	conversationID string, wm ServerWatermark, reqs []ReceiveRequest,
+	accept func(plaintext []byte) error, cipher ReceiveCipher,
+) ([]ReceiveResult, error) {
+	if len(reqs) == 0 || len(reqs) > MaxReceiveBatch {
+		return nil, errors.New("receive batch size is out of range")
+	}
+	seen := make(map[uint64]bool, len(reqs))
+	for _, req := range reqs {
+		if len(req.Message) == 0 || req.Handshake || seen[req.Seq] {
+			return nil, errors.New("receive batch needs distinct application messages")
+		}
+		seen[req.Seq] = true
+	}
+	out := make([]ReceiveResult, 0, len(reqs))
+	wipe := func() {
+		for _, r := range out {
+			secure.Zeroize(r.Plaintext)
+		}
+	}
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		changed := false
+		for _, req := range reqs {
+			result, wrote, err := s.receiveOne(conversationID, rec, wm, req, cipher, accept)
+			if err != nil {
+				return err
+			}
+			if !result.Application {
+				return ErrNotApplication
+			}
+			out = append(out, result)
+			changed = changed || wrote
+		}
+		if !changed {
+			return nil
+		}
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		for i := range out {
+			out[i].Generation = rec.Generation
+		}
+		return nil
+	})
+	if err != nil {
+		wipe()
+		return nil, err
+	}
+	return out, nil
+}
+
+// ErrNotApplication — a message in a display batch was a handshake. Commits
+// go through the handshake path, in epoch order; nothing was written.
+var ErrNotApplication = errors.New("chat state was handed a handshake as an application message")
+
+// receiveOne is one delivery against a loaded record, in memory. It reports
+// whether it changed the record; the caller writes it. The returned plaintext
+// is a copy the caller owns.
+func (s *Store) receiveOne(
+	conversationID string, rec *Record, wm ServerWatermark, req ReceiveRequest,
+	cipher ReceiveCipher, accept func([]byte) error,
+) (ReceiveResult, bool, error) {
+	if len(req.Message) == 0 {
+		return ReceiveResult{}, false, errors.New("receive needs a message")
+	}
+	if stored, ok := rec.findHistory(req.Seq); ok && !req.Handshake {
+		out, err := s.reread(conversationID, rec, stored)
+		return out, false, err
+	}
+	// A re-read above is served from the sealed copy and never reaches
+	// here, so an unsettled Commit does not stop anyone from reading what
+	// they already have. What it does stop is feeding a new message to
+	// MLS. A Commit handed to Open while ours is pending would be applied
+	// by the library and would silently drop our pending along with it,
+	// settling the race behind the record's back; ConfirmCommit is where
+	// that message belongs (§7.3.2).
+	if rec.Pending != nil {
+		return ReceiveResult{}, false, ErrCommitPending
+	}
+	if len(rec.GroupState) == 0 {
+		return ReceiveResult{}, false, ErrNoGroupState
+	}
+	if req.Handshake {
+		switch {
+		case req.ProducedEpoch <= rec.Epoch:
+			return ReceiveResult{}, false, ErrHandshakeApplied
+		case req.ProducedEpoch > rec.Epoch+1:
+			return ReceiveResult{}, false, ErrHandshakeSkipped
+		}
+	}
+	if err := cipher.Load(rec.GroupState); err != nil {
+		return ReceiveResult{}, false, err
+	}
+
+	opened, err := cipher.Open(req.Message)
+	if err != nil {
+		return ReceiveResult{}, false, err
+	}
+	defer secure.Zeroize(opened.Plaintext)
+	if req.Handshake {
+		if opened.Application {
+			return ReceiveResult{}, false, ErrNotHandshake
+		}
+		// A device the Commit removed is left with no group to read an
+		// epoch from, so only a Commit it survived is held to the claim.
+		if !opened.Removed && opened.Epoch != req.ProducedEpoch {
+			return ReceiveResult{}, false, ErrEpochStale
+		}
+	}
+
+	position := Position{
+		Epoch:           opened.Epoch,
+		SenderLeafIndex: opened.SenderLeafIndex,
+		ContentType:     ContentTypeApplication,
+	}
+	if opened.Application {
+		if opened.KeyGeneration != nil {
+			position.Generation = uint64(*opened.KeyGeneration)
+		}
+		if err := verifyDeclaration(
+			opened.AuthenticatedData, position, opened.KeyGeneration,
+		); err != nil {
+			return ReceiveResult{}, false, err
+		}
+		if accept != nil {
+			if err := accept(opened.Plaintext); err != nil {
+				return ReceiveResult{}, false, err
+			}
+		}
+	}
+
+	// Judged on the state Open left behind: somebody else's Commit that
+	// took the leaf out is confirmed the moment it is applied. A device
+	// that was itself removed has no group left to read a roster from and
+	// will never encrypt in it again, so its latch is left as it was.
+	latch := rec.RemovalLatch
+	if !opened.Removed {
+		if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+			return ReceiveResult{}, false, err
+		}
+	}
+
+	state, err := cipher.State()
+	if err != nil {
+		return ReceiveResult{}, false, err
+	}
+	sender := Sender{AccountID: opened.SenderAccountID, DeviceID: opened.SenderDeviceID}
+	first := true
+	var entry HistoryEntry
+	if opened.Application {
+		if entry, err = s.sealHistory(conversationID, req.Seq, position, sender, opened.Plaintext, time.Now()); err != nil {
+			return ReceiveResult{}, false, err
+		}
+	}
+	rec.GroupState = state
+	rec.RemovalLatch = latch
+	rec.enterEpoch(opened.Epoch)
+	if opened.Application {
+		first = !rec.receivedContains(position)
+		if first {
+			rec.appendReceived(position)
+		}
+		rec.appendHistory(entry, s.HistoryPolicy, time.Now())
+	}
+
+	out := ReceiveResult{
+		Application:   opened.Application,
+		Removed:       opened.Removed,
+		Position:      position,
+		FirstDelivery: first,
+		Generation:    rec.Generation,
+	}
+	if opened.Application {
+		out.Plaintext = append([]byte(nil), opened.Plaintext...)
+		out.Sender = sender
+	}
+	return out, true, nil
 }
 
 // ReadHistory answers a re-read without touching MLS at all. Receive does the
@@ -266,6 +440,7 @@ func (s *Store) reread(conversationID string, rec *Record, stored HistoryEntry) 
 		Plaintext:   plaintext,
 		Application: true,
 		Position:    position,
+		Sender:      Sender{AccountID: stored.SenderAccountID, DeviceID: stored.SenderDeviceID},
 		FromHistory: true,
 		Generation:  rec.Generation,
 	}, nil

@@ -1025,7 +1025,7 @@ type staleTreeScenario struct {
 	daveKPs    [][]byte
 	clock      *int64
 	firstSeen  int64
-	olderGroup func(kp []byte) []byte
+	olderGroup func(conversationID string, kp []byte) []byte
 }
 
 func newStaleTreeScenario(t *testing.T) staleTreeScenario {
@@ -1036,7 +1036,18 @@ func newStaleTreeScenario(t *testing.T) staleTreeScenario {
 	bob.declare(t, device1, proto.MLSLeafReasonEnroll, t0)
 	alice := newAccount(t, accountA)
 	alice.device(t, device1)
-	_, olderGroup := invite(t, alice, "older group", keyPackage(t, bob.session(t)))
+	// One older group per conversation, each holding bob's pre-rotation leaf:
+	// a join keeps a group only under the conversation id it is named by.
+	var oldLeaves [][]byte
+	for range 2 {
+		oldLeaves = append(oldLeaves, keyPackage(t, bob.session(t)))
+	}
+	olderGroup := func(conversationID string, kp []byte) []byte {
+		old := oldLeaves[0]
+		oldLeaves = oldLeaves[1:]
+		_, add := invite(t, alice, conversationID, old)
+		return add(kp)
+	}
 
 	bob.declare(t, device1, proto.MLSLeafReasonRotate, t0+60)
 	dave := newAccount(t, accountC)
@@ -1090,7 +1101,7 @@ func TestAStaleTreeLeafIsJoinableWithinTheGracePeriod(t *testing.T) {
 	before, _ := s.dave.newestOf(t, accountB)
 
 	*s.clock = s.firstSeen + proto.MLSLeafTreeGraceSeconds
-	if err := s.join(t, convGrace1, s.olderGroup(s.daveKPs[0])); err != nil {
+	if err := s.join(t, convGrace1, s.olderGroup(convGrace1, s.daveKPs[0])); err != nil {
 		t.Fatalf("join at the end of the grace period: %v", err)
 	}
 	if rec, _ := s.dave.newestOf(t, accountB); rec != before {
@@ -1111,7 +1122,7 @@ func TestAStaleTreeLeafIsRefusedOnceTheGracePeriodHasPassed(t *testing.T) {
 	poolBefore := poolSize(t, s.daveStore)
 
 	*s.clock = s.firstSeen + proto.MLSLeafTreeGraceSeconds + 1
-	err := s.join(t, convGrace2, s.olderGroup(s.daveKPs[1]))
+	err := s.join(t, convGrace2, s.olderGroup(convGrace2, s.daveKPs[1]))
 	if !errors.Is(err, mls.ErrLeafUntrusted) || !strings.Contains(err.Error(), "grace period") {
 		t.Fatalf("join past the grace period = %v; want ErrLeafUntrusted for a superseded tree leaf", err)
 	}
@@ -1130,13 +1141,13 @@ func TestAStaleTreeLeafIsRefusedOnceTheGracePeriodHasPassed(t *testing.T) {
 
 	alice := newAccount(t, accountA)
 	alice.device(t, device1)
-	_, current := invite(t, alice, "current group", keyPackage(t, s.bob.session(t)))
+	_, current := invite(t, alice, convGrace3, keyPackage(t, s.bob.session(t)))
 	if err := s.join(t, convGrace3, current(s.daveKPs[2])); err != nil {
 		t.Fatalf("joining a tree holding bob's current leaf: %v", err)
 	}
 
 	s.bob.declare(t, device1, proto.MLSLeafReasonRotate, s.t0+120)
-	_, newer := invite(t, alice, "newer group", keyPackage(t, s.bob.session(t)))
+	_, newer := invite(t, alice, convGrace4, keyPackage(t, s.bob.session(t)))
 	if err := s.join(t, convGrace4, newer(s.daveKPs[3])); err != nil {
 		t.Fatalf("joining a tree holding a leaf newer than dave's record: %v", err)
 	}

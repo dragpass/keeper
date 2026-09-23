@@ -254,8 +254,13 @@ func (r ConversationDecryptBatchForAppDisplayRequest) Validate() error {
 // docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5,
 // docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, and
 // threat-model §4.10.
+//
+// Items is the MLS widening (0.0.49, mls_decrypt_batch_for_app_display): the
+// metadata of each plaintext, parallel to PlaintextB64, and no plaintext of its
+// own. The v1 reveal leaves it out.
 type ConversationDecryptBatchForAppDisplayResponseData struct {
-	PlaintextB64 []string `json:"plaintext_b64"` // secret in RESPONSE — the approved chat carve-out; never logged
+	PlaintextB64 []string         `json:"plaintext_b64"` // secret in RESPONSE — the approved chat carve-out; never logged
+	Items        []MLSDisplayItem `json:"items,omitempty"`
 }
 
 // ChatAADCanonical builds the additional authenticated data the chat messages

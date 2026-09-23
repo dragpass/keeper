@@ -76,7 +76,14 @@ var rawSecretResponseCarveOuts = map[string]string{
 	// message mode. Also approved in
 	// docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5 and
 	// docs/security/threat-model.md §4.10 (control-plane).
-	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). []string element type is covered here too. Any tag/UTF-8/AAD failure refuses the whole batch with no partial plaintext. Zeroized after encoding, never logged; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, and docs/security/threat-model.md §4.10.",
+	//
+	// 0.0.49 widens it a third time, again without a new entry or a new
+	// plaintext field: mls_decrypt_batch_for_app_display returns this same
+	// response type for chat v2 (design M6.3). Its plaintexts are MLS
+	// application messages opened with keys the server never held, so it is
+	// gated on the conversation-state permit and not on a read permit
+	// (decision R2); the added `items` carry metadata only.
+	"ConversationDecryptBatchForAppDisplayResponseData.plaintext_b64": "chat-display carve-out (0.0.30, widened 0.0.34 and 0.0.49): decrypted chat messages — 1:1 and named group room — and, under payload_kind=room_name, the single decrypted room name are the action's entire output, returned only under a server-signed read permit and opened under a Keeper-built AAD whose domain the payload_kind selects (dragpass.chat|1|... with a dragpass.chat.read permit, dragpass.room|1|... with a dragpass.room.read permit). 0.0.49: mls_decrypt_batch_for_app_display returns the same type for chat v2 MLS application messages, under the server-signed dragpass.chat.state permit (no read permit: the Keeper opens them with MLS keys the server never held, decision R2), each opened by chatstate.Store.ReceiveBatch with its sender taken from the MLS leaf credential and its declared position checked, or re-read from the sealed local history; items carries that metadata and no plaintext. []string element type is covered here too. Any tag/UTF-8/AAD/declaration failure refuses the whole batch with no partial plaintext and, for MLS, nothing written. Zeroized after encoding, never logged, not even by length; clipboard actions still return no plaintext. Approved in dragpass-control-plane docs/exec-plans/active/dragpass-chat-1to1-implementation.md §5, docs/exec-plans/active/dragpass-chat-grouproom-implementation.md §6.2, docs/exec-plans/active/dragpass-chat-v2-mls-integration.md M6.3 and §12.2, and docs/security/threat-model.md §4.10.",
 }
 
 // rawSecretRequestCarveOuts lists "<RequestType>.<json_field>" entries whose
@@ -95,6 +102,7 @@ var rawSecretRequestCarveOuts = map[string]string{
 	"GroupEncryptWithAADRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
+	"MLSEncryptRequest.plaintext_b64":                 "encrypt direction: the chat v2 message to encrypt as an MLS application message is the action's input; zeroized after sealing, never returned or logged, not even by length.",
 }
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)
@@ -240,7 +248,8 @@ func TestRawSecretResponseCarveOuts_ScopeIsStated(t *testing.T) {
 		t.Fatalf("carve-out %q is missing", chatKey)
 	}
 	// The room-name branch rides this one entry, so the entry has to say so.
-	for _, want := range []string{"room_name", "dragpass.room|1|", "dragpass.room.read"} {
+	for _, want := range []string{"room_name", "dragpass.room|1|", "dragpass.room.read",
+		"mls_decrypt_batch_for_app_display", "dragpass.chat.state", "items"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("the chat carve-out rationale does not mention %q — "+
 				"payload_kind=room_name returns plaintext through this field and the "+
