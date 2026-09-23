@@ -6,10 +6,18 @@ version: 2
 
 project_name: dragpass-keeper
 
+# Both darwin builds link the MLS library. The hook leaves one universal
+# archive where the cgo directive looks, and each GOARCH links its own slice.
+before:
+  hooks:
+    - make mls-lib-macos
+
 builds:
   - id: keeper-darwin
     binary: dragpass-keeper
     main: .
+    tags:
+      - mls
     env:
       - CGO_ENABLED=1
     goos:

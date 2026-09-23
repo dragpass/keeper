@@ -24,6 +24,7 @@ Download the latest release from the [Releases page](https://github.com/dragpass
 - **Linux**:
   - `dragpass-keeper-linux-x86_64.deb` (x86_64/amd64)
   - `dragpass-keeper-linux-arm64.deb` (ARM64)
+  - Requires glibc 2.31 or newer: Ubuntu 20.04, Debian 11, or any later release.
 - **Windows**: `dragpass-keeper.exe` (x64 installer)
 
 ## Verifying Downloads

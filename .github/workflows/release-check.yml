@@ -1,0 +1,107 @@
+# Builds every release artifact on a pull request that touches the build, so a
+# pipeline change shows it is broken before a tag does. Nothing is signed,
+# attested or published: those steps need release secrets and a tag, and stay
+# in release.yml.
+#
+# release-build.yml is the same workflow release.yml runs, including its
+# checks. This adds the GoReleaser (Homebrew) darwin build and a size report
+# comparing each binary with the library-free build of the same commit.
+name: release-check
+
+on:
+  pull_request:
+    paths:
+      - Makefile
+      - .goreleaser.yml
+      - setup.iss
+      - scripts/**
+      - .github/workflows/release*.yml
+      - mls/Cargo.toml
+      - mls/Cargo.lock
+      - go.mod
+      - go.sum
+      - mls_linked.go
+      - internal/keystore/mls/bridge_cgo.go
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: read version.go
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - id: version
+        run: |
+          v=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/keystore/version/version.go)
+          test -n "$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: release build
+    needs: version
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      size-baseline: true
+
+  goreleaser:
+    name: GoReleaser darwin build (snapshot)
+    needs: version
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - name: rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: build --snapshot --clean
+      - name: install Rosetta for the x86_64 probe
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
+      - name: each binary is its own arch, carries the mls tag, and answers
+        run: |
+          for pair in amd64:x86_64 arm64:arm64; do
+            bin="$(ls dist/keeper-darwin_darwin_${pair%%:*}*/dragpass-keeper)"
+            archs="$(lipo -archs "$bin")"
+            echo "$bin: $archs, $(wc -c < "$bin") bytes"
+            [ "$archs" = "${pair##*:}" ]
+            go version -m "$bin" | grep -q -- '-tags=mls'
+            scripts/release-probe.sh "$bin" "${{ needs.version.outputs.version }}"
+          done
+
+  sizes:
+    name: binary size report
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: sizes-*
+          path: sizes
+          merge-multiple: true
+      - name: summarize
+        run: |
+          {
+            echo "| Binary | Without MLS (bytes) | With MLS (bytes) | Delta (bytes) | Delta |"
+            echo "|---|---:|---:|---:|---:|"
+            cat sizes/*.txt | sort | while read -r name base mls; do
+              delta=$((mls - base))
+              pct=$(awk "BEGIN { printf \"%+.1f%%\", $delta * 100 / $base }")
+              echo "| $name | $base | $mls | $delta | $pct |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"

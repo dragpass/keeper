@@ -24,6 +24,7 @@
 - **Linux**:
   - `dragpass-keeper-linux-x86_64.deb` (x86_64/amd64)
   - `dragpass-keeper-linux-arm64.deb` (ARM64)
+  - glibc 2.31 이상이 필요합니다. Ubuntu 20.04, Debian 11 또는 그 이후 릴리스에서 동작합니다.
 - **Windows**: `dragpass-keeper.exe` (x64 installer)
 
 ## 다운로드 검증
