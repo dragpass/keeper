@@ -27,8 +27,8 @@ if [ "$(uname -m)" != "$machine" ]; then
 fi
 
 # libx11-dev is for headers only. clipboard_linux.c includes <X11/Xlib.h> to
-# declare the function pointers it fills from dlopen("libX11.so"), and links
-# nothing but -ldl. curl and ca-certificates fetch rustup, make runs the
+# declare the function pointers it fills from dlopen (libX11.so.6, then
+# libX11.so), and links nothing but -ldl. curl and ca-certificates fetch rustup, make runs the
 # Makefile recipe.
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq

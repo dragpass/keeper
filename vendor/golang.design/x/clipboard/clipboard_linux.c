@@ -38,7 +38,18 @@ int initX11() {
 	if (libX11) {
 		return 1;
 	}
-	libX11 = dlopen("libX11.so", RTLD_LAZY);
+	// DragPass Keeper local patch to golang.design/x/clipboard v0.7.1, not
+	// upstream. Upstream opens only "libX11.so", and on Debian and Ubuntu that
+	// name is the unversioned symlink shipped by libx11-dev; the runtime
+	// package libx11-6 ships only "libX11.so.6". Without the soname first,
+	// decrypt-to-clipboard fails on an ordinary desktop that has no -dev
+	// package. "libX11.so" stays as the fallback for systems that ship only
+	// that name. Re-vendoring drops this patch; see the guard test in
+	// internal/keystore/clipboard/vendor_patch_test.go.
+	libX11 = dlopen("libX11.so.6", RTLD_LAZY);
+	if (!libX11) {
+		libX11 = dlopen("libX11.so", RTLD_LAZY);
+	}
 	if (!libX11) {
 		return 0;
 	}
