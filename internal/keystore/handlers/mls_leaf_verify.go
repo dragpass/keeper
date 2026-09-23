@@ -78,6 +78,11 @@ type MLSLeafVerifier struct {
 
 	pins   map[string]keychain.PeerKeyPin
 	newest map[string]keychain.MLSLeafNewest
+
+	// judged is what the last successful VerifyLeaves decided per peer
+	// account, and reported what every Commit so far has recorded.
+	judged   map[string]keychain.PeerKeyPinState
+	reported map[string]keychain.PeerKeyPinState
 }
 
 var _ mls.LeafVerifier = (*MLSLeafVerifier)(nil)
@@ -100,18 +105,19 @@ type judgedLeaf struct {
 // VerifyLeaves runs §5.3 over every leaf, then the newest-declaration check
 // over the batch, and stages what a success would record.
 func (v *MLSLeafVerifier) VerifyLeaves(leaves []mls.Leaf) error {
-	v.pins, v.newest = nil, nil
+	v.pins, v.newest, v.judged = nil, nil, nil
 
 	if resp, ok := requirePeerKeyOwner(v.d, v.owner); !ok {
 		return errors.New(resp.Error)
 	}
 
 	pins := map[string]keychain.PeerKeyPin{}
+	states := map[string]keychain.PeerKeyPinState{}
 	judged := make([]judgedLeaf, 0, len(leaves))
 	now := v.d.Now().Unix()
 
 	for _, leaf := range leaves {
-		j, err := v.judge(leaf, pins, now)
+		j, err := v.judge(leaf, pins, states, now)
 		if err == nil && j.entering && now >= j.notAfter {
 			err = untrusted("leaf declaration has expired")
 		}
@@ -128,12 +134,12 @@ func (v *MLSLeafVerifier) VerifyLeaves(leaves []mls.Leaf) error {
 		return err
 	}
 
-	v.pins, v.newest = pins, newest
+	v.pins, v.newest, v.judged = pins, newest, states
 	return nil
 }
 
 func (v *MLSLeafVerifier) judge(
-	leaf mls.Leaf, pins map[string]keychain.PeerKeyPin, now int64,
+	leaf mls.Leaf, pins map[string]keychain.PeerKeyPin, states map[string]keychain.PeerKeyPinState, now int64,
 ) (judgedLeaf, error) {
 	// 1.
 	accountID, deviceID, err := mls.ParseCredentialIdentity(leaf.Identity)
@@ -185,6 +191,7 @@ func (v *MLSLeafVerifier) judge(
 			}
 		}
 		pins[accountID] = outcome.Pin
+		states[accountID] = outcome.State
 	}
 
 	// 5.
@@ -323,8 +330,94 @@ func (v *MLSLeafVerifier) Commit() error {
 			return errors.New("mls leaf verify: failed to save the newest leaf declaration record")
 		}
 	}
-	v.pins, v.newest = nil, nil
+	if v.reported == nil {
+		v.reported = map[string]keychain.PeerKeyPinState{}
+	}
+	for accountID, state := range v.judged {
+		v.reported[accountID] = state
+	}
+	v.pins, v.newest, v.judged = nil, nil, nil
 	return nil
+}
+
+// Reported is the state every account that entered under this verifier was
+// judged at, for the response of the operation (proto.MLSAccountTrust). Only
+// what a Commit recorded is here: a refused or unapplied verification
+// reports nothing.
+func (v *MLSLeafVerifier) Reported() []proto.MLSAccountTrust {
+	return accountTrustList(v.reported)
+}
+
+func accountTrustList(states map[string]keychain.PeerKeyPinState) []proto.MLSAccountTrust {
+	if len(states) == 0 {
+		return nil
+	}
+	out := make([]proto.MLSAccountTrust, 0, len(states))
+	for _, accountID := range sortedKeys(states) {
+		out = append(out, proto.MLSAccountTrust{AccountID: accountID, State: string(states[accountID])})
+	}
+	return out
+}
+
+// MLSMemberTrust holds every other account in a confirmed tree against its
+// pin as the pin now stands, reading nothing but the pins and writing
+// nothing. Per leaf:
+//
+//	no pin                                    → not listed
+//	the leaf's account key is the pinned one  → the pin's state
+//	it is the key the pin last rotated from   → rotated
+//	anything else                             → changed
+//
+// The second-to-last line is the one a real rotation leaves behind: a member
+// who rotated still sits in this group under the old leaf until its Update
+// lands, and the pin moved forward over a chain the Keeper verified. An older
+// key than that one, or a declaration that does not decode, is changed: the
+// Keeper holds nothing that explains it. With several leaves of one account
+// the worst state is the account's.
+func MLSMemberTrust(d Deps, ownerAccountID string, leaves []mls.Leaf) ([]proto.MLSAccountTrust, error) {
+	states := map[string]keychain.PeerKeyPinState{}
+	for _, leaf := range leaves {
+		accountID, _, err := mls.ParseCredentialIdentity(leaf.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if accountID == ownerAccountID {
+			continue
+		}
+		pin, err := loadPeerKeyPin(d.Store, ownerAccountID, accountID)
+		if err != nil {
+			return nil, errors.New("mls member trust: failed to read peer key pin")
+		}
+		if pin == nil {
+			continue
+		}
+		state := keychain.PeerKeyPinStateChanged
+		if ext, err := decodeMLSLeafExtension(leaf.Declaration); err == nil {
+			switch crypto.AccountKeyFingerprint([]byte(ext.AccountPublicKey)) {
+			case pin.Fingerprint:
+				state = pin.State
+			case pin.LastRotationFingerprint:
+				state = keychain.PeerKeyPinStateRotated
+			}
+		}
+		if prev, ok := states[accountID]; !ok || trustRank(state) > trustRank(prev) {
+			states[accountID] = state
+		}
+	}
+	return accountTrustList(states), nil
+}
+
+func trustRank(state keychain.PeerKeyPinState) int {
+	switch state {
+	case keychain.PeerKeyPinStateVerified:
+		return 0
+	case keychain.PeerKeyPinStateTOFU:
+		return 1
+	case keychain.PeerKeyPinStateRotated:
+		return 2
+	default:
+		return 3
+	}
 }
 
 func sortedKeys[T any](m map[string]T) []string {

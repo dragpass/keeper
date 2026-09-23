@@ -203,6 +203,34 @@ type MLSCommitResponseData struct {
 	NameEpoch         uint64 `json:"name_epoch,omitempty"`
 	NameIVb64         string `json:"name_iv_b64,omitempty"`
 	NameCiphertextB64 string `json:"name_ciphertext_b64,omitempty"`
+
+	// LeafTrust is how this build judged the accounts its Add or replace
+	// brings in (0.0.55). Absent for a Remove or an Update, and for a retry
+	// answered from the stored Commit, which judges nothing.
+	LeafTrust []MLSAccountTrust `json:"leaf_trust,omitempty"`
+}
+
+// MLS account trust states: the peer-key pin states (keychain.PeerKeyPinState)
+// as the Keeper judged an account's key for a leaf of it.
+const (
+	MLSAccountTrustTOFU     = "tofu"
+	MLSAccountTrustVerified = "verified"
+	MLSAccountTrustRotated  = "rotated"
+	MLSAccountTrustChanged  = "changed"
+)
+
+// MLSAccountTrust is the Keeper's judgement of one account's key, sorted by
+// account id wherever it appears. On a response that brings leaves in it is
+// the verdict the leaf verifier reached for every account it let in: tofu,
+// verified or rotated, never changed, because a changed key is refused
+// (CHAT_MLS_LEAF_UNTRUSTED) and nothing enters. On mls_conversation_status it
+// is every account of the confirmed tree held against the pin as it now
+// stands, where changed can appear. This account's own leaves are never
+// listed, and neither is an account with no pin: the Keeper has nothing to
+// judge it by, and the app must not show it as a first use.
+type MLSAccountTrust struct {
+	AccountID string `json:"account_id"`
+	State     string `json:"state"`
 }
 
 // MLSGroupCreateRequest creates the conversation's group at epoch 0 and builds
@@ -504,6 +532,10 @@ type MLSCommitConfirmResponseData struct {
 	Removed           bool   `json:"removed"`
 	CommitB64         string `json:"commit_b64"`
 	Generation        uint64 `json:"generation"`
+
+	// LeafTrust is set when superseded applied a winner that brought
+	// accounts in (0.0.55); see MLSAccountTrust.
+	LeafTrust []MLSAccountTrust `json:"leaf_trust,omitempty"`
 }
 
 // MLSProcessRequest applies one handshake row from GET /:id/mls/handshake:
@@ -546,6 +578,10 @@ type MLSProcessResponseData struct {
 	Epoch      uint64 `json:"epoch"`
 	Removed    bool   `json:"removed"`
 	Generation uint64 `json:"generation"`
+
+	// LeafTrust is how the Commit's entering accounts were judged (0.0.55);
+	// absent when it brought none in. See MLSAccountTrust.
+	LeafTrust []MLSAccountTrust `json:"leaf_trust,omitempty"`
 }
 
 // MLSJoinRequest joins the conversation's group from a Welcome addressed to
@@ -575,6 +611,10 @@ func (r MLSJoinRequest) Validate() error {
 
 type MLSJoinResponseData struct {
 	Epoch uint64 `json:"epoch"`
+
+	// LeafTrust is how every other account in the Welcome's tree was judged
+	// (0.0.55). See MLSAccountTrust.
+	LeafTrust []MLSAccountTrust `json:"leaf_trust,omitempty"`
 }
 
 // MLSEncryptRequest encrypts one application message: reserve, encrypt and
@@ -889,6 +929,11 @@ type MLSConversationStatusResponseData struct {
 	// RemovedFromGroup — the last Commit applied here removed this device, so
 	// mls_conversation_forget_removed must run before mls_join (0.0.53).
 	RemovedFromGroup bool `json:"removed_from_group"`
+
+	// MemberTrust is every other account in the confirmed tree held against
+	// its pin now (0.0.55); see MLSAccountTrust. Absent with needs_rekey, with
+	// no group, and when the pins could not be read.
+	MemberTrust []MLSAccountTrust `json:"member_trust,omitempty"`
 }
 
 // MLSDisplayResponseData carries the decrypted payloads of

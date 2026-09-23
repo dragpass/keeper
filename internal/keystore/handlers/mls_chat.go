@@ -134,7 +134,7 @@ func memberKeyPackages(d Deps, members []proto.MLSMemberKeyPackage) ([][]byte, p
 	return out, proto.BaseResponse{}, true
 }
 
-func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
+func commitResponse(r chatstate.BeginCommitResult, trust []proto.MLSAccountTrust) proto.BaseResponse {
 	data := proto.MLSCommitResponseData{
 		ClientCommitID:    r.ClientCommitID,
 		ExpectedEpoch:     r.ExpectedEpoch,
@@ -143,6 +143,7 @@ func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
 		WelcomeReleasable: r.WelcomeReleasable,
 		Created:           r.Created,
 		Generation:        r.Generation,
+		LeafTrust:         trust,
 	}
 	if r.RoomName != nil {
 		data.NameEpoch = r.RoomName.Epoch
@@ -219,7 +220,7 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return chatStateFailure(d, "mls group create", err)
 	}
 	d.Logger.Println("mls group create successful")
-	return commitResponse(result)
+	return commitResponse(result, v.Reported())
 }
 
 // HandleMLSGroupDiscardUnaccepted drops this device's create that lost the
@@ -347,7 +348,7 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return chatStateFailure(d, "mls commit build", err)
 	}
 	d.Logger.Println("mls commit build successful")
-	return commitResponse(result)
+	return commitResponse(result, v.Reported())
 }
 
 // HandleMLSCommitConfirm applies the server's CAS verdict, or, for unknown,
@@ -398,6 +399,7 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		WelcomeReleasable: result.WelcomeReleasable,
 		Removed:           result.Removed,
 		Generation:        result.Generation,
+		LeafTrust:         v.Reported(),
 	}}
 }
 
@@ -436,6 +438,7 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		Epoch:      result.Position.Epoch,
 		Removed:    result.Removed,
 		Generation: result.Generation,
+		LeafTrust:  v.Reported(),
 	}}
 }
 
@@ -461,7 +464,7 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return chatStateFailure(d, "mls join", err)
 	}
 	d.Logger.Println("mls join successful")
-	return proto.BaseResponse{Success: true, Data: proto.MLSJoinResponseData{Epoch: epoch}}
+	return proto.BaseResponse{Success: true, Data: proto.MLSJoinResponseData{Epoch: epoch, LeafTrust: v.Reported()}}
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -749,7 +752,34 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		data.PendingNameIVb64 = base64.StdEncoding.EncodeToString(name.IV)
 		data.PendingNameCiphertextB64 = base64.StdEncoding.EncodeToString(name.Ciphertext)
 	}
+	if status.HasGroupState && !status.NeedsRekey {
+		data.MemberTrust = c.memberTrust(d)
+	}
 	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// memberTrust is mls_conversation_status's member_trust. It is a display
+// hint and not a gate, so a read that fails leaves it out rather than failing
+// the status the app needs before it sends.
+func (c *mlsChat) memberTrust(d Deps) []proto.MLSAccountTrust {
+	state, err := c.store.LoadGroupState(c.conv, c.wm)
+	if err == nil {
+		err = c.session.Load(state)
+		secure.Zeroize(state)
+	}
+	var leaves []mls.Leaf
+	if err == nil {
+		leaves, err = c.session.Roster()
+	}
+	var trust []proto.MLSAccountTrust
+	if err == nil {
+		trust, err = MLSMemberTrust(d, c.permit.AccountID, leaves)
+	}
+	if err != nil {
+		d.Logger.Println("mls conversation status: member trust was not read")
+		return nil
+	}
+	return trust
 }
 
 func appContextOutput(raw []byte) string {
