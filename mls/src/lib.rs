@@ -40,6 +40,8 @@ pub const DPMLS_ERR_ARG: i32 = -3;
 /// A leaf the Go side did not approve tried to enter the group, and the
 /// operation was refused with nothing applied.
 pub const DPMLS_ERR_UNTRUSTED: i32 = -4;
+/// The message was sent by this session's own leaf. Nothing was consumed.
+pub const DPMLS_ERR_FROM_SELF: i32 = -5;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -85,6 +87,8 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
         Ok(Err(msg)) => {
             let code = if msg.contains(gate::NOT_APPROVED) {
                 DPMLS_ERR_UNTRUSTED
+            } else if msg.contains(session::FROM_SELF) {
+                DPMLS_ERR_FROM_SELF
             } else {
                 DPMLS_ERR
             };

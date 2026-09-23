@@ -40,6 +40,7 @@ type mlsChat struct {
 	store   *chatstate.Store
 	wm      chatstate.ServerWatermark
 	session *mls.Session
+	leaf    mls.DeviceLeaf
 	permit  proto.ChatStatePermit
 	conv    string
 }
@@ -80,7 +81,7 @@ func openMLSChat(
 		store.Close()
 		return nil, chatStateNotAuthorized(d, "leaf account"), false
 	}
-	return &mlsChat{store: store, wm: wm, session: session, permit: permit, conv: conversationID}, proto.BaseResponse{}, true
+	return &mlsChat{store: store, wm: wm, session: session, leaf: leaf, permit: permit, conv: conversationID}, proto.BaseResponse{}, true
 }
 
 func mlsSessionFailure(d Deps, err error) proto.BaseResponse {
@@ -461,8 +462,31 @@ func HandleMLSEncrypt(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}}
 }
 
+// HandleMLSMarkSent binds a sent message's sealed copy to the server's seq.
+func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSMarkSentRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	result, err := c.store.MarkSent(c.conv, c.wm, req.ClientMessageID, req.Seq)
+	if err != nil {
+		return chatStateFailure(d, "mls mark sent", err)
+	}
+	d.Logger.Println("mls mark sent successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSMarkSentResponseData{
+		ClientMessageID: req.ClientMessageID,
+		Seq:             req.Seq,
+		Bound:           result.Bound,
+		Generation:      result.Generation,
+	}}
+}
+
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
-// for the app's own screen, all or nothing.
+// for the app's own screen, all or nothing but for a message of this device
+// that has no local copy (chatstate.ReceiveBatch).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
@@ -508,6 +532,15 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	plaintexts := make([]string, len(results))
 	items := make([]proto.MLSDisplayItem, len(results))
 	for i, r := range results {
+		if r.OwnWithoutCopy {
+			items[i] = proto.MLSDisplayItem{
+				Seq:             req.Messages[i].Seq,
+				State:           proto.MLSDisplayItemStateOwnWithoutCopy,
+				SenderAccountID: c.leaf.AccountID,
+				SenderDeviceID:  c.leaf.DeviceID,
+			}
+			continue
+		}
 		// A copy that cannot say who sent it is refused rather than shown
 		// under nobody's name.
 		if r.Sender.AccountID == "" || r.Sender.DeviceID == "" {
@@ -516,6 +549,7 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		plaintexts[i] = base64.StdEncoding.EncodeToString(r.Plaintext)
 		items[i] = proto.MLSDisplayItem{
 			Seq:             req.Messages[i].Seq,
+			State:           proto.MLSDisplayItemStateShown,
 			SenderAccountID: r.Sender.AccountID,
 			SenderDeviceID:  r.Sender.DeviceID,
 			Epoch:           r.Position.Epoch,

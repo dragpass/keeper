@@ -136,6 +136,11 @@ type ReceiveResult struct {
 	// and no MLS key was touched. A re-read is always this.
 	FromHistory bool
 
+	// OwnWithoutCopy is true for a message this device sent whose seq has no
+	// sealed copy here. There is no plaintext and no position, and nothing was
+	// consumed or written for it. Only ReceiveBatch reports it.
+	OwnWithoutCopy bool
+
 	// Generation is the record's write counter after the confirmation, or the
 	// current one when nothing was written.
 	Generation uint64
@@ -155,6 +160,13 @@ var (
 	// application message. Nothing was written.
 	ErrNotHandshake = errors.New("chat state was handed an application message as a handshake")
 )
+
+// ErrOwnMessage — the MLS layer refused a message because this device's own
+// leaf sent it (mls-rs CantProcessMessageFromSelf). The refusal comes from
+// reading the sender data, before any content key is derived, so nothing was
+// consumed. ReceiveBatch reports it as OwnWithoutCopy; everywhere else it is a
+// refusal like any other.
+var ErrOwnMessage = errors.New("chat state was handed a message this device sent")
 
 // ErrHistoryUnavailable — the sealed copy for this sequence is not there, or
 // cannot say who sent it. A re-read of a message whose history has been
@@ -210,6 +222,18 @@ const MaxReceiveBatch = 200
 // does not open, a declaration that does not match, something that is not an
 // application message, or accept saying no — writes nothing and returns no
 // plaintext at all.
+//
+// One outcome is not a refusal: a message this device sent, whose seq has no
+// sealed copy here (never bound by MarkSent, or evicted since). Its sealed
+// copy is the only place its plaintext could come from, because MLS will not
+// open a message from its own leaf, so its absence is a fact about this
+// device's history and not a sign that anything is wrong with the page. It is
+// answered as OwnWithoutCopy, with no plaintext, and the rest of the batch
+// proceeds. The exception is exactly ErrOwnMessage from Open: a message that
+// fails for any other reason, including one that only claims to be ours, still
+// refuses the batch. A member who forges sender data naming this device's leaf
+// gets a placeholder shown under this device's name and no content, which is
+// no more than it could do by sending garbage.
 //
 // A refused batch leaves the disk believing the keys of the messages before
 // the refusal are unused, although the library consumed them in memory. That
@@ -273,6 +297,10 @@ func (s *Store) ReceiveBatch(
 		changed := false
 		for _, req := range reqs {
 			result, wrote, err := s.receiveOne(conversationID, rec, wm, req, cipher, accept)
+			if errors.Is(err, ErrOwnMessage) {
+				out = append(out, ReceiveResult{Application: true, OwnWithoutCopy: true, Generation: rec.Generation})
+				continue
+			}
 			if err != nil {
 				return err
 			}

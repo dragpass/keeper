@@ -111,6 +111,8 @@ import (
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 )
 
 // Session is one conversation's MLS client and group.
@@ -718,6 +720,11 @@ func statusError(rc C.int32_t) error {
 	// -4 is DPMLS_ERR_UNTRUSTED: a leaf nobody approved reached the gate.
 	if rc == -4 {
 		return fmt.Errorf("%w (status %d): %s", ErrLeafUntrusted, int(rc), msg)
+	}
+	// -5 is DPMLS_ERR_FROM_SELF: this session's own leaf sent the message.
+	// Not ErrFailed, because the display path answers it from local history.
+	if rc == -5 {
+		return fmt.Errorf("%w (status %d): %s", chatstate.ErrOwnMessage, int(rc), msg)
 	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

@@ -49,6 +49,7 @@ package chatstate
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // maxBurnForward bounds the recovery loop. One burn is all a crash between the
@@ -80,6 +81,12 @@ type SendCipher interface {
 	// State serializes the session as it now stands. Nothing the MLS library
 	// did is durable until what this returns is written.
 	State() ([]byte, error)
+
+	// SenderOf names the credential of the leaf at this index in the confirmed
+	// group. Send asks it for its own leaf, so the sealed copy of a sent
+	// message names this device the way a delivered one names its sender: from
+	// the group's tree, never from the caller.
+	SenderOf(leafIndex uint32) (Sender, error)
 
 	RosterReader
 }
@@ -187,6 +194,15 @@ func (s *Store) Send(
 		if rec.positionTaken(position) {
 			return ErrPositionTaken
 		}
+		// Before write 1, so a leaf this cannot name refuses the send with
+		// nothing consumed rather than after the AEAD.
+		self, err := cipher.SenderOf(position.SenderLeafIndex)
+		if err != nil {
+			return err
+		}
+		if self.AccountID == "" || self.DeviceID == "" {
+			return errors.New("send could not name this device's own leaf")
+		}
 
 		// Write 1. The state is re-serialized even when nothing was burned,
 		// because the peek has to describe the state that is on the disk: if
@@ -239,10 +255,18 @@ func (s *Store) Send(
 				len(ciphertext), MaxCiphertextBytes)
 		}
 
-		// Write 2. The advanced state, the ciphertext and the cleared intent
-		// land together, so a crash before this leaves an intent to burn and a
-		// crash after it leaves nothing to do.
+		// Write 2. The advanced state, the ciphertext, the cleared intent and
+		// the sealed copy of the plaintext land together, so a crash before
+		// this leaves an intent to burn and a crash after it leaves nothing to
+		// do. The copy is in the same write as the outbox entry because it is
+		// the only one this device will ever have: the library will not open
+		// its own message (history.go).
 		advanced, err := cipher.State()
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		sent, err := s.sealSentHistory(conversationID, req.ClientMessageID, position, self, req.Plaintext, now)
 		if err != nil {
 			return err
 		}
@@ -255,6 +279,7 @@ func (s *Store) Send(
 		rec.GroupState = advanced
 		rec.PendingSend = nil
 		rec.appendOutbox(entry)
+		rec.appendHistory(sent, s.HistoryPolicy, now)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -318,4 +343,63 @@ func burnUnfinished(rec *Record, cipher SendCipher) ([]Position, error) {
 		burned = append(burned, position)
 	}
 	return nil, ErrBurnForward
+}
+
+// ErrSeqBound — MarkSent was asked to give a seq to a sent message when either
+// side of the pair is already taken: the seq carries another message's copy,
+// or the message was already bound to another seq. Rebinding would make a
+// re-read of one seq answer with a different message's plaintext.
+var ErrSeqBound = errors.New("chat state history already binds that seq or that message differently")
+
+// MarkSentResult reports the binding. Bound is false when the entry already
+// carried this seq and nothing was written.
+type MarkSentResult struct {
+	Bound      bool
+	Generation uint64
+}
+
+// MarkSent binds a sent message's sealed copy to the seq the server assigned
+// it, once POST /:id/messages has answered. From then on a display batch that
+// names the seq is answered from the copy, the only place this device can read
+// its own message from.
+//
+// Idempotent: the same pair again writes nothing. A copy that is gone — evicted
+// by the ring or the age bound, or never made because the send predates this
+// Keeper — is ErrNotFound, which leaves that message readable only as "sent
+// from this device, no local copy".
+func (s *Store) MarkSent(
+	conversationID string, wm ServerWatermark, clientMessageID string, seq uint64,
+) (MarkSentResult, error) {
+	if clientMessageID == "" || seq == 0 {
+		return MarkSentResult{}, errors.New("mark sent needs a client message id and a seq")
+	}
+	var out MarkSentResult
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		i, ok := rec.findSentHistory(clientMessageID)
+		if !ok {
+			return ErrNotFound
+		}
+		if rec.History[i].Seq == seq {
+			out = MarkSentResult{Generation: rec.Generation}
+			return nil
+		}
+		if rec.History[i].Seq != 0 {
+			return ErrSeqBound
+		}
+		if _, taken := rec.findHistory(seq); taken {
+			return ErrSeqBound
+		}
+		loaded := rec.Generation
+		rec.History[i].Seq = seq
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		out = MarkSentResult{Bound: true, Generation: rec.Generation}
+		return nil
+	})
+	return out, err
 }

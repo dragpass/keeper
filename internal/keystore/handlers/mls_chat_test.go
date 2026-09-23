@@ -76,6 +76,12 @@ func mlsChatCases() []mlsChatCase {
 				PlaintextB64: base64.StdEncoding.EncodeToString([]byte("hello")),
 			}
 		}},
+		{proto.MLSMarkSent, HandleMLSMarkSent, func(p proto.ChatStatePermit) any {
+			return proto.MLSMarkSentRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+				ClientMessageID: mlsTestCommitID, Seq: 5,
+			}
+		}},
 		{proto.MLSConversationStatus, HandleMLSConversationStatus, func(p proto.ChatStatePermit) any {
 			return proto.MLSConversationStatusRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
 		}},

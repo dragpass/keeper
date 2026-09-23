@@ -15,7 +15,7 @@ import (
 
 // Update together. Bump this number inside the same handler-change PR so
 // add/remove intent is obvious during review.
-const ExpectedRegisteredActionCount = 98
+const ExpectedRegisteredActionCount = 99
 
 func TestActionRegistry_Count(t *testing.T) {
 	if got := len(actionRegistry); got != ExpectedRegisteredActionCount {

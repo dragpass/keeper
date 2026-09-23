@@ -124,6 +124,19 @@ func (c *fakeCipher) ConfirmedLeaves() ([]RosterLeaf, error) {
 	return c.leaves, nil
 }
 
+// fakeSelf is who fakeCipher's own leaf is.
+var fakeSelf = Sender{AccountID: "self-acct", DeviceID: "self-dev"}
+
+func (c *fakeCipher) SenderOf(leaf uint32) (Sender, error) {
+	if !c.loaded {
+		return Sender{}, errors.New("fake cipher: roster read before loading")
+	}
+	if leaf != c.leaf {
+		return Sender{}, errors.New("fake cipher: no such leaf")
+	}
+	return fakeSelf, nil
+}
+
 func (c *fakeCipher) State() ([]byte, error) {
 	if !c.loaded {
 		return nil, errors.New("fake cipher: serialized before loading")

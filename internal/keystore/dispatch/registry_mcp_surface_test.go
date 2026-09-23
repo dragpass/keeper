@@ -112,6 +112,7 @@ var mlsChatActionNames = []string{
 	proto.MLSProcess,
 	proto.MLSJoin,
 	proto.MLSEncrypt,
+	proto.MLSMarkSent,
 	proto.MLSDecryptBatchForAppDisplay,
 	proto.MLSConversationStatus,
 }

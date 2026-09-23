@@ -90,26 +90,46 @@ const (
 	// CHAT_MLS_LEAF_REPLACEMENT_PENDING while the M4.4 latch holds, before any
 	// position is consumed.
 	//
+	//
+	// The plaintext is also sealed into the local history in the same write as
+	// the outbox entry, keyed by client_message_id until MLSMarkSent gives it
+	// the server's seq: mls-rs never opens a message from its own leaf, so that
+	// copy is the only way this device reads what it sent.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_message_id,
 	//           expected_epoch (>=1), plaintext_b64 (1..6144B, UTF-8)
 	//   Output: { client_message_id, ciphertext_b64, epoch, leaf_index,
 	//             content_type, generation, created }
 	MLSEncrypt = "mls_encrypt"
 
+	// MLSMarkSent binds the sealed copy of a message this device sent to the
+	// seq POST /:id/messages returned. Idempotent on the same pair (bound:
+	// false, nothing written). Refused with CHAT_STATE_CONFLICT when the seq
+	// already carries another message's copy or the message is already bound
+	// to another seq, and CHAT_STATE_NOT_FOUND when no copy for the id is left.
+	//
+	//   Inputs: permit, org_id, conversation_id, client_message_id, seq (>=1)
+	//   Output: { client_message_id, seq, bound, generation }
+	MLSMarkSent = "mls_mark_sent"
+
 	// MLSDecryptBatchForAppDisplay opens a page of application messages for
 	// the DragPass app's own screen, through chatstate.Store.ReceiveBatch and
-	// the local history: a seq already delivered is answered from the sealed
-	// copy with from_history and no MLS key. It widens the v1 reveal's
-	// carve-out rather than adding one (M6.3): the response is
+	// the local history: a seq already delivered, or sent by this device and
+	// bound by MLSMarkSent, is answered from the sealed copy with from_history
+	// and no MLS key. It widens the v1 reveal's carve-out rather than adding
+	// one (M6.3): the response is
 	// ConversationDecryptBatchForAppDisplayResponseData, plaintext_b64 its only
 	// plaintext field. All or nothing: one message that fails refuses the
-	// batch with no plaintext and nothing written. On a conversation latched
-	// NeedsRekey a batch of history hits only is still answered; one new
-	// message refuses the batch with CHAT_STATE_REKEY_REQUIRED.
+	// batch with no plaintext and nothing written. The one exception is a
+	// message this device sent that has no sealed copy here: it is reported as
+	// state own_without_local_copy with an empty plaintext entry, and the rest
+	// of the batch proceeds. On a conversation latched NeedsRekey a batch of
+	// history hits only is still answered; one new message refuses the batch
+	// with CHAT_STATE_REKEY_REQUIRED.
 	//
 	//   Inputs: permit, org_id, conversation_id,
 	//           messages[1..200] { seq, ciphertext_b64 (1..8208B) }
-	//   Output: { plaintext_b64[], items[] { seq, sender_account_id,
+	//   Output: { plaintext_b64[], items[] { seq, state, sender_account_id,
 	//             sender_device_id, epoch, sender_leaf_index, content_type,
 	//             generation, from_history } }
 	MLSDecryptBatchForAppDisplay = "mls_decrypt_batch_for_app_display"

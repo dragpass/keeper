@@ -452,6 +452,16 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 	}, nil
 }
 
+// SenderOf names the leaf at this index from the confirmed tree, for the
+// sealed copy of a message this device sends.
+func (c *Cipher) SenderOf(leafIndex uint32) (chatstate.Sender, error) {
+	account, device, err := c.senderOf(leafIndex)
+	if err != nil {
+		return chatstate.Sender{}, err
+	}
+	return chatstate.Sender{AccountID: account, DeviceID: device}, nil
+}
+
 func (c *Cipher) senderOf(leafIndex uint32) (accountID, deviceID string, err error) {
 	leaves, err := c.session.Roster()
 	if err != nil {

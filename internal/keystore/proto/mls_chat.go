@@ -501,6 +501,43 @@ type MLSEncryptResponseData struct {
 	Created bool `json:"created"`
 }
 
+// MLSMarkSentRequest binds a message this device sent to the seq the server
+// gave it (POST /:id/messages), so later display batches answer it from the
+// sealed local copy.
+type MLSMarkSentRequest struct {
+	Permit          ChatStatePermit `json:"permit"`
+	OrgID           string          `json:"org_id"`
+	ConversationID  string          `json:"conversation_id"`
+	ClientMessageID string          `json:"client_message_id"`
+	Seq             uint64          `json:"seq"`
+}
+
+func (r MLSMarkSentRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSMarkSentRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.ClientMessageID, "client_message_id"); err != nil {
+		return err
+	}
+	if r.Seq < 1 {
+		return newValidationError("seq", "must be a positive sequence")
+	}
+	return nil
+}
+
+// MLSMarkSentResponseData — Bound is false when the copy already carried this
+// seq and nothing was written.
+type MLSMarkSentResponseData struct {
+	ClientMessageID string `json:"client_message_id"`
+	Seq             uint64 `json:"seq"`
+	Bound           bool   `json:"bound"`
+	Generation      uint64 `json:"generation"`
+}
+
 // MLSDisplayMessage is one message of a display batch: the server's seq and
 // the MLS PrivateMessage it stored.
 type MLSDisplayMessage struct {
@@ -549,14 +586,29 @@ func (r MLSDecryptBatchForAppDisplayRequest) Validate() error {
 	return nil
 }
 
+// MLS display item states.
+const (
+	// MLSDisplayItemStateShown — the item's plaintext_b64 entry is the message.
+	MLSDisplayItemStateShown = "shown"
+
+	// MLSDisplayItemStateOwnWithoutCopy — this device sent the message and
+	// holds no sealed copy for its seq. MLS never opens a message from its own
+	// leaf, so there is no plaintext: plaintext_b64 is "" at this index, the
+	// sender is this device, and the position fields are zero. The one outcome
+	// that does not refuse the batch.
+	MLSDisplayItemStateOwnWithoutCopy = "own_without_local_copy"
+)
+
 // MLSDisplayItem is what the app may show about one decrypted message besides
 // its plaintext, parallel to plaintext_b64. The sender comes from the leaf
 // credential MLS authenticated, never from the server; epoch, leaf, axis and
 // generation are the position the declaration was checked against.
 // FromHistory is true when the plaintext came from this device's sealed local
-// copy and no MLS key was used.
+// copy and no MLS key was used; a message this device sent is always read
+// that way. State says whether there is a plaintext at all.
 type MLSDisplayItem struct {
 	Seq             uint64 `json:"seq"`
+	State           string `json:"state"`
 	SenderAccountID string `json:"sender_account_id"`
 	SenderDeviceID  string `json:"sender_device_id"`
 	Epoch           uint64 `json:"epoch"`

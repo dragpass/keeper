@@ -5,6 +5,7 @@ use mls_rs::client_builder::{
     BaseConfig, PaddingMode, WithCryptoProvider, WithGroupStateStorage, WithIdentityProvider,
     WithKeyPackageRepo, WithMlsRules,
 };
+use mls_rs::error::MlsError;
 use mls_rs::extension::built_in::RequiredCapabilitiesExt;
 use mls_rs::group::proposal::{AddProposal, Proposal};
 use mls_rs::group::{CommitEffect, ReceivedMessage};
@@ -102,6 +103,13 @@ pub type Res<T> = Result<T, String>;
 fn err(context: &str, e: impl core::fmt::Display) -> String {
     format!("mls: {context}: {e}")
 }
+
+/// Marks the refusal of a message this session's own leaf sent. mls-rs
+/// refuses it after opening the sender data and before deriving any content
+/// key, so nothing is consumed; the C ABI edge turns the marker into its own
+/// status code because Go treats it as "read this from local history", not as
+/// a failure.
+pub const FROM_SELF: &str = "the message was sent by this leaf";
 
 pub struct Processed {
     pub epoch: u64,
@@ -763,7 +771,10 @@ impl Session {
         let group = self.group_mut()?;
         let received = group.process_incoming_message(msg);
         self.disarm()?;
-        let received = received.map_err(|e| err("process", e))?;
+        let received = received.map_err(|e| match e {
+            MlsError::CantProcessMessageFromSelf => format!("mls: process: {FROM_SELF}"),
+            e => err("process", e),
+        })?;
         let group = self.group_mut()?;
         let new = gate::new_leaves(&before, &leaves_of(group));
         if let Err(e) = require_approved(&new, &approved) {
@@ -1441,6 +1452,26 @@ mod tests {
         assert_eq!(
             processed.application.as_deref().map(|v| &v[..]),
             Some(&b"hi"[..])
+        );
+    }
+
+    // The sender's own message is refused with the marker the C ABI maps to
+    // its own status, and the refusal leaves the receiving side able to open
+    // the next message from somebody else.
+    #[test]
+    fn processing_an_own_message_is_refused_with_the_from_self_marker() {
+        let (mut alice, mut bob) = pair();
+        let own = alice.encrypt(b"mine", b"ad").unwrap();
+        let Err(e) = alice.process(&own) else {
+            panic!("a message from this leaf was processed");
+        };
+        assert!(e.contains(FROM_SELF), "{e}");
+
+        let from_bob = bob.encrypt(b"theirs", b"ad").unwrap();
+        let processed = alice.process(&from_bob).unwrap();
+        assert_eq!(
+            processed.application.as_deref().map(|v| &v[..]),
+            Some(&b"theirs"[..])
         );
     }
 
