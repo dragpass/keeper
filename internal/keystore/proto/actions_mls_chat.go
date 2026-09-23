@@ -204,6 +204,6 @@ const (
 	//   Inputs: permit, org_id, conversation_id
 	//   Output: { epoch, has_group_state, commit_pending,
 	//             pending_client_commit_id, removal_latch_account_ids,
-	//             needs_rekey }
+	//             needs_rekey, removed_from_group }
 	MLSConversationStatus = "mls_conversation_status"
 )

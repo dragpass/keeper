@@ -738,6 +738,7 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
 		NeedsRekey:            status.NeedsRekey,
+		RemovedFromGroup:      status.RemovedFromGroup,
 	}}
 }
 

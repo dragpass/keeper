@@ -367,6 +367,15 @@ func TestMLSChatE2E_TheOldDeviceSwitchesBackAndRejoins(t *testing.T) {
 	bob2 := newTakeoverKeeper(t, c.bob, e2eDevice2)
 	epoch := c.takeOver(c.bob, bob2, 1, oldBob.NotBefore+60)
 
+	// Status tells a restarted app that the forget has to come first, and
+	// reading it changes nothing.
+	if !c.bob.status().RemovedFromGroup || !c.bob.status().RemovedFromGroup {
+		t.Fatal("bob's status does not report the removal")
+	}
+	if c.alice.status().RemovedFromGroup || bob2.status().RemovedFromGroup {
+		t.Fatal("a member still in the group reports a removal")
+	}
+
 	// Only the removed device may forget, and only its own removed group.
 	c.alice.refuseForget()
 	bob2.refuseForget()
@@ -376,7 +385,8 @@ func TestMLSChatE2E_TheOldDeviceSwitchesBackAndRejoins(t *testing.T) {
 	if again := c.bob.forgetRemoved(); again.Forgotten {
 		t.Fatalf("forget again = %+v; want nothing to forget", again)
 	}
-	if got := c.bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || len(got.LeafReplacementLatch) != 0 {
+	if got := c.bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || got.RemovedFromGroup ||
+		len(got.LeafReplacementLatch) != 0 {
 		t.Fatalf("bob's status after the forget = %+v", got)
 	}
 	// What the old device had read stays readable.
@@ -384,6 +394,9 @@ func TestMLSChatE2E_TheOldDeviceSwitchesBackAndRejoins(t *testing.T) {
 
 	epoch = c.takeOver(bob2, c.bob, epoch, oldBob.NotBefore+120)
 	assertReplacementLatch(t, c.bob)
+	if c.bob.status().RemovedFromGroup || !bob2.status().RemovedFromGroup {
+		t.Fatal("after the switch back only bob2 should report a removal")
+	}
 	fromBob := c.send(c.bob, 2, epoch, "back on the old laptop")
 	assertShown(t, c.alice.decrypt(fromBob), 0, "back on the old laptop", c.bob, false)
 	toBob := c.send(c.alice, 3, epoch, "welcome back again")

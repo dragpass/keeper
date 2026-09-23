@@ -196,6 +196,13 @@ func TestARemovedGroupIsForgottenAndItsHistoryKept(t *testing.T) {
 	if rec := readRecordForTest(t, store, testConvA); !rec.RemovedFromGroup || len(rec.LeafReplacementLatch) != 1 {
 		t.Fatalf("record after the removal = %+v", rec)
 	}
+	removedAt := readRecordForTest(t, store, testConvA).Generation
+	if status, err := store.Status(testConvA, noWatermark, &fakeCipher{leaves: leavesOf(oldFP)}); err != nil || !status.RemovedFromGroup {
+		t.Fatalf("status after the removal = %+v, %v", status, err)
+	}
+	if readRecordForTest(t, store, testConvA).Generation != removedAt {
+		t.Fatal("status wrote the record")
+	}
 	got, err := store.ForgetRemovedGroup(testConvA, noWatermark)
 	if err != nil || !got.Forgotten {
 		t.Fatalf("forget = %+v, %v", got, err)
@@ -204,6 +211,9 @@ func TestARemovedGroupIsForgottenAndItsHistoryKept(t *testing.T) {
 	if len(rec.GroupState) != 0 || rec.Pending != nil || rec.RemovalLatch != nil || rec.LeafReplacementLatch != nil ||
 		rec.RemovedFromGroup || rec.Epoch != 1 || len(rec.History) != 1 || rec.Generation != got.Generation {
 		t.Fatalf("record after the forget = %+v", rec)
+	}
+	if status, err := store.Status(testConvA, noWatermark, &fakeCipher{}); err != nil || status.RemovedFromGroup {
+		t.Fatalf("status after the forget = %+v, %v", status, err)
 	}
 	reread, err := store.ReadHistory(testConvA, noWatermark, 1)
 	if err != nil || string(reread.Plaintext) != "before the takeover" || !reread.FromHistory {

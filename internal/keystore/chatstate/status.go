@@ -28,6 +28,12 @@ type ConversationStatus struct {
 	// nil.
 	LeafReplacementLatch []LeafReplacement
 
+	// RemovedFromGroup is Record.RemovedFromGroup: the last Commit applied to
+	// the confirmed state removed this device, so ForgetRemovedGroup must run
+	// before a Welcome is joined. Reported so a caller that restarted, and no
+	// longer holds the removed answer it was given, can still keep that order.
+	RemovedFromGroup bool
+
 	// NeedsRekey is the rewind latch. When it is set nothing else is read:
 	// the record behind it is not trusted to say anything.
 	NeedsRekey bool
@@ -62,6 +68,7 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		}
 		out.Epoch = rec.Epoch
 		out.HasGroupState = len(rec.GroupState) > 0
+		out.RemovedFromGroup = rec.RemovedFromGroup
 		if rec.Pending != nil {
 			out.CommitPending = true
 			out.PendingClientCommitID = rec.Pending.ClientCommitID

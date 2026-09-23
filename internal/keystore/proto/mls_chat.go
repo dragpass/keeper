@@ -795,4 +795,8 @@ type MLSConversationStatusResponseData struct {
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
 	NeedsRekey           bool                       `json:"needs_rekey"`
+
+	// RemovedFromGroup — the last Commit applied here removed this device, so
+	// mls_conversation_forget_removed must run before mls_join (0.0.53).
+	RemovedFromGroup bool `json:"removed_from_group"`
 }
