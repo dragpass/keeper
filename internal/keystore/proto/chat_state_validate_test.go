@@ -9,6 +9,7 @@
 package proto
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -20,14 +21,27 @@ const (
 	stateFixtureIssuedAt  = 1788999000
 	stateFixtureExpiresAt = 1788999300 // issued_at + 300
 
+	stateFixtureRemovedA = "55555555-5555-4555-8555-555555555555"
+	stateFixtureRemovedB = "66666666-6666-4666-8666-666666666666"
+
 	// stateFixtureCanonicalGolden — the exact bytes ariadne must reproduce.
 	// The four watermark values are distinct so that swapping any two of them
 	// changes the string, which is what the ordering assertion below rests on.
-	stateFixtureCanonicalGolden = "dragpass.chat.state|2|" +
+	stateFixtureCanonicalGolden = "dragpass.chat.state|3|" +
 		"11111111-1111-4111-8111-111111111111|" +
 		"22222222-2222-4222-8222-222222222222|" +
 		"33333333-3333-4333-8333-333333333333|" +
 		"7|3|11|42|" +
+		"55555555-5555-4555-8555-555555555555,66666666-6666-4666-8666-666666666666|" +
+		"1788999000|1788999300|1"
+
+	// stateFixtureCanonicalGoldenNoRemovals — the same permit with nothing
+	// pending: the slot is present and empty, so two pipes meet.
+	stateFixtureCanonicalGoldenNoRemovals = "dragpass.chat.state|3|" +
+		"11111111-1111-4111-8111-111111111111|" +
+		"22222222-2222-4222-8222-222222222222|" +
+		"33333333-3333-4333-8333-333333333333|" +
+		"7|3|11|42||" +
 		"1788999000|1788999300|1"
 )
 
@@ -40,6 +54,7 @@ func stateValidPermit() ChatStatePermit {
 		WatermarkLeafIndex:       3,
 		WatermarkNextHandshake:   11,
 		WatermarkNextApplication: 42,
+		PendingRemovalAccountIDs: []string{stateFixtureRemovedA, stateFixtureRemovedB},
 		IssuedAt:                 stateFixtureIssuedAt,
 		ExpiresAt:                stateFixtureExpiresAt,
 		ServerKeyVersion:         1,
@@ -47,19 +62,31 @@ func stateValidPermit() ChatStatePermit {
 	}
 }
 
-// TestChatStatePermitCanonical_GoldenVector — the 12-item signing string on
-// fixed inputs. The ariadne signer asserts the same literal.
+// TestChatStatePermitCanonical_GoldenVector — the 13-item signing string on
+// fixed inputs, with pending removals and without. The ariadne signer asserts
+// the same two literals.
 func TestChatStatePermitCanonical_GoldenVector(t *testing.T) {
-	got := ChatStatePermitCanonical(stateValidPermit())
-	t.Logf("chat-state-permit canonical (golden): %s", got)
-	if got != stateFixtureCanonicalGolden {
-		t.Fatalf("permit canonical = %q, want %q", got, stateFixtureCanonicalGolden)
-	}
-	if strings.Count(got, "|") != 11 {
-		t.Fatalf("canonical must have 12 items separated by 11 pipes, got %d", strings.Count(got, "|"))
-	}
-	if strings.HasSuffix(got, "\n") {
-		t.Fatal("canonical must not end with a newline")
+	none := stateValidPermit()
+	none.PendingRemovalAccountIDs = []string{}
+	for name, tc := range map[string]struct {
+		permit ChatStatePermit
+		want   string
+	}{
+		"two pending":  {stateValidPermit(), stateFixtureCanonicalGolden},
+		"none pending": {none, stateFixtureCanonicalGoldenNoRemovals},
+	} {
+		got := ChatStatePermitCanonical(tc.permit)
+		t.Logf("chat-state-permit canonical (%s): %s", name, got)
+		if got != tc.want {
+			t.Fatalf("%s: permit canonical = %q, want %q", name, got, tc.want)
+		}
+		if strings.Count(got, "|") != 12 {
+			t.Fatalf("%s: canonical must have 13 items separated by 12 pipes, got %d",
+				name, strings.Count(got, "|"))
+		}
+		if strings.HasSuffix(got, "\n") {
+			t.Fatalf("%s: canonical must not end with a newline", name)
+		}
 	}
 }
 
@@ -96,7 +123,7 @@ func TestChatStatePermitCanonical_WatermarkSlotOrder(t *testing.T) {
 	}
 }
 
-// TestChatStatePermitCanonical_EveryFieldIsSigned — the ten fields a permit
+// TestChatStatePermitCanonical_EveryFieldIsSigned — the eleven fields a permit
 // carries into the canonical each move it. A field that does not is a field
 // the server could change after signing.
 func TestChatStatePermitCanonical_EveryFieldIsSigned(t *testing.T) {
@@ -109,9 +136,12 @@ func TestChatStatePermitCanonical_EveryFieldIsSigned(t *testing.T) {
 		"watermark_leaf_index":       func(p *ChatStatePermit) { p.WatermarkLeafIndex++ },
 		"watermark_next_handshake":   func(p *ChatStatePermit) { p.WatermarkNextHandshake++ },
 		"watermark_next_application": func(p *ChatStatePermit) { p.WatermarkNextApplication++ },
-		"issued_at":                  func(p *ChatStatePermit) { p.IssuedAt++ },
-		"expires_at":                 func(p *ChatStatePermit) { p.ExpiresAt++ },
-		"server_key_version":         func(p *ChatStatePermit) { p.ServerKeyVersion++ },
+		"pending_removal_account_ids": func(p *ChatStatePermit) {
+			p.PendingRemovalAccountIDs = p.PendingRemovalAccountIDs[:1]
+		},
+		"issued_at":          func(p *ChatStatePermit) { p.IssuedAt++ },
+		"expires_at":         func(p *ChatStatePermit) { p.ExpiresAt++ },
+		"server_key_version": func(p *ChatStatePermit) { p.ServerKeyVersion++ },
 	} {
 		changed := base
 		mutate(&changed)
@@ -122,11 +152,52 @@ func TestChatStatePermitCanonical_EveryFieldIsSigned(t *testing.T) {
 
 	// The two fixed slots are not reachable through the struct, so they are
 	// asserted as the prefix they are.
-	if !strings.HasPrefix(stateFixtureCanonicalGolden, ChatStatePermitDomain+"|2|") {
-		t.Fatalf("canonical must open with the state domain and schema 2, got %q",
+	if !strings.HasPrefix(stateFixtureCanonicalGolden, ChatStatePermitDomain+"|3|") {
+		t.Fatalf("canonical must open with the state domain and schema 3, got %q",
 			stateFixtureCanonicalGolden)
 	}
-	if ChatStatePermitCanonicalVersion != 2 {
-		t.Fatalf("canonical version = %d, want 2", ChatStatePermitCanonicalVersion)
+	if ChatStatePermitCanonicalVersion != 3 {
+		t.Fatalf("canonical version = %d, want 3", ChatStatePermitCanonicalVersion)
+	}
+}
+
+// TestChatStatePermit_PendingRemovalsAreValidatedNotRepaired — every list the
+// canonical would not reproduce exactly is refused. Sorting or de-duplicating
+// here would verify a signature over bytes the server never signed.
+func TestChatStatePermit_PendingRemovalsAreValidatedNotRepaired(t *testing.T) {
+	full := make([]string, 0, ChatStateMaxPendingRemovals)
+	for i := 0; i < ChatStateMaxPendingRemovals; i++ {
+		full = append(full, fmt.Sprintf("%08x-0000-4000-8000-000000000000", i+1))
+	}
+	over := append(append([]string(nil), full...), "ffffffff-0000-4000-8000-000000000000")
+
+	for name, tc := range map[string]struct {
+		ids []string
+		ok  bool
+	}{
+		"empty":          {[]string{}, true},
+		"one":            {[]string{stateFixtureRemovedA}, true},
+		"sorted":         {[]string{stateFixtureRemovedA, stateFixtureRemovedB}, true},
+		"at the bound":   {full, true},
+		"null":           {nil, false},
+		"unsorted":       {[]string{stateFixtureRemovedB, stateFixtureRemovedA}, false},
+		"duplicated":     {[]string{stateFixtureRemovedA, stateFixtureRemovedA}, false},
+		"uppercase":      {[]string{strings.ToUpper("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")}, false},
+		"uppercase hex":  {[]string{"5555555A-5555-4555-8555-555555555555"}, false},
+		"not a uuid":     {[]string{"55555555"}, false},
+		"empty entry":    {[]string{""}, false},
+		"nil uuid":       {[]string{"00000000-0000-0000-0000-000000000000"}, false},
+		"joined in one":  {[]string{stateFixtureRemovedA + "," + stateFixtureRemovedB}, false},
+		"over the bound": {over, false},
+	} {
+		p := stateValidPermit()
+		p.PendingRemovalAccountIDs = tc.ids
+		err := p.Validate()
+		if tc.ok && err != nil {
+			t.Fatalf("%s: refused a valid list: %v", name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("%s: accepted a malformed list", name)
+		}
 	}
 }

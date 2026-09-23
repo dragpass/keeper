@@ -51,6 +51,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -216,6 +217,16 @@ func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
 // one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
+	if len(plan.RemoveAccountIDs) > 0 {
+		if len(plan.AddKeyPackages) > 0 {
+			return chatstate.BuiltCommit{}, errors.New("mls: a commit plan adds or removes, not both")
+		}
+		commit, expected, err := c.commitRemoveAccounts(plan.RemoveAccountIDs)
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, ExpectedEpoch: expected}, nil
+	}
 	if len(plan.AddKeyPackages) == 0 {
 		commit, expected, err := c.session.CommitUpdate()
 		if err != nil {
@@ -228,6 +239,56 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 		return chatstate.BuiltCommit{}, err
 	}
 	return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
+}
+
+// commitRemoveAccounts removes every leaf of each account. An account with no
+// leaf in the confirmed tree is refused rather than skipped: a Commit that
+// removes less than it was asked to would read as the removal having happened.
+func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, 0, err
+	}
+	var indices []uint32
+	for _, want := range accountIDs {
+		found := false
+		for _, leaf := range leaves {
+			account, _, err := ParseCredentialIdentity(leaf.Identity)
+			if err != nil {
+				return nil, 0, err
+			}
+			if account == want {
+				indices = append(indices, leaf.Index)
+				found = true
+			}
+		}
+		if !found {
+			return nil, 0, errors.New("mls: an account to remove has no leaf in the group")
+		}
+	}
+	return c.session.CommitRemoveMembers(indices)
+}
+
+// ConfirmedAccounts reads the confirmed roster, which a pending Commit is not
+// part of. Every identity is parsed strictly: a leaf this cannot attribute to
+// an account is an error, never a leaf that silently latches nobody.
+func (c *Cipher) ConfirmedAccounts() ([]string, error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]string, 0, len(leaves))
+	for _, leaf := range leaves {
+		account, _, err := ParseCredentialIdentity(leaf.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(accounts, account) {
+			accounts = append(accounts, account)
+		}
+	}
+	slices.Sort(accounts)
+	return accounts, nil
 }
 
 func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
@@ -639,6 +700,16 @@ func frameKeyPackages(keyPackages [][]byte) []byte {
 	for _, kp := range keyPackages {
 		out = binary.BigEndian.AppendUint32(out, uint32(len(kp)))
 		out = append(out, kp...)
+	}
+	return out
+}
+
+// frameLeafIndices frames leaf indices the way gate::decode_leaf_indices reads
+// them: u32 count, then each u32, big-endian.
+func frameLeafIndices(indices []uint32) []byte {
+	out := binary.BigEndian.AppendUint32(nil, uint32(len(indices)))
+	for _, i := range indices {
+		out = binary.BigEndian.AppendUint32(out, i)
 	}
 	return out
 }

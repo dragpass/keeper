@@ -69,16 +69,31 @@ const (
 	// ChatMLSErrorCodeCapabilityRequired — this Keeper binary was built
 	// without the MLS library (design §13).
 	ChatMLSErrorCodeCapabilityRequired = "CHAT_MLS_CAPABILITY_REQUIRED"
+
+	// ChatMLSErrorCodeRotationPending — a permit has named an account this
+	// device's confirmed group still holds a leaf for as removed from the
+	// organization, and this device has not yet applied a Commit that takes
+	// that leaf out (design §6.4.1 S-1). New application messages in the
+	// conversation are refused; receiving and Commits are not. The same code
+	// the server answers POST /:id/messages with, because the server refusing
+	// alone means nothing under a server that is not honest.
+	ChatMLSErrorCodeRotationPending = "CHAT_MLS_ROTATION_PENDING"
 )
 
 // Wire-shape constants.
 const (
 	// ChatStatePermitDomain / ChatStatePermitCanonicalVersion — the first two
-	// slots of the 12-item conversation-state permit canonical. A separate
+	// slots of the 13-item conversation-state permit canonical. A separate
 	// domain from `dragpass.chat.read`, so a page of read permits cannot also
 	// advance a chain, and a state permit cannot open a message.
 	ChatStatePermitDomain           = "dragpass.chat.state"
-	ChatStatePermitCanonicalVersion = 2
+	ChatStatePermitCanonicalVersion = 3
+
+	// ChatStateMaxPendingRemovals bounds pending_removal_account_ids. ariadne
+	// caps a room at 30 members, so an honest list is far below this; a longer
+	// one is refused rather than truncated, because dropping a name is exactly
+	// the omission S-1 cannot afford to make on its own.
+	ChatStateMaxPendingRemovals = 64
 
 	// ChatStatePermitTTLSeconds — the server fixes
 	// `expires_at = issued_at + 300` and the Keeper requires exactly that
@@ -135,6 +150,14 @@ type ChatStatePermit struct {
 	WatermarkNextHandshake   uint64 `json:"watermark_next_handshake"`
 	WatermarkNextApplication uint64 `json:"watermark_next_application"`
 
+	// PendingRemovalAccountIDs is the server's claim of which accounts left
+	// the organization and still await a Remove Commit in this conversation
+	// (design §6.4.1 S-1). Lowercase UUIDs, ascending, no duplicates, and []
+	// when there are none; null is refused. It is only ever a reason to stop
+	// encrypting. The Keeper resumes on its own confirmed group state and
+	// never because a later permit stopped listing an account.
+	PendingRemovalAccountIDs []string `json:"pending_removal_account_ids"`
+
 	IssuedAt         int64  `json:"issued_at"`
 	ExpiresAt        int64  `json:"expires_at"` // issued_at + 300
 	ServerKeyVersion uint   `json:"server_key_version"`
@@ -149,6 +172,9 @@ func (p ChatStatePermit) Validate() error {
 		return err
 	}
 	if err := requireMessageUUID(p.ConversationID, "permit.conversation_id"); err != nil {
+		return err
+	}
+	if err := validatePendingRemovals(p.PendingRemovalAccountIDs); err != nil {
 		return err
 	}
 	if err := requireMessageTimestamp(p.IssuedAt, "permit.issued_at"); err != nil {
@@ -166,8 +192,31 @@ func (p ChatStatePermit) Validate() error {
 	return nil
 }
 
-// ChatStatePermitCanonical builds the 12-item string the server signs and the
-// Keeper verifies. No trailing newline; the schema slot is always 2.
+// validatePendingRemovals refuses a list the canonical would not reproduce
+// byte for byte. It never repairs one: sorting or de-duplicating here would
+// verify a signature over bytes the server did not sign.
+func validatePendingRemovals(ids []string) error {
+	const field = "permit.pending_removal_account_ids"
+	if ids == nil {
+		return newValidationError(field, "must be an array")
+	}
+	if len(ids) > ChatStateMaxPendingRemovals {
+		return newValidationError(field,
+			"must hold at most "+strconv.Itoa(ChatStateMaxPendingRemovals)+" account ids")
+	}
+	for i, id := range ids {
+		if err := requireMessageUUID(id, field); err != nil {
+			return err
+		}
+		if i > 0 && ids[i-1] >= id {
+			return newValidationError(field, "must be sorted ascending without duplicates")
+		}
+	}
+	return nil
+}
+
+// ChatStatePermitCanonical builds the 13-item string the server signs and the
+// Keeper verifies. No trailing newline; the schema slot is always 3.
 //
 // Pure function on purpose, like the other canonicals in this package: ariadne
 // has to produce these bytes exactly.
@@ -182,6 +231,7 @@ func ChatStatePermitCanonical(p ChatStatePermit) string {
 		strconv.FormatUint(uint64(p.WatermarkLeafIndex), 10),
 		strconv.FormatUint(p.WatermarkNextHandshake, 10),
 		strconv.FormatUint(p.WatermarkNextApplication, 10),
+		strings.Join(p.PendingRemovalAccountIDs, ","),
 		strconv.FormatInt(p.IssuedAt, 10),
 		strconv.FormatInt(p.ExpiresAt, 10),
 		strconv.FormatUint(uint64(p.ServerKeyVersion), 10),

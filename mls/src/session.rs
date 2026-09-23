@@ -511,6 +511,46 @@ impl Session {
         Ok((output, expected_epoch))
     }
 
+    /// Build a Commit that removes these leaves, **without applying it**. Same
+    /// pending discipline as `commit_add_members`: the leaves stay in the
+    /// confirmed tree, and so in `roster`, until `apply_pending_commit`.
+    pub fn commit_remove_members(&mut self, leaf_indices: &[u32]) -> Res<(Vec<u8>, u64)> {
+        if leaf_indices.is_empty() {
+            return Err("mls: a remove commit needs at least one leaf".to_string());
+        }
+        self.group_mut()?;
+        self.arm()?;
+        let built = self.build_remove(leaf_indices);
+        self.disarm()?;
+        let (output, expected_epoch) = built?;
+        let commit = output
+            .commit_message
+            .to_bytes()
+            .map_err(|e| err("commit encode", e))?;
+        Ok((commit, expected_epoch))
+    }
+
+    fn build_remove(&mut self, leaf_indices: &[u32]) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let group = self.group_mut()?;
+        let expected_epoch = group.current_epoch();
+        let mut builder = group.commit_builder();
+        for &index in leaf_indices {
+            builder = builder
+                .remove_member(index)
+                .map_err(|e| err("remove member", e))?;
+        }
+        let output = builder.build().map_err(|e| err("commit build", e))?;
+        Ok((output, expected_epoch))
+    }
+
+    /// Every leaf of the confirmed tree. `Group::roster` reads the group's own
+    /// state and a built Commit lives in `pending_commit` beside it, so a
+    /// Remove this device has built but the server has not accepted leaves
+    /// the removed leaf here. S-1's unlatch depends on exactly that.
+    pub fn roster(&mut self) -> Res<Vec<Leaf>> {
+        Ok(leaves_of(self.group_mut()?))
+    }
+
     /// Promote the pending Commit to confirmed. Called only once the server's
     /// CAS has said this Commit is the one that won its epoch.
     pub fn apply_pending_commit(&mut self) -> Res<()> {
@@ -744,6 +784,47 @@ mod tests {
         let (_, welcome, _) = alice.commit_add_members(&[&kp]).unwrap();
         alice.apply_pending_commit().unwrap();
         welcome
+    }
+
+    fn identities(s: &mut Session) -> Vec<Vec<u8>> {
+        s.roster()
+            .unwrap()
+            .into_iter()
+            .map(|l| l.identity)
+            .collect()
+    }
+
+    // S-1 unlatches on the confirmed roster, so a built Remove must not show
+    // there until it is applied, and must show once it is.
+    #[test]
+    fn a_pending_remove_leaves_the_leaf_in_the_roster_until_applied() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        add(&mut alice, &member("bob"));
+        let bob = alice
+            .roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == b"bob")
+            .unwrap();
+
+        alice.commit_remove_members(&[bob.index]).unwrap();
+        assert!(alice.has_pending_commit().unwrap());
+        assert_eq!(
+            identities(&mut alice),
+            vec![b"alice".to_vec(), b"bob".to_vec()]
+        );
+
+        alice.apply_pending_commit().unwrap();
+        assert_eq!(identities(&mut alice), vec![b"alice".to_vec()]);
+    }
+
+    #[test]
+    fn a_remove_of_nobody_builds_nothing() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        assert!(alice.commit_remove_members(&[]).is_err());
+        assert!(!alice.has_pending_commit().unwrap());
     }
 
     #[test]

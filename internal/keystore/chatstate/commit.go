@@ -104,12 +104,21 @@ type CommitCipher interface {
 	// State serializes the session. Nothing the MLS library did is durable
 	// until what this returns is written.
 	State() ([]byte, error)
+
+	// ConfirmedAccounts must not see a pending Commit. It is what keeps a
+	// built Remove from unlatching anything before the server accepts it.
+	RosterReader
 }
 
 // CommitPlan is what one Commit should contain. Empty means a Commit with no
-// proposals, which rotates this device's own key material.
+// proposals, which rotates this device's own key material. A plan adds or
+// removes, not both.
 type CommitPlan struct {
 	AddKeyPackages [][]byte
+
+	// RemoveAccountIDs takes every leaf of each account out of the group:
+	// leaving the organization removes a person, not one of their devices.
+	RemoveAccountIDs []string
 }
 
 // BuiltCommit is what the MLS layer produced for a plan.
@@ -228,6 +237,14 @@ func (s *Store) BeginCommit(
 		if err := cipher.Load(rec.GroupState); err != nil {
 			return err
 		}
+		// Never a refusal here, whatever is latched: a Remove Commit is the
+		// only way a latched conversation gets out (§6.4.1 condition 2). The
+		// judgement still runs so this permit's list is not lost, and it runs
+		// before the build so that it reads the roster the Commit forks from.
+		latch, err := judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher)
+		if err != nil {
+			return err
+		}
 		built, err := cipher.BuildCommit(req.Plan)
 		if err != nil {
 			return err
@@ -249,6 +266,7 @@ func (s *Store) BeginCommit(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = &pending
+		rec.RemovalLatch = latch
 		// Record.Epoch is deliberately untouched. commit() copies it into the
 		// anchor, and a pending epoch written there would make the next load
 		// read a lost race as a rewind (§7.3.3).
@@ -323,6 +341,17 @@ func (s *Store) ConfirmCommit(
 			}
 		}
 
+		// Whichever Commit took the epoch is now the confirmed state, so this
+		// is the judgement that can finally unlatch. A winner that did not
+		// remove the leaf leaves the account latched: losing the race to
+		// someone else's Commit is not the same as the removal happening.
+		latch := rec.RemovalLatch
+		if !removed {
+			if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+				return err
+			}
+		}
+
 		state, err := cipher.State()
 		if err != nil {
 			return err
@@ -330,6 +359,7 @@ func (s *Store) ConfirmCommit(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil
+		rec.RemovalLatch = latch
 		rec.enterEpoch(epoch)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err

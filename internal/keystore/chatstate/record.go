@@ -159,6 +159,15 @@ type Record struct {
 	// confirmed state and a built Commit is not confirmed; see commit.go.
 	Pending *PendingCommit `json:"pending,omitempty"`
 
+	// RemovalLatch is the accounts this device may not encrypt new messages
+	// past (design §6.4.1 S-1), sorted. See latch.go for how it moves.
+	//
+	// Absent in a record written before it existed, which reads as nothing
+	// latched and is true. SchemaVersion is not raised for it: a Keeper old
+	// enough to drop the field on rewrite verifies only the v2 permit
+	// canonical, so once the server signs v3 it cannot open this store at all.
+	RemovalLatch []string `json:"removal_latch,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
 

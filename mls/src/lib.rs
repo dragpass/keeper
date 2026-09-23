@@ -533,6 +533,63 @@ pub unsafe extern "C" fn dpmls_group_commit_update(
     })
 }
 
+/// Build a Commit that removes the leaves in `leaf_indices` (framed as in
+/// `gate::decode_leaf_indices`) and hold it pending. `expected_epoch` receives
+/// the confirmed epoch it was built against.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`; `commit` must
+/// point to a writable DpBuf and `expected_epoch` to a writable u64.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_commit_remove_members(
+    handle: *mut Session,
+    leaf_indices: *const u8,
+    leaf_indices_len: usize,
+    commit: *mut DpBuf,
+    expected_epoch: *mut u64,
+) -> i32 {
+    guard(|| {
+        if expected_epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `leaf_indices` points to
+        // `leaf_indices_len` readable bytes for the duration of this call. The
+        // indices are decoded into an owned Vec before the borrow ends.
+        let (session, framed) =
+            unsafe { (session_of(handle)?, slice(leaf_indices, leaf_indices_len)?) };
+        let indices = gate::decode_leaf_indices(framed).map_err(|e| format!("mls: {e}"))?;
+        let (c, epoch) = session.commit_remove_members(&indices)?;
+        // SAFETY: `expected_epoch` was checked for null above and the caller
+        // promises it points to a writable u64; the caller promises `commit`
+        // points to a writable DpBuf, which `put` checks for null and
+        // overwrites without reading.
+        unsafe {
+            *expected_epoch = epoch;
+            put(commit, c)?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Every leaf of the confirmed tree, never one only a pending Commit reaches,
+/// in the leaf framing of `gate::encode_leaves`.
+///
+/// # Safety
+/// `handle` as in `session_of`; `out` must point to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_roster(handle: *mut Session, out: *mut DpBuf) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let leaves = unsafe { session_of(handle)? }.roster()?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, gate::encode_leaves(&leaves))? };
+        Ok(DPMLS_OK)
+    })
+}
+
 /// Promote the pending Commit to confirmed.
 ///
 /// # Safety

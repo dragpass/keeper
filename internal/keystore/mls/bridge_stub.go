@@ -51,6 +51,12 @@ func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error
 	return nil, 0, ErrUnavailable
 }
 
+func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expectedEpoch uint64, err error) {
+	return nil, 0, ErrUnavailable
+}
+
+func (s *Session) Roster() ([]Leaf, error) { return nil, ErrUnavailable }
+
 func (s *Session) ApplyPendingCommit() error { return ErrUnavailable }
 
 func (s *Session) ClearPendingCommit() error { return ErrUnavailable }
