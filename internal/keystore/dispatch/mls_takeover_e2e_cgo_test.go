@@ -281,3 +281,112 @@ func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
 	})
 	assertShown(t, bob3.decrypt(c.send(c.alice, 2, 2, "third time")), 0, "third time", c.alice, false)
 }
+
+// takeOver runs the M4.4 takeover of Bob's account by to, from the rotate
+// through Alice's accepted replace, to's join and from's removal, and leaves
+// the server as it is once the replace landed: the pending replacement row is
+// gone, so no permit lists it any more. It returns the new epoch.
+func (c *dm) takeOver(from, to *keeper, epoch uint64, notBefore int64) uint64 {
+	c.alice.t.Helper()
+	decl := to.declare(proto.MLSLeafReasonRotate, notBefore)
+	listed := []proto.ChatStateLeafReplacement{{AccountID: c.bob.id, NewSignatureKeyFP: decl.SignatureKeyFingerprint}}
+	c.alice.replacing, from.replacing, to.replacing = listed, listed, listed
+	// The old device is still in use, and the send it tries now is refused.
+	// The refusal stores the latch in its record, waiting for to's key.
+	from.refused(proto.MLSEncrypt, from.encryptRequest(messageID(int(epoch)*100), epoch, "still here"),
+		proto.ChatMLSErrorCodeLeafReplacementPending)
+
+	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: epoch,
+		Replace: []proto.MLSReplaceMember{replaceOf(to.keyPackage())},
+	}))
+	c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.replacing, from.replacing, to.replacing = nil, nil, nil
+
+	joined := to.must(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: to.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64,
+	}).Data.(proto.MLSJoinResponseData)
+	if joined.Epoch != epoch+1 {
+		c.alice.t.Fatalf("%s joined at epoch %d, want %d", to.device[:8], joined.Epoch, epoch+1)
+	}
+	if got := from.process(c.nextSeq(), epoch+1, built.CommitB64); !got.Removed {
+		c.alice.t.Fatalf("%s processed the replace as %+v", from.device[:8], got)
+	}
+	return epoch + 1
+}
+
+func (k *keeper) forgetRemoved() proto.MLSConversationForgetRemovedResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSConversationForgetRemoved, proto.MLSConversationForgetRemovedRequest{
+		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+	}).Data.(proto.MLSConversationForgetRemovedResponseData)
+}
+
+func (k *keeper) refuseForget() {
+	k.t.Helper()
+	k.refused(proto.MLSConversationForgetRemoved, proto.MLSConversationForgetRemovedRequest{
+		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+	}, proto.ChatStateErrorCodeConflict)
+}
+
+// The reproduction: the user switches back to the old device after a
+// takeover, Bob → Bob2 → Bob, without forgetting the removed group first. The
+// join succeeds, because the removed group was left at the epoch before the
+// replace and the Welcome is past it. But the record still carries the latch
+// that waits for Bob2's key, no permit lists the takeover any more, and every
+// send in the new group is refused with nothing able to lift it.
+func TestMLSChatE2E_ASwitchBackWithoutForgettingStaysLatched(t *testing.T) {
+	c := newDM(t)
+	oldBob, _, err := keychain.GetMLSLeafNewest(c.alice.store, c.alice.id, c.bob.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob2 := newTakeoverKeeper(t, c.bob, e2eDevice2)
+	epoch := c.takeOver(c.bob, bob2, 1, oldBob.NotBefore+60)
+	epoch = c.takeOver(bob2, c.bob, epoch, oldBob.NotBefore+120)
+
+	c.bob.refused(proto.MLSEncrypt, c.bob.encryptRequest(messageID(1), epoch, "back on the old laptop"),
+		proto.ChatMLSErrorCodeLeafReplacementPending)
+	// The join replaced the removed group, so the record is no longer one
+	// this device was removed from and it cannot be forgotten any more: the
+	// app has to forget before it joins.
+	c.bob.refuseForget()
+}
+
+// The whole round trip with the removed group forgotten before the switch
+// back: Bob → Bob2 → Bob, Bob added again and joined from the new Welcome.
+func TestMLSChatE2E_TheOldDeviceSwitchesBackAndRejoins(t *testing.T) {
+	c := newDM(t)
+	before := c.send(c.alice, 1, 1, "before the takeover")
+	assertShown(t, c.bob.decrypt(before), 0, "before the takeover", c.alice, false)
+	oldBob, _, err := keychain.GetMLSLeafNewest(c.alice.store, c.alice.id, c.bob.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob2 := newTakeoverKeeper(t, c.bob, e2eDevice2)
+	epoch := c.takeOver(c.bob, bob2, 1, oldBob.NotBefore+60)
+
+	// Only the removed device may forget, and only its own removed group.
+	c.alice.refuseForget()
+	bob2.refuseForget()
+	if got := c.bob.forgetRemoved(); !got.Forgotten {
+		t.Fatalf("forget = %+v", got)
+	}
+	if again := c.bob.forgetRemoved(); again.Forgotten {
+		t.Fatalf("forget again = %+v; want nothing to forget", again)
+	}
+	if got := c.bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || len(got.LeafReplacementLatch) != 0 {
+		t.Fatalf("bob's status after the forget = %+v", got)
+	}
+	// What the old device had read stays readable.
+	assertShown(t, c.bob.decrypt(before), 0, "before the takeover", c.alice, true)
+
+	epoch = c.takeOver(bob2, c.bob, epoch, oldBob.NotBefore+120)
+	assertReplacementLatch(t, c.bob)
+	fromBob := c.send(c.bob, 2, epoch, "back on the old laptop")
+	assertShown(t, c.alice.decrypt(fromBob), 0, "back on the old laptop", c.bob, false)
+	toBob := c.send(c.alice, 3, epoch, "welcome back again")
+	assertShown(t, c.bob.decrypt(toBob), 0, "welcome back again", c.alice, false)
+	assertShown(t, c.bob.decrypt(before), 0, "before the takeover", c.alice, true)
+}

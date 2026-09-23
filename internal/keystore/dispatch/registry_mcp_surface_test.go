@@ -108,6 +108,7 @@ func TestMCPCallableActions_ExcludeMLSKeyPackageGenerate(t *testing.T) {
 var mlsChatActionNames = []string{
 	proto.MLSGroupCreate,
 	proto.MLSGroupDiscardUnaccepted,
+	proto.MLSConversationForgetRemoved,
 	proto.MLSCommitBuild,
 	proto.MLSCommitConfirm,
 	proto.MLSProcess,

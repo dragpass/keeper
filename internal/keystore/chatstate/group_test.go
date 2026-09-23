@@ -161,3 +161,130 @@ func TestADiscardIsRefusedForAnyOtherState(t *testing.T) {
 		refuse(t, store, testCommitA, ErrNotUnacceptedCreate)
 	})
 }
+
+// removeForTest applies a handshake that removes this device. mls-rs leaves
+// the group behind at the epoch it was at, which is the epoch Open reports.
+func removeForTest(t *testing.T, store *Store, seq, epoch uint64) {
+	t.Helper()
+	removal := &fakeInbound{opened: Opened{Epoch: epoch, Removed: true}}
+	got, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: seq, Message: []byte("commit"), Handshake: true, ProducedEpoch: epoch + 1}, removal)
+	if err != nil || !got.Removed {
+		t.Fatalf("removal = %+v, %v", got, err)
+	}
+}
+
+// Bob → Bob2 → Bob: the old device was removed with a latch waiting for Bob2's
+// key. Forgetting drops the group, the pending Commit and the latch, keeps the
+// history and the epoch, and the next Welcome is joined into a clean record.
+func TestARemovedGroupIsForgottenAndItsHistoryKept(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+	delivered := inbound(1, 0, "before the takeover")
+	delivered.opened.Epoch = 1
+	if _, err := store.Receive(testConvA, noWatermark, ReceiveRequest{Seq: 1, Message: []byte("m")}, delivered); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacementSend(store, replacing(takeover()), &fakeCipher{leaves: leavesOf(oldFP)}); !errors.Is(err, ErrLeafReplacementPending) {
+		t.Fatal(err)
+	}
+	if _, err := store.ForgetRemovedGroup(testConvA, noWatermark); !errors.Is(err, ErrNotRemoved) {
+		t.Fatalf("forget before the removal = %v", err)
+	}
+
+	removeForTest(t, store, 2, 1)
+	if rec := readRecordForTest(t, store, testConvA); !rec.RemovedFromGroup || len(rec.LeafReplacementLatch) != 1 {
+		t.Fatalf("record after the removal = %+v", rec)
+	}
+	got, err := store.ForgetRemovedGroup(testConvA, noWatermark)
+	if err != nil || !got.Forgotten {
+		t.Fatalf("forget = %+v, %v", got, err)
+	}
+	rec := readRecordForTest(t, store, testConvA)
+	if len(rec.GroupState) != 0 || rec.Pending != nil || rec.RemovalLatch != nil || rec.LeafReplacementLatch != nil ||
+		rec.RemovedFromGroup || rec.Epoch != 1 || len(rec.History) != 1 || rec.Generation != got.Generation {
+		t.Fatalf("record after the forget = %+v", rec)
+	}
+	reread, err := store.ReadHistory(testConvA, noWatermark, 1)
+	if err != nil || string(reread.Plaintext) != "before the takeover" || !reread.FromHistory {
+		t.Fatalf("history after the forget = %q, %v", reread.Plaintext, err)
+	}
+
+	again, err := store.ForgetRemovedGroup(testConvA, noWatermark)
+	if err != nil || again.Forgotten || again.Generation != got.Generation {
+		t.Fatalf("forget again = %+v, %v; want nothing written", again, err)
+	}
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+		t.Fatalf("join after the forget: %v", err)
+	}
+	if rec := readRecordForTest(t, store, testConvA); rec.Epoch != 3 || rec.RemovedFromGroup {
+		t.Fatalf("record after the join = %+v", rec)
+	}
+	if _, err := store.ForgetRemovedGroup(testConvA, noWatermark); !errors.Is(err, ErrNotRemoved) {
+		t.Fatalf("forget of the joined group = %v", err)
+	}
+}
+
+// Losing a CAS to a Commit that removes this device marks the record the same
+// way applying it from the handshake log does, and the pending Commit it
+// built goes with the group.
+func TestARemovingWinnerMarksTheRecordForgettable(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 1, 0, 0)
+	beginForTest(t, store, testCommitA, &fakeCommitter{})
+	if _, err := store.ConfirmCommit(testConvA, noWatermark, CommitOutcome{
+		ClientCommitID: testCommitA, Kind: CommitSuperseded, WinnerMessage: []byte("commit@1"),
+	}, &fakeCommitter{removes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.ForgetRemovedGroup(testConvA, noWatermark); err != nil || !got.Forgotten {
+		t.Fatalf("forget = %+v, %v", got, err)
+	}
+}
+
+// Every state but a removal is refused and writes nothing.
+func TestAForgetIsRefusedForAnyOtherState(t *testing.T) {
+	t.Run("a live group", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		seedGroupState(t, store, testConvA, 1, 0, 0)
+		before := readRecordForTest(t, store, testConvA).Generation
+		if _, err := store.ForgetRemovedGroup(testConvA, noWatermark); !errors.Is(err, ErrNotRemoved) {
+			t.Fatalf("forget = %v", err)
+		}
+		if readRecordForTest(t, store, testConvA).Generation != before {
+			t.Fatal("a refused forget wrote the record")
+		}
+	})
+	t.Run("an unaccepted create", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		createForTest(t, store, testCommitA)
+		if _, err := store.ForgetRemovedGroup(testConvA, noWatermark); !errors.Is(err, ErrNotRemoved) {
+			t.Fatalf("forget = %v", err)
+		}
+	})
+	t.Run("a record latched for a rewind", func(t *testing.T) {
+		store, secrets := newTestStore(t)
+		if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 1, 0), 1); err != nil {
+			t.Fatal(err)
+		}
+		removeForTest(t, store, 2, 1)
+		tag := store.paths(testConvA).tag
+		anchor, err := loadAnchor(secrets, tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		anchor.NeedsRekey = true
+		if err := saveAnchor(secrets, tag, anchor); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ForgetRemovedGroup(testConvA, noWatermark); !errors.Is(err, ErrRekeyRequired) {
+			t.Fatalf("forget = %v", err)
+		}
+	})
+	t.Run("nothing at all", func(t *testing.T) {
+		store, _ := newTestStore(t)
+		if got, err := store.ForgetRemovedGroup(testConvB, noWatermark); err != nil || got.Forgotten {
+			t.Fatalf("forget of an empty conversation = %+v, %v", got, err)
+		}
+	})
+}

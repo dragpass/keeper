@@ -460,6 +460,9 @@ func (s *Store) ConfirmCommit(
 		rec.Pending = nil
 		latch.apply(rec)
 		rec.enterEpoch(epoch)
+		if removed {
+			rec.RemovedFromGroup = true
+		}
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}

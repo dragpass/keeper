@@ -96,6 +96,7 @@ func (s *Store) CreateGroup(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = &pending
+		rec.RemovedFromGroup = false
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -134,6 +135,7 @@ func (s *Store) SaveJoinedGroupState(
 		}
 		loaded := rec.Generation
 		rec.GroupState = blob
+		rec.RemovedFromGroup = false
 		rec.enterEpoch(epoch)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
@@ -217,6 +219,75 @@ func (s *Store) DiscardUnacceptedGroup(
 			return err
 		}
 		out = DiscardResult{Discarded: true, Generation: rec.Generation}
+		return nil
+	})
+	return out, err
+}
+
+// ErrNotRemoved — the conversation holds a group this device was not removed
+// from, as far as its confirmed state says. Forgetting it would throw away a
+// group this device may still be reading and sending in.
+var ErrNotRemoved = errors.New("chat state group is not one this device was removed from")
+
+// ForgetResult reports what ForgetRemovedGroup did. Forgotten is false when
+// there was nothing left to forget and nothing was written.
+type ForgetResult struct {
+	Forgotten  bool
+	Generation uint64
+}
+
+// ForgetRemovedGroup drops the group state of a conversation this device was
+// removed from, so a later Welcome is joined into a clean record. The case it
+// exists for is a device takeover undone (design M4.4): Bob → Bob2 removes
+// Bob's leaf, the user switches back, and Bob is added again. Bob's record
+// still carries the leaf-replacement latch that waits for Bob2's key. The
+// permit that could re-point it is gone once the replace landed, so every send
+// in the new group is refused with ErrLeafReplacementPending and nothing lifts
+// it.
+//
+// It succeeds only when RemovedFromGroup is set: the last Commit applied to
+// the confirmed state removed this device. Then the group state, the pending
+// Commit and both latches go. Everything else is refused with ErrNotRemoved,
+// and a NeedsRekey record with ErrRekeyRequired.
+//
+// Why dropping them is safe: every other member is past the epoch the group
+// was left at, so nothing this device could still encrypt in it would be read,
+// and a pending Commit built on it can never win an epoch the server has
+// already moved past. The latches judge that group's roster, and the next
+// group is judged from its own. What it costs: a message of the left-behind
+// epoch that this device had not opened yet cannot be opened afterwards, so
+// the caller forgets once it has read that epoch's messages.
+//
+// What stays: the sealed history, which re-reads answer from without the group
+// the way the NeedsRekey read path does, and the chain counters and epoch the
+// anchor is judged against, which a join only ever moves forward.
+//
+// Idempotent: a record with no group, no pending Commit and no removal mark
+// has nothing to forget and answers Forgotten false.
+func (s *Store) ForgetRemovedGroup(conversationID string, wm ServerWatermark) (ForgetResult, error) {
+	var out ForgetResult
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		if !rec.RemovedFromGroup {
+			if len(rec.GroupState) == 0 && rec.Pending == nil {
+				out = ForgetResult{Generation: rec.Generation}
+				return nil
+			}
+			return ErrNotRemoved
+		}
+		loaded := rec.Generation
+		rec.GroupState = nil
+		rec.Pending = nil
+		rec.RemovalLatch = nil
+		rec.LeafReplacementLatch = nil
+		rec.RemovedFromGroup = false
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		out = ForgetResult{Forgotten: true, Generation: rec.Generation}
 		return nil
 	})
 	return out, err

@@ -241,6 +241,27 @@ func HandleMLSGroupDiscardUnaccepted(d Deps, payload json.RawMessage) proto.Base
 	}}
 }
 
+// HandleMLSConversationForgetRemoved drops the group state of a conversation
+// this device was removed from (chatstate.ForgetRemovedGroup).
+func HandleMLSConversationForgetRemoved(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSConversationForgetRemovedRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	result, err := c.store.ForgetRemovedGroup(c.conv, c.wm)
+	if err != nil {
+		return chatStateFailure(d, "mls conversation forget removed", err)
+	}
+	d.Logger.Println("mls conversation forget removed successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSConversationForgetRemovedResponseData{
+		Forgotten:  result.Forgotten,
+		Generation: result.Generation,
+	}}
+}
+
 // replaceMembers decodes the replace entries and pairs each with the key the
 // permit names for its account. The credential is checked against the account
 // here, as memberKeyPackages checks an Add's; the key is checked against the

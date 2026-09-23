@@ -434,6 +434,9 @@ func (s *Store) receiveOne(
 	rec.GroupState = state
 	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
+	if opened.Removed {
+		rec.RemovedFromGroup = true
+	}
 	if opened.Application {
 		first = !rec.receivedContains(position)
 		if first {

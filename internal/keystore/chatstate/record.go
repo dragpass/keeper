@@ -182,6 +182,16 @@ type Record struct {
 	// record unreadable, because an unknown version fails closed.
 	LeafReplacementLatch []ReplacementLatch `json:"leaf_replacement_latch,omitempty"`
 
+	// RemovedFromGroup is true when the last Commit applied to GroupState
+	// removed this device. mls-rs leaves such a group behind at the epoch
+	// before the Commit with this device's leaf still in its roster, so the
+	// state itself cannot say so and the record has to. Only a new group
+	// clears it (see ForgetRemovedGroup).
+	//
+	// SchemaVersion is not raised for it: a Keeper that drops the field on
+	// rewrite leaves it false, and false only refuses ForgetRemovedGroup.
+	RemovedFromGroup bool `json:"removed_from_group,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
 
