@@ -4,6 +4,7 @@ package mls
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,11 @@ const (
 
 func newSession(t *testing.T, identity string) *Session {
 	t.Helper()
-	secret, public, err := GenerateSignatureKey()
+	secret, public, err := generateSignatureKey()
 	if err != nil {
 		t.Fatalf("generate signature key: %v", err)
 	}
-	s, err := NewSession([]byte(identity), secret, public)
+	s, err := openSession([]byte(identity), secret, public)
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -292,11 +293,11 @@ func TestABadBlobIsRefusedRatherThanFatal(t *testing.T) {
 }
 
 func TestCallsAfterCloseFailInsteadOfTouchingAFreedHandle(t *testing.T) {
-	secret, public, err := GenerateSignatureKey()
+	secret, public, err := generateSignatureKey()
 	if err != nil {
 		t.Fatalf("generate signature key: %v", err)
 	}
-	s, err := NewSession([]byte("alice@device-1"), secret, public)
+	s, err := openSession([]byte("alice@device-1"), secret, public)
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -775,5 +776,71 @@ func TestAPendingCommitEnlargesTheStoredBlob(t *testing.T) {
 	if len(applied) >= len(withPending) {
 		t.Fatalf("settling the commit did not shrink the blob: %d vs %d",
 			len(applied), len(withPending))
+	}
+}
+
+// The device key is minted in Go (crypto/ed25519) by mls_leaf_declare, not by
+// the library, so this is what shows mls-rs accepts that layout as a signer and
+// that the leaf it builds carries the declared key and identity.
+func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
+	store := keychain.NewMemorySecretStore()
+	if _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafKey) {
+		t.Fatalf("NewDeviceSession with no key = %v; want ErrNoLeafKey", err)
+	}
+
+	public, secret, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const device = "44444444-4444-4444-8444-444444444444"
+	if err := keychain.SaveMLSLeafKey(store, keychain.MLSLeafKey{
+		AccountID: testOwner, DeviceID: device, SecretKey: secret, PublicKey: public,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	alice, err := NewDeviceSession(store)
+	if err != nil {
+		t.Fatalf("NewDeviceSession: %v", err)
+	}
+	t.Cleanup(alice.Close)
+	kp, err := alice.KeyPackage()
+	if err != nil {
+		t.Fatalf("key package: %v", err)
+	}
+	if !bytes.Contains(kp, public) {
+		t.Fatal("key package does not carry the declared leaf signature key")
+	}
+	if !bytes.Contains(kp, CredentialIdentity(testOwner, device)) {
+		t.Fatal("key package does not carry the device credential identity")
+	}
+
+	// bob joining and opening alice's message proves the key signs and
+	// verifies, not only that it serializes.
+	if err := alice.CreateGroup([]byte("device-session-group")); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	bob := newSession(t, "bob@device-1")
+	bobKP, err := bob.KeyPackage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, welcome, _, err := alice.CommitAddMember(bobKP)
+	if err != nil {
+		t.Fatalf("commit add member: %v", err)
+	}
+	if err := alice.ApplyPendingCommit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bob.Join(welcome); err != nil {
+		t.Fatalf("join a group created by a device session: %v", err)
+	}
+	ciphertext, err := alice.Encrypt([]byte("hello"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed, err := bob.Process(ciphertext)
+	if err != nil || string(processed.Plaintext) != "hello" {
+		t.Fatalf("bob could not open alice's message: %v", err)
 	}
 }

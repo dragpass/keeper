@@ -33,6 +33,12 @@ const (
 	PendingDragPassRequestSigningPrivateKey = "pending_request_signing_private_key"
 	PendingDragPassRequestSigningPublicKey  = "pending_request_signing_public_key"
 
+	// MLS leaf signature key (Ed25519), one record naming the account and
+	// device it was declared for. Not the request-signing key: that one
+	// authenticates this device to the server, this one signs every MLS
+	// message and is vouched for to peers by a leaf declaration.
+	MLSLeafSignatureKey = "mls_leaf_signature_key"
+
 	// Per-org Archive / Recovery keypair (RSA-2048).
 	//
 	// A break-glass recovery key held on the org owner's device. Completely

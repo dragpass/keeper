@@ -68,6 +68,16 @@ func TestMCPCallableActions_ExcludeChatState(t *testing.T) {
 	}
 }
 
+// A model that could reach this could vouch for a leaf key under the user's
+// account key, which is the one statement the MLS identity check trusts.
+func TestMCPCallableActions_ExcludeMLSLeafDeclare(t *testing.T) {
+	for _, action := range mcpCallableActions {
+		if action == proto.ActionMLSLeafDeclare {
+			t.Fatal("mls_leaf_declare is on the MCP surface")
+		}
+	}
+}
+
 // TestChatStateActions_AreExactlyTheFiveRegistered keeps the set this guard
 // checks honest: a sixth conversation-state action added without a thought
 // about the boundary fails here rather than passing unnoticed.

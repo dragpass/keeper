@@ -72,5 +72,8 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionRotateRequestKeyPrepare: wrap(handlers.HandleRotateRequestKeyPrepare),
 		proto.ActionRotateRequestKeyPromote: wrap(handlers.HandleRotateRequestKeyPromote),
 		proto.ActionRotateRequestKeyAbort:   wrap(handlers.HandleRotateRequestKeyAbort),
+
+		// MLS leaf signature key + its declaration under the account key
+		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare),
 	}
 }
