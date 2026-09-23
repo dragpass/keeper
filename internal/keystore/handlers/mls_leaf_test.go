@@ -15,6 +15,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -968,5 +969,73 @@ func TestVerifyLeafDeclaration_GoldenCanonicalRoundTrip(t *testing.T) {
 	}
 	if err := VerifyLeafDeclaration(decl, accountPublicKey(t, account.PublicKey)); err != nil {
 		t.Fatalf("declaration signed over the golden literal does not verify: %v", err)
+	}
+}
+
+// pendingReadBarrier, once armed, parks the next read of the pending slot.
+type pendingReadBarrier struct {
+	keychain.SecretStore
+	armed   atomic.Bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (s *pendingReadBarrier) Get(service, account string) (string, error) {
+	if account == config.MLSLeafSignatureKeyPending && s.armed.CompareAndSwap(true, false) {
+		close(s.reached)
+		<-s.release
+	}
+	return s.SecretStore.Get(service, account)
+}
+
+// The window the leaf lock closes in a reset. The reset has cleared the other
+// slots, found no active leaf, and is parked just before it looks at pending.
+// A promote now runs. Without the lock it moves pending to active and returns,
+// the reset then finds pending empty, and an active leaf survives a reset that
+// reported success. With the lock the promote waits, the reset removes
+// pending, and the promote finds nothing to promote.
+//
+// A declare parked under the lock is not enough to show this: the reset's
+// device key and key bundle slots take the same mutex, so it would stall
+// there by accident before ever reaching the leaf slots.
+func TestResetDeviceIdentity_RacingAPromoteLeavesNoLeafSlot(t *testing.T) {
+	deps, _, store := newResetDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	staged := declareLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
+	barrier := &pendingReadBarrier{SecretStore: store, reached: make(chan struct{}), release: make(chan struct{})}
+	deps.Store = barrier
+	barrier.armed.Store(true)
+
+	reset := make(chan proto.BaseResponse, 1)
+	go func() { reset <- HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{}) }()
+	<-barrier.reached
+
+	promoted := make(chan proto.BaseResponse, 1)
+	go func() { promoted <- HandleMLSLeafPromote(deps, acceptanceFor(staged)) }()
+	// With the lock the promote cannot finish while the reset holds it, and
+	// this wait is only ever spent. Without it the promote is done well inside.
+	select {
+	case <-promoted:
+		promoted <- proto.BaseResponse{Success: true}
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(barrier.release)
+
+	deadline := time.After(10 * time.Second)
+	select {
+	case resp := <-reset:
+		if !resp.Success {
+			t.Fatalf("reset failed: %s", resp.Error)
+		}
+	case <-deadline:
+		t.Fatal("reset did not finish")
+	}
+	select {
+	case <-promoted:
+	case <-deadline:
+		t.Fatal("promote did not finish")
+	}
+	if leafSlots(t, store) != [2]string{} {
+		t.Fatal("a leaf slot survived a reset that raced a promote")
 	}
 }
