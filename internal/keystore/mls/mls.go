@@ -421,6 +421,14 @@ func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
 
 func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
 
+func (c *Cipher) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	return c.session.ExportSecret(label, context, n)
+}
+
+func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	return c.session.ExportPendingSecret(label, context, n)
+}
+
 // Open applies or decrypts one inbound message. For an application message it
 // also names the sender, from the credential of the leaf at SenderLeafIndex in
 // the group's own tree: the leaf that signed the message, in the epoch it was

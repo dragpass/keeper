@@ -97,6 +97,15 @@ int32_t dpmls_group_process(DpSession *handle,
                             uint32_t *key_generation, uint8_t *key_generation_known);
 int32_t dpmls_wire_form(const uint8_t *message, size_t message_len, uint8_t *out);
 
+int32_t dpmls_group_export_secret(DpSession *handle,
+                                  const uint8_t *label, size_t label_len,
+                                  const uint8_t *context, size_t context_len,
+                                  size_t len, DpBuf *out);
+int32_t dpmls_group_export_pending_secret(DpSession *handle,
+                                          const uint8_t *label, size_t label_len,
+                                          const uint8_t *context, size_t context_len,
+                                          size_t len, uint64_t *epoch, DpBuf *out);
+
 int32_t dpmls_group_send_position(DpSession *handle,
                                   uint64_t *epoch, uint32_t *leaf_index, uint32_t *generation);
 int32_t dpmls_group_burn_generation(DpSession *handle);
@@ -613,6 +622,50 @@ func WireFormOf(message []byte) (WireForm, error) {
 		return WireFormOther, statusError(rc)
 	}
 	return WireForm(form), nil
+}
+
+// ExportSecret is MLS-Exporter(label, context, n) of the confirmed epoch. The
+// result is a key: the caller wipes it.
+func (s *Session) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, err
+	}
+	var buf C.DpBuf
+	rc := C.dpmls_group_export_secret(h,
+		bytePtr(label), C.size_t(len(label)), bytePtr(context), C.size_t(len(context)), C.size_t(n), &buf)
+	runtime.KeepAlive(label)
+	runtime.KeepAlive(context)
+	if rc != 0 {
+		return nil, statusError(rc)
+	}
+	return takeBuf(&buf), nil
+}
+
+// ExportPendingSecret is the same for the epoch the pending Commit would
+// create, and names that epoch. The Commit stays pending and the confirmed
+// epoch does not move.
+func (s *Session) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, 0, err
+	}
+	var (
+		buf   C.DpBuf
+		epoch C.uint64_t
+	)
+	rc := C.dpmls_group_export_pending_secret(h,
+		bytePtr(label), C.size_t(len(label)), bytePtr(context), C.size_t(len(context)), C.size_t(n), &epoch, &buf)
+	runtime.KeepAlive(label)
+	runtime.KeepAlive(context)
+	if rc != 0 {
+		return nil, 0, statusError(rc)
+	}
+	return takeBuf(&buf), uint64(epoch), nil
 }
 
 // SendPosition reports where this device's application ratchet stands without

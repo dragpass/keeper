@@ -10,6 +10,7 @@
 package chatstate
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strconv"
@@ -37,6 +38,9 @@ type fakeCommitter struct {
 	clears   int
 	appliedA []uint64 // the confirmed epoch each ApplyMessage ran against
 	buildErr error
+
+	pendingExports int
+	exportErr      error
 
 	roster []string
 	leaves []RosterLeaf
@@ -138,6 +142,31 @@ func (c *fakeCommitter) ApplyMessage(message []byte) (uint64, bool, error) {
 	c.appliedA = append(c.appliedA, c.epoch)
 	c.epoch, c.pending, c.generation = c.epoch+1, 0, 0
 	return c.epoch, false, nil
+}
+
+// fakeExport stands in for MLS-Exporter: one key per epoch, label and
+// context, so a name sealed for one epoch does not open under another.
+func fakeExport(epoch uint64, label, context []byte, n int) []byte {
+	sum := sha256.Sum256(fmt.Appendf(nil, "fake-exporter|%d|%s|%s", epoch, label, context))
+	return append([]byte(nil), sum[:n]...)
+}
+
+func (c *fakeCommitter) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	if !c.loaded {
+		return nil, errors.New("fake committer: exported before loading")
+	}
+	return fakeExport(c.epoch, label, context, n), nil
+}
+
+func (c *fakeCommitter) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	if !c.loaded || c.pending == 0 {
+		return nil, 0, errors.New("fake committer: no pending commit to export from")
+	}
+	if c.exportErr != nil {
+		return nil, 0, c.exportErr
+	}
+	c.pendingExports++
+	return fakeExport(c.pending, label, context, n), c.pending, nil
 }
 
 func (c *fakeCommitter) Epoch() (uint64, error) {

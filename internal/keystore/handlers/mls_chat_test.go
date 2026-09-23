@@ -87,6 +87,19 @@ func mlsChatCases() []mlsChatCase {
 				ClientMessageID: mlsTestCommitID, Seq: 5,
 			}
 		}},
+		{proto.MLSRoomNameSeal, HandleMLSRoomNameSeal, func(p proto.ChatStatePermit) any {
+			return proto.MLSRoomNameSealRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+				PlaintextB64: base64.StdEncoding.EncodeToString([]byte("room")),
+			}
+		}},
+		{proto.MLSRoomNameOpen, HandleMLSRoomNameOpen, func(p proto.ChatStatePermit) any {
+			return proto.MLSRoomNameOpenRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, Epoch: 1,
+				NameIVb64:         base64.StdEncoding.EncodeToString(make([]byte, 12)),
+				NameCiphertextB64: base64.StdEncoding.EncodeToString(make([]byte, 20)),
+			}
+		}},
 		{proto.MLSConversationStatus, HandleMLSConversationStatus, func(p proto.ChatStatePermit) any {
 			return proto.MLSConversationStatusRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
 		}},

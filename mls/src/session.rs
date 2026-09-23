@@ -868,6 +868,77 @@ impl Session {
     }
 }
 
+/// The longest exporter output this crate hands out. The room name key is 32
+/// bytes; the bound keeps one call from asking for an unbounded derivation.
+pub const MAX_EXPORT_LEN: usize = 64;
+
+fn check_export_len(len: usize) -> Res<()> {
+    if len == 0 || len > MAX_EXPORT_LEN {
+        return Err(format!(
+            "mls: an exported secret is 1..={MAX_EXPORT_LEN} bytes"
+        ));
+    }
+    Ok(())
+}
+
+fn exported(secret: &mls_rs_core::secret::Secret) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(secret.as_bytes().to_vec())
+}
+
+impl Session {
+    /// `MLS-Exporter(label, context, len)` of the confirmed epoch (RFC 9420
+    /// §8.5). A pending Commit is not consulted: it lives beside the key
+    /// schedule this reads, not in it.
+    pub fn export_secret(
+        &mut self,
+        label: &[u8],
+        context: &[u8],
+        len: usize,
+    ) -> Res<Zeroizing<Vec<u8>>> {
+        check_export_len(len)?;
+        let secret = self
+            .group_mut()?
+            .export_secret(label, context, len)
+            .map_err(|e| err("export secret", e))?;
+        Ok(exported(&secret))
+    }
+
+    /// The same exporter output for the epoch the pending Commit would
+    /// create, and that epoch, **without applying the Commit**.
+    ///
+    /// mls-rs keeps the next epoch's key schedule inside `pending_commit`
+    /// and exposes it only by applying. So this applies the Commit to the
+    /// in-memory group, exports, and restores the group from the snapshot it
+    /// took first, the same round trip `process_collect` makes. The snapshot
+    /// carries `pending_commit`, so the restored group still has the Commit
+    /// pending and the confirmed epoch has not moved (RFC 9420 §14). Nothing
+    /// is durable here; the caller persists only what it flushes itself.
+    pub fn export_pending_secret(
+        &mut self,
+        label: &[u8],
+        context: &[u8],
+        len: usize,
+    ) -> Res<(Zeroizing<Vec<u8>>, u64)> {
+        check_export_len(len)?;
+        if !self.group_mut()?.has_pending_commit() {
+            return Err("mls: no pending commit to export from".to_string());
+        }
+        let snapshot = self.flush()?;
+        let group = self.group_mut()?;
+        let next = group
+            .apply_pending_commit()
+            .map_err(|e| err("apply commit", e))
+            .and_then(|_| {
+                let secret = group
+                    .export_secret(label, context, len)
+                    .map_err(|e| err("export secret", e))?;
+                Ok((exported(&secret), group.current_epoch()))
+            });
+        self.load(&snapshot)?;
+        next
+    }
+}
+
 pub fn wire_form(message: &[u8]) -> Res<WireForm> {
     use mls_rs::WireFormat;
     let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
@@ -1473,6 +1544,78 @@ mod tests {
             processed.application.as_deref().map(|v| &v[..]),
             Some(&b"theirs"[..])
         );
+    }
+
+    const ROOM: &[u8] = b"dragpass room name";
+
+    // The committer reads the new epoch's exporter before its Commit is
+    // accepted, and it is the one every member of that epoch derives: the
+    // committer after applying, a member who processed the Commit, and a
+    // joiner from the Welcome. The pending read leaves the Commit pending and
+    // the confirmed epoch where it was.
+    #[test]
+    fn the_pending_exporter_is_the_next_epochs_exporter_for_everyone() {
+        let (mut alice, mut bob) = pair();
+        let current = alice.export_secret(ROOM, b"g", 32).unwrap();
+
+        let mut carol = member("carol");
+        let kp = kp(&carol);
+        alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
+        let (commit, welcome, _) = alice.commit_add_members(&[&kp]).unwrap();
+
+        let (pending, epoch) = alice.export_pending_secret(ROOM, b"g", 32).unwrap();
+        assert_eq!(epoch, 2);
+        assert_ne!(pending, current);
+        assert!(alice.has_pending_commit().unwrap());
+        assert_eq!(alice.epoch().unwrap(), 1);
+        assert_eq!(alice.export_secret(ROOM, b"g", 32).unwrap(), current);
+
+        alice.apply_pending_commit().unwrap();
+        assert_eq!(alice.export_secret(ROOM, b"g", 32).unwrap(), pending);
+
+        let seen = bob.process_collect(&commit).unwrap();
+        bob.approve(seen.iter().map(approval).collect());
+        bob.process(&commit).unwrap();
+        assert_eq!(bob.export_secret(ROOM, b"g", 32).unwrap(), pending);
+
+        let tree = carol.join_collect(&welcome).unwrap();
+        carol.approve(tree.iter().map(approval).collect());
+        carol.join(&welcome).unwrap();
+        assert_eq!(carol.export_secret(ROOM, b"g", 32).unwrap(), pending);
+
+        // The context separates two conversations' names in one epoch.
+        assert_ne!(carol.export_secret(ROOM, b"h", 32).unwrap(), pending);
+    }
+
+    // A group create's pending Commit exports epoch 1, which is what the
+    // first member joins at.
+    #[test]
+    fn a_creates_pending_exporter_is_epoch_one() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let kp = kp(&bob);
+        alice.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
+        let (_, welcome, _) = alice.commit_add_members(&[&kp]).unwrap();
+        let (pending, epoch) = alice.export_pending_secret(ROOM, b"g", 32).unwrap();
+        assert_eq!(epoch, 1);
+        assert_eq!(alice.epoch().unwrap(), 0);
+
+        let tree = bob.join_collect(&welcome).unwrap();
+        bob.approve(tree.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+        assert_eq!(bob.export_secret(ROOM, b"g", 32).unwrap(), pending);
+    }
+
+    #[test]
+    fn an_export_is_bounded_and_needs_a_pending_commit_for_the_next_epoch() {
+        let (mut alice, _) = pair();
+        assert!(alice.export_secret(ROOM, b"g", 0).is_err());
+        assert!(alice.export_secret(ROOM, b"g", MAX_EXPORT_LEN + 1).is_err());
+        let Err(e) = alice.export_pending_secret(ROOM, b"g", 32) else {
+            panic!("a next-epoch secret without a pending commit");
+        };
+        assert!(e.contains("no pending commit"), "{e}");
     }
 
     // Without a rotation an Update changes neither the key nor the

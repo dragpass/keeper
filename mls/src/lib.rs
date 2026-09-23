@@ -841,6 +841,85 @@ pub unsafe extern "C" fn dpmls_wire_form(
     })
 }
 
+// ─── exporter ───────────────────────────────────────────────────────────
+
+/// `MLS-Exporter(label, context, len)` of the confirmed epoch, for a key the
+/// Go side uses outside MLS (the room name). The bytes are wiped by
+/// dpmls_buf_free.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`; `out` must point
+/// to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_export_secret(
+    handle: *mut Session,
+    label: *const u8,
+    label_len: usize,
+    context: *const u8,
+    context_len: usize,
+    len: usize,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller guarantees `handle` is null or a live session
+        // from dpmls_session_new, and both input pointers name `*_len`
+        // readable bytes for this call; `slice` and `session_of` refuse null.
+        let (session, label, context) = unsafe {
+            (
+                session_of(handle)?,
+                slice(label, label_len)?,
+                slice(context, context_len)?,
+            )
+        };
+        let secret = session.export_secret(label, context, len)?;
+        // SAFETY: `out` is null or a writable DpBuf the caller owns; `put`
+        // refuses null.
+        unsafe { put(out, secret.to_vec())? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The same exporter output for the epoch the pending Commit would create,
+/// and that epoch in `epoch`, without applying the Commit (see
+/// `Session::export_pending_secret`).
+///
+/// # Safety
+/// As `dpmls_group_export_secret`; `epoch` must point to a writable u64.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn dpmls_group_export_pending_secret(
+    handle: *mut Session,
+    label: *const u8,
+    label_len: usize,
+    context: *const u8,
+    context_len: usize,
+    len: usize,
+    epoch: *mut u64,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        if epoch.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: as in dpmls_group_export_secret.
+        let (session, label, context) = unsafe {
+            (
+                session_of(handle)?,
+                slice(label, label_len)?,
+                slice(context, context_len)?,
+            )
+        };
+        let (secret, next) = session.export_pending_secret(label, context, len)?;
+        // SAFETY: `epoch` was checked non-null above and the caller
+        // guarantees it is writable; `out` as in dpmls_group_export_secret.
+        unsafe {
+            *epoch = next;
+            put(out, secret.to_vec())?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
 // ─── state ──────────────────────────────────────────────────────────────
 
 /// Read the send chain position without advancing it.

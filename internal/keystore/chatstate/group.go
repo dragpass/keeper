@@ -45,6 +45,9 @@ func (s *Store) CreateGroup(
 	if len(req.Plan.AddKeyPackages) == 0 || len(req.Plan.RemoveAccountIDs) > 0 || len(req.Plan.Replace) > 0 {
 		return BeginCommitResult{}, errors.New("a group is created by adding members and nothing else")
 	}
+	if err := checkRoomName(req.RoomName); err != nil {
+		return BeginCommitResult{}, err
+	}
 	var out BeginCommitResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, anchor, err := s.loadChecked(p, conversationID, wm)
@@ -52,7 +55,12 @@ func (s *Store) CreateGroup(
 			return err
 		}
 		if rec.Pending != nil && rec.Pending.ClientCommitID == req.ClientCommitID {
+			name, err := resealPending(conversationID, rec, req.RoomName, cipher)
+			if err != nil {
+				return err
+			}
 			out = pendingResult(*rec.Pending, rec.Generation, false)
+			out.RoomName = name
 			return nil
 		}
 		if rec.Pending != nil || len(rec.GroupState) > 0 {
@@ -73,6 +81,12 @@ func (s *Store) CreateGroup(
 		if err != nil {
 			return err
 		}
+		var name *SealedRoomName
+		if req.RoomName != nil {
+			if name, err = sealForPending(cipher, conversationID, built.ExpectedEpoch, req.RoomName); err != nil {
+				return err
+			}
+		}
 		pending := PendingCommit{
 			ClientCommitID: req.ClientCommitID,
 			ExpectedEpoch:  built.ExpectedEpoch,
@@ -86,6 +100,7 @@ func (s *Store) CreateGroup(
 			return err
 		}
 		out = pendingResult(pending, rec.Generation, true)
+		out.RoomName = name
 		return nil
 	})
 	return out, err

@@ -27,9 +27,13 @@ const (
 	// pending (§7.3): post it to the CAS endpoint, then report the verdict
 	// through MLSCommitConfirm. Idempotent on client_commit_id.
 	//
+	// For a room, room_name_plaintext_b64 is resealed for epoch 1 from the
+	// pending create, and the response carries it as name_* for the server to
+	// store with the Commit.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           members[1..32] { account_id, device_id, key_package_b64 },
-	//           rotation_statements?
+	//           rotation_statements?, room_name_plaintext_b64? (1..256B)
 	//   Output: MLSCommitResponseData
 	MLSGroupCreate = "mls_group_create"
 
@@ -54,11 +58,17 @@ const (
 	// update_self (a path update that also moves the group onto the device's
 	// active leaf key after a rotation). A plan that mixes kinds is refused.
 	//
+	// For a room, room_name_plaintext_b64 — the name as this device last
+	// opened it — is resealed for the epoch the Commit creates, computed from
+	// the pending Commit before the CAS, and returned as name_* for the server
+	// to store atomically with the Commit.
+	//
 	//   Inputs: permit, org_id, conversation_id, client_commit_id,
 	//           expected_epoch (>=1), exactly one of add[1..32] /
 	//           remove_account_ids[1..64] /
 	//           replace[1..32] { account_id, key_package_b64 } /
-	//           update_self, rotation_statements?
+	//           update_self, rotation_statements?,
+	//           room_name_plaintext_b64? (1..256B)
 	//   Output: MLSCommitResponseData
 	MLSCommitBuild = "mls_commit_build"
 
@@ -147,6 +157,28 @@ const (
 	//             sender_device_id, epoch, sender_leaf_index, content_type,
 	//             generation, from_history } }
 	MLSDecryptBatchForAppDisplay = "mls_decrypt_batch_for_app_display"
+
+	// MLSRoomNameSeal seals a room's name under the confirmed epoch's MLS
+	// exporter ("dragpass room name", context conversation_id, 32 bytes) with
+	// AES-256-GCM, a random IV and AAD dragpass.room.name|1|<conversation_id>|
+	// <epoch>. For a rename, and for the epoch 0 name a room is created with
+	// while its create is pending. Writes nothing.
+	//
+	//   Inputs: permit, org_id, conversation_id, plaintext_b64 (1..256B, UTF-8)
+	//   Output: { epoch, name_iv_b64, name_ciphertext_b64 }
+	MLSRoomNameSeal = "mls_room_name_seal"
+
+	// MLSRoomNameOpen opens a room's name for the DragPass app's own screen.
+	// Only the confirmed epoch's name opens (CHAT_MLS_EPOCH_STALE otherwise):
+	// an older epoch's exporter is gone. The response is
+	// ConversationDecryptBatchForAppDisplayResponseData with exactly one
+	// plaintext_b64 entry, the same carve-out as the display batch rather than
+	// a new one. Writes nothing.
+	//
+	//   Inputs: permit, org_id, conversation_id, epoch, name_iv_b64 (12B),
+	//           name_ciphertext_b64 (17..272B)
+	//   Output: { plaintext_b64: [name] }
+	MLSRoomNameOpen = "mls_room_name_open"
 
 	// MLSConversationStatus reports this device's copy of the conversation:
 	// the confirmed epoch, whether a Commit is pending and under which

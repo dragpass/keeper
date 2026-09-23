@@ -91,7 +91,24 @@ const (
 	// MLSDecryptMaxRequestBytes fits 200 ciphertexts of 8208 bytes in Base64
 	// plus fixed context. The v1 reveal's 2 MiB does not.
 	MLSDecryptMaxRequestBytes = 3 * 1024 * 1024
+
+	// MLSRoomNameMaxBytes mirrors chatstate.MaxRoomNameBytes: the server's
+	// name_ciphertext column holds 272 bytes, the name and a 16-byte tag.
+	MLSRoomNameMaxBytes = 256
+
+	// MLSRoomNameIVBytes is the AES-GCM IV of a sealed room name.
+	MLSRoomNameIVBytes = 12
 )
+
+// validateRoomNamePlaintext bounds an optional room name input. The name
+// rules (1..64 code points, no control characters) are the client's; the
+// Keeper checks the size the server can store and, once decoded, UTF-8.
+func validateRoomNamePlaintext(b64, field string, required bool) error {
+	if b64 == "" && !required {
+		return nil
+	}
+	return requireMessageBase64Len(b64, field, 1, MLSRoomNameMaxBytes)
+}
 
 // MLS commit outcomes a caller reports to mls_commit_confirm.
 const (
@@ -160,6 +177,13 @@ type MLSCommitResponseData struct {
 	// under the same client_commit_id: a lost response retried, not rebuilt.
 	Created    bool   `json:"created"`
 	Generation uint64 `json:"generation"`
+
+	// NameEpoch / NameIVb64 / NameCiphertextB64 are the request's
+	// room_name_plaintext_b64 sealed for the epoch this Commit creates, for
+	// POST /:id/mls/commit to store with it. Absent when no name was given.
+	NameEpoch         uint64 `json:"name_epoch,omitempty"`
+	NameIVb64         string `json:"name_iv_b64,omitempty"`
+	NameCiphertextB64 string `json:"name_ciphertext_b64,omitempty"`
 }
 
 // MLSGroupCreateRequest creates the conversation's group at epoch 0 and builds
@@ -171,6 +195,10 @@ type MLSGroupCreateRequest struct {
 	ClientCommitID     string                 `json:"client_commit_id"`
 	Members            []MLSMemberKeyPackage  `json:"members"`
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+
+	// RoomNamePlaintextB64 is a room's name, resealed for epoch 1 in the
+	// response. Omitted for a DM. Encrypt direction; zeroized after sealing.
+	RoomNamePlaintextB64 string `json:"room_name_plaintext_b64,omitempty"`
 }
 
 func (r MLSGroupCreateRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -185,6 +213,9 @@ func (r MLSGroupCreateRequest) Validate() error {
 		return err
 	}
 	if err := validateMLSMembers(r.Members, "members"); err != nil {
+		return err
+	}
+	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
 		return err
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
@@ -282,6 +313,11 @@ type MLSCommitBuildRequest struct {
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+
+	// RoomNamePlaintextB64 is the room's name as this device last opened it,
+	// resealed for the epoch the Commit creates. Omitted for a DM. Encrypt
+	// direction; zeroized after sealing.
+	RoomNamePlaintextB64 string `json:"room_name_plaintext_b64,omitempty"`
 }
 
 func (r MLSCommitBuildRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -326,6 +362,9 @@ func (r MLSCommitBuildRequest) Validate() error {
 	if kinds != 1 {
 		return newValidationError("add",
 			"exactly one of add, remove_account_ids, replace and update_self must be given")
+	}
+	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
+		return err
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -644,6 +683,60 @@ type MLSDisplayItem struct {
 	ContentType     string `json:"content_type"`
 	Generation      uint64 `json:"generation"`
 	FromHistory     bool   `json:"from_history"`
+}
+
+// MLSRoomNameSealRequest seals a room's name under the confirmed epoch's
+// exporter, for a rename or the epoch 0 name a room is created with.
+type MLSRoomNameSealRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+	PlaintextB64   string          `json:"plaintext_b64"` // encrypt direction; zeroized after sealing, never logged
+}
+
+func (r MLSRoomNameSealRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSRoomNameSealRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	return validateRoomNamePlaintext(r.PlaintextB64, "plaintext_b64", true)
+}
+
+// MLSRoomNameSealResponseData is the server's name_iv / name_ciphertext and
+// the epoch (name_epoch) whose exporter opens them.
+type MLSRoomNameSealResponseData struct {
+	Epoch             uint64 `json:"epoch"`
+	NameIVb64         string `json:"name_iv_b64"`
+	NameCiphertextB64 string `json:"name_ciphertext_b64"`
+}
+
+// MLSRoomNameOpenRequest opens a room's name for display. Epoch is the
+// server's name_epoch and must be this device's confirmed epoch. The answer is
+// ConversationDecryptBatchForAppDisplayResponseData with one plaintext entry.
+type MLSRoomNameOpenRequest struct {
+	Permit            ChatStatePermit `json:"permit"`
+	OrgID             string          `json:"org_id"`
+	ConversationID    string          `json:"conversation_id"`
+	Epoch             uint64          `json:"epoch"`
+	NameIVb64         string          `json:"name_iv_b64"`
+	NameCiphertextB64 string          `json:"name_ciphertext_b64"`
+}
+
+func (r MLSRoomNameOpenRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSRoomNameOpenRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if err := requireMessageBase64Len(r.NameIVb64, "name_iv_b64", MLSRoomNameIVBytes, MLSRoomNameIVBytes); err != nil {
+		return err
+	}
+	return requireMessageBase64Len(r.NameCiphertextB64, "name_ciphertext_b64", 17, MLSRoomNameMaxBytes+16)
 }
 
 // MLSConversationStatusRequest asks where this device's copy of the

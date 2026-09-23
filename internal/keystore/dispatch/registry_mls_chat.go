@@ -24,6 +24,8 @@ func mlsChatActions() map[string]actionHandlerFunc {
 		proto.MLSEncrypt:                   handlers.HandleMLSEncrypt,
 		proto.MLSMarkSent:                  handlers.HandleMLSMarkSent,
 		proto.MLSDecryptBatchForAppDisplay: handlers.HandleMLSDecryptBatchForAppDisplay,
+		proto.MLSRoomNameSeal:              handlers.HandleMLSRoomNameSeal,
+		proto.MLSRoomNameOpen:              handlers.HandleMLSRoomNameOpen,
 		proto.MLSConversationStatus:        handlers.HandleMLSConversationStatus,
 	}
 }
