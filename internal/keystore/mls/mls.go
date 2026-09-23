@@ -235,10 +235,23 @@ func (c *Cipher) CreateGroup(groupID []byte) error { return c.session.CreateGrou
 // one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
-	if len(plan.RemoveAccountIDs) > 0 {
-		if len(plan.AddKeyPackages) > 0 {
-			return chatstate.BuiltCommit{}, failed("a commit plan adds or removes, not both")
+	kinds := 0
+	for _, present := range []bool{len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0} {
+		if present {
+			kinds++
 		}
+	}
+	if kinds > 1 {
+		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes or replaces, never two of them")
+	}
+	if len(plan.Replace) > 0 {
+		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
+	}
+	if len(plan.RemoveAccountIDs) > 0 {
 		commit, expected, err := c.commitRemoveAccounts(plan.RemoveAccountIDs)
 		if err != nil {
 			return chatstate.BuiltCommit{}, err
@@ -287,6 +300,69 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 	return c.session.CommitRemoveMembers(indices)
 }
 
+// commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
+// whose key is not the replacement's goes out and the replacement's KeyPackage
+// comes in, all in one Commit.
+//
+// The KeyPackage is held to two things §5.3 does not check on its own: its
+// credential names the account being replaced, and its leaf signs with the
+// key the permit named. The first keeps a KeyPackage of another account from
+// taking this one's place; the second keeps any other key of the same account
+// — the old device's, or one the server swapped in — from being the one the
+// latch then accepts as the replacement. Either mismatch is ErrLeafUntrusted,
+// decided before anything is built. The leaf then goes through the full §5.3
+// verification as an entering leaf, freshness included.
+//
+// An account with no leaf under another key is refused rather than turned
+// into a bare Add: there is nothing it replaces.
+func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commit, welcome []byte, expected uint64, err error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	var (
+		indices []uint32
+		kps     [][]byte
+	)
+	for _, m := range members {
+		leaf, err := keyPackageLeaf(m.KeyPackage)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		account, _, err := ParseCredentialIdentity(leaf.Identity)
+		if err != nil || account != m.AccountID {
+			return nil, nil, 0, fmt.Errorf("%w: the replacement key package names another account", ErrLeafUntrusted)
+		}
+		fingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(leaf.SignatureKey)
+		if err != nil || fingerprint != m.NewFingerprint {
+			return nil, nil, 0, fmt.Errorf("%w: the replacement key package is not the key the permit names", ErrLeafUntrusted)
+		}
+		found := false
+		for _, l := range leaves {
+			held, _, err := ParseCredentialIdentity(l.Identity)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if held != m.AccountID {
+				continue
+			}
+			heldFingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(l.SignatureKey)
+			if err != nil {
+				return nil, nil, 0, failed("a leaf in the group has an unreadable signature key")
+			}
+			if heldFingerprint != m.NewFingerprint {
+				indices = append(indices, l.Index)
+				found = true
+			}
+		}
+		if !found {
+			return nil, nil, 0, failed("an account to replace has no other leaf in the group")
+		}
+		kps = append(kps, m.KeyPackage)
+	}
+	return c.session.CommitReplaceMembersVerified(indices, kps, c.verifier)
+}
+
 // ConfirmedAccounts reads the confirmed roster, which a pending Commit is not
 // part of. Every identity is parsed strictly: a leaf this cannot attribute to
 // an account is an error, never a leaf that silently latches nobody.
@@ -307,6 +383,28 @@ func (c *Cipher) ConfirmedAccounts() ([]string, error) {
 	}
 	slices.Sort(accounts)
 	return accounts, nil
+}
+
+// ConfirmedLeaves reads the confirmed roster with each leaf's key
+// fingerprint, for the M4.4 latch, under the same strict parsing.
+func (c *Cipher) ConfirmedLeaves() ([]chatstate.RosterLeaf, error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]chatstate.RosterLeaf, 0, len(leaves))
+	for _, leaf := range leaves {
+		account, _, err := ParseCredentialIdentity(leaf.Identity)
+		if err != nil {
+			return nil, err
+		}
+		fingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(leaf.SignatureKey)
+		if err != nil {
+			return nil, failed("a leaf in the group has an unreadable signature key")
+		}
+		out = append(out, chatstate.RosterLeaf{AccountID: account, Fingerprint: fingerprint})
+	}
+	return out, nil
 }
 
 func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
@@ -822,6 +920,33 @@ func (s *Session) CommitAddMembersVerified(
 		return nil, nil, 0, err
 	}
 	return s.CommitAddMembers(keyPackages)
+}
+
+// CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
+// also removes leafIndices: the leaves the KeyPackages would add are verified
+// as one unit and as entering leaves, and a refused set builds nothing.
+func (s *Session) CommitReplaceMembersVerified(
+	leafIndices []uint32, keyPackages [][]byte, v LeafVerifier,
+) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	if len(leafIndices) == 0 || len(keyPackages) == 0 || len(keyPackages) > MaxKeyPackagesPerCall {
+		return nil, nil, 0, errors.New("mls: replace member count is out of range")
+	}
+	leaves := make([]Leaf, 0, len(keyPackages))
+	for _, kp := range keyPackages {
+		leaf, err := keyPackageLeaf(kp)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		leaf.Entering = true
+		leaves = append(leaves, leaf)
+	}
+	if err := verifyLeaves(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := s.approve(leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return s.CommitReplaceMembers(leafIndices, keyPackages)
 }
 
 // CommitAddMemberVerified is CommitAddMembersVerified for one member.

@@ -11,6 +11,7 @@ package dispatch
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,9 +40,19 @@ const (
 type keeper struct {
 	t       *testing.T
 	id      string
+	device  string
 	store   *keychain.MemorySecretStore
 	deps    handlers.Deps
 	commits int
+
+	// root, when set, is this Keeper's own chat state root. Two devices of one
+	// account would otherwise share an owner partition in the test's root,
+	// which two machines never do.
+	root string
+
+	// replacing is what the server lists in pending_leaf_replacements of the
+	// permits it signs for this Keeper.
+	replacing []proto.ChatStateLeafReplacement
 }
 
 func newKeeper(t *testing.T, id string) *keeper {
@@ -57,7 +68,7 @@ func newKeeper(t *testing.T, id string) *keeper {
 	if err := keychain.SavePublicKey(store, pair.PublicKey); err != nil {
 		t.Fatal(err)
 	}
-	k := &keeper{t: t, id: id, store: store, deps: handlers.Deps{
+	k := &keeper{t: t, id: id, device: e2eDevice, store: store, deps: handlers.Deps{
 		Logger:            logger.NewMemoryLogger(),
 		Store:             store,
 		ServerKeyVerifier: verifier.AlwaysOKVerifier{},
@@ -82,6 +93,11 @@ func (k *keeper) call(action string, payload any) proto.BaseResponse {
 	if err != nil {
 		k.t.Fatal(err)
 	}
+	if k.root != "" {
+		shared := os.Getenv(chatstate.RootEnvVar)
+		os.Setenv(chatstate.RootEnvVar, k.root)
+		defer os.Setenv(chatstate.RootEnvVar, shared)
+	}
 	return HandleRequest(k.deps.Logger, k.deps, msg)
 }
 
@@ -104,14 +120,14 @@ func (k *keeper) refused(action string, payload any, code string) {
 
 // declare runs mls_leaf_declare then mls_leaf_promote: how a device's leaf key
 // becomes the one it signs with, at enrolment and at every rotation.
-func (k *keeper) declare(reason string, notBefore int64) {
+func (k *keeper) declare(reason string, notBefore int64) proto.MLSLeafDeclaration {
 	k.t.Helper()
 	resp := k.must(proto.ActionMLSLeafDeclare, proto.MLSLeafDeclareRequest{
-		ChallengeToken: "dragpass.mls.leaf.challenge|1|" + k.id + "|" + e2eDevice + "|" + e2eNonce + "|" +
+		ChallengeToken: "dragpass.mls.leaf.challenge|1|" + k.id + "|" + k.device + "|" + e2eNonce + "|" +
 			strconv.FormatInt(time.Now().Unix()+proto.MLSLeafChallengeTTLSeconds, 10),
 		ServerSignature: "any",
 		AccountID:       k.id,
-		DeviceID:        e2eDevice,
+		DeviceID:        k.device,
 		NotBefore:       notBefore,
 		NotAfter:        notBefore + proto.MLSLeafMaxValiditySeconds,
 		Reason:          reason,
@@ -121,20 +137,21 @@ func (k *keeper) declare(reason string, notBefore int64) {
 		AcceptanceToken: proto.MLSLeafAcceptedToken(d.AccountID, d.DeviceID, d.SignatureKeyFingerprint, d.NotBefore, d.NotAfter),
 		ServerSignature: "any",
 	})
+	return d
 }
 
 func (k *keeper) keyPackage() proto.MLSMemberKeyPackage {
 	k.t.Helper()
 	resp := k.must(proto.MLSKeyPackageGenerate, proto.MLSKeyPackageGenerateRequest{
-		ChallengeToken: "dragpass.mls.keypackage.challenge|1|" + k.id + "|" + e2eDevice + "|" + e2eNonce + "|" +
+		ChallengeToken: "dragpass.mls.keypackage.challenge|1|" + k.id + "|" + k.device + "|" + e2eNonce + "|" +
 			strconv.FormatInt(time.Now().Unix()+proto.MLSKeyPackageChallengeTTLSeconds, 10),
 		ServerSignature: "any",
 		AccountID:       k.id,
-		DeviceID:        e2eDevice,
+		DeviceID:        k.device,
 		Count:           1,
 	})
 	kp := resp.Data.(proto.MLSKeyPackageGenerateResponseData).KeyPackages[0]
-	return proto.MLSMemberKeyPackage{AccountID: k.id, DeviceID: e2eDevice, KeyPackageB64: kp.KeyPackageB64}
+	return proto.MLSMemberKeyPackage{AccountID: k.id, DeviceID: k.device, KeyPackageB64: kp.KeyPackageB64}
 }
 
 // permit is what ariadne would sign for this account. The signature is not
@@ -145,9 +162,14 @@ func (k *keeper) permit(removals ...string) proto.ChatStatePermit {
 	if removals == nil {
 		removals = []string{}
 	}
+	replacing := k.replacing
+	if replacing == nil {
+		replacing = []proto.ChatStateLeafReplacement{}
+	}
 	return proto.ChatStatePermit{
 		AccountID: k.id, OrgID: e2eOrg, ConversationID: e2eConv,
 		PendingRemovalAccountIDs: removals,
+		PendingLeafReplacements:  replacing,
 		IssuedAt:                 now,
 		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
 		ServerKeyVersion:         1,

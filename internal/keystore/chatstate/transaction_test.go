@@ -38,8 +38,10 @@ type fakeCipher struct {
 	sealErr  error
 	beforeAt func()
 
-	// roster is what ConfirmedAccounts reports; rosterReads counts the reads.
+	// roster is what ConfirmedAccounts reports and leaves what
+	// ConfirmedLeaves reports; rosterReads counts the reads of either.
 	roster      []string
+	leaves      []RosterLeaf
 	rosterReads int
 }
 
@@ -112,6 +114,14 @@ func (c *fakeCipher) ConfirmedAccounts() ([]string, error) {
 	}
 	c.rosterReads++
 	return c.roster, nil
+}
+
+func (c *fakeCipher) ConfirmedLeaves() ([]RosterLeaf, error) {
+	if !c.loaded {
+		return nil, errors.New("fake cipher: roster read before loading")
+	}
+	c.rosterReads++
+	return c.leaves, nil
 }
 
 func (c *fakeCipher) State() ([]byte, error) {
@@ -458,9 +468,12 @@ type fakeInbound struct {
 	beforeState func()
 
 	roster []string
+	leaves []RosterLeaf
 }
 
 func (c *fakeInbound) ConfirmedAccounts() ([]string, error) { return c.roster, nil }
+
+func (c *fakeInbound) ConfirmedLeaves() ([]RosterLeaf, error) { return c.leaves, nil }
 
 func (c *fakeInbound) Load(blob []byte) error {
 	if len(blob) == 0 {

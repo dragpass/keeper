@@ -23,13 +23,18 @@ type ConversationStatus struct {
 	// holds the account. Sorted, and empty rather than nil.
 	RemovalLatch []string
 
+	// LeafReplacementLatch is the same for the M4.4 latch: what a send would
+	// be refused for now with ErrLeafReplacementPending. Empty rather than
+	// nil.
+	LeafReplacementLatch []LeafReplacement
+
 	// NeedsRekey is the rewind latch. When it is set nothing else is read:
 	// the record behind it is not trusted to say anything.
 	NeedsRekey bool
 }
 
 // StatusCipher is what Status needs from MLS: the confirmed roster, to judge
-// the permit's removals the way the next send would.
+// the permit's lists the way the next send would.
 type StatusCipher interface {
 	Load(groupState []byte) error
 	RosterReader
@@ -45,7 +50,7 @@ type StatusCipher interface {
 // the send's job (refuseWhileLatched), and a status read has no position to
 // refuse.
 func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusCipher) (ConversationStatus, error) {
-	out := ConversationStatus{RemovalLatch: []string{}}
+	out := ConversationStatus{RemovalLatch: []string{}, LeafReplacementLatch: []LeafReplacement{}}
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
@@ -61,16 +66,18 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 			out.CommitPending = true
 			out.PendingClientCommitID = rec.Pending.ClientCommitID
 		}
-		latch := rec.RemovalLatch
-		if out.HasGroupState && (len(rec.RemovalLatch) > 0 || len(wm.PendingRemovals) > 0) {
+		latch := storedLatches(rec)
+		if out.HasGroupState && (latch.held() ||
+			len(wm.PendingRemovals) > 0 || len(wm.PendingLeafReplacements) > 0) {
 			if err := cipher.Load(rec.GroupState); err != nil {
 				return err
 			}
-			if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+			if latch, err = judgeLatches(rec, wm, cipher); err != nil {
 				return err
 			}
 		}
-		out.RemovalLatch = append(out.RemovalLatch, latch...)
+		out.RemovalLatch = append(out.RemovalLatch, latch.removals...)
+		out.LeafReplacementLatch = append(out.LeafReplacementLatch, latch.replacements...)
 		return nil
 	})
 	return out, err

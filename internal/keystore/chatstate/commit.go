@@ -50,6 +50,7 @@ package chatstate
 
 import (
 	"errors"
+	"slices"
 )
 
 // MaxCommitBytes bounds a Commit and a Welcome. A Commit carries a path update
@@ -111,14 +112,44 @@ type CommitCipher interface {
 }
 
 // CommitPlan is what one Commit should contain. Empty means a Commit with no
-// proposals, which rotates this device's own key material. A plan adds or
-// removes, not both.
+// proposals, which rotates this device's own key material. A plan adds,
+// removes or replaces: one kind, never two.
 type CommitPlan struct {
 	AddKeyPackages [][]byte
 
 	// RemoveAccountIDs takes every leaf of each account out of the group:
 	// leaving the organization removes a person, not one of their devices.
 	RemoveAccountIDs []string
+
+	// Replace swaps each account's leaves for the leaf of the device that took
+	// it over (design M4.4), in one Commit.
+	Replace []ReplaceMember
+}
+
+// ReplaceMember is one account to replace. NewFingerprint is the one the
+// permit named for the account, never one the caller picked, and the
+// KeyPackage's leaf must sign with exactly that key.
+type ReplaceMember struct {
+	AccountID      string
+	NewFingerprint string
+	KeyPackage     []byte
+}
+
+// ErrReplacementNotListed — a replace plan names an account, or a key for it,
+// that this operation's permit does not list as taken over. The permit is the
+// only statement of which key replaces an account, so a replacement it does not
+// name is not built.
+var ErrReplacementNotListed = errors.New("chat state replace plan names a replacement the permit does not list")
+
+// requireListedReplacements holds every replace entry to the permit's list.
+func requireListedReplacements(plan CommitPlan, wm ServerWatermark) error {
+	for _, m := range plan.Replace {
+		if !slices.Contains(wm.PendingLeafReplacements,
+			LeafReplacement{AccountID: m.AccountID, NewFingerprint: m.NewFingerprint}) {
+			return ErrReplacementNotListed
+		}
+	}
+	return nil
 }
 
 // BuiltCommit is what the MLS layer produced for a plan.
@@ -235,6 +266,11 @@ func (s *Store) BeginCommit(
 			out = pendingResult(*rec.Pending, rec.Generation, false)
 			return nil
 		}
+		// After the retry branch: a retry answers with bytes already built,
+		// and the permit it arrives with may have dropped the entry since.
+		if err := requireListedReplacements(req.Plan, wm); err != nil {
+			return err
+		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}
@@ -250,11 +286,12 @@ func (s *Store) BeginCommit(
 				return ErrEpochStale
 			}
 		}
-		// Never a refusal here, whatever is latched: a Remove Commit is the
-		// only way a latched conversation gets out (§6.4.1 condition 2). The
-		// judgement still runs so this permit's list is not lost, and it runs
-		// before the build so that it reads the roster the Commit forks from.
-		latch, err := judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher)
+		// Never a refusal here, whatever is latched: a Remove or replace
+		// Commit is the only way a latched conversation gets out (§6.4.1
+		// condition 2, M4.4). The judgement still runs so this permit's lists
+		// are not lost, and it runs before the build so that it reads the
+		// roster the Commit forks from.
+		latch, err := judgeLatches(rec, wm, cipher)
 		if err != nil {
 			return err
 		}
@@ -279,7 +316,7 @@ func (s *Store) BeginCommit(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = &pending
-		rec.RemovalLatch = latch
+		latch.apply(rec)
 		// Record.Epoch is deliberately untouched. commit() copies it into the
 		// anchor, and a pending epoch written there would make the next load
 		// read a lost race as a rewind (§7.3.3).
@@ -358,9 +395,9 @@ func (s *Store) ConfirmCommit(
 		// is the judgement that can finally unlatch. A winner that did not
 		// remove the leaf leaves the account latched: losing the race to
 		// someone else's Commit is not the same as the removal happening.
-		latch := rec.RemovalLatch
+		latch := storedLatches(rec)
 		if !removed {
-			if latch, err = judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, cipher); err != nil {
+			if latch, err = judgeLatches(rec, wm, cipher); err != nil {
 				return err
 			}
 		}
@@ -372,7 +409,7 @@ func (s *Store) ConfirmCommit(
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil
-		rec.RemovalLatch = latch
+		latch.apply(rec)
 		rec.enterEpoch(epoch)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err

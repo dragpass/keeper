@@ -78,22 +78,35 @@ const (
 	// the server answers POST /:id/messages with, because the server refusing
 	// alone means nothing under a server that is not honest.
 	ChatMLSErrorCodeRotationPending = "CHAT_MLS_ROTATION_PENDING"
+
+	// ChatMLSErrorCodeLeafReplacementPending — a permit has named an account
+	// as taken over by a new device (design M4.4), and this device's confirmed
+	// group still holds a leaf of that account under another key. The old
+	// device may be lost or stolen and its leaf holds the current epoch keys,
+	// so new application messages are refused until a replace Commit that
+	// takes that leaf out is confirmed here. Receiving and Commits are not
+	// refused.
+	ChatMLSErrorCodeLeafReplacementPending = "CHAT_MLS_LEAF_REPLACEMENT_PENDING"
 )
 
 // Wire-shape constants.
 const (
 	// ChatStatePermitDomain / ChatStatePermitCanonicalVersion — the first two
-	// slots of the 13-item conversation-state permit canonical. A separate
+	// slots of the 14-item conversation-state permit canonical. A separate
 	// domain from `dragpass.chat.read`, so a page of read permits cannot also
 	// advance a chain, and a state permit cannot open a message.
 	ChatStatePermitDomain           = "dragpass.chat.state"
-	ChatStatePermitCanonicalVersion = 3
+	ChatStatePermitCanonicalVersion = 4
 
 	// ChatStateMaxPendingRemovals bounds pending_removal_account_ids. ariadne
 	// caps a room at 30 members, so an honest list is far below this; a longer
 	// one is refused rather than truncated, because dropping a name is exactly
 	// the omission S-1 cannot afford to make on its own.
 	ChatStateMaxPendingRemovals = 64
+
+	// ChatStateMaxPendingLeafReplacements bounds pending_leaf_replacements, for
+	// the same reason and at the same value as the removal list.
+	ChatStateMaxPendingLeafReplacements = ChatStateMaxPendingRemovals
 
 	// ChatStatePermitTTLSeconds — the server fixes
 	// `expires_at = issued_at + 300` and the Keeper requires exactly that
@@ -158,6 +171,14 @@ type ChatStatePermit struct {
 	// never because a later permit stopped listing an account.
 	PendingRemovalAccountIDs []string `json:"pending_removal_account_ids"`
 
+	// PendingLeafReplacements is the server's claim of which accounts a new
+	// device has taken over, and the signature key fingerprint of the leaf
+	// that replaces theirs (design M4.4). Ascending by account, one entry per
+	// account, and [] when there are none; null is refused. Like the removal
+	// list it is only ever a reason to stop encrypting, and it is also the
+	// only fingerprint a replace Commit may add for that account.
+	PendingLeafReplacements []ChatStateLeafReplacement `json:"pending_leaf_replacements"`
+
 	IssuedAt         int64  `json:"issued_at"`
 	ExpiresAt        int64  `json:"expires_at"` // issued_at + 300
 	ServerKeyVersion uint   `json:"server_key_version"`
@@ -175,6 +196,9 @@ func (p ChatStatePermit) Validate() error {
 		return err
 	}
 	if err := validatePendingRemovals(p.PendingRemovalAccountIDs); err != nil {
+		return err
+	}
+	if err := validatePendingLeafReplacements(p.PendingLeafReplacements); err != nil {
 		return err
 	}
 	if err := requireMessageTimestamp(p.IssuedAt, "permit.issued_at"); err != nil {
@@ -215,8 +239,54 @@ func validatePendingRemovals(ids []string) error {
 	return nil
 }
 
-// ChatStatePermitCanonical builds the 13-item string the server signs and the
-// Keeper verifies. No trailing newline; the schema slot is always 3.
+// ChatStateLeafReplacement is one entry of pending_leaf_replacements: the
+// account a new device took over, and the fingerprint of that device's leaf
+// signature key.
+type ChatStateLeafReplacement struct {
+	AccountID         string `json:"account_id"`
+	NewSignatureKeyFP string `json:"new_signature_key_fp"`
+}
+
+// validatePendingLeafReplacements holds the list to the same rule as the
+// removal list: exactly the bytes the canonical reproduces, never repaired.
+// One entry per account, because two fingerprints for one account would be two
+// leaves the server claims are both the one that replaces it.
+func validatePendingLeafReplacements(entries []ChatStateLeafReplacement) error {
+	const field = "permit.pending_leaf_replacements"
+	if entries == nil {
+		return newValidationError(field, "must be an array")
+	}
+	if len(entries) > ChatStateMaxPendingLeafReplacements {
+		return newValidationError(field,
+			"must hold at most "+strconv.Itoa(ChatStateMaxPendingLeafReplacements)+" entries")
+	}
+	for i, e := range entries {
+		if err := requireMessageUUID(e.AccountID, field+".account_id"); err != nil {
+			return err
+		}
+		if err := requireKeyFingerprint(e.NewSignatureKeyFP, field+".new_signature_key_fp"); err != nil {
+			return err
+		}
+		if i > 0 && entries[i-1].AccountID >= e.AccountID {
+			return newValidationError(field, "must be sorted ascending by account_id without duplicates")
+		}
+	}
+	return nil
+}
+
+// chatStateLeafReplacementsCanonical is the slot's canonical form:
+// `<account_id>:<fp>` per entry, joined with ",", and "" for none. Validate
+// has already required the order, so this only joins.
+func chatStateLeafReplacementsCanonical(entries []ChatStateLeafReplacement) string {
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		parts[i] = e.AccountID + ":" + e.NewSignatureKeyFP
+	}
+	return strings.Join(parts, ",")
+}
+
+// ChatStatePermitCanonical builds the 14-item string the server signs and the
+// Keeper verifies. No trailing newline; the schema slot is always 4.
 //
 // Pure function on purpose, like the other canonicals in this package: ariadne
 // has to produce these bytes exactly.
@@ -232,6 +302,7 @@ func ChatStatePermitCanonical(p ChatStatePermit) string {
 		strconv.FormatUint(p.WatermarkNextHandshake, 10),
 		strconv.FormatUint(p.WatermarkNextApplication, 10),
 		strings.Join(p.PendingRemovalAccountIDs, ","),
+		chatStateLeafReplacementsCanonical(p.PendingLeafReplacements),
 		strconv.FormatInt(p.IssuedAt, 10),
 		strconv.FormatInt(p.ExpiresAt, 10),
 		strconv.FormatUint(uint64(p.ServerKeyVersion), 10),

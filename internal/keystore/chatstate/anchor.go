@@ -85,6 +85,11 @@ type ServerWatermark struct {
 	// still await a Remove Commit here (design §6.4.1). It can only add to
 	// Record.RemovalLatch; see latch.go.
 	PendingRemovals []string
+
+	// PendingLeafReplacements rides in the same signed permit on the same
+	// terms: the server's claim of which accounts a new device took over
+	// (design M4.4). It can only add to Record.LeafReplacementLatch.
+	PendingLeafReplacements []LeafReplacement
 }
 
 // HasAccepted reports whether the server has ever taken a position from this

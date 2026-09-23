@@ -6,7 +6,7 @@ use mls_rs::client_builder::{
     WithKeyPackageRepo, WithMlsRules,
 };
 use mls_rs::extension::built_in::RequiredCapabilitiesExt;
-use mls_rs::group::proposal::AddProposal;
+use mls_rs::group::proposal::{AddProposal, Proposal};
 use mls_rs::group::{CommitEffect, ReceivedMessage};
 use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
@@ -176,6 +176,39 @@ pub fn key_package_leaf(key_package: &[u8]) -> Res<Leaf> {
         add.signing_identity(),
         &add.leaf_node_extensions(),
     ))
+}
+
+/// The leaves a Commit that removed this device adds for everyone else.
+///
+/// A removed member's group does not move to the new epoch, so its roster after
+/// the Commit is the roster before it and the diff in `process_collect` would
+/// see nobody new. mls-rs still validates every added member against the gate
+/// before it reports the removal, so without these the enforce pass refuses the
+/// Commit that removes this device whenever it also adds someone — which is
+/// exactly what a replace Commit (design M4.4) does to the old device.
+///
+/// Only Adds are listed. This integration never sends a by-reference Update,
+/// and a leaf one of them (or the committer's path) would change is left out,
+/// so the gate refuses such a Commit here: the fail-closed direction.
+fn added_to_a_group_left_behind(received: &ReceivedMessage) -> Vec<Leaf> {
+    let ReceivedMessage::Commit(commit) = received else {
+        return Vec::new();
+    };
+    let CommitEffect::Removed { new_epoch, .. } = &commit.effect else {
+        return Vec::new();
+    };
+    new_epoch
+        .applied_proposals
+        .iter()
+        .filter_map(|info| match &info.proposal {
+            Proposal::Add(add) => Some(Leaf::from_parts(
+                0,
+                add.signing_identity(),
+                &add.leaf_node_extensions(),
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The KeyPackage references a Welcome is addressed to: one per new member it
@@ -575,6 +608,66 @@ impl Session {
         Ok((output, expected_epoch))
     }
 
+    /// Build one Commit that removes `leaf_indices` and adds `key_packages`,
+    /// **without applying it**: how the remaining members replace an account's
+    /// old leaf with the leaf of the device that took it over (design M4.4).
+    /// One Commit rather than a Remove then an Add, because between the two
+    /// there would be an epoch that holds neither leaf or both.
+    ///
+    /// Same pending discipline and the same gate as `commit_add_members`:
+    /// every added leaf must have been approved for this call, and a refusal
+    /// is decided before the build, so it leaves no pending Commit.
+    pub fn commit_replace_members(
+        &mut self,
+        leaf_indices: &[u32],
+        key_packages: &[&[u8]],
+    ) -> Res<(Vec<u8>, Vec<u8>, u64)> {
+        if leaf_indices.is_empty() || key_packages.is_empty() {
+            return Err("mls: a replace commit needs a leaf to remove and one to add".to_string());
+        }
+        let mut leaves = Vec::with_capacity(key_packages.len());
+        let mut messages = Vec::with_capacity(key_packages.len());
+        for kp in key_packages {
+            leaves.push(key_package_leaf(kp)?);
+            messages.push(MlsMessage::from_bytes(kp).map_err(|e| err("key package decode", e))?);
+        }
+        self.group_mut()?;
+        let approved = self.arm()?;
+        let built = require_approved(&leaves, &approved)
+            .and_then(|()| self.build_replace(leaf_indices, messages));
+        self.disarm()?;
+        let (output, expected_epoch) = built?;
+        let welcome = match output.welcome_messages.first() {
+            Some(w) => w.to_bytes().map_err(|e| err("welcome encode", e))?,
+            None => Vec::new(),
+        };
+        let commit = output
+            .commit_message
+            .to_bytes()
+            .map_err(|e| err("commit encode", e))?;
+        Ok((commit, welcome, expected_epoch))
+    }
+
+    fn build_replace(
+        &mut self,
+        leaf_indices: &[u32],
+        key_packages: Vec<MlsMessage>,
+    ) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let group = self.group_mut()?;
+        let expected_epoch = group.current_epoch();
+        let mut builder = group.commit_builder();
+        for &index in leaf_indices {
+            builder = builder
+                .remove_member(index)
+                .map_err(|e| err("remove member", e))?;
+        }
+        for kp in key_packages {
+            builder = builder.add_member(kp).map_err(|e| err("add member", e))?;
+        }
+        let output = builder.build().map_err(|e| err("commit build", e))?;
+        Ok((output, expected_epoch))
+    }
+
     /// Every leaf of the confirmed tree. `Group::roster` reads the group's own
     /// state and a built Commit lives in `pending_commit` beside it, so a
     /// Remove this device has built but the server has not accepted leaves
@@ -648,9 +741,11 @@ impl Session {
         let before = leaves_of(group);
         self.gate.collect()?;
         let group = self.group_mut()?;
-        let applied = group
-            .process_incoming_message(msg)
-            .map(|_| leaves_of(group));
+        let applied = group.process_incoming_message(msg).map(|received| {
+            let mut after = leaves_of(group);
+            after.extend(added_to_a_group_left_behind(&received));
+            after
+        });
         self.disarm()?;
         self.load(&snapshot)?;
         let after = applied.map_err(|e| err("process", e))?;
@@ -853,6 +948,91 @@ mod tests {
 
         alice.apply_pending_commit().unwrap();
         assert_eq!(identities(&mut alice), vec![b"alice".to_vec()]);
+    }
+
+    // M4.4: one Commit takes the old leaf out and brings the new device's in,
+    // and neither shows in the confirmed roster until it is applied.
+    #[test]
+    fn a_replace_removes_the_old_leaf_and_adds_the_new_one_in_one_commit() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        add(&mut alice, &member("bob"));
+        let old = alice
+            .roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == b"bob")
+            .unwrap();
+        let new_kp = kp(&member("bob2"));
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+
+        let (_, welcome, _) = alice
+            .commit_replace_members(&[old.index], &[&new_kp])
+            .unwrap();
+        assert!(!welcome.is_empty());
+        assert_eq!(
+            identities(&mut alice),
+            vec![b"alice".to_vec(), b"bob".to_vec()]
+        );
+
+        alice.apply_pending_commit().unwrap();
+        assert_eq!(
+            identities(&mut alice),
+            vec![b"alice".to_vec(), b"bob2".to_vec()]
+        );
+    }
+
+    // The old device is removed by the replace, so its group never reaches the
+    // new epoch; the collect pass must still report the leaf the Commit adds,
+    // or the gate refuses the Commit that tells it it was removed.
+    #[test]
+    fn a_member_a_replace_removes_still_sees_the_leaf_it_adds() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+        let tree = bob.join_collect(&welcome).unwrap();
+        bob.approve(tree.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+        let old = alice
+            .roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == b"bob")
+            .unwrap();
+        let new_kp = kp(&member("bob2"));
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        let (commit, _, _) = alice
+            .commit_replace_members(&[old.index], &[&new_kp])
+            .unwrap();
+
+        let seen = bob.process_collect(&commit).unwrap();
+        assert_eq!(
+            seen.iter().map(|l| l.identity.clone()).collect::<Vec<_>>(),
+            vec![b"bob2".to_vec()]
+        );
+        bob.approve(seen.iter().map(approval).collect());
+        assert!(bob.process(&commit).unwrap().removed);
+    }
+
+    #[test]
+    fn a_replace_with_an_unapproved_leaf_builds_nothing() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        add(&mut alice, &member("bob"));
+        let old = alice
+            .roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == b"bob")
+            .unwrap();
+        let new_kp = kp(&member("bob2"));
+        assert!(alice
+            .commit_replace_members(&[old.index], &[&new_kp])
+            .is_err());
+        assert!(!alice.has_pending_commit().unwrap());
+        assert!(alice.commit_replace_members(&[], &[&new_kp]).is_err());
+        assert!(alice.commit_replace_members(&[old.index], &[]).is_err());
     }
 
     #[test]
