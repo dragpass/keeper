@@ -9,7 +9,9 @@
 package mls
 
 // Session exists here only so the shared code in mls.go has a type to name.
-type Session struct{}
+type Session struct {
+	leafFingerprint string
+}
 
 func Available() bool { return false }
 

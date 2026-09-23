@@ -5,6 +5,7 @@ package mls
 import (
 	"time"
 
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
@@ -26,4 +27,19 @@ func (s *Session) KeyPackage() ([]byte, error) {
 		return nil, err
 	}
 	return kp, nil
+}
+
+// WelcomeKeyPackageRefsForTest names the KeyPackages a Welcome is addressed
+// to, so a test can find the pool entry a join would take.
+var WelcomeKeyPackageRefsForTest = welcomeKeyPackageRefs
+
+// JoinFromEntryForTest is JoinFromPool from the pool entry on, for an entry
+// the test hands in. It is how a test joins from an entry with no leaf
+// recorded, which only a Keeper before 0.0.50 wrote and AddKeyPackages
+// refuses to write.
+func (s *Session) JoinFromEntryForTest(
+	store *chatstate.Store, conversationID string, wm chatstate.ServerWatermark,
+	welcome []byte, entry chatstate.KeyPackagePoolEntry, v LeafVerifier, now time.Time,
+) error {
+	return s.joinFromEntry(store, conversationID, wm, welcome, entry, v, now)
 }
