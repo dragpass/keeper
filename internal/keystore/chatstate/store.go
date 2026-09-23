@@ -265,6 +265,7 @@ func (s *Store) SaveGroupState(
 		}
 		loaded := rec.Generation
 		rec.GroupState = blob
+		rec.RemovedFromGroup = false
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}

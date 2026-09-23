@@ -389,6 +389,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrNotUnacceptedCreate):
 		code, message = proto.ChatStateErrorCodeConflict,
 			"the group on this device is not an unaccepted create of this device"
+	case errors.Is(err, chatstate.ErrNotRemoved):
+		code, message = proto.ChatStateErrorCodeConflict,
+			"this device was not removed from the group it holds for this conversation"
 	case errors.Is(err, chatstate.ErrSeqBound):
 		code, message = proto.ChatStateErrorCodeConflict,
 			"that seq or that message is already bound to another one"

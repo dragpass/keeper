@@ -38,6 +38,7 @@ type fakeCommitter struct {
 	clears   int
 	appliedA []uint64 // the confirmed epoch each ApplyMessage ran against
 	buildErr error
+	removes  bool // ApplyMessage reports that the winner removed this device
 
 	pendingExports int
 	exportErr      error
@@ -141,7 +142,7 @@ func (c *fakeCommitter) ApplyMessage(message []byte) (uint64, bool, error) {
 	}
 	c.appliedA = append(c.appliedA, c.epoch)
 	c.epoch, c.pending, c.generation = c.epoch+1, 0, 0
-	return c.epoch, false, nil
+	return c.epoch, c.removes, nil
 }
 
 // fakeExport stands in for MLS-Exporter: one key per epoch, label and

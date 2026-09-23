@@ -51,6 +51,9 @@ func mlsChatCases() []mlsChatCase {
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, ClientCommitID: mlsTestCommitID,
 			}
 		}},
+		{proto.MLSConversationForgetRemoved, HandleMLSConversationForgetRemoved, func(p proto.ChatStatePermit) any {
+			return proto.MLSConversationForgetRemovedRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
+		}},
 		{proto.MLSCommitBuild, HandleMLSCommitBuild, func(p proto.ChatStatePermit) any {
 			return proto.MLSCommitBuildRequest{
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,

@@ -249,6 +249,29 @@ type MLSGroupDiscardUnacceptedResponseData struct {
 	Generation uint64 `json:"generation"`
 }
 
+// MLSConversationForgetRemovedRequest drops the group state of a conversation
+// this device was removed from.
+type MLSConversationForgetRemovedRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+}
+
+func (r MLSConversationForgetRemovedRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSConversationForgetRemovedRequest) Validate() error {
+	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+}
+
+// MLSConversationForgetRemovedResponseData — Forgotten is false when there
+// was no group left to drop and nothing was written.
+type MLSConversationForgetRemovedResponseData struct {
+	Forgotten  bool   `json:"forgotten"`
+	Generation uint64 `json:"generation"`
+}
+
 // MLSReplaceMember is one account to replace (design M4.4): the account a new
 // device took over, and that device's KeyPackage as the server handed it out.
 // There is no fingerprint field: the only key the Keeper accepts for the
@@ -772,4 +795,8 @@ type MLSConversationStatusResponseData struct {
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
 	NeedsRekey           bool                       `json:"needs_rekey"`
+
+	// RemovedFromGroup — the last Commit applied here removed this device, so
+	// mls_conversation_forget_removed must run before mls_join (0.0.53).
+	RemovedFromGroup bool `json:"removed_from_group"`
 }

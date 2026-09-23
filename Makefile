@@ -54,7 +54,9 @@ test-clipboard-e2e:
 # glibc baseline (scripts/linux-baseline-build.sh). It also compiles the real
 # golang.design/x/clipboard instead of its nocgo stub. That needs the X11
 # headers (libx11-dev) at build time, but the library is opened at runtime
-# with dlopen("libX11.so") and nothing links against libX11.
+# with dlopen and nothing links against libX11. The vendored copy is patched
+# to try "libX11.so.6" (libx11-6) before "libX11.so" (libx11-dev only); see
+# vendor/golang.design/x/clipboard/clipboard_linux.c.
 #
 # The cgo directives in internal/keystore/mls read the archive from
 # mls/target/release on macOS and Linux, and from the gnu triple's directory on

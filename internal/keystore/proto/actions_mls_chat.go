@@ -51,6 +51,20 @@ const (
 	//   Output: { discarded, generation }
 	MLSGroupDiscardUnaccepted = "mls_group_discard_unaccepted"
 
+	// MLSConversationForgetRemoved drops the group state of a conversation
+	// this device was removed from, so that a Welcome that adds it again is
+	// joined into a clean record: a device takeover that was undone leaves
+	// the old device's latch waiting for a key that will never appear (design
+	// M4.4). It succeeds only when the last Commit applied to the confirmed
+	// state removed this device's leaf; then the group state, the pending
+	// Commit and both latches go, and the sealed local history stays
+	// readable. Every other state is CHAT_STATE_CONFLICT and writes nothing.
+	// Idempotent: with no group left it answers forgotten false.
+	//
+	//   Inputs: permit, org_id, conversation_id
+	//   Output: { forgotten, generation }
+	MLSConversationForgetRemoved = "mls_conversation_forget_removed"
+
 	// MLSCommitBuild builds one pending Commit of exactly one kind against
 	// expected_epoch: add, remove_account_ids (every leaf of each account),
 	// replace (each account's leaves swapped for the leaf of the device that
@@ -190,6 +204,6 @@ const (
 	//   Inputs: permit, org_id, conversation_id
 	//   Output: { epoch, has_group_state, commit_pending,
 	//             pending_client_commit_id, removal_latch_account_ids,
-	//             needs_rekey }
+	//             needs_rekey, removed_from_group }
 	MLSConversationStatus = "mls_conversation_status"
 )
