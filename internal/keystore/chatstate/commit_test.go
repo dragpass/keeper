@@ -432,12 +432,12 @@ func TestARereadStillWorksWhileACommitIsUnsettled(t *testing.T) {
 	}
 	beginForTest(t, store, testCommitA, &fakeCommitter{})
 
-	plaintext, err := store.ReadHistory(testConvA, noWatermark, 9)
+	got, err := store.ReadHistory(testConvA, noWatermark, 9)
 	if err != nil {
 		t.Fatalf("reread during an unsettled commit: %v", err)
 	}
-	if string(plaintext) != "delivered" {
-		t.Fatalf("reread returned %q", plaintext)
+	if string(got.Plaintext) != "delivered" {
+		t.Fatalf("reread returned %q", got.Plaintext)
 	}
 }
 

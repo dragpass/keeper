@@ -86,8 +86,17 @@ func (h HistoryPolicy) maxEntries() int {
 // HistoryEntry is one delivered message, sealed. Seq is the server's message
 // sequence, which is what a re-read asks by.
 type HistoryEntry struct {
-	Seq        uint64 `json:"seq"`
-	StoredAt   int64  `json:"stored_at"`
+	Seq      uint64 `json:"seq"`
+	StoredAt int64  `json:"stored_at"`
+
+	// Position is the one verifyDeclaration accepted at the first delivery,
+	// written in the same replacement that confirmed it. A re-read has no
+	// other source for who sent the message: the key that authenticated the
+	// sender is gone, and the server's metadata is what MLS is here to not
+	// need. It is bound into the AAD so it cannot be moved onto another
+	// entry's plaintext.
+	Position *Position `json:"position,omitempty"`
+
 	IV         []byte `json:"iv"`
 	Ciphertext []byte `json:"ciphertext"`
 }
@@ -125,19 +134,26 @@ func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Ti
 	r.History = kept
 }
 
-func historyAAD(ownerAccountID, conversationID string, seq uint64) []byte {
+func historyAAD(ownerAccountID, conversationID string, seq uint64, position Position) []byte {
 	return []byte(strings.Join([]string{
 		historyAADDomain,
 		strconv.Itoa(SchemaVersion),
 		ownerAccountID,
 		conversationID,
 		strconv.FormatUint(seq, 10),
+		strconv.FormatUint(position.Epoch, 10),
+		strconv.FormatUint(uint64(position.SenderLeafIndex), 10),
+		string(position.ContentType),
+		strconv.FormatUint(position.Generation, 10),
 	}, "|"))
 }
 
 // sealHistory wraps one plaintext for storage. The caller still owns the
-// plaintext buffer and still has to wipe it.
-func (s *Store) sealHistory(conversationID string, seq uint64, plaintext []byte, now time.Time) (HistoryEntry, error) {
+// plaintext buffer and still has to wipe it, and position must be the one the
+// caller has just verified.
+func (s *Store) sealHistory(
+	conversationID string, seq uint64, position Position, plaintext []byte, now time.Time,
+) (HistoryEntry, error) {
 	gcm, err := newGCM(s.historyKey)
 	if err != nil {
 		return HistoryEntry{}, err
@@ -149,22 +165,32 @@ func (s *Store) sealHistory(conversationID string, seq uint64, plaintext []byte,
 	return HistoryEntry{
 		Seq:        seq,
 		StoredAt:   now.Unix(),
+		Position:   &position,
 		IV:         iv,
-		Ciphertext: gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, seq)),
+		Ciphertext: gcm.Seal(nil, iv, plaintext, historyAAD(s.owner, conversationID, seq, position)),
 	}, nil
 }
 
-func (s *Store) openHistory(conversationID string, e HistoryEntry) ([]byte, error) {
+// openHistory refuses an entry that carries no position rather than answering
+// it with a zero one, which would name leaf 0 at epoch 0 as the sender. It is
+// ErrHistoryUnavailable and not a sentinel of its own because the caller's
+// answer has to be the same: this copy cannot say who sent it and nothing else
+// may, so a distinct error would only invite a branch that asks the server.
+func (s *Store) openHistory(conversationID string, e HistoryEntry) ([]byte, Position, error) {
+	if e.Position == nil || !e.Position.ContentType.valid() {
+		return nil, Position{}, ErrHistoryUnavailable
+	}
 	gcm, err := newGCM(s.historyKey)
 	if err != nil {
-		return nil, err
+		return nil, Position{}, err
 	}
 	if len(e.IV) != ivBytes {
-		return nil, errSealedRecordMalformed
+		return nil, Position{}, errSealedRecordMalformed
 	}
-	plaintext, err := gcm.Open(nil, e.IV, e.Ciphertext, historyAAD(s.owner, conversationID, e.Seq))
+	plaintext, err := gcm.Open(nil, e.IV, e.Ciphertext,
+		historyAAD(s.owner, conversationID, e.Seq, *e.Position))
 	if err != nil {
-		return nil, errSealedRecordMalformed
+		return nil, Position{}, errSealedRecordMalformed
 	}
-	return plaintext, nil
+	return plaintext, *e.Position, nil
 }

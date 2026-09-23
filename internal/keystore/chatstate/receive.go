@@ -105,9 +105,9 @@ type ReceiveResult struct {
 	Generation uint64
 }
 
-// ErrHistoryUnavailable — the sealed copy for this sequence is not there. A
-// re-read of a message whose history has been evicted, expired or damaged ends
-// here, and it is terminal: the MLS key for it was consumed and deleted when it
+// ErrHistoryUnavailable — the sealed copy for this sequence is not there, or
+// cannot say who sent it. A re-read of a message whose history has been
+// evicted, expired or damaged ends here, and it is terminal: the MLS key for it was consumed and deleted when it
 // was first delivered, so the server's ciphertext cannot stand in.
 var ErrHistoryUnavailable = errors.New("chat state has no local copy of that message")
 
@@ -129,17 +129,8 @@ func (s *Store) Receive(
 			return err
 		}
 		if stored, ok := rec.findHistory(req.Seq); ok {
-			plaintext, err := s.openHistory(conversationID, stored)
-			if err != nil {
-				return err
-			}
-			out = ReceiveResult{
-				Plaintext:   plaintext,
-				Application: true,
-				FromHistory: true,
-				Generation:  rec.Generation,
-			}
-			return nil
+			out, err = s.reread(conversationID, rec, stored)
+			return err
 		}
 		// A re-read above is served from the sealed copy and never reaches
 		// here, so an unsettled Commit does not stop anyone from reading what
@@ -193,7 +184,7 @@ func (s *Store) Receive(
 			if first {
 				rec.appendReceived(position)
 			}
-			entry, err := s.sealHistory(conversationID, req.Seq, opened.Plaintext, time.Now())
+			entry, err := s.sealHistory(conversationID, req.Seq, position, opened.Plaintext, time.Now())
 			if err != nil {
 				return err
 			}
@@ -230,8 +221,8 @@ func (s *Store) Receive(
 // scrolling back.
 func (s *Store) ReadHistory(
 	conversationID string, wm ServerWatermark, seq uint64,
-) ([]byte, error) {
-	var plaintext []byte
+) (ReceiveResult, error) {
+	var out ReceiveResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if err != nil {
@@ -241,8 +232,25 @@ func (s *Store) ReadHistory(
 		if !ok {
 			return ErrHistoryUnavailable
 		}
-		plaintext, err = s.openHistory(conversationID, stored)
+		out, err = s.reread(conversationID, rec, stored)
 		return err
 	})
-	return plaintext, err
+	if err != nil {
+		return ReceiveResult{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) reread(conversationID string, rec *Record, stored HistoryEntry) (ReceiveResult, error) {
+	plaintext, position, err := s.openHistory(conversationID, stored)
+	if err != nil {
+		return ReceiveResult{}, err
+	}
+	return ReceiveResult{
+		Plaintext:   plaintext,
+		Application: true,
+		Position:    position,
+		FromHistory: true,
+		Generation:  rec.Generation,
+	}, nil
 }

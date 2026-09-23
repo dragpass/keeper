@@ -539,8 +539,8 @@ func TestReceiveServesARereadFromHistory(t *testing.T) {
 	}
 
 	direct, err := store.ReadHistory(testConvA, noWatermark, 11)
-	if err != nil || string(direct) != "hello" {
-		t.Fatalf("ReadHistory = %q, %v", direct, err)
+	if err != nil || string(direct.Plaintext) != "hello" {
+		t.Fatalf("ReadHistory = %+v, %v", direct, err)
 	}
 	if _, err := store.ReadHistory(testConvA, noWatermark, 12); !errors.Is(err, ErrHistoryUnavailable) {
 		t.Fatalf("ReadHistory on a missing seq = %v, want ErrHistoryUnavailable", err)
@@ -562,13 +562,112 @@ func TestHistoryIsStoredSealed(t *testing.T) {
 	if strings.Contains(string(entry.Ciphertext), "회의는") {
 		t.Fatal("the history entry carries its plaintext")
 	}
-	if _, err := store.openHistory(testConvB, entry); err == nil {
+	if _, _, err := store.openHistory(testConvB, entry); err == nil {
 		t.Fatal("a history entry opened under another conversation's binding")
 	}
 	tampered := entry
 	tampered.Seq = 12
-	if _, err := store.openHistory(testConvA, tampered); err == nil {
+	if _, _, err := store.openHistory(testConvA, tampered); err == nil {
 		t.Fatal("a history entry opened under a rewritten sequence")
+	}
+	moved := entry
+	moved.Position = &Position{SenderLeafIndex: 4, ContentType: ContentTypeApplication}
+	if _, _, err := store.openHistory(testConvA, moved); err == nil {
+		t.Fatal("a history entry opened under a rewritten sender")
+	}
+}
+
+// A leaf and an epoch that are both non-zero, so a re-read that falls back to
+// the zero Position cannot pass by matching it.
+func authenticatedInbound(plaintext string) (*fakeInbound, Position) {
+	msg := inbound(3, 7, plaintext)
+	msg.opened.Epoch = 5
+	return msg, Position{Epoch: 5, SenderLeafIndex: 3, ContentType: ContentTypeApplication, Generation: 7}
+}
+
+func TestRereadReturnsThePositionTheFirstDeliveryVerified(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 5, 0, 0)
+	msg, want := authenticatedInbound("hello")
+
+	first, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, msg)
+	if err != nil {
+		t.Fatalf("first receive: %v", err)
+	}
+	if first.Position != want {
+		t.Fatalf("first delivery position = %+v, want %+v", first.Position, want)
+	}
+
+	again, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, &fakeInbound{})
+	if err != nil || !again.FromHistory {
+		t.Fatalf("re-read = %+v, %v", again, err)
+	}
+	if again.Position != first.Position {
+		t.Fatalf("re-read position = %+v, first delivery = %+v", again.Position, first.Position)
+	}
+	direct, err := store.ReadHistory(testConvA, noWatermark, 11)
+	if err != nil || direct.Position != first.Position {
+		t.Fatalf("ReadHistory = %+v, %v; want position %+v", direct, err, first.Position)
+	}
+}
+
+func TestRereadPositionSurvivesAReopen(t *testing.T) {
+	store, secrets := newTestStore(t)
+	seedGroupState(t, store, testConvA, 5, 0, 0)
+	msg, want := authenticatedInbound("hello")
+	if _, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, msg); err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	store.Close()
+
+	reopened, err := Open(secrets, testOwner)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.ReadHistory(testConvA, noWatermark, 11)
+	if err != nil || string(got.Plaintext) != "hello" || got.Position != want {
+		t.Fatalf("ReadHistory after reopen = %+v, %v; want position %+v", got, err, want)
+	}
+}
+
+// An entry with no stored position is refused. Answering it would name leaf 0
+// at epoch 0 as the sender, and going back to MLS cannot work because the key
+// was consumed at the first delivery.
+func TestRereadRefusesAnEntryWithoutAPosition(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 5, 0, 0)
+	msg, _ := authenticatedInbound("hello")
+	if _, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, msg); err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	err := store.withConversation(testConvA, func(p convPaths) error {
+		rec, anchor, err := store.loadChecked(p, testConvA, noWatermark)
+		if err != nil {
+			return err
+		}
+		rec.History[0].Position = nil
+		return store.commit(p, rec, rec.Generation, anchor)
+	})
+	if err != nil {
+		t.Fatalf("strip the stored position: %v", err)
+	}
+
+	replay := &fakeInbound{}
+	got, err := store.Receive(testConvA, noWatermark,
+		ReceiveRequest{Seq: 11, Message: []byte("wire")}, replay)
+	if !errors.Is(err, ErrHistoryUnavailable) || got.Plaintext != nil || got.Position != (Position{}) {
+		t.Fatalf("re-read = %+v, %v; want ErrHistoryUnavailable", got, err)
+	}
+	if replay.opens != 0 {
+		t.Fatal("the refused re-read went back to the MLS layer")
+	}
+	if got, err := store.ReadHistory(testConvA, noWatermark, 11); !errors.Is(err, ErrHistoryUnavailable) {
+		t.Fatalf("ReadHistory = %+v, %v; want ErrHistoryUnavailable", got, err)
 	}
 }
 
