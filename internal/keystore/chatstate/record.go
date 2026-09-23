@@ -203,6 +203,12 @@ type Record struct {
 	// leaves exactly that fallback.
 	OwnLeaf *OwnLeaf `json:"own_leaf,omitempty"`
 
+	// JoinedKeyPackageRef is the KeyPackage the last join into this record
+	// consumed. It is written with the joined group state, so it is the
+	// durable proof the pool sweep deletes that KeyPackage's private keys on
+	// (key_package_pool.go).
+	JoinedKeyPackageRef []byte `json:"joined_key_package_ref,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
 

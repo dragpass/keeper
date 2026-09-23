@@ -4,6 +4,7 @@
 package chatstate
 
 import (
+	"bytes"
 	"errors"
 )
 
@@ -113,7 +114,9 @@ func (s *Store) CreateGroup(
 // SaveJoinedGroupState stores the group a Welcome produced, and moves the
 // record onto the epoch the group joined at and the leaf this device holds in
 // it. ownLeaf is read from the joined group state (the session's own member
-// index), never from anything the server said.
+// index), never from anything the server said. keyPackageRef is the pool
+// entry the join consumed, recorded in the same write so that a crash before
+// DeleteKeyPackage leaves the proof the pool sweep needs.
 //
 // SaveGroupState leaves Record.Epoch alone, which is right for a blob that has
 // not moved the confirmed epoch and wrong for a join: a joiner enters at the
@@ -133,7 +136,7 @@ func (s *Store) CreateGroup(
 // leave a record that says a Commit is waiting on a group that no longer holds
 // it.
 func (s *Store) SaveJoinedGroupState(
-	conversationID string, wm ServerWatermark, blob []byte, epoch uint64, ownLeaf uint32,
+	conversationID string, wm ServerWatermark, blob []byte, epoch uint64, ownLeaf uint32, keyPackageRef []byte,
 ) (uint64, error) {
 	if len(blob) == 0 {
 		return 0, errors.New("group state blob is empty")
@@ -152,6 +155,7 @@ func (s *Store) SaveJoinedGroupState(
 		rec.RemovedFromGroup = false
 		rec.enterEpoch(epoch)
 		rec.OwnLeaf = &OwnLeaf{Index: ownLeaf, SinceEpoch: epoch}
+		rec.JoinedKeyPackageRef = bytes.Clone(keyPackageRef)
 		if rec, anchor, err = s.judgeWatermark(p, rec, anchor, wm); err != nil {
 			return err
 		}

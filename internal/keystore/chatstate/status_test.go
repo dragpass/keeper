@@ -12,7 +12,7 @@ func TestStatusReportsTheRecordAndWritesNothing(t *testing.T) {
 		t.Fatalf("status of a fresh conversation = %+v, %v", empty, err)
 	}
 
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	before := readRecordForTest(t, store, testConvA).Generation

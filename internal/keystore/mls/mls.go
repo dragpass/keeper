@@ -689,10 +689,11 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 // with a pending Commit refuses the join and keeps the pool entry.
 //
 // The order is the point. The group state is written first and the pool entry
-// deleted second. A crash between the two leaves an entry behind, which is
-// harmless: the server marked that KeyPackage consumed when it served it and
-// will not hand it out again. The other order could lose the invitation — the
-// keys gone and the group never written.
+// deleted second; the other order could lose the invitation — the keys gone
+// and the group never written. A crash between the two leaves the entry's
+// private keys behind, and those must not stay: the entry is claimed for this
+// conversation before the state write and the joined record names it, so the
+// next pool open deletes it (chatstate's pool sweep).
 //
 // mls-rs deletes the KeyPackage from its own repository when the joined group
 // is written to storage, outside any transaction (design §15). That repository
@@ -779,11 +780,21 @@ func (s *Session) joinFromEntry(
 	if err != nil {
 		return err
 	}
-	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch, ownLeaf); err != nil {
+	if err := store.ClaimKeyPackage(entry.Ref, conversationID); err != nil {
+		return err
+	}
+	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch, ownLeaf, entry.Ref); err != nil {
+		return err
+	}
+	if err := afterJoinedStateSaved(); err != nil {
 		return err
 	}
 	return store.DeleteKeyPackage(entry.Ref, now)
 }
+
+// afterJoinedStateSaved runs between the joined group state write and the
+// pool delete. A test sets it to stop there, the way a crash would.
+var afterJoinedStateSaved = func() error { return nil }
 
 // OwnLeafIndex is this device's leaf in the group the session holds: the
 // library's current member index, read from the group state itself.

@@ -26,7 +26,7 @@ func TestAJoinIgnoresAWatermarkThatIsNotItsChain(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, _ := newTestStore(t)
-			if _, err := store.SaveJoinedGroupState(testConvA, wm, fakeState(4, 2, 0), 4, 2); err != nil {
+			if _, err := store.SaveJoinedGroupState(testConvA, wm, fakeState(4, 2, 0), 4, 2, nil); err != nil {
 				t.Fatalf("join = %v", err)
 			}
 			rec := readRecordForTest(t, store, testConvA)
@@ -57,7 +57,7 @@ func TestAReplayedWelcomeUnderANewerWatermarkForTheSameLeafLatches(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, _ := newTestStore(t)
-			if _, err := store.SaveJoinedGroupState(testConvA, wm, fakeState(5, 3, 0), 5, 3); !errors.Is(err, ErrRekeyRequired) {
+			if _, err := store.SaveJoinedGroupState(testConvA, wm, fakeState(5, 3, 0), 5, 3, nil); !errors.Is(err, ErrRekeyRequired) {
 				t.Fatalf("replayed join = %v, want ErrRekeyRequired", err)
 			}
 			assertLatched(t, store, testConvA, RekeyCauseWatermarkAhead)
@@ -85,11 +85,11 @@ func TestAJoinOverARestoredFileUnderALiveAnchorLatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); !errors.Is(err, ErrRekeyRequired) {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1, nil); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("join over a restored file = %v, want ErrRekeyRequired", err)
 	}
 	assertLatched(t, store, testConvA, RekeyCauseRollback)
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); !errors.Is(err, ErrRekeyRequired) {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1, nil); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("second join = %v, want ErrRekeyRequired", err)
 	}
 	status, err := store.Status(testConvA, noWatermark, &fakeInbound{})
@@ -108,7 +108,7 @@ func TestAJoinWithTheFileMissingUnderANonZeroAnchorLatches(t *testing.T) {
 	if err := os.Remove(store.paths(testConvA).record); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1); !errors.Is(err, ErrRekeyRequired) {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1, nil); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("join with the file deleted = %v, want ErrRekeyRequired", err)
 	}
 	assertLatched(t, store, testConvA, RekeyCauseStateMissing)

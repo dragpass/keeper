@@ -43,3 +43,12 @@ func (s *Session) JoinFromEntryForTest(
 ) error {
 	return s.joinFromEntry(store, conversationID, wm, welcome, entry, v, now)
 }
+
+// StopAfterJoinedStateSavedForTest makes the next joins return err right
+// after their group state is written and before the pool entry is deleted,
+// which is where a crash would leave them, until restore is called.
+func StopAfterJoinedStateSavedForTest(err error) (restore func()) {
+	previous := afterJoinedStateSaved
+	afterJoinedStateSaved = func() error { return err }
+	return func() { afterJoinedStateSaved = previous }
+}
