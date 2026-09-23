@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -357,4 +358,203 @@ func TestMLSChatE2E_ARotatedLeafEntersThroughUpdateSelf(t *testing.T) {
 	next := c.bob.buildUpdate(2)
 	c.bob.confirm(next.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.process(c.nextSeq(), 3, next.CommitB64)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Messages.
+// ────────────────────────────────────────────────────────────────────────
+
+func (k *keeper) encryptRequest(id string, epoch uint64, text string, removals ...string) proto.MLSEncryptRequest {
+	return proto.MLSEncryptRequest{
+		Permit: k.permit(removals...), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientMessageID: id, ExpectedEpoch: epoch,
+		PlaintextB64: base64.StdEncoding.EncodeToString([]byte(text)),
+	}
+}
+
+func (k *keeper) encrypt(id string, epoch uint64, text string) proto.MLSEncryptResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSEncrypt, k.encryptRequest(id, epoch, text)).Data.(proto.MLSEncryptResponseData)
+}
+
+func (k *keeper) decryptRequest(msgs ...proto.MLSDisplayMessage) proto.MLSDecryptBatchForAppDisplayRequest {
+	return proto.MLSDecryptBatchForAppDisplayRequest{
+		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv, Messages: msgs,
+	}
+}
+
+func (k *keeper) decrypt(msgs ...proto.MLSDisplayMessage) proto.ConversationDecryptBatchForAppDisplayResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSDecryptBatchForAppDisplay, k.decryptRequest(msgs...)).
+		Data.(proto.ConversationDecryptBatchForAppDisplayResponseData)
+}
+
+func plaintextOf(t *testing.T, b64 string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func messageID(n int) string {
+	return "eeeeeeee-eeee-4eee-8eee-" + strconv.FormatInt(int64(100000000000+n), 10)
+}
+
+// sendTo encrypts on one side and returns the row the server would store.
+func (c *dm) send(from *keeper, n int, epoch uint64, text string) proto.MLSDisplayMessage {
+	c.alice.t.Helper()
+	sent := from.encrypt(messageID(n), epoch, text)
+	return proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: sent.CiphertextB64}
+}
+
+func assertShown(t *testing.T, got proto.ConversationDecryptBatchForAppDisplayResponseData, i int,
+	text string, sender *keeper, fromHistory bool) {
+	t.Helper()
+	if len(got.Items) != len(got.PlaintextB64) {
+		t.Fatalf("%d items for %d plaintexts", len(got.Items), len(got.PlaintextB64))
+	}
+	item := got.Items[i]
+	if plaintextOf(t, got.PlaintextB64[i]) != text || item.SenderAccountID != sender.id ||
+		item.SenderDeviceID != e2eDevice || item.FromHistory != fromHistory ||
+		item.ContentType != proto.ChatStateContentTypeApplication {
+		t.Fatalf("message %d = %q %+v; want %q from %s (from_history=%v)",
+			i, plaintextOf(t, got.PlaintextB64[i]), item, text, sender.id[:8], fromHistory)
+	}
+}
+
+func TestMLSChatE2E_EachSideEncryptsAndTheOtherReads(t *testing.T) {
+	c := newDM(t)
+	fromAlice := c.send(c.alice, 1, 1, "hello bob")
+	fromBob := c.send(c.bob, 2, 1, "hello alice")
+
+	assertShown(t, c.bob.decrypt(fromAlice), 0, "hello bob", c.alice, false)
+	assertShown(t, c.alice.decrypt(fromBob), 0, "hello alice", c.bob, false)
+
+	// The declared position is what the reader verified, and it is this
+	// sender's own leaf and generation.
+	second := c.alice.encrypt(messageID(3), 1, "again")
+	if second.Generation != 1 || second.ContentType != proto.ChatStateContentTypeApplication {
+		t.Fatalf("alice's second send declared %+v", second)
+	}
+	got := c.bob.decrypt(proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: second.CiphertextB64})
+	if got.Items[0].SenderLeafIndex != second.LeafIndex || got.Items[0].Generation != 1 {
+		t.Fatalf("bob read %+v for a send declared as %+v", got.Items[0], second)
+	}
+	for _, k := range []*keeper{c.alice, c.bob} {
+		for _, text := range []string{"hello bob", "hello alice", "again"} {
+			if k.deps.Logger.(*logger.MemoryLogger).Contains(text) {
+				t.Fatalf("%s's log carries a plaintext", k.id[:8])
+			}
+		}
+	}
+}
+
+// A retransmission after a lost response sends the same bytes and takes no
+// second position; an epoch the group is not on is refused.
+func TestMLSChatE2E_EncryptIsIdempotentAndEpochBound(t *testing.T) {
+	c := newDM(t)
+	first := c.alice.encrypt(messageID(1), 1, "once")
+	again := c.alice.encrypt(messageID(1), 1, "once")
+	if !first.Created || again.Created || again.CiphertextB64 != first.CiphertextB64 {
+		t.Fatalf("retransmission = %+v, first = %+v", again, first)
+	}
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 2, "stale"), proto.ChatMLSErrorCodeEpochStale)
+
+	// The largest plaintext the protocol accepts fits the stored ciphertext.
+	big := strings.Repeat("가", proto.MLSEncryptMaxPlaintextBytes/3)
+	sent := c.alice.encrypt(messageID(3), 1, big)
+	if raw, _ := base64.StdEncoding.DecodeString(sent.CiphertextB64); len(raw) > chatstate.MaxCiphertextBytes {
+		t.Fatalf("a %d-byte plaintext made a %d-byte ciphertext", len(big), len(raw))
+	}
+	assertShown(t, c.bob.decrypt(proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: sent.CiphertextB64}),
+		0, big, c.alice, false)
+}
+
+// A second read of a delivered seq comes from the sealed local copy: the key
+// that opened it is gone, and it still names the sender.
+func TestMLSChatE2E_AReReadComesFromHistory(t *testing.T) {
+	c := newDM(t)
+	row := c.send(c.alice, 1, 1, "keep me")
+	assertShown(t, c.bob.decrypt(row), 0, "keep me", c.alice, false)
+	assertShown(t, c.bob.decrypt(row), 0, "keep me", c.alice, true)
+
+	// Still readable after the group has moved on.
+	update := c.alice.buildUpdate(1)
+	c.alice.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.bob.process(c.nextSeq(), 2, update.CommitB64)
+	assertShown(t, c.bob.decrypt(row), 0, "keep me", c.alice, true)
+}
+
+// One message that does not open refuses the page, returns no plaintext and
+// writes nothing: the good message is still a first delivery afterwards.
+func TestMLSChatE2E_ADisplayBatchIsAllOrNothing(t *testing.T) {
+	c := newDM(t)
+	good := c.send(c.alice, 1, 1, "fine")
+	raw, _ := base64.StdEncoding.DecodeString(c.send(c.alice, 2, 1, "damaged").CiphertextB64)
+	raw[len(raw)-1] ^= 1
+	bad := proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: base64.StdEncoding.EncodeToString(raw)}
+
+	resp := c.bob.call(proto.MLSDecryptBatchForAppDisplay, c.bob.decryptRequest(good, bad))
+	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeFailed || resp.Data != nil {
+		t.Fatalf("a batch with a damaged message = %+v", resp)
+	}
+	assertShown(t, c.bob.decrypt(good), 0, "fine", c.alice, false)
+
+	// A handshake does not belong on this path.
+	update := c.alice.buildUpdate(1)
+	c.bob.refused(proto.MLSDecryptBatchForAppDisplay,
+		c.bob.decryptRequest(proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: update.CommitB64}),
+		proto.ChatStateErrorCodeInvalidInput)
+}
+
+// S-1: once a permit names Bob as removed from the organization, Alice may not
+// encrypt while her confirmed group holds his leaf — not even under a later
+// permit that stops naming him. Her own confirmed Remove lifts it.
+func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
+	c := newDM(t)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob", c.bob.id),
+		proto.ChatMLSErrorCodeRotationPending)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
+		proto.ChatMLSErrorCodeRotationPending)
+
+	remove := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: c.alice.permit(c.bob.id), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, RemoveAccountIDs: []string{c.bob.id},
+	}))
+	// Pending is not confirmed: still latched, and now also waiting.
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
+		proto.ChatMLSErrorCodeCommitPending)
+	c.alice.confirm(remove.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+
+	sent := c.alice.must(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 2, "bob is gone", c.bob.id)).
+		Data.(proto.MLSEncryptResponseData)
+	// The refusals consumed no position: the first message of epoch 2 is
+	// generation 0.
+	if sent.Epoch != 2 || sent.Generation != 0 {
+		t.Fatalf("after the remove alice sent %+v", sent)
+	}
+	// Bob learns he was removed.
+	if got := c.bob.process(c.nextSeq(), 2, remove.CommitB64); !got.Removed {
+		t.Fatalf("bob processed his removal as %+v", got)
+	}
+}
+
+// After the race the two sides are one group: messages cross both ways.
+func TestMLSChatE2E_MessagesCrossAfterARaceAndARotation(t *testing.T) {
+	c := newDM(t)
+	a, b := c.alice.buildUpdate(1), c.bob.buildUpdate(1)
+	c.alice.confirm(a.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.bob.confirm(b.ClientCommitID, proto.MLSCommitOutcomeSuperseded, a.CommitB64)
+	c.nextSeq()
+	assertShown(t, c.alice.decrypt(c.send(c.bob, 1, 2, "after the race")), 0, "after the race", c.bob, false)
+
+	before, _, _ := keychain.GetMLSLeafNewest(c.alice.store, c.alice.id, c.bob.id)
+	c.bob.declare(proto.MLSLeafReasonRotate, before.NotBefore+60)
+	update := c.bob.buildUpdate(2)
+	c.bob.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.process(c.nextSeq(), 3, update.CommitB64)
+	assertShown(t, c.alice.decrypt(c.send(c.bob, 2, 3, "new key")), 0, "new key", c.bob, false)
+	assertShown(t, c.bob.decrypt(c.send(c.alice, 3, 3, "got it")), 0, "got it", c.alice, false)
 }

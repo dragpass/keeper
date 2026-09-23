@@ -988,6 +988,8 @@ Commit coming back) and a row that comes after one not yet applied are both
 |`mls_commit_confirm`|`permit`, `org_id`, `conversation_id`, `client_commit_id`, `outcome` (`accepted` \| `superseded` \| `unknown`), `winner_commit_b64` (superseded only, ≤262144B), `rotation_statements?`|`{ outcome, epoch, welcome_releasable, removed, commit_b64, generation }`|`accepted` promotes the pending Commit; `welcome_releasable` is `true` only here and only for an Add. `superseded` drops the fork and applies the winner's Commit (verified like any inbound Commit) to the epoch that never moved; `removed` says the winner took this device out. `unknown` writes nothing and returns the pending Commit in `commit_b64` and the epoch it was built against, so the caller can ask the server by `client_commit_id` and repost if needed. An id other than the pending one is `CHAT_STATE_CONFLICT`.|
 |`mls_process`|`permit`, `org_id`, `conversation_id`, `seq`, `epoch` (the row's: the epoch the Commit produced), `commit_b64` (an MLS `PublicMessage`, ≤262144B), `rotation_statements?`|`{ seq, epoch, removed, generation }`|Applies somebody else's Commit through `ProcessVerified`: every leaf it brings in is verified, the replacement leaf of an Update included. Epoch order as above. A message that is not a `PublicMessage` is `CHAT_STATE_INVALID_INPUT`; application messages belong to the display path. While this device has a pending Commit it is `CHAT_MLS_COMMIT_PENDING`: the winner goes through `mls_commit_confirm` instead.|
 |`mls_join`|`permit`, `org_id`, `conversation_id`, `welcome_b64` (≤262144B), `rotation_statements?`|`{ epoch }`|Joins from a Welcome addressed to one of this device's KeyPackages (`JoinFromPool`), verifying every leaf of the tree, and records the epoch it joined at. The group state is written first and the pool entry deleted second. Refused with `CHAT_MLS_FAILED` when no pool entry matches or the group is another conversation's, and with `CHAT_MLS_COMMIT_PENDING` over a pending Commit; the pool entry is kept on every refusal.|
+|`mls_encrypt`|`permit`, `org_id`, `conversation_id`, `client_message_id` (UUID), `expected_epoch` (≥1), `plaintext_b64` (1..6144B, UTF-8)|`{ client_message_id, ciphertext_b64, epoch, leaf_index, content_type ("application"), generation, created }`|Design §7.2.1 T-c through `chatstate.Store.Send`: the position is recorded as in use and fsynced, the message is encrypted at it, and the advanced state and ciphertext are persisted, all inside one hold of the conversation lock. The response is what `POST /:id/messages` needs, including the position the library actually used (leaf, axis, generation) for the W2 watermark; the caller never picks it. Idempotent on `client_message_id`: a retransmission returns the stored ciphertext with `created: false`. Refused with `CHAT_MLS_ROTATION_PENDING` while the S-1 latch holds, before any position is peeked or burned, and with `CHAT_MLS_COMMIT_PENDING` while a Commit of this device is unsettled. 6144 bytes is the plaintext bound because the StepFunction padding and the MLS framing must fit the 8208-byte stored ciphertext.|
+|`mls_decrypt_batch_for_app_display`|`permit`, `org_id`, `conversation_id`, `messages` (1..200 × `{ seq, ciphertext_b64 (an MLS PrivateMessage, ≤8208B) }`, distinct seqs)|`{ plaintext_b64: string[], items: [{ seq, sender_account_id, sender_device_id, epoch, sender_leaf_index, content_type, generation, from_history }] }` — the v1 reveal's response type, widened|Opens a page through `chatstate.Store.ReceiveBatch`: every message is opened, its declared position checked against the generation the library derived, and sealed into the local history in memory, and the record is replaced once. A seq already delivered is answered from the sealed copy with `from_history: true` and no MLS key. The sender is the credential of the sending leaf in the group's own tree, never a server field. **All or nothing**: a message that does not open, does not match its declaration, is not UTF-8 or is a handshake refuses the whole batch with no plaintext and nothing written. `plaintext_b64` is the only plaintext field.|
 
 `rotation_statements` is the flat list of `KeyRotationStatement`s (the shape
 the wrap actions take) for any account whose pinned key differs from the one
@@ -999,9 +1001,27 @@ Error codes these actions add, in the same `error_code` field:
 |---|---|
 |`CHAT_MLS_COMMIT_PENDING`|This device has a Commit whose CAS outcome it has not been told (§7.3.2). A new Commit, a new send, a new MLS open and a join are refused until `mls_commit_confirm` settles it. A retransmission and a local-history re-read are not.|
 |`CHAT_MLS_EPOCH_STALE`|Keeper-side meaning: the request does not continue this device's confirmed epoch. A Commit or send built for another epoch than the group is on, or a handshake already applied or one that comes after a handshake not yet applied. The server's CAS failure carries the same code with the server-side meaning.|
-|`CHAT_MLS_FAILED`|The MLS operation itself failed or refused, and nothing was written: a message that does not open, a Welcome with no KeyPackage of this device or for another conversation, a Remove of an account with no leaf, a declaration that does not match the position, a conversation with no group on this device, or a device with no active leaf key.|
+|`CHAT_MLS_FAILED`|The MLS operation itself failed or refused, and nothing was written: a message that does not open or is not text, a history copy that cannot name its sender, a Welcome with no KeyPackage of this device or for another conversation, a Remove of an account with no leaf, a declaration that does not match the position, a conversation with no group on this device, or a device with no active leaf key.|
 |`CHAT_MLS_LEAF_UNTRUSTED`|As in the leaf verification section, and additionally a KeyPackage whose credential names another account or device than the member it was requested for.|
 |`CHAT_MLS_CAPABILITY_REQUIRED`|This binary was built without the MLS library.|
+
+**The display carve-out is widened, not added (M6.3).**
+`mls_decrypt_batch_for_app_display` returns
+`ConversationDecryptBatchForAppDisplayResponseData`, the same type as
+`conversation_decrypt_batch_for_app_display`, with an `items` array of
+metadata parallel to `plaintext_b64`; the carve-out list keeps its two entries
+and its rationale now names this action. It keeps the v1 reveal's gates except
+those that belong to a key the server held: kept are a server-signed permit
+checked before anything is opened, strict decode and size bounds (200
+messages, 8208 bytes each, 3 MiB request), no caller-supplied binding (MLS
+framing and the sender's declaration stand where the Keeper-built AAD stood),
+UTF-8, whole-batch refusal, zeroized buffers and no logging of plaintext or
+its length. Dropped are the `dragpass.chat.read` permit (decision R2: the
+Keeper opens these with MLS keys the server never held), the group handle (it
+proved possession of a conversation DEK; here the key never leaves the
+Keeper), and `dek_version` / `payload_kind` binding (the epoch is in the MLS
+framing; room names are not on this path). `MLSEncryptRequest.plaintext_b64`
+is an encrypt-direction request carve-out like the Group DEK encrypt actions'.
 
 The chat-state codes above keep their meaning: `CHAT_STATE_NOT_AUTHORIZED` for
 the gate (nothing opened), `CHAT_STATE_INVALID_INPUT` for size and shape,

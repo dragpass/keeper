@@ -370,7 +370,11 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, mls.ErrGroupMismatch):
 		code, message = proto.ChatMLSErrorCodeFailed,
 			"the welcome is for a different conversation"
+	case errors.Is(err, chatstate.ErrHistoryUnavailable):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"this device has no usable local copy of that message"
 	case errors.Is(err, chatstate.ErrNotHandshake),
+		errors.Is(err, chatstate.ErrNotApplication),
 		errors.Is(err, chatstate.ErrDeclarationMismatch),
 		errors.Is(err, chatstate.ErrGenerationUnknown),
 		errors.Is(err, chatstate.ErrBurnForward),

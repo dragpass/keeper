@@ -75,4 +75,34 @@ const (
 	//           rotation_statements?
 	//   Output: { epoch }
 	MLSJoin = "mls_join"
+
+	// MLSEncrypt encrypts one application message. Reserving the position,
+	// encrypting at it and persisting the ciphertext are one locked section
+	// (§7.2.1 T-c), through chatstate.Store.Send: two calls — reserve, then
+	// encrypt — would let another process encrypt from the same group state
+	// in between. Idempotent on client_message_id. Refused with
+	// CHAT_MLS_ROTATION_PENDING while the S-1 latch holds, before any
+	// position is consumed.
+	//
+	//   Inputs: permit, org_id, conversation_id, client_message_id,
+	//           expected_epoch (>=1), plaintext_b64 (1..6144B, UTF-8)
+	//   Output: { client_message_id, ciphertext_b64, epoch, leaf_index,
+	//             content_type, generation, created }
+	MLSEncrypt = "mls_encrypt"
+
+	// MLSDecryptBatchForAppDisplay opens a page of application messages for
+	// the DragPass app's own screen, through chatstate.Store.ReceiveBatch and
+	// the local history: a seq already delivered is answered from the sealed
+	// copy with from_history and no MLS key. It widens the v1 reveal's
+	// carve-out rather than adding one (M6.3): the response is
+	// ConversationDecryptBatchForAppDisplayResponseData, plaintext_b64 its only
+	// plaintext field. All or nothing: one message that fails refuses the
+	// batch with no plaintext and nothing written.
+	//
+	//   Inputs: permit, org_id, conversation_id,
+	//           messages[1..200] { seq, ciphertext_b64 (1..8208B) }
+	//   Output: { plaintext_b64[], items[] { seq, sender_account_id,
+	//             sender_device_id, epoch, sender_leaf_index, content_type,
+	//             generation, from_history } }
+	MLSDecryptBatchForAppDisplay = "mls_decrypt_batch_for_app_display"
 )

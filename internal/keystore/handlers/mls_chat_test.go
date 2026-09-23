@@ -69,6 +69,19 @@ func mlsChatCases() []mlsChatCase {
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, WelcomeB64: mlsTestBlobB64,
 			}
 		}},
+		{proto.MLSEncrypt, HandleMLSEncrypt, func(p proto.ChatStatePermit) any {
+			return proto.MLSEncryptRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+				ClientMessageID: mlsTestCommitID, ExpectedEpoch: 1,
+				PlaintextB64: base64.StdEncoding.EncodeToString([]byte("hello")),
+			}
+		}},
+		{proto.MLSDecryptBatchForAppDisplay, HandleMLSDecryptBatchForAppDisplay, func(p proto.ChatStatePermit) any {
+			return proto.MLSDecryptBatchForAppDisplayRequest{
+				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+				Messages: []proto.MLSDisplayMessage{{Seq: 3, CiphertextB64: mlsTestBlobB64}},
+			}
+		}},
 	}
 }
 
@@ -201,6 +214,22 @@ func TestMLSChat_ValidationRefusesMalformedRequests(t *testing.T) {
 	assertChatStateFailure(t, HandleMLSCommitConfirm(f.deps, chatMarshal(t, confirm)),
 		proto.ChatStateErrorCodeInvalidInput)
 
+	encrypt := proto.MLSEncryptRequest{
+		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, ClientMessageID: mlsTestCommitID,
+		ExpectedEpoch: 1, PlaintextB64: base64.StdEncoding.EncodeToString(make([]byte, proto.MLSEncryptMaxPlaintextBytes+1)),
+	}
+	assertChatStateFailure(t, HandleMLSEncrypt(f.deps, chatMarshal(t, encrypt)), proto.ChatStateErrorCodeInvalidInput)
+	decrypt := proto.MLSDecryptBatchForAppDisplayRequest{
+		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+		Messages: []proto.MLSDisplayMessage{{Seq: 3, CiphertextB64: mlsTestBlobB64}, {Seq: 3, CiphertextB64: mlsTestBlobB64}},
+	}
+	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), proto.ChatStateErrorCodeInvalidInput)
+	decrypt.Messages = make([]proto.MLSDisplayMessage, proto.MLSDecryptMaxMessages+1)
+	for i := range decrypt.Messages {
+		decrypt.Messages[i] = proto.MLSDisplayMessage{Seq: uint64(i + 1), CiphertextB64: mlsTestBlobB64}
+	}
+	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), proto.ChatStateErrorCodeInvalidInput)
+
 	create := proto.MLSGroupCreateRequest{
 		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
 		ClientCommitID: mlsTestCommitID, Members: make([]proto.MLSMemberKeyPackage, proto.MLSChatMaxMembersPerCommit+1),
@@ -232,6 +261,17 @@ func TestMLSChat_WireBoundsMatchTheLayersThatEnforceThem(t *testing.T) {
 	if n := proto.MLSChatMaxMembersPerCommit*len(kp) + 64*1024; n > proto.MLSChatMaxRequestBytes {
 		t.Errorf("a full member batch needs %d bytes, over the %d cap", n, proto.MLSChatMaxRequestBytes)
 	}
+	ct := base64.StdEncoding.EncodeToString(make([]byte, proto.ConversationCiphertextMaxBytes))
+	if n := proto.MLSDecryptMaxMessages*(len(ct)+32) + 64*1024; n > proto.MLSDecryptMaxRequestBytes {
+		t.Errorf("a full display batch needs %d bytes, over the %d cap", n, proto.MLSDecryptMaxRequestBytes)
+	}
+	if proto.ConversationCiphertextMaxBytes != chatstate.MaxCiphertextBytes {
+		t.Errorf("display ciphertext bound %d != chatstate.MaxCiphertextBytes %d",
+			proto.ConversationCiphertextMaxBytes, chatstate.MaxCiphertextBytes)
+	}
+	if proto.MLSDecryptMaxMessages != chatstate.MaxReceiveBatch {
+		t.Errorf("display batch %d != chatstate.MaxReceiveBatch %d", proto.MLSDecryptMaxMessages, chatstate.MaxReceiveBatch)
+	}
 	if n := len(commit) + 64*1024; n > proto.MLSChatMaxRequestBytes {
 		t.Errorf("a full commit needs %d bytes, over the %d cap", n, proto.MLSChatMaxRequestBytes)
 	}
@@ -254,6 +294,8 @@ func TestMLSChat_FailuresMapToTheirProtocolCodes(t *testing.T) {
 		{chatstate.ErrRekeyRequired, proto.ChatStateErrorCodeRekeyRequired},
 		{chatstate.ErrNoGroupState, proto.ChatMLSErrorCodeFailed},
 		{chatstate.ErrNotHandshake, proto.ChatMLSErrorCodeFailed},
+		{chatstate.ErrNotApplication, proto.ChatMLSErrorCodeFailed},
+		{chatstate.ErrHistoryUnavailable, proto.ChatMLSErrorCodeFailed},
 		{chatstate.ErrDeclarationMismatch, proto.ChatMLSErrorCodeFailed},
 		{chatstate.ErrGenerationUnknown, proto.ChatMLSErrorCodeFailed},
 		{chatstate.ErrBurnForward, proto.ChatMLSErrorCodeFailed},

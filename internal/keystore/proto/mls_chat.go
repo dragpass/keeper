@@ -66,6 +66,23 @@ const (
 	// actions: 32 KeyPackages of 8192 bytes, or one 256 KiB Commit or
 	// Welcome, in Base64, plus rotation chains and fixed context.
 	MLSChatMaxRequestBytes = 1024 * 1024
+
+	// MLSEncryptMaxPlaintextBytes bounds one application message. The
+	// ciphertext has to fit the 8208 bytes the server's message column and
+	// chatstate.MaxCiphertextBytes allow, and MLS adds the sender's signature,
+	// the framing, the declaration and the AEAD tag, then pads with the
+	// StepFunction rule (the top three bits of the length survive, so up to
+	// an eighth more). 6144 bytes pads to at most 7168 and leaves the rest for
+	// the overhead; a test in dispatch encrypts one of exactly this size.
+	MLSEncryptMaxPlaintextBytes = 6144
+
+	// MLSDecryptMaxMessages is the display batch, the same 200 as the v1
+	// reveal.
+	MLSDecryptMaxMessages = ConversationDecryptMaxMessages
+
+	// MLSDecryptMaxRequestBytes fits 200 ciphertexts of 8208 bytes in Base64
+	// plus fixed context. The v1 reveal's 2 MiB does not.
+	MLSDecryptMaxRequestBytes = 3 * 1024 * 1024
 )
 
 // MLS commit outcomes a caller reports to mls_commit_confirm.
@@ -368,4 +385,120 @@ func (r MLSJoinRequest) Validate() error {
 
 type MLSJoinResponseData struct {
 	Epoch uint64 `json:"epoch"`
+}
+
+// MLSEncryptRequest encrypts one application message: reserve, encrypt and
+// persist in one locked section (design §7.2.1 T-c). client_message_id is the
+// outbox key: a second call with it answers with the stored ciphertext and
+// encrypts nothing.
+type MLSEncryptRequest struct {
+	Permit          ChatStatePermit `json:"permit"`
+	OrgID           string          `json:"org_id"`
+	ConversationID  string          `json:"conversation_id"`
+	ClientMessageID string          `json:"client_message_id"`
+	ExpectedEpoch   uint64          `json:"expected_epoch"`
+	PlaintextB64    string          `json:"plaintext_b64"` // encrypt direction; zeroized after sealing, never logged
+}
+
+func (r MLSEncryptRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSEncryptRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.ClientMessageID, "client_message_id"); err != nil {
+		return err
+	}
+	// Nothing is ever sent at epoch 0, where the creator is alone and its Add
+	// is pending; a positive value also keeps the assertion from being
+	// skipped by a zero.
+	if r.ExpectedEpoch < 1 {
+		return newValidationError("expected_epoch", "must be a positive epoch")
+	}
+	return requireMessageBase64Len(r.PlaintextB64, "plaintext_b64", 1, MLSEncryptMaxPlaintextBytes)
+}
+
+// MLSEncryptResponseData is what POST /:id/messages needs: the ciphertext, and
+// the position the library actually used, which the sender declares for the
+// W2 watermark. The caller does not pick the position; only the group state
+// knows it. Generation here is the step along this sender's application
+// ratchet, not the record's write counter.
+type MLSEncryptResponseData struct {
+	ClientMessageID string `json:"client_message_id"`
+	CiphertextB64   string `json:"ciphertext_b64"`
+	Epoch           uint64 `json:"epoch"`
+	LeafIndex       uint32 `json:"leaf_index"`
+	ContentType     string `json:"content_type"`
+	Generation      uint64 `json:"generation"`
+
+	// Created is false when the stored ciphertext for this client_message_id
+	// answered: a retransmission sends the same bytes.
+	Created bool `json:"created"`
+}
+
+// MLSDisplayMessage is one message of a display batch: the server's seq and
+// the MLS PrivateMessage it stored.
+type MLSDisplayMessage struct {
+	Seq           uint64 `json:"seq"`
+	CiphertextB64 string `json:"ciphertext_b64"`
+}
+
+// MLSDecryptBatchForAppDisplayRequest opens a page of one conversation's
+// messages for display. It answers with the v1 reveal's response type, widened
+// (ConversationDecryptBatchForAppDisplayResponseData.items): one carve-out,
+// not a third (design M6.3).
+type MLSDecryptBatchForAppDisplayRequest struct {
+	Permit         ChatStatePermit     `json:"permit"`
+	OrgID          string              `json:"org_id"`
+	ConversationID string              `json:"conversation_id"`
+	Messages       []MLSDisplayMessage `json:"messages"`
+}
+
+func (r MLSDecryptBatchForAppDisplayRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSDecryptBatchForAppDisplayRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	if len(r.Messages) == 0 || len(r.Messages) > MLSDecryptMaxMessages {
+		return newValidationError("messages",
+			"must hold 1.."+strconv.Itoa(MLSDecryptMaxMessages)+" entries")
+	}
+	seen := make(map[uint64]bool, len(r.Messages))
+	for _, m := range r.Messages {
+		if m.Seq < 1 {
+			return newValidationError("messages.seq", "must be a positive sequence")
+		}
+		if seen[m.Seq] {
+			return newValidationError("messages.seq", "must not repeat within a batch")
+		}
+		seen[m.Seq] = true
+		if err := requireMessageBase64Len(
+			m.CiphertextB64, "messages.ciphertext_b64", 1, ConversationCiphertextMaxBytes,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MLSDisplayItem is what the app may show about one decrypted message besides
+// its plaintext, parallel to plaintext_b64. The sender comes from the leaf
+// credential MLS authenticated, never from the server; epoch, leaf, axis and
+// generation are the position the declaration was checked against.
+// FromHistory is true when the plaintext came from this device's sealed local
+// copy and no MLS key was used.
+type MLSDisplayItem struct {
+	Seq             uint64 `json:"seq"`
+	SenderAccountID string `json:"sender_account_id"`
+	SenderDeviceID  string `json:"sender_device_id"`
+	Epoch           uint64 `json:"epoch"`
+	SenderLeafIndex uint32 `json:"sender_leaf_index"`
+	ContentType     string `json:"content_type"`
+	Generation      uint64 `json:"generation"`
+	FromHistory     bool   `json:"from_history"`
 }

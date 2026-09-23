@@ -15,10 +15,12 @@ import (
 
 func mlsChatActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.MLSGroupCreate:   handlers.HandleMLSGroupCreate,
-		proto.MLSCommitBuild:   handlers.HandleMLSCommitBuild,
-		proto.MLSCommitConfirm: handlers.HandleMLSCommitConfirm,
-		proto.MLSProcess:       handlers.HandleMLSProcess,
-		proto.MLSJoin:          handlers.HandleMLSJoin,
+		proto.MLSGroupCreate:               handlers.HandleMLSGroupCreate,
+		proto.MLSCommitBuild:               handlers.HandleMLSCommitBuild,
+		proto.MLSCommitConfirm:             handlers.HandleMLSCommitConfirm,
+		proto.MLSProcess:                   handlers.HandleMLSProcess,
+		proto.MLSJoin:                      handlers.HandleMLSJoin,
+		proto.MLSEncrypt:                   handlers.HandleMLSEncrypt,
+		proto.MLSDecryptBatchForAppDisplay: handlers.HandleMLSDecryptBatchForAppDisplay,
 	}
 }

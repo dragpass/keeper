@@ -322,12 +322,27 @@ func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
 
 func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
 
+// Open applies or decrypts one inbound message. For an application message it
+// also names the sender, from the credential of the leaf at SenderLeafIndex in
+// the group's own tree: the leaf that signed the message, in the epoch it was
+// sent in, which is the only source for who sent it that the server does not
+// choose. A sender this cannot attribute is a refusal, never an anonymous
+// message.
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 	processed, err := c.session.ProcessVerified(message, c.verifier)
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
+	var account, device string
+	if processed.Application {
+		if account, device, err = c.senderOf(processed.SenderLeafIndex); err != nil {
+			secure.Zeroize(processed.Plaintext)
+			return chatstate.Opened{}, err
+		}
+	}
 	return chatstate.Opened{
+		SenderAccountID:   account,
+		SenderDeviceID:    device,
 		Epoch:             processed.Epoch,
 		SenderLeafIndex:   processed.SenderLeafIndex,
 		Application:       processed.Application,
@@ -336,6 +351,19 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 		KeyGeneration:     processed.KeyGeneration,
 		Plaintext:         processed.Plaintext,
 	}, nil
+}
+
+func (c *Cipher) senderOf(leafIndex uint32) (accountID, deviceID string, err error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return "", "", err
+	}
+	for _, leaf := range leaves {
+		if leaf.Index == leafIndex {
+			return ParseCredentialIdentity(leaf.Identity)
+		}
+	}
+	return "", "", failed("the sending leaf is not in the group")
 }
 
 // ────────────────────────────────────────────────────────────────────────

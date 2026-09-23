@@ -5,6 +5,8 @@ package mls
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -33,12 +35,24 @@ func newSession(t testing.TB, identity string) *Session {
 	if err != nil {
 		t.Fatalf("generate signature key: %v", err)
 	}
-	s, err := openSession([]byte(identity), secret, public, []byte("test declaration of "+identity))
+	s, err := openSession(testIdentity(identity), secret, public, []byte("test declaration of "+identity))
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
 	t.Cleanup(s.Close)
 	return s
+}
+
+// testIdentity gives a named test member a DragPass device identity, the only
+// kind Cipher.Open can name as the sender of a message. The ids are derived
+// from the name so a restored session is the same member.
+func testIdentity(name string) []byte {
+	sum := sha256.Sum256([]byte(name))
+	h := hex.EncodeToString(sum[:])
+	uuid := func(x string) string {
+		return x[0:8] + "-" + x[8:12] + "-4" + x[13:16] + "-8" + x[17:20] + "-" + x[20:32]
+	}
+	return CredentialIdentity(uuid(h[:32]), uuid(h[32:]))
 }
 
 // twoMemberGroup returns alice (the creator), bob (joined via Welcome) and the

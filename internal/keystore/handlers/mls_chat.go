@@ -25,11 +25,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // mlsChat is one action's opened context. close releases the session and the
@@ -348,4 +350,145 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}
 	d.Logger.Println("mls join successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSJoinResponseData{Epoch: epoch}}
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Messages.
+//
+// mls_decrypt_batch_for_app_display widens the v1 reveal's carve-out
+// (conversation_decrypt.go) instead of adding one, and keeps its gates except
+// the ones that belong to a key the server held:
+//
+//	kept     a server-signed permit checked for binding, window and signature
+//	         before anything is opened (the conversation-state permit here)
+//	kept     strict decode and a request cap, at most 200 messages, each
+//	         ciphertext bounded to the 8208 bytes the server stores
+//	kept     the caller says nothing about binding: no AAD, no key, no
+//	         position. MLS framing and the sender's declaration, checked
+//	         against the generation the library derived, take the AAD's place
+//	kept     every plaintext is well-formed UTF-8
+//	kept     one failure refuses the whole batch with no partial plaintext,
+//	         and here also with nothing written
+//	kept     every plaintext buffer is zeroized, nothing about one is logged
+//	dropped  the read permit (dragpass.chat.read): decision R2, the Keeper
+//	         opens these with MLS keys the server never held, so there is no
+//	         server key possession to authorize
+//	dropped  the group handle: it proved the caller held the conversation
+//	         DEK; here the key never leaves the Keeper's own group state
+//	dropped  dek_version binding and payload_kind: the epoch is inside the
+//	         MLS framing, and room names are not on this path
+// ────────────────────────────────────────────────────────────────────────
+
+var errDisplayNotText = errors.New("mls display plaintext is not UTF-8")
+
+// HandleMLSEncrypt encrypts one application message through chatstate.Send:
+// the position is consumed, encrypted at and persisted in one locked section.
+func HandleMLSEncrypt(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSEncryptRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	plaintext, err := base64.StdEncoding.DecodeString(req.PlaintextB64)
+	defer secure.Zeroize(plaintext)
+	if err != nil {
+		return chatStateInvalidInput("plaintext_b64 must be valid standard Base64")
+	}
+	// The display path refuses a plaintext that is not text, so a message
+	// that is not would be sent and never shown.
+	if !utf8.Valid(plaintext) {
+		return chatStateInvalidInput("plaintext_b64 must decode to UTF-8 text")
+	}
+	result, err := c.store.Send(c.conv, c.wm, chatstate.SendRequest{
+		ClientMessageID: req.ClientMessageID,
+		Plaintext:       plaintext,
+		ExpectedEpoch:   req.ExpectedEpoch,
+	}, mls.NewCipher(c.session, c.verifier(d, nil)))
+	if err != nil {
+		return chatStateFailure(d, "mls encrypt", err)
+	}
+	d.Logger.Println("mls encrypt successful")
+	pos := result.Entry.Position
+	return proto.BaseResponse{Success: true, Data: proto.MLSEncryptResponseData{
+		ClientMessageID: result.Entry.ClientMessageID,
+		CiphertextB64:   base64.StdEncoding.EncodeToString(result.Entry.Ciphertext),
+		Epoch:           pos.Epoch,
+		LeafIndex:       pos.SenderLeafIndex,
+		ContentType:     string(pos.ContentType),
+		Generation:      pos.Generation,
+		Created:         result.Created,
+	}}
+}
+
+// HandleMLSDecryptBatchForAppDisplay opens a page of application messages
+// for the app's own screen, all or nothing.
+func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSDecryptBatchForAppDisplayRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	reqs := make([]chatstate.ReceiveRequest, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		ciphertext, err := base64.StdEncoding.DecodeString(m.CiphertextB64)
+		if err != nil {
+			return chatStateInvalidInput("ciphertext_b64 must be valid standard Base64")
+		}
+		// Commits are applied through mls_process, in epoch order; only an
+		// application message belongs on this path.
+		if form, err := mls.WireFormOf(ciphertext); err != nil || form != mls.WireFormPrivateMessage {
+			return chatStateInvalidInput("ciphertext_b64 is not an MLS PrivateMessage")
+		}
+		reqs = append(reqs, chatstate.ReceiveRequest{Seq: m.Seq, Message: ciphertext})
+	}
+	acceptText := func(plaintext []byte) error {
+		if !utf8.Valid(plaintext) {
+			return errDisplayNotText
+		}
+		return nil
+	}
+	results, err := c.store.ReceiveBatch(c.conv, c.wm, reqs, acceptText, mls.NewCipher(c.session, c.verifier(d, nil)))
+	defer func() {
+		for _, r := range results {
+			secure.Zeroize(r.Plaintext)
+		}
+	}()
+	if errors.Is(err, errDisplayNotText) {
+		d.Logger.Println("mls decrypt batch refused a plaintext that is not text")
+		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed),
+			"a message is not text; nothing was shown or written")
+	}
+	if err != nil {
+		return chatStateFailure(d, "mls decrypt batch", err)
+	}
+
+	plaintexts := make([]string, len(results))
+	items := make([]proto.MLSDisplayItem, len(results))
+	for i, r := range results {
+		// A copy that cannot say who sent it is refused rather than shown
+		// under nobody's name.
+		if r.Sender.AccountID == "" || r.Sender.DeviceID == "" {
+			return chatStateFailure(d, "mls decrypt batch", chatstate.ErrHistoryUnavailable)
+		}
+		plaintexts[i] = base64.StdEncoding.EncodeToString(r.Plaintext)
+		items[i] = proto.MLSDisplayItem{
+			Seq:             req.Messages[i].Seq,
+			SenderAccountID: r.Sender.AccountID,
+			SenderDeviceID:  r.Sender.DeviceID,
+			Epoch:           r.Position.Epoch,
+			SenderLeafIndex: r.Position.SenderLeafIndex,
+			ContentType:     string(r.Position.ContentType),
+			Generation:      r.Position.Generation,
+			FromHistory:     r.FromHistory,
+		}
+	}
+	d.Logger.Println("mls decrypt batch successful")
+	return proto.BaseResponse{Success: true, Data: proto.ConversationDecryptBatchForAppDisplayResponseData{
+		PlaintextB64: plaintexts,
+		Items:        items,
+	}}
 }

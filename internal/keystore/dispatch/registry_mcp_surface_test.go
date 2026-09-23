@@ -66,6 +66,9 @@ func TestMCPCallableActions_ExcludeChatState(t *testing.T) {
 	if pinned[proto.ActionConversationDecryptBatchForAppDisplay] {
 		t.Error("the chat reveal action is on the MCP surface")
 	}
+	if pinned[proto.MLSDecryptBatchForAppDisplay] {
+		t.Error("the chat v2 reveal action is on the MCP surface")
+	}
 }
 
 // A model that could reach declare could vouch for a leaf key under the
@@ -108,6 +111,8 @@ var mlsChatActionNames = []string{
 	proto.MLSCommitConfirm,
 	proto.MLSProcess,
 	proto.MLSJoin,
+	proto.MLSEncrypt,
+	proto.MLSDecryptBatchForAppDisplay,
 }
 
 func TestMCPCallableActions_ExcludeTheMLSChatActions(t *testing.T) {
