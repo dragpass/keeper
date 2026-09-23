@@ -47,7 +47,9 @@
 package chatstate
 
 import (
+	"cmp"
 	"crypto/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -116,6 +118,89 @@ type HistoryEntry struct {
 
 	IV         []byte `json:"iv"`
 	Ciphertext []byte `json:"ciphertext"`
+}
+
+// MaxOpenedSeqRanges bounds Record.OpenedSeqs. Seqs are opened mostly in
+// order, so the set is one range plus a gap at each seq this device never
+// opens (its own messages, its own Commits); the bound is reached only by a
+// long conversation read out of order. A file-size bound, like the ring.
+const MaxOpenedSeqRanges = 256
+
+// SeqRange is the inclusive run [From, Through] of server seqs.
+type SeqRange struct {
+	From    uint64 `json:"from"`
+	Through uint64 `json:"through"`
+}
+
+// markOpened records that MLS opened seq here, so a later re-read of it
+// after the ring evicted its copy is answered as unavailable rather than
+// handed to MLS a second time (receiveOne). The record is the right place:
+// the mark lands in the same write as the state advance that consumed the key.
+//
+// On overflow the lowest gap is filled. The seqs in it then read as opened,
+// so the direction of the error is a message shown as unavailable, never a
+// consumed key handed back to MLS.
+func (r *Record) markOpened(seq uint64, policy HistoryPolicy) {
+	if seq == 0 {
+		return
+	}
+	if len(r.OpenedSeqs) == 0 {
+		if floor := r.legacyOpenedFloor(policy); floor > 0 {
+			r.OpenedSeqs = []SeqRange{{From: 1, Through: floor}}
+		}
+	}
+	ranges := append(r.OpenedSeqs, SeqRange{From: seq, Through: seq})
+	slices.SortFunc(ranges, func(a, b SeqRange) int { return cmp.Compare(a.From, b.From) })
+	merged := ranges[:1]
+	for _, next := range ranges[1:] {
+		last := &merged[len(merged)-1]
+		if next.From <= last.Through+1 {
+			last.Through = max(last.Through, next.Through)
+			continue
+		}
+		merged = append(merged, next)
+	}
+	for len(merged) > MaxOpenedSeqRanges {
+		merged[1].From = merged[0].From
+		merged = merged[1:]
+	}
+	r.OpenedSeqs = merged
+}
+
+// opened reports whether MLS already opened seq on this device.
+func (r *Record) opened(seq uint64, policy HistoryPolicy) bool {
+	if len(r.OpenedSeqs) == 0 {
+		return seq > 0 && seq <= r.legacyOpenedFloor(policy)
+	}
+	for _, run := range r.OpenedSeqs {
+		if seq >= run.From && seq <= run.Through {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyOpenedFloor stands in for OpenedSeqs in a record written before it
+// existed: everything below the oldest delivered copy still held, and only
+// when the ring is full, since a ring that never evicted still holds every
+// message it was given. It is an inference and not a record — a seq below
+// that copy that this device skipped reads as opened too — and it errs in the
+// direction markOpened's overflow does: shown as unavailable, never handed
+// back to MLS.
+func (r *Record) legacyOpenedFloor(policy HistoryPolicy) uint64 {
+	if len(r.History) < policy.maxEntries() {
+		return 0
+	}
+	oldest := uint64(0)
+	for _, e := range r.History {
+		if e.ClientMessageID == "" && e.Seq > 0 && (oldest == 0 || e.Seq < oldest) {
+			oldest = e.Seq
+		}
+	}
+	if oldest == 0 {
+		return 0
+	}
+	return oldest - 1
 }
 
 // findHistory never matches seq 0: that is a sent entry the server has not

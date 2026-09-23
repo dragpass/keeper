@@ -217,6 +217,12 @@ type Record struct {
 	// and storing its copy is one replacement; see history.go for what that
 	// settles and what it leaves open.
 	History []HistoryEntry `json:"history,omitempty"`
+
+	// OpenedSeqs is every server seq MLS has opened on this device, sorted
+	// and merged. It outlives the History ring on purpose: the ring evicts the
+	// copy, and this is what still knows the key behind it is gone. Absent in
+	// a record written before it existed; see legacyOpenedFloor.
+	OpenedSeqs []SeqRange `json:"opened_seqs,omitempty"`
 }
 
 // OwnLeaf is a leaf index and the first epoch this device held it in.

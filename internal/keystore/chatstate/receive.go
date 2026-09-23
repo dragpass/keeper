@@ -36,6 +36,7 @@ package chatstate
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -142,6 +143,13 @@ type ReceiveResult struct {
 	// consumed or written for it. Only ReceiveBatch reports it.
 	OwnWithoutCopy bool
 
+	// HistoryUnavailable is true for a seq MLS already opened on this device
+	// whose sealed copy is no longer held: the ring evicted it. Its key was
+	// consumed at that first delivery, so there is no plaintext, no position
+	// and no sender, and nothing was opened or written for it. Only
+	// ReceiveBatch reports it.
+	HistoryUnavailable bool
+
 	// Generation is the record's write counter after the confirmation, or the
 	// current one when nothing was written.
 	Generation uint64
@@ -174,6 +182,12 @@ var ErrOwnMessage = errors.New("chat state was handed a message this device sent
 // evicted, expired or damaged ends here, and it is terminal: the MLS key for it was consumed and deleted when it
 // was first delivered, so the server's ciphertext cannot stand in.
 var ErrHistoryUnavailable = errors.New("chat state has no local copy of that message")
+
+// errOpenedWithoutCopy is ErrHistoryUnavailable for a seq Record.OpenedSeqs
+// says was opened here: the one form of it ReceiveBatch answers per item
+// rather than refusing the page. A copy that is present but cannot say who
+// sent it stays a refusal.
+var errOpenedWithoutCopy = fmt.Errorf("%w: it was opened here and its copy is gone", ErrHistoryUnavailable)
 
 // Receive confirms one inbound message and returns its plaintext.
 //
@@ -249,10 +263,18 @@ const MaxReceiveBatch = 200
 // Re-reads from the history are not shown to it: they were accepted when they
 // were first delivered.
 //
+// A second outcome is not a refusal either: a seq MLS already opened here
+// whose copy the ring has since evicted. Its key is gone, so it is never
+// handed to Open again; it is answered as HistoryUnavailable, with no
+// plaintext, and the rest of the batch proceeds. Record.OpenedSeqs is what
+// tells it apart from a message nobody has opened yet, which still goes to
+// Open.
+//
 // On a conversation latched NeedsRekey a batch made only of re-reads is still
-// answered, from the history and without MLS (loadLatched). A batch holding
-// even one sequence the history does not have is refused whole with
-// ErrRekeyRequired, by the same all-or-nothing rule.
+// answered, from the history and without MLS (loadLatched), and an evicted
+// seq as HistoryUnavailable. A batch holding even one sequence that was never
+// opened here is refused whole with ErrRekeyRequired, by the same
+// all-or-nothing rule.
 func (s *Store) ReceiveBatch(
 	conversationID string, wm ServerWatermark, reqs []ReceiveRequest,
 	accept func(plaintext []byte) error, cipher ReceiveCipher,
@@ -282,6 +304,10 @@ func (s *Store) ReceiveBatch(
 			}
 			for _, req := range reqs {
 				stored, ok := rec.findHistory(req.Seq)
+				if !ok && rec.opened(req.Seq, s.HistoryPolicy) {
+					out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
+					continue
+				}
 				if !ok {
 					return ErrRekeyRequired
 				}
@@ -310,6 +336,10 @@ func (s *Store) ReceiveBatch(
 				}
 				out = append(out, bound)
 				changed = changed || ok
+				continue
+			}
+			if errors.Is(err, errOpenedWithoutCopy) {
+				out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
 				continue
 			}
 			if err != nil {
@@ -399,6 +429,11 @@ func (s *Store) receiveOne(
 		out, err := s.reread(conversationID, rec, stored)
 		return out, false, err
 	}
+	// Opened here before and no copy left: the key was consumed at that
+	// delivery, and handing the ciphertext to MLS again can only fail.
+	if !req.Handshake && rec.opened(req.Seq, s.HistoryPolicy) {
+		return ReceiveResult{}, false, errOpenedWithoutCopy
+	}
 	// A re-read above is served from the sealed copy and never reaches
 	// here, so an unsettled Commit does not stop anyone from reading what
 	// they already have. What it does stop is feeding a new message to
@@ -487,6 +522,7 @@ func (s *Store) receiveOne(
 	rec.GroupState = state
 	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
+	rec.markOpened(req.Seq, s.HistoryPolicy)
 	if opened.Removed {
 		rec.RemovedFromGroup = true
 	}

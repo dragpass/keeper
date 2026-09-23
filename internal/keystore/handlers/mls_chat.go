@@ -530,7 +530,8 @@ func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
 
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
 // for the app's own screen, all or nothing but for a message of this device
-// that has no local copy (chatstate.ReceiveBatch).
+// that has no local copy and a message whose copy the history evicted
+// (chatstate.ReceiveBatch).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
@@ -576,6 +577,10 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	plaintexts := make([]string, len(results))
 	items := make([]proto.MLSDisplayItem, len(results))
 	for i, r := range results {
+		if r.HistoryUnavailable {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateHistoryUnavailable}
+			continue
+		}
 		if r.OwnWithoutCopy {
 			items[i] = proto.MLSDisplayItem{
 				Seq:             req.Messages[i].Seq,

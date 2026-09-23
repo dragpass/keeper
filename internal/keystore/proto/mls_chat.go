@@ -693,6 +693,14 @@ const (
 	// sender is this device, and the position fields are zero. The one outcome
 	// that does not refuse the batch.
 	MLSDisplayItemStateOwnWithoutCopy = "own_without_local_copy"
+
+	// MLSDisplayItemStateHistoryUnavailable — this device already opened the
+	// message once and no longer holds its sealed copy (the local history
+	// evicted it), so it cannot be shown again: its MLS key was consumed at
+	// that first delivery. plaintext_b64 is "" at this index, the sender and
+	// position fields are empty and zero, and nothing was opened or written
+	// for it. The batch proceeds (0.0.55).
+	MLSDisplayItemStateHistoryUnavailable = "history_unavailable"
 )
 
 // MLSDisplayItem is what the app may show about one decrypted message besides
