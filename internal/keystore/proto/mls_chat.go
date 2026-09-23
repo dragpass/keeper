@@ -730,6 +730,14 @@ const (
 	// position fields are empty and zero, and nothing was opened or written
 	// for it. The batch proceeds (0.0.55).
 	MLSDisplayItemStateHistoryUnavailable = "history_unavailable"
+
+	// MLSDisplayItemStateBeforeJoin — the message belongs to an epoch before
+	// the one this device's leaf entered the group at, so this device never
+	// held its key. It is not an error and not lost history: nobody could
+	// open it here. plaintext_b64 is "" at this index, the sender and position
+	// fields are empty and zero, and nothing was opened or written for it.
+	// The batch proceeds (0.0.55).
+	MLSDisplayItemStateBeforeJoin = "before_join"
 )
 
 // MLSDisplayItem is what the app may show about one decrypted message besides

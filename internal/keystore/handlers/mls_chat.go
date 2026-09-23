@@ -552,7 +552,8 @@ func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
 
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
 // for the app's own screen, all or nothing but for a message of this device
-// that has no local copy and a message whose copy the history evicted
+// that has no local copy, a message whose copy the history evicted, and a
+// message from before this device's leaf entered the group
 // (chatstate.ReceiveBatch).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
@@ -573,7 +574,11 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		if form, err := mls.WireFormOf(ciphertext); err != nil || form != mls.WireFormPrivateMessage {
 			return chatStateInvalidInput("ciphertext_b64 is not an MLS PrivateMessage")
 		}
-		reqs = append(reqs, chatstate.ReceiveRequest{Seq: m.Seq, Message: ciphertext})
+		req := chatstate.ReceiveRequest{Seq: m.Seq, Message: ciphertext}
+		if epoch, err := mls.PrivateMessageEpoch(ciphertext); err == nil {
+			req.FramedEpoch = &epoch
+		}
+		reqs = append(reqs, req)
 	}
 	acceptText := func(plaintext []byte) error {
 		if !utf8.Valid(plaintext) {
@@ -601,6 +606,10 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	for i, r := range results {
 		if r.HistoryUnavailable {
 			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateHistoryUnavailable}
+			continue
+		}
+		if r.BeforeJoin {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateBeforeJoin}
 			continue
 		}
 		if r.OwnWithoutCopy {
