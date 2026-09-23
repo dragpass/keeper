@@ -67,6 +67,7 @@ var actionFragments = []actionFragment{
 	messageActions,
 	conversationActions,
 	chatStateActions,
+	mlsChatActions,
 	archiveActions,
 	archiveQuorumActions,
 }

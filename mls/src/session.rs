@@ -16,6 +16,7 @@ use mls_rs::{
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
     MlsMessage,
 };
+use mls_rs_core::crypto::SignatureSecretKey;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use zeroize::Zeroizing;
 
@@ -62,9 +63,17 @@ pub struct Session {
     storage: RecordStorage,
     custody: KeyPackageCustody,
     gate: LeafGate,
+    /// The leaf this session was opened as: the device's active key, which a
+    /// group loaded from an older snapshot may not be signing with yet. An
+    /// Update is how a group moves onto it (`build_update`). The client holds
+    /// the same key but does not hand it back, hence the copy;
+    /// `SignatureSecretKey` zeroizes on drop.
+    signing_identity: SigningIdentity,
+    signer: SignatureSecretKey,
     /// This device's own leaf declaration, carried in every leaf it creates:
-    /// its KeyPackages and the first leaf of a group it creates. Empty only
-    /// for the throwaway members tests build.
+    /// its KeyPackages, the first leaf of a group it creates, and the leaf an
+    /// Update replaces its old one with. Empty only for the throwaway members
+    /// tests build.
     leaf_extensions: ExtensionList,
     /// What the Go side approved for the next group operation, and only that
     /// one. Every operation that can bring a leaf in takes it.
@@ -238,7 +247,11 @@ impl Session {
             .group_state_storage(storage.clone())
             .mls_rules(rules)
             .key_package_repo(custody.clone())
-            .signing_identity(signing_identity, secret_key.to_vec().into(), CIPHER_SUITE)
+            .signing_identity(
+                signing_identity.clone(),
+                secret_key.to_vec().into(),
+                CIPHER_SUITE,
+            )
             .build();
 
         Ok(Self {
@@ -246,6 +259,8 @@ impl Session {
             storage,
             custody,
             gate,
+            signing_identity,
+            signer: secret_key.to_vec().into(),
             leaf_extensions,
             approved: Vec::new(),
             group: None,
@@ -488,6 +503,13 @@ impl Session {
     /// Build a Commit with no proposals — the path update that rotates this
     /// device's own key material. Same pending discipline as
     /// `commit_add_member`.
+    ///
+    /// When the group still signs as an older leaf key than the one this
+    /// session was opened with, the Update replaces the leaf with the active
+    /// key and its declaration. That is how a leaf rotation reaches groups
+    /// that already hold the device: nothing else carries the new key into
+    /// them. Receivers see the replacement as an entering leaf and verify it
+    /// in full before their gate admits it (`LeafGate::valid_successor`).
     pub fn commit_update(&mut self) -> Res<(Vec<u8>, u64)> {
         self.group_mut()?;
         self.arm()?;
@@ -502,12 +524,22 @@ impl Session {
     }
 
     fn build_update(&mut self) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let active = self.signing_identity.clone();
+        let signer = self.signer.clone();
+        let extensions = self.leaf_extensions.clone();
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
-        let output = group
-            .commit_builder()
-            .build()
-            .map_err(|e| err("commit build", e))?;
+        let current = group
+            .current_member_signing_identity()
+            .map_err(|e| err("own leaf", e))?
+            .clone();
+        let mut builder = group.commit_builder();
+        if current != active {
+            builder = builder
+                .set_new_signing_identity(signer, active)
+                .set_leaf_node_extensions(extensions);
+        }
+        let output = builder.build().map_err(|e| err("commit build", e))?;
         Ok((output, expected_epoch))
     }
 
@@ -549,6 +581,10 @@ impl Session {
     /// the removed leaf here. S-1's unlatch depends on exactly that.
     pub fn roster(&mut self) -> Res<Vec<Leaf>> {
         Ok(leaves_of(self.group_mut()?))
+    }
+
+    pub fn group_id(&mut self) -> Res<Vec<u8>> {
+        Ok(self.group_mut()?.group_id().to_vec())
     }
 
     /// Promote the pending Commit to confirmed. Called only once the server's
@@ -1151,5 +1187,92 @@ mod tests {
         };
         assert!(e.contains("not approved"), "{e}");
         assert_eq!(bob.epoch().unwrap(), 1);
+    }
+
+    /// Alice and Bob in one group, both confirmed at epoch 1.
+    fn pair() -> (Session, Session) {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let welcome = add(&mut alice, &bob);
+        let tree = bob.join_collect(&welcome).unwrap();
+        bob.approve(tree.iter().map(approval).collect());
+        bob.join(&welcome).unwrap();
+        (alice, bob)
+    }
+
+    /// The same device after a leaf rotation: same identity, a new key and a
+    /// new declaration, restored from the state the old session left.
+    fn rotated(old: &mut Session, name: &str) -> Session {
+        let blob = old.flush().unwrap();
+        let (sk, pk) = generate_signature_key().unwrap();
+        let decl = format!("rotated declaration of {name}");
+        let mut next = Session::new(name.as_bytes(), &sk, &pk, decl.as_bytes()).unwrap();
+        next.load(&blob).unwrap();
+        next
+    }
+
+    fn own_key(s: &mut Session, name: &[u8]) -> Vec<u8> {
+        s.roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == name)
+            .unwrap()
+            .signature_key
+    }
+
+    // P3: after a rotation the Update carries the active key and its
+    // declaration, and a receiver applies it only once that leaf is approved.
+    #[test]
+    fn an_update_moves_the_group_onto_the_active_leaf_key() {
+        let (mut alice, mut bob) = pair();
+        let old_key = own_key(&mut bob, b"alice");
+        let mut alice = rotated(&mut alice, "alice");
+
+        let (commit, expected) = alice.commit_update().unwrap();
+        assert_eq!(expected, 1);
+
+        let seen = bob.process_collect(&commit).unwrap();
+        assert_eq!(seen.len(), 1, "the replacement leaf must be reported");
+        assert_eq!(seen[0].identity, b"alice");
+        assert_ne!(seen[0].signature_key, old_key);
+        assert_eq!(
+            seen[0].declaration.as_deref(),
+            Some(&b"rotated declaration of alice"[..])
+        );
+
+        let Err(e) = bob.process(&commit) else {
+            panic!("a new signature key was applied without approval");
+        };
+        assert!(
+            e.contains("successor") || e.contains(gate::NOT_APPROVED),
+            "{e}"
+        );
+        assert_eq!(bob.epoch().unwrap(), 1);
+
+        bob.approve(seen.iter().map(approval).collect());
+        bob.process(&commit).unwrap();
+        assert_eq!(bob.epoch().unwrap(), 2);
+        assert_ne!(own_key(&mut bob, b"alice"), old_key);
+
+        alice.apply_pending_commit().unwrap();
+        let sealed = alice.encrypt(b"hi", b"ad").unwrap();
+        let processed = bob.process(&sealed).unwrap();
+        assert_eq!(
+            processed.application.as_deref().map(|v| &v[..]),
+            Some(&b"hi"[..])
+        );
+    }
+
+    // Without a rotation an Update changes neither the key nor the
+    // declaration, so a receiver needs no approval for it.
+    #[test]
+    fn an_update_without_a_rotation_keeps_the_leaf_key() {
+        let (mut alice, mut bob) = pair();
+        let before = own_key(&mut bob, b"alice");
+        let (commit, _) = alice.commit_update().unwrap();
+        assert!(bob.process_collect(&commit).unwrap().is_empty());
+        bob.process(&commit).unwrap();
+        assert_eq!(own_key(&mut bob, b"alice"), before);
     }
 }

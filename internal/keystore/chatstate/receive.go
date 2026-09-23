@@ -88,6 +88,21 @@ type ReceiveCipher interface {
 type ReceiveRequest struct {
 	Seq     uint64
 	Message []byte
+
+	// Handshake marks a Commit taken from the server's handshake log, and
+	// ProducedEpoch is the epoch that log says it produced. Together they are
+	// the ordering rule for handshakes: the one applied next must produce the
+	// epoch after the confirmed one, no earlier and no later.
+	//
+	// The rule is on epochs and not on Seq because the server numbers
+	// handshakes and application messages on one gap-free axis, so a gap
+	// between two handshake seqs is ordinary and says nothing about a
+	// handshake having been skipped. The epoch does: the server keeps one
+	// handshake per epoch, and MLS binds the epoch into the Commit it
+	// authenticates, so the claimed value is checked against what applying
+	// the Commit actually produced before anything is written.
+	Handshake     bool
+	ProducedEpoch uint64
 }
 
 // ReceiveResult is what the caller may show.
@@ -108,6 +123,21 @@ type ReceiveResult struct {
 	// current one when nothing was written.
 	Generation uint64
 }
+
+var (
+	// ErrHandshakeApplied — the handshake produces an epoch this record is
+	// already at or past. A redelivery, or this device's own accepted Commit
+	// coming back from the log.
+	ErrHandshakeApplied = errors.New("chat state is already past the epoch this handshake produces")
+
+	// ErrHandshakeSkipped — the handshake produces an epoch more than one past
+	// the confirmed one, so at least one handshake before it was not applied.
+	ErrHandshakeSkipped = errors.New("chat state has not applied the handshake before this one")
+
+	// ErrNotHandshake — a message handed in as a handshake decrypted as an
+	// application message. Nothing was written.
+	ErrNotHandshake = errors.New("chat state was handed an application message as a handshake")
+)
 
 // ErrHistoryUnavailable — the sealed copy for this sequence is not there, or
 // cannot say who sent it. A re-read of a message whose history has been
@@ -149,6 +179,14 @@ func (s *Store) Receive(
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}
+		if req.Handshake {
+			switch {
+			case req.ProducedEpoch <= rec.Epoch:
+				return ErrHandshakeApplied
+			case req.ProducedEpoch > rec.Epoch+1:
+				return ErrHandshakeSkipped
+			}
+		}
 		if err := cipher.Load(rec.GroupState); err != nil {
 			return err
 		}
@@ -158,6 +196,16 @@ func (s *Store) Receive(
 			return err
 		}
 		defer secure.Zeroize(opened.Plaintext)
+		if req.Handshake {
+			if opened.Application {
+				return ErrNotHandshake
+			}
+			// A device the Commit removed is left with no group to read an
+			// epoch from, so only a Commit it survived is held to the claim.
+			if !opened.Removed && opened.Epoch != req.ProducedEpoch {
+				return ErrEpochStale
+			}
+		}
 
 		position := Position{
 			Epoch:           opened.Epoch,

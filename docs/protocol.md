@@ -914,6 +914,101 @@ the server and the Extension:
 |`CHAT_MLS_ROTATION_PENDING`|A permit named an account this device's confirmed group still holds a leaf for as removed from the organization, and no Commit taking that leaf out has been applied here yet (design §6.4.1 S-1). Only encrypting a new application message is refused, and nothing was consumed. It clears on this device's confirmed state and never on a later permit. The server answers `POST /:id/messages` with the same code.|
 |`CHAT_STATE_STORAGE_FAILURE`|The state directory or the keyring could not be read or written. Nothing was committed.|
 
+### MLS chat (chat v2 MLS actions)
+
+The MLS half of chat v2, on top of the conversation-state layer above: the
+same sealed record, the same per-conversation lock, the same `permit`
+(canonical v3) and the same gate, in the same order — size cap, strict decode,
+validation, request/permit binding, window, server signature — before the
+state directory is opened. Then the MLS library must be linked
+(`CHAT_MLS_CAPABILITY_REQUIRED` otherwise), and the device session opens as the
+device's **active** leaf key, which must belong to the permit's account. The
+MLS group state inside the record is read and written by the Keeper only; **no
+action carries the group state, a secret, or a key across IPC** in either
+direction. Design: dragpass-control-plane
+`docs/exec-plans/active/dragpass-chat-v2-mls-integration.md` §7 and §12.2.
+
+**All or nothing.** Every action is one chatstate transaction and one file
+replacement. A refusal at any step — permit, validation, §5.3 leaf
+verification, MLS, storage — persists nothing: no group state, no pending
+Commit, no pin, no newest-declaration record, no KeyPackage pool deletion. The
+pins and newest-declaration records a verification staged are written only
+after the chatstate write they were for is on disk.
+
+**Off the MCP surface.** None of these is in the pinned MCP set, and
+`registry_mcp_surface_test.go` fails if one is added to it or if an MLS chat
+action is registered without being named in the guard.
+
+**Request size.** The chat-state 32 KiB cap does not fit a KeyPackage batch, a
+Commit or a Welcome, so the membership and handshake requests are capped at
+1 MiB (`MLSChatMaxRequestBytes`): 32 KeyPackages of at most 8192 bytes, or one
+Commit or Welcome of at most 262144 bytes (`chatstate.MaxCommitBytes`), in
+Base64, with room for rotation chains.
+
+**Pending and confirmed (§7.3).** `mls_group_create` and `mls_commit_build`
+leave their Commit pending: the confirmed epoch, the send chain and the
+rollback anchor do not move, and `welcome_releasable` is `false`. Post the
+Commit (and Welcome) to `POST /:id/mls/commit`, then report the CAS verdict
+through `mls_commit_confirm`. Until then a new Commit, a new send, a new MLS
+open and a join are refused with `CHAT_MLS_COMMIT_PENDING`.
+
+**Membership checks the credential, not only §5.3.** Each member to Add names
+the `account_id` and `device_id` the caller asked the server for, and a
+KeyPackage whose credential names anyone else is refused with
+`CHAT_MLS_LEAF_UNTRUSTED`. §5.3 accepts any account whose declaration
+verifies, so a server answering a request for Bob with Mallory's valid
+KeyPackage would otherwise pass. Groups are named by their conversation id,
+and `mls_join` refuses a Welcome whose group has another id.
+
+**Rotation reaches existing groups through `update_self` (P3).** After
+`mls_leaf_declare` (rotate) and `mls_leaf_promote`, groups this device is
+already in still sign as the old leaf key. The next `update_self` Commit
+replaces the leaf with the active key and its declaration
+(`set_new_signing_identity` + `set_leaf_node_extensions` on the mls-rs 0.56
+commit builder). Receivers see the replacement as an **entering** leaf: the
+full §5.3 checks, the expiry check, and the newest-declaration check, which
+advances their record. The Rust gate admits a new signature key for the same
+credential identity only when the Go verifier approved it for that operation;
+a changed identity is never a valid successor.
+
+**Handshakes apply in epoch order.** A handshake row from
+`GET /:id/mls/handshake` is applied only if the epoch it produced is the one
+after this device's confirmed epoch. The rule is on epochs, not on `seq`,
+because handshakes and application messages share one gap-free `seq` axis, so
+a gap between two handshake seqs is ordinary and says nothing about a skipped
+handshake; the server keeps one handshake per epoch and MLS binds the epoch
+into the Commit. A row already applied (including this device's own accepted
+Commit coming back) and a row that comes after one not yet applied are both
+`CHAT_MLS_EPOCH_STALE`.
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`mls_group_create`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID), `members` (1..32 × `{ account_id, device_id, key_package_b64 (≤8192B) }`, one entry per device, not the caller), `rotation_statements?`|`{ client_commit_id, expected_epoch (0), commit_b64, welcome_b64, welcome_releasable (false), created, generation }`|Creates the conversation's group at epoch 0, verifies every member (§5.3 plus the credential match), and builds the Add, pending, in one transaction. Idempotent on `client_commit_id`: a retry answers from the stored Commit with `created: false`. A conversation that already holds a group or a pending Commit is `CHAT_STATE_CONFLICT`.|
+|`mls_commit_build`|`permit`, `org_id`, `conversation_id`, `client_commit_id`, `expected_epoch` (≥1), exactly one of `add` (1..32 members), `remove_account_ids` (1..64 UUIDs; every leaf of each account), `update_self: true`; `rotation_statements?`|as `mls_group_create`; `welcome_b64` empty unless the Commit adds|One pending Commit of one kind. A plan that mixes kinds is refused (validation, and `chatstate.CommitPlan` below it). `expected_epoch` is checked against the confirmed epoch before anything is built (`CHAT_MLS_EPOCH_STALE`). A Remove never refuses on the S-1 latch: it is the way out of it. A Remove naming an account with no leaf in the group is `CHAT_MLS_FAILED` rather than a smaller Commit.|
+|`mls_commit_confirm`|`permit`, `org_id`, `conversation_id`, `client_commit_id`, `outcome` (`accepted` \| `superseded` \| `unknown`), `winner_commit_b64` (superseded only, ≤262144B), `rotation_statements?`|`{ outcome, epoch, welcome_releasable, removed, commit_b64, generation }`|`accepted` promotes the pending Commit; `welcome_releasable` is `true` only here and only for an Add. `superseded` drops the fork and applies the winner's Commit (verified like any inbound Commit) to the epoch that never moved; `removed` says the winner took this device out. `unknown` writes nothing and returns the pending Commit in `commit_b64` and the epoch it was built against, so the caller can ask the server by `client_commit_id` and repost if needed. An id other than the pending one is `CHAT_STATE_CONFLICT`.|
+|`mls_process`|`permit`, `org_id`, `conversation_id`, `seq`, `epoch` (the row's: the epoch the Commit produced), `commit_b64` (an MLS `PublicMessage`, ≤262144B), `rotation_statements?`|`{ seq, epoch, removed, generation }`|Applies somebody else's Commit through `ProcessVerified`: every leaf it brings in is verified, the replacement leaf of an Update included. Epoch order as above. A message that is not a `PublicMessage` is `CHAT_STATE_INVALID_INPUT`; application messages belong to the display path. While this device has a pending Commit it is `CHAT_MLS_COMMIT_PENDING`: the winner goes through `mls_commit_confirm` instead.|
+|`mls_join`|`permit`, `org_id`, `conversation_id`, `welcome_b64` (≤262144B), `rotation_statements?`|`{ epoch }`|Joins from a Welcome addressed to one of this device's KeyPackages (`JoinFromPool`), verifying every leaf of the tree, and records the epoch it joined at. The group state is written first and the pool entry deleted second. Refused with `CHAT_MLS_FAILED` when no pool entry matches or the group is another conversation's, and with `CHAT_MLS_COMMIT_PENDING` over a pending Commit; the pool entry is kept on every refusal.|
+
+`rotation_statements` is the flat list of `KeyRotationStatement`s (the shape
+the wrap actions take) for any account whose pinned key differs from the one
+its leaf declaration carries. A leaf extension has no room for the chain.
+
+Error codes these actions add, in the same `error_code` field:
+
+|Code|Trigger|
+|---|---|
+|`CHAT_MLS_COMMIT_PENDING`|This device has a Commit whose CAS outcome it has not been told (§7.3.2). A new Commit, a new send, a new MLS open and a join are refused until `mls_commit_confirm` settles it. A retransmission and a local-history re-read are not.|
+|`CHAT_MLS_EPOCH_STALE`|Keeper-side meaning: the request does not continue this device's confirmed epoch. A Commit or send built for another epoch than the group is on, or a handshake already applied or one that comes after a handshake not yet applied. The server's CAS failure carries the same code with the server-side meaning.|
+|`CHAT_MLS_FAILED`|The MLS operation itself failed or refused, and nothing was written: a message that does not open, a Welcome with no KeyPackage of this device or for another conversation, a Remove of an account with no leaf, a declaration that does not match the position, a conversation with no group on this device, or a device with no active leaf key.|
+|`CHAT_MLS_LEAF_UNTRUSTED`|As in the leaf verification section, and additionally a KeyPackage whose credential names another account or device than the member it was requested for.|
+|`CHAT_MLS_CAPABILITY_REQUIRED`|This binary was built without the MLS library.|
+
+The chat-state codes above keep their meaning: `CHAT_STATE_NOT_AUTHORIZED` for
+the gate (nothing opened), `CHAT_STATE_INVALID_INPUT` for size and shape,
+`CHAT_STATE_CONFLICT` for a group that already exists or a confirm for a
+Commit that is not the pending one, `CHAT_STATE_REKEY_REQUIRED` for a rewound
+record, `CHAT_MLS_ROTATION_PENDING` for the S-1 latch.
+
 ### Peer account key pins (account key trust v1)
 
 Every Group DEK the Extension wraps to a member is wrapped to a public key the

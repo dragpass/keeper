@@ -51,6 +51,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -64,6 +65,19 @@ import (
 // every other failure so a caller never reads "no group" when the real answer is
 // "no library".
 var ErrUnavailable = errors.New("mls: this build does not include the MLS library")
+
+// ErrFailed marks a refusal or failure of the MLS operation itself — the
+// library rejected a message, a Commit could not be built, a plan named a
+// member the group does not hold — as distinct from the storage around it. The
+// protocol edge answers it with CHAT_MLS_FAILED and never with a storage code.
+var ErrFailed = errors.New("mls operation failed")
+
+// ErrGroupMismatch — a Welcome produced a group whose id is not the
+// conversation it was handed in for. Groups this Keeper creates are named by
+// their conversation id, so this is a Welcome for some other conversation.
+var ErrGroupMismatch = errors.New("mls: the welcome is for a different conversation's group")
+
+func failed(reason string) error { return fmt.Errorf("%w: %s", ErrFailed, reason) }
 
 // WireForm is the framing a message actually went out in, read back off the
 // encoded bytes. Asserting on this rather than on the setting that produced it
@@ -213,13 +227,16 @@ func (c *Cipher) Seal(plaintext, authenticatedData []byte) ([]byte, error) {
 
 func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
 
+// CreateGroup starts the conversation's group, for chatstate.Store.CreateGroup.
+func (c *Cipher) CreateGroup(groupID []byte) error { return c.session.CreateGroup(groupID) }
+
 // BuildCommit builds a Commit and leaves it pending. mls-rs refuses a second
 // one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
 	if len(plan.RemoveAccountIDs) > 0 {
 		if len(plan.AddKeyPackages) > 0 {
-			return chatstate.BuiltCommit{}, errors.New("mls: a commit plan adds or removes, not both")
+			return chatstate.BuiltCommit{}, failed("a commit plan adds or removes, not both")
 		}
 		commit, expected, err := c.commitRemoveAccounts(plan.RemoveAccountIDs)
 		if err != nil {
@@ -263,7 +280,7 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 			}
 		}
 		if !found {
-			return nil, 0, errors.New("mls: an account to remove has no leaf in the group")
+			return nil, 0, failed("an account to remove has no leaf in the group")
 		}
 	}
 	return c.session.CommitRemoveMembers(indices)
@@ -360,7 +377,7 @@ func ParseCredentialIdentity(identity []byte) (accountID, deviceID string, err e
 	if len(parts) != 4 || parts[0] != credentialIdentityDomain || parts[1] != credentialIdentityVersion ||
 		!isLowerUUID(parts[2]) || !isLowerUUID(parts[3]) ||
 		!bytes.Equal(identity, CredentialIdentity(parts[2], parts[3])) {
-		return "", "", errors.New("mls: credential identity is not a dragpass device identity")
+		return "", "", failed("credential identity is not a dragpass device identity")
 	}
 	return parts[2], parts[3], nil
 }
@@ -496,6 +513,19 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 	return out, pool, nil
 }
 
+// KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
+// without a group. It is how a caller that asked the server for one member's
+// KeyPackage checks it was handed that member's and not some other account's:
+// §5.3 would accept any account whose declaration verifies, so it cannot tell
+// the two apart on its own.
+func KeyPackageIdentity(keyPackage []byte) (accountID, deviceID string, err error) {
+	leaf, err := keyPackageLeaf(keyPackage)
+	if err != nil {
+		return "", "", err
+	}
+	return ParseCredentialIdentity(leaf.Identity)
+}
+
 // ErrNoKeyPackageForWelcome — this device holds no private keys for any
 // KeyPackage the Welcome is addressed to: it expired, was never kept, or was
 // already used.
@@ -503,7 +533,8 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 
 // JoinFromPool joins a conversation from a Welcome addressed to one of this
 // device's KeyPackages, taking that KeyPackage's private keys from the
-// owner's pool, and persists the group.
+// owner's pool, and persists the group at the epoch it joined at. A record
+// with a pending Commit refuses the join and keeps the pool entry.
 //
 // The order is the point. The group state is written first and the pool entry
 // deleted second. A crash between the two leaves an entry behind, which is
@@ -546,7 +577,22 @@ func (s *Session) JoinFromPool(
 	if err := s.JoinVerified(welcome, v); err != nil {
 		return err
 	}
-	if _, err := Persist(store, conversationID, wm, s); err != nil {
+	groupID, err := s.GroupID()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(groupID, []byte(conversationID)) {
+		return ErrGroupMismatch
+	}
+	blob, err := s.Flush()
+	if err != nil {
+		return err
+	}
+	epoch, err := s.Epoch()
+	if err != nil {
+		return err
+	}
+	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch); err != nil {
 		return err
 	}
 	return store.DeleteKeyPackage(entry.Ref, now)
