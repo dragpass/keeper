@@ -201,9 +201,21 @@ func openChatStateStore(
 		NextApplicationIndex: permit.WatermarkNextApplication,
 		PendingRemovals:      permit.PendingRemovalAccountIDs,
 
-		PendingLeafReplacements: leafReplacementsOf(permit.PendingLeafReplacements),
+		PendingLeafReplacements:  leafReplacementsOf(permit.PendingLeafReplacements),
+		PendingDeviceRevocations: deviceRefsOf(permit.PendingDeviceRevocations),
 	}
 	return store, watermark, proto.BaseResponse{}, true
+}
+
+func deviceRefsOf(refs []proto.MLSDeviceRef) []chatstate.DeviceRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]chatstate.DeviceRef, len(refs))
+	for i, r := range refs {
+		out[i] = chatstate.DeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID}
+	}
+	return out
 }
 
 func leafReplacementsOf(entries []proto.ChatStateLeafReplacement) []chatstate.LeafReplacement {
@@ -384,6 +396,15 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrRotationPending):
 		code, message = proto.ChatMLSErrorCodeRotationPending,
 			"a member removal is not yet applied on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrDeviceRevocationPending):
+		code, message = proto.ChatMLSErrorCodeRotationPending,
+			"a revoked device's leaf is not yet removed on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrStatementUnverified):
+		code, message = proto.ChatMLSErrorCodeStatementUnverified,
+			"a signed statement does not verify; nothing was built"
+	case errors.Is(err, mls.ErrRolesUnsupported):
+		code, message = proto.ChatMLSErrorCodeRolesUnsupported,
+			"a member's keeper does not support room roles; nothing was built"
 	case errors.Is(err, chatstate.ErrLeafReplacementPending):
 		code, message = proto.ChatMLSErrorCodeLeafReplacementPending,
 			"a device takeover is not yet applied on this device; new messages cannot be encrypted"

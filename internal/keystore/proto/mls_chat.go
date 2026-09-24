@@ -18,6 +18,7 @@ package proto
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -265,6 +266,11 @@ type MLSGroupCreateRequest struct {
 	// AppContextB64 is kept with the pending Commit and comes back in
 	// mls_conversation_status (0.0.55); see MLSCommitBuildRequest.
 	AppContextB64 string `json:"app_context_b64,omitempty"`
+
+	// Roles is the group's roles, written into its group context at create
+	// (0.0.55, Q3 phase 2): a room with this account as owner, or a DM.
+	// Omitted, the group is created without roles (legacy_temporary).
+	Roles *MLSRoleSet `json:"roles,omitempty"`
 }
 
 func (r MLSGroupCreateRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -286,6 +292,15 @@ func (r MLSGroupCreateRequest) Validate() error {
 	}
 	if err := validateAppContext(r.AppContextB64); err != nil {
 		return err
+	}
+	if r.Roles != nil {
+		if err := r.Roles.Validate("roles"); err != nil {
+			return err
+		}
+		if r.Roles.Kind == MLSRolesKindRoom && !slices.Contains(r.Roles.Entries,
+			MLSRoleEntry{AccountID: r.Permit.AccountID, Role: MLSRoleOwner}) {
+			return newValidationError("roles", "the creator is the room's owner")
+		}
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -615,11 +630,26 @@ type MLSCommitBuildRequest struct {
 	Rejoin           []MLSRejoinMember     `json:"rejoin,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
-	// UserInitiated says a person on this device asked for this add or
-	// remove_account_ids (0.0.55). Automation never sends it. An add needs it;
-	// a remove needs it unless the permit names every account as departed.
-	// It is the app's word: 임시, 정책 미충족 (Q3) until room roles live in the
-	// authenticated group context.
+	// RevokeDevices removes exactly the leaf of each (account, device) its
+	// account revoked (0.0.55, Q13). Each needs a matching entry in
+	// DeviceRevocations.
+	RevokeDevices []MLSDeviceRef `json:"revoke_devices,omitempty"`
+
+	// SetRoles is the complete new role list (0.0.55, Q3 phase 2). Alone it
+	// builds a roles-only Commit; it may also ride on remove_account_ids,
+	// revoke_devices or add.
+	SetRoles *MLSRoleSet `json:"set_roles,omitempty"`
+
+	// The signed statements a Remove rests on (0.0.55). The Keeper verifies
+	// them before building and carries them in the Commit.
+	OrgRemovalStatements []MLSOrgRemovalStatement `json:"org_removal_statements,omitempty"`
+	LeaveStatements      []MLSLeaveStatement      `json:"leave_statements,omitempty"`
+	DeviceRevocations    []MLSDeviceRevocation    `json:"device_revocations,omitempty"`
+
+	// UserInitiated says a person on this device asked for this add, remove
+	// or roles change (0.0.55). Automation never sends it. It gates the app's
+	// intent and is never authority on its own: the Keeper judges every
+	// Commit by the group's roles and the signed statements.
 	UserInitiated bool `json:"user_initiated,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -680,15 +710,32 @@ func (r MLSCommitBuildRequest) Validate() error {
 			return err
 		}
 	}
+	if r.RevokeDevices != nil {
+		kinds++
+		if err := validateDeviceRefs(r.RevokeDevices, "revoke_devices"); err != nil {
+			return err
+		}
+	}
 	if r.UpdateSelf {
 		kinds++
 	}
-	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil {
-		return newValidationError("user_initiated", "is only for add and remove_account_ids")
+	if r.SetRoles != nil {
+		if err := r.SetRoles.Validate("set_roles"); err != nil {
+			return err
+		}
+		if r.Replace != nil || r.Rejoin != nil || r.UpdateSelf {
+			return newValidationError("set_roles", "rides alone or on add, remove_account_ids or revoke_devices")
+		}
 	}
-	if kinds != 1 {
+	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil && r.SetRoles == nil {
+		return newValidationError("user_initiated", "is only for add, remove_account_ids and set_roles")
+	}
+	if kinds > 1 || (kinds == 0 && r.SetRoles == nil) {
 		return newValidationError("add",
-			"exactly one of add, remove_account_ids, replace, rejoin and update_self must be given")
+			"exactly one of add, remove_account_ids, revoke_devices, replace, rejoin and update_self must be given, or set_roles alone")
+	}
+	if err := validateStatements(r.OrgRemovalStatements, r.LeaveStatements, r.DeviceRevocations); err != nil {
+		return err
 	}
 	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
 		return err
@@ -1196,7 +1243,22 @@ type MLSConversationStatusResponseData struct {
 	PendingNameCiphertextB64 string `json:"pending_name_ciphertext_b64,omitempty"`
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
-	NeedsRekey           bool                       `json:"needs_rekey"`
+
+	// DeviceRevokeLatch is the device leaves a send waits on the removal of
+	// (0.0.55, Q13). [] when none.
+	DeviceRevokeLatch []MLSDeviceRef `json:"device_revoke_latch"`
+
+	// Authority names the rules the group is judged by (0.0.55): roles, dm,
+	// legacy_temporary (a group made before roles, judged by the wave 4
+	// rules that rest partly on the server's word), or "" with no group
+	// state. Roles is a room's owner and admins from its group context, []
+	// otherwise. RolesMigratable reports whether every leaf advertises the
+	// roles extension, so the owner of a legacy room can set its roles.
+	Authority       string         `json:"authority"`
+	Roles           []MLSRoleEntry `json:"roles"`
+	RolesMigratable bool           `json:"roles_migratable"`
+
+	NeedsRekey bool `json:"needs_rekey"`
 
 	// RekeyCause says why needs_rekey latched (0.0.55): one of the
 	// ChatStateRekeyCause* values, "unknown" for a latch recorded before the

@@ -158,6 +158,11 @@ type ServerWatermark struct {
 	// (design M4.4). It can add to Record.LeafReplacementLatch or change the key
 	// an entry waits for, never lift one.
 	PendingLeafReplacements []LeafReplacement
+
+	// PendingDeviceRevocations rides in the same signed permit on the same
+	// terms: the server's claim of which device leaves their accounts revoked
+	// (design Q13). It can only add to Record.DeviceRevokeLatch.
+	PendingDeviceRevocations []DeviceRef
 }
 
 // HasAccepted reports whether the server has ever taken a position from this

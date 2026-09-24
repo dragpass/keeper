@@ -25,6 +25,12 @@ func (s *Session) approve(leaves []Leaf) error { return ErrUnavailable }
 
 func (s *Session) approveRemovals(leaves []Leaf) error { return ErrUnavailable }
 
+func (s *Session) setNextRoles(payload []byte) error { return ErrUnavailable }
+
+func (s *Session) setNextCommitAAD(aad []byte) error { return ErrUnavailable }
+
+func (s *Session) groupAuthority() ([]byte, bool, error) { return nil, false, ErrUnavailable }
+
 func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
 	return nil, CommitShape{}, ErrUnavailable
 }

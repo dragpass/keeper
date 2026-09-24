@@ -1,50 +1,74 @@
 // authority.go — who may add and remove whom, and what this device keeps to
-// notice a fork (design §0.3 policy 5, Q3 phase 1, Q4, Q16).
+// notice a fork (design §0.3 policy 5, Q3, Q4, Q5 (b), Q13, Q16, Q27).
+//
+// # Where authority comes from
+//
+// Only from the authenticated group state and from signatures by accounts
+// whose keys this device holds pinned. Nothing the server says or signs is
+// authority for an Add or a Remove on its own (policy 5), with the one
+// labelled exception below for groups made before 0.0.55.
+//
+//   - Room roles live in the group context (roles.go): an owner and admins.
+//     The owner alone changes them; an owner or admin adds members; an owner
+//     removes anybody and an admin anybody but the owner and the admins.
+//   - A DM is marked as one in the group context and never adds anybody after
+//     its create.
+//   - Signed statements, carried inside the Commit's own authenticated data so
+//     every receiver checks the same bytes, catch-up included:
+//     an org admin's removal statement (Q5 (b)), the member's own signed leave
+//     (Q13), and the account's own signed revoke of one device's leaf (Q13).
+//     The leave and the revoke are verified with the account key in the
+//     removed leaf's own declaration, which this device pinned when the leaf
+//     entered. The admin statement is verified with the key it carries, held
+//     to this device's pin for the admin account.
 //
 // # Removes
 //
 // A Remove of account A's leaf by committer C is accepted when one of these
 // holds:
 //
-//	R1  A is C's own account.
+//	R1  A is C's own account (another leaf of it).
 //	R2  the same Commit adds a leaf of A (a replace, or a rejoin).
-//	R3  a signed permit names A as having left the organization: this
-//	    operation's pending_removal_account_ids, or an earlier one this record
-//	    latched (RemovalLatch).
-//	R3b the member set the server signed for this very Commit no longer holds
-//	    A (the handshake row's attestation). Receiving only: it is how a room
-//	    owner's or admin's Remove is told from a member's.
-//	R4i a person on this device asked for it. Building only.
+//	S   a verified statement the Commit carries covers that leaf.
+//	RR  C's role lets it remove A (roles.go roleMayRemove).
+//	R3b legacy_temporary only: the member set the server signed for this very
+//	    Commit no longer holds A. Receiving only.
 //
-// # Adds
+// # Adds and roles
 //
-// A received Add is accepted on the leaf verification and the trust state of
-// the account it brings in (§5.3), and nothing else: no permit, member set or
-// role the server supplies is authority for it, because a server that could
-// name an account could then have it added and read everything after. That
-// leaves any member free to Add any account whose leaf verifies. 임시, 정책
-// 미충족 (Q3): inbound Add authority against a malicious server waits for room
-// roles in the authenticated group context (Q3 phase 2, wave 5).
+// roles.go: in a room an Add needs the committer to be owner or admin, in a
+// DM there is none after the create, and a group without roles (legacy) takes
+// any Add whose leaf verifies. Only Add, Remove and a roles-only group context
+// change are allowed at all.
 //
-// An Add this device builds needs R4i, a rejoin (R2 with the account's own
-// signed request, and a leaf of the account already in the authenticated
-// tree), or a replace the permit lists. A group's first Commit is its create,
-// judged by nobody but its builder.
+// # Building
 //
-// Only Add and Remove are allowed at all. Any other proposal type is refused.
+// A Commit this device builds is judged by the same rules before anything is
+// built, over the change the plan would make (PlanJudge). On top of them,
+// user_initiated gates the app's intent and nothing else: a local Add, a
+// role-based Remove and an owner's roles change need a person to have asked;
+// a Remove resting on a signed statement, a migration and an ownerless claim
+// do not. It is never authority on its own.
 //
-// 임시, 정책 미충족 (Q5): server-attested. R3 and R3b rest on the server's
-// signature, which policy 5 says must not be enough on its own; R4i rests on
-// the app's word. They stand in for what the Keeper cannot yet check itself.
-// TODO(Q5): replace R3 with an org-admin-signed removal statement.
-// TODO(Q3 phase 2): replace R3b, R4i and inbound Add authority with roles held
-// in GroupContext.
+// # What the client cannot know on its own, stated so it is not hidden
 //
-// What a client cannot know on its own, stated here so it is not hidden: a
-// server that omits a departed account from every permit keeps that account in
-// the group, and a server that signs a false member set can make a Remove look
-// authorized. These rules stop a member with a modified client from removing
-// others; they do not stop the server.
+//   - Whether someone left the organization. A server that serves no removal
+//     statement keeps that account in the group; this device cannot tell.
+//   - Who the org admins are. The admin set is server-attested: a statement
+//     verifies against the key of the account it names as admin, and this
+//     device takes that account's first key on trust (TOFU) when it has no
+//     pin for it. A server that makes a signing account look like an admin
+//     can have it remove members; it cannot forge the signature.
+//   - A replayed statement. A leave or a removal names an account, not an
+//     epoch; a server that re-serves an old one after the account was added
+//     back can have it removed again (availability, not confidentiality).
+//
+// 임시, 정책 미충족 (legacy_temporary): a group created before 0.0.55 carries
+// no roles until its owner's Commit sets them. Until then a received Add rests
+// on its leaf alone, a Remove may rest on R3b (the server's signature), and a
+// local Add or member Remove rests on user_initiated (the app's word). These
+// are the paths marked legacyTemporary below; the status reports the group's
+// authority so the app can say so.
 //
 // # A refusal
 //
@@ -68,6 +92,11 @@ import (
 // refused and nothing is built; received, it latches the conversation.
 var ErrCommitUnauthorized = errors.New("chat state refused a commit its committer is not authorized to make")
 
+// ErrStatementUnverified — a signed statement handed in for a local build does
+// not verify. Nothing is built: a Commit carrying it would be refused by every
+// receiver anyway.
+var ErrStatementUnverified = errors.New("chat state refused a signed statement that does not verify")
+
 // UnauthorizedCommitError is ErrCommitUnauthorized with the committer the
 // group's own tree names and the rule that failed, as a condition and never a
 // value.
@@ -83,15 +112,34 @@ func (e *UnauthorizedCommitError) Error() string {
 
 func (e *UnauthorizedCommitError) Unwrap() error { return ErrCommitUnauthorized }
 
-// CommitAuthority is the evidence a received Commit is judged by.
-type CommitAuthority struct {
-	// PendingRemovals is R3: the permit's list and this record's latch.
-	PendingRemovals []string
+// RemovedLeaf is one leaf a Commit removes: whose it is, and the declaration
+// payload it carried, which holds the account key its own statements verify
+// under.
+type RemovedLeaf struct {
+	AccountID   string
+	DeviceID    string
+	Declaration []byte
+}
 
+// RemovalEvidence verifies the signed statements a Commit carries in its
+// authenticated data. Authorized has one entry per change.Removed: whether a
+// statement covers removing that leaf. Invalid counts the statements present
+// that do not verify, which a receiver ignores and a local build refuses.
+type RemovalEvidence interface {
+	Authorized(change CommitChange) (authorized []bool, invalid int, err error)
+}
+
+// CommitAuthority is the evidence a Commit is judged by beyond its own group
+// state.
+type CommitAuthority struct {
 	// CommitMembers is the member set the server signed for the Commit being
 	// judged, and CommitMembersKnown whether the row carried such a signature.
+	// Read for legacy_temporary groups only (R3b).
 	CommitMembers      []string
 	CommitMembersKnown bool
+
+	// Evidence verifies the statements the Commit carries. Nil verifies none.
+	Evidence RemovalEvidence
 }
 
 // AuthorityReceiver is a cipher that judges the Commits it applies. The
@@ -107,14 +155,12 @@ type ServerCommitMembers struct {
 	AccountIDs []string
 }
 
-func (s *Store) armAuthority(cipher any, rec *Record, wm ServerWatermark, members *ServerCommitMembers) {
+func (s *Store) armAuthority(cipher any, members *ServerCommitMembers) {
 	receiver, ok := cipher.(AuthorityReceiver)
 	if !ok {
 		return
 	}
-	auth := CommitAuthority{
-		PendingRemovals: mergedAccounts(wm.PendingRemovals, rec.RemovalLatch),
-	}
+	var auth CommitAuthority
 	if members != nil {
 		auth.CommitMembers = slices.Clone(members.AccountIDs)
 		auth.CommitMembersKnown = true
@@ -122,33 +168,44 @@ func (s *Store) armAuthority(cipher any, rec *Record, wm ServerWatermark, member
 	receiver.SetCommitAuthority(auth)
 }
 
-func mergedAccounts(lists ...[]string) []string {
-	var out []string
-	for _, l := range lists {
-		for _, id := range l {
-			if !slices.Contains(out, id) {
-				out = append(out, id)
-			}
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// CommitChange is what one received Commit does, in accounts: who committed
-// it (from the group's own tree, before the Commit), one entry per removed
-// leaf, one per added leaf, and how many proposals are neither.
+// CommitChange is what one Commit does, in accounts: who committed it (from
+// the group's own tree, before the Commit), one entry per removed leaf, one
+// per added leaf, how many proposals are neither, and what it does to the
+// roles. Before is the account of every leaf of the tree it applies to.
 type CommitChange struct {
 	CommitterAccountID string
 	CommitterDeviceID  string
 	Removed            []string
 	Added              []string
 	OtherProposals     int
+
+	// RemovedLeaves parallels Removed with what a statement is checked
+	// against. Empty when the caller had nothing to check.
+	RemovedLeaves []RemovedLeaf
+
+	// CreatorAccountID is the account holding leaf 0 before the Commit: the
+	// leaf of whoever created the group.
+	CreatorAccountID string
+
+	Epoch             uint64
+	Before            []string
+	RolesBefore       *Roles
+	RolesChange       RolesChangeKind
+	RolesAfter        *Roles
+	AuthenticatedData []byte
 }
 
 // JudgeReceived holds a received Commit to the rules above. Nil means apply
 // it; otherwise an *UnauthorizedCommitError naming the committer.
 func JudgeReceived(change CommitChange, auth CommitAuthority) error {
+	_, err := judge(change, auth, nil)
+	return err
+}
+
+// judge is the one judgement behind a received Commit and a local build. plan
+// is nil for a received Commit. The second result is the statements present
+// that do not verify.
+func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, error) {
 	refuse := func(reason string) error {
 		return &UnauthorizedCommitError{
 			CommitterAccountID: change.CommitterAccountID,
@@ -157,38 +214,88 @@ func JudgeReceived(change CommitChange, auth CommitAuthority) error {
 		}
 	}
 	if change.OtherProposals > 0 {
-		return refuse("the commit carries a proposal other than add and remove")
+		return 0, refuse("the commit carries a proposal other than add, remove and a roles change")
 	}
-	for _, account := range change.Removed {
-		member, known := slices.Contains(auth.CommitMembers, account), auth.CommitMembersKnown
+	if reason := judgeRoles(change); reason != "" {
+		return 0, refuse(reason)
+	}
+	authorized := make([]bool, len(change.Removed))
+	invalid := 0
+	if auth.Evidence != nil && len(change.Removed) > 0 {
+		got, bad, err := auth.Evidence.Authorized(change)
+		if err != nil {
+			return 0, err
+		}
+		if len(got) == len(authorized) {
+			authorized = got
+		}
+		invalid = bad
+	}
+	roles := change.effectiveRoles()
+	asked := plan != nil && plan.UserInitiated
+	for i, account := range change.Removed {
 		switch {
 		case account == change.CommitterAccountID: // R1
 		case slices.Contains(change.Added, account): // R2
-		case slices.Contains(auth.PendingRemovals, account): // R3
-		case known && !member: // R3b
+		case authorized[i]: // S
+		case roleMayRemove(roles, change.CommitterAccountID, account) && (plan == nil || asked): // RR
+		case roles == nil && plan == nil && change.legacyTemporaryR3b(auth, account):
+		case roles == nil && asked: // legacyTemporary: R4i, the app's word
 		default:
-			return refuse("a remove is not the committer's own, not paired with an add, and not a signed departure")
+			return invalid, refuse("a remove is not the committer's own, not paired with an add, not signed, and not the committer's role to make")
 		}
 	}
-	return nil
+	if plan == nil {
+		return invalid, nil
+	}
+	for _, account := range change.Added {
+		if !slices.Contains(change.Removed, account) && !asked {
+			return invalid, refuse("an add needs a person on this device to ask for it")
+		}
+	}
+	if change.RolesChange == RolesSet && change.RolesBefore != nil && !asked &&
+		!change.isOwnerlessClaim(*change.RolesBefore, *change.RolesAfter) {
+		return invalid, refuse("a roles change needs a person on this device to ask for it")
+	}
+	return invalid, nil
 }
 
-// requireAuthorizedPlan holds a locally built plan to the rules above, before
+// legacyTemporaryR3b is R3b: in a group without roles, the member set the
+// server signed for this Commit no longer holds the account. 임시, 정책 미충족.
+func (c CommitChange) legacyTemporaryR3b(auth CommitAuthority, account string) bool {
+	return auth.CommitMembersKnown && !slices.Contains(auth.CommitMembers, account)
+}
+
+// PlanJudge is a cipher that can describe, before building, the change a plan
+// would make to the group it holds: the same CommitChange a receiver will
+// read off the Commit.
+type PlanJudge interface {
+	PlanChange(plan CommitPlan) (CommitChange, error)
+
+	// Evidence verifies the statements the plan's CommitAAD carries.
+	Evidence() RemovalEvidence
+}
+
+// judgeLocalPlan holds a locally built plan to the rules above, before
 // anything is built. A create is not judged here: it is the group's first
-// Commit (CreateGroup never calls this). A replace is held to the permit's list
+// Commit (CreateGroup never calls this), and the Rust rules hold it to the
+// roles it sets. A replace is held to the permit's list first
 // (requireListedReplacements), and a rejoin to its signed request by the
-// caller and to the authenticated tree by the cipher.
-func requireAuthorizedPlan(plan CommitPlan, rec *Record, wm ServerWatermark) error {
-	if len(plan.AddKeyPackages) > 0 && !plan.UserInitiated {
-		return &UnauthorizedCommitError{Reason: "an add outside a create needs a person on this device to ask for it"}
+// caller.
+func judgeLocalPlan(plan CommitPlan, cipher CommitCipher) error {
+	pj, ok := cipher.(PlanJudge)
+	if !ok {
+		return nil
 	}
-	pending := mergedAccounts(wm.PendingRemovals, rec.RemovalLatch)
-	for _, account := range plan.RemoveAccountIDs {
-		if !plan.UserInitiated && !slices.Contains(pending, account) {
-			return &UnauthorizedCommitError{Reason: "a remove names an account no permit lists as departed and nobody here asked for"}
-		}
+	change, err := pj.PlanChange(plan)
+	if err != nil {
+		return err
 	}
-	return nil
+	invalid, err := judge(change, CommitAuthority{Evidence: pj.Evidence()}, &plan)
+	if invalid > 0 {
+		return ErrStatementUnverified
+	}
+	return err
 }
 
 // ────────────────────────────────────────────────────────────────────────

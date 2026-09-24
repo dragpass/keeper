@@ -204,6 +204,12 @@ type Record struct {
 	// record unreadable, because an unknown version fails closed.
 	LeafReplacementLatch []ReplacementLatch `json:"leaf_replacement_latch,omitempty"`
 
+	// DeviceRevokeLatch is the (account, device) leaves this device may not
+	// encrypt new messages past until its confirmed group no longer holds
+	// them (design Q13), sorted. See latch.go. SchemaVersion is not raised,
+	// on LeafReplacementLatch's argument one permit version later (v5).
+	DeviceRevokeLatch []DeviceRef `json:"device_revoke_latch,omitempty"`
+
 	// RemovedFromGroup is true when the last Commit applied to GroupState
 	// removed this device. mls-rs leaves such a group behind at the epoch
 	// before the Commit with this device's leaf still in its roster, so the

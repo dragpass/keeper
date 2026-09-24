@@ -12,10 +12,20 @@
 // approved for one operation and refuse every other one.
 //
 // The resting state is `Enforce` with nothing approved: a Commit that removes
-// anybody, or carries any proposal type but Add and Remove, is refused. Each
+// anybody, or carries any proposal type but Add, Remove and a GroupContext
+// change, is refused. Each
 // operation widens it for its own call and narrows it again when it returns,
 // so a caller that skips the Go step gets a refusal rather than an unjudged
 // Remove.
+//
+// # Roles
+//
+// The one judgement made here rather than in Go is the room roles one
+// (roles.rs): the roles live in the group context mls-rs hands these rules, so
+// who may add a member and who may change the roles is decided from the
+// authenticated state directly, for a Commit this device builds and for one it
+// receives alike. Go makes the same judgement first so a refusal carries a
+// reason; this is what stops a Commit when Go was skipped.
 //
 // # Collect
 //
@@ -37,6 +47,7 @@ use mls_rs_core::error::IntoAnyError;
 use mls_rs_core::group::ProposalType;
 
 use crate::gate::{self, Leaf};
+use crate::roles::{self, roles_extension_type};
 
 /// The phrase every refusal by these rules carries. mls-rs turns an MlsRules
 /// error into a string of its own, so this text is what the C ABI edge keys a
@@ -129,7 +140,9 @@ impl AuthorityRules {
     fn judge(
         &self,
         direction: CommitDirection,
+        source: &CommitSource,
         roster: &Roster,
+        context: &GroupContext,
         mut proposals: ProposalBundle,
     ) -> Result<ProposalBundle, AuthorityError> {
         let state = self.state.lock().map_err(|_| AuthorityError::Poisoned)?;
@@ -146,9 +159,11 @@ impl AuthorityRules {
             })?;
         }
         if proposals.custom_proposal_types().next().is_some()
-            || proposals
-                .proposal_types()
-                .any(|t| t != ProposalType::ADD && t != ProposalType::REMOVE)
+            || proposals.proposal_types().any(|t| {
+                t != ProposalType::ADD
+                    && t != ProposalType::REMOVE
+                    && t != ProposalType::GROUP_CONTEXT_EXTENSIONS
+            })
         {
             return Err(AuthorityError::NotAuthorized);
         }
@@ -166,6 +181,10 @@ impl AuthorityRules {
                 return Err(AuthorityError::NotAuthorized);
             }
         }
+        let before = roles::roster_accounts(roster);
+        let change = roles::change_of(source, roster, context, &proposals, &before)
+            .map_err(|_| AuthorityError::NotAuthorized)?;
+        roles::check(&change).map_err(|_| AuthorityError::NotAuthorized)?;
         Ok(proposals)
     }
 }
@@ -184,12 +203,12 @@ impl MlsRules for AuthorityRules {
     fn filter_proposals(
         &self,
         direction: CommitDirection,
-        _source: CommitSource,
+        source: CommitSource,
         current_roster: &Roster,
-        _context: &GroupContext,
+        context: &GroupContext,
         proposals: ProposalBundle,
     ) -> Result<ProposalBundle, Self::Error> {
-        self.judge(direction, current_roster, proposals)
+        self.judge(direction, &source, current_roster, context, proposals)
     }
 
     fn commit_options(
@@ -212,10 +231,28 @@ impl MlsRules for AuthorityRules {
 
 // ─── the shape of one Commit, as the collect pass saw it ───────────────────
 
+/// What a GroupContextExtensions proposal did to the roles, if the Commit
+/// carried one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RolesChange {
+    #[default]
+    None,
+    /// The roles were set to this payload.
+    Set(Vec<u8>),
+    /// The roles extension was dropped.
+    Dropped,
+    /// The proposal changed an extension other than the roles.
+    Other,
+}
+
 /// What a processed Commit did, for the Go side to judge. `removed` carries
 /// each removed leaf as the tree held it before the Commit (its index and
 /// identity); `added` carries each Add's leaf with index 0, as a KeyPackage
-/// has no place yet. `other` lists every proposal type that is neither.
+/// has no place yet. `other` lists every proposal type that is neither, a
+/// roles-only GroupContext change aside. `epoch` is the epoch the Commit was
+/// applied to, `roles_before` that epoch's roles payload, and
+/// `authenticated_data` the Commit's own, which carries the signed statements
+/// a Remove rests on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommitShape {
     pub is_commit: bool,
@@ -223,15 +260,24 @@ pub struct CommitShape {
     pub removed: Vec<Leaf>,
     pub added: Vec<Leaf>,
     pub other: Vec<u16>,
+    pub epoch: u64,
+    pub roles_before: Option<Vec<u8>>,
+    pub roles: RolesChange,
+    pub authenticated_data: Vec<u8>,
 }
 
 impl CommitShape {
     /// Read the shape off a processed message. `before` is the tree the Commit
-    /// was applied to, which is where a removed leaf's identity still is.
-    pub fn of(received: &ReceivedMessage, before: &[Leaf]) -> Self {
+    /// was applied to, which is where a removed leaf's identity still is, and
+    /// `context` that epoch's group context.
+    pub fn of(received: &ReceivedMessage, before: &[Leaf], context: &GroupContext) -> Self {
         let ReceivedMessage::Commit(commit) = received else {
             return Self::default();
         };
+        let roles_before = context
+            .extensions
+            .get(roles_extension_type())
+            .map(|e| e.extension_data().to_vec());
         let applied = match &commit.effect {
             CommitEffect::NewEpoch(e) => &e.applied_proposals,
             CommitEffect::Removed { new_epoch, .. } => &new_epoch.applied_proposals,
@@ -240,6 +286,9 @@ impl CommitShape {
                     is_commit: true,
                     committer: commit.committer,
                     other: vec![ProposalType::RE_INIT.raw_value()],
+                    epoch: context.epoch,
+                    roles_before,
+                    authenticated_data: commit.authenticated_data.clone(),
                     ..Self::default()
                 };
             }
@@ -247,6 +296,9 @@ impl CommitShape {
         let mut shape = Self {
             is_commit: true,
             committer: commit.committer,
+            epoch: context.epoch,
+            roles_before,
+            authenticated_data: commit.authenticated_data.clone(),
             ..Self::default()
         };
         for info in applied {
@@ -266,6 +318,16 @@ impl CommitShape {
                         declaration: None,
                     }));
                 }
+                Proposal::GroupContextExtensions(next) => {
+                    shape.roles = if !roles::same_except_roles(&context.extensions, next) {
+                        RolesChange::Other
+                    } else {
+                        match next.get(roles_extension_type()) {
+                            Some(e) => RolesChange::Set(e.extension_data().to_vec()),
+                            None => RolesChange::Dropped,
+                        }
+                    };
+                }
                 other => shape.other.push(other.proposal_type().raw_value()),
             }
         }
@@ -273,9 +335,18 @@ impl CommitShape {
     }
 }
 
+fn put_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
 /// `u8 is_commit`, `u32 committer`, the removed and added leaves each in the
 /// framing of `gate::encode_leaves`, then `u32 count` and one `u16` per other
-/// proposal type. Big-endian throughout.
+/// proposal type; then `u64 epoch`, `u8` 0/1 and a length-prefixed payload for
+/// the roles before, `u8` roles change (0 none, 1 set, 2 dropped, 3 other)
+/// with a length-prefixed payload after a 1, and the length-prefixed
+/// authenticated data. Big-endian throughout.
 pub fn encode_shape(shape: &CommitShape) -> Vec<u8> {
     let mut out = vec![u8::from(shape.is_commit)];
     out.extend_from_slice(&shape.committer.to_be_bytes());
@@ -286,6 +357,24 @@ pub fn encode_shape(shape: &CommitShape) -> Vec<u8> {
     for t in &shape.other {
         out.extend_from_slice(&t.to_be_bytes());
     }
+    out.extend_from_slice(&shape.epoch.to_be_bytes());
+    match &shape.roles_before {
+        Some(p) => {
+            out.push(1);
+            put_prefixed(&mut out, p);
+        }
+        None => out.push(0),
+    }
+    match &shape.roles {
+        RolesChange::None => out.push(0),
+        RolesChange::Set(p) => {
+            out.push(1);
+            put_prefixed(&mut out, p);
+        }
+        RolesChange::Dropped => out.push(2),
+        RolesChange::Other => out.push(3),
+    }
+    put_prefixed(&mut out, &shape.authenticated_data);
     out
 }
 

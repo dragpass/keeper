@@ -368,6 +368,7 @@ func (d *device) permit() proto.ChatStatePermit {
 		AccountID: d.account, OrgID: hOrg, ConversationID: hConv,
 		PendingRemovalAccountIDs: []string{},
 		PendingLeafReplacements:  []proto.ChatStateLeafReplacement{},
+		PendingDeviceRevocations: []proto.MLSDeviceRef{},
 		IssuedAt:                 now,
 		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
 		ServerKeyVersion:         1,

@@ -210,13 +210,19 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
+	roles, err := rolesPayload(req.Roles)
+	if err != nil {
+		return chatStateInvalidInput("roles must be one owner and admins, or a DM with none")
+	}
 	v := c.verifier(d, req.RotationStatements)
+	cipher := mls.NewCipher(c.session, v)
+	cipher.SetCreateRoles(roles)
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
 		RoomName:       name,
 		AppContext:     appContext,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
 	}
@@ -333,8 +339,20 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 			return resp
 		}
 		plan.Rejoin = members
+	case req.RevokeDevices != nil:
+		for _, r := range req.RevokeDevices {
+			plan.RevokeDevices = append(plan.RevokeDevices, chatstate.DeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID})
+		}
 	}
 	plan.UserInitiated = req.UserInitiated
+	roles, err := rolesPayload(req.SetRoles)
+	if err != nil {
+		return chatStateInvalidInput("set_roles must be one owner and admins, or a DM with none")
+	}
+	plan.SetRoles = roles
+	if plan.CommitAAD, err = commitEvidence(req); err != nil {
+		return chatStateFailure(d, "mls commit build", err)
+	}
 	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
 	if !ok {
 		return resp
@@ -345,13 +363,15 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return resp
 	}
 	v := c.verifier(d, req.RotationStatements)
+	cipher := mls.NewCipher(c.session, v)
+	cipher.SetEvidence(newStatementEvidence(d, c.permit))
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
 		ExpectedEpoch:  req.ExpectedEpoch,
 		RoomName:       name,
 		AppContext:     appContext,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)
 	}
@@ -408,7 +428,9 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		}
 	}
 	v := c.verifier(d, req.RotationStatements)
-	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, mls.NewCipher(c.session, v))
+	cipher := mls.NewCipher(c.session, v)
+	cipher.SetEvidence(newStatementEvidence(d, c.permit))
+	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
@@ -470,13 +492,15 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return chatStateNotAuthorized(d, "commit attestation")
 	}
 	v := c.verifier(d, req.RotationStatements)
+	cipher := mls.NewCipher(c.session, v)
+	cipher.SetEvidence(newStatementEvidence(d, c.permit))
 	result, err := c.store.Receive(c.conv, c.wm, chatstate.ReceiveRequest{
 		Seq:           req.Seq,
 		Message:       commit,
 		Handshake:     true,
 		ProducedEpoch: req.Epoch,
 		CommitMembers: members,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
@@ -791,6 +815,8 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		PendingAppContextB64:  appContextOutput(status.PendingAppContext),
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
+		DeviceRevokeLatch:     wireDeviceRefs(status.DeviceRevokeLatch),
+		Roles:                 []proto.MLSRoleEntry{},
 		NeedsRekey:            status.NeedsRekey,
 		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
@@ -806,8 +832,35 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	}
 	if status.HasGroupState && !status.NeedsRekey {
 		data.MemberTrust = c.memberTrust(d)
+		c.reportAuthority(d, &data)
 	}
 	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// reportAuthority fills the status's authority, roles and roles_migratable
+// from the group context the session memberTrust loaded. A read that fails
+// leaves authority "" rather than naming rules the group may not be under.
+func (c *mlsChat) reportAuthority(d Deps, data *proto.MLSConversationStatusResponseData) {
+	roles, supported, err := mls.NewCipher(c.session, nil).Authority()
+	if err != nil {
+		d.Logger.Println("mls conversation status: the group's roles were not read")
+		return
+	}
+	data.Authority = chatstate.AuthorityOf(roles)
+	data.RolesMigratable = supported
+	if roles != nil {
+		for _, e := range roles.Entries() {
+			data.Roles = append(data.Roles, proto.MLSRoleEntry{AccountID: e.AccountID, Role: e.Role})
+		}
+	}
+}
+
+func wireDeviceRefs(refs []chatstate.DeviceRef) []proto.MLSDeviceRef {
+	out := make([]proto.MLSDeviceRef, len(refs))
+	for i, r := range refs {
+		out[i] = proto.MLSDeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID}
+	}
+	return out
 }
 
 // memberTrust is mls_conversation_status's member_trust. It is a display

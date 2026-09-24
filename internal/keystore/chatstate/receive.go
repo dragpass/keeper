@@ -537,7 +537,7 @@ func (s *Store) receiveOne(
 	if err := cipher.Load(rec.GroupState); err != nil {
 		return ReceiveResult{}, false, err
 	}
-	s.armAuthority(cipher, rec, wm, req.CommitMembers)
+	s.armAuthority(cipher, req.CommitMembers)
 
 	opened, err := cipher.Open(req.Message)
 	if err != nil {

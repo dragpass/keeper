@@ -92,9 +92,10 @@ const (
 // Wire-shape constants.
 const (
 	// ChatStatePermitDomain / ChatStatePermitCanonicalVersion — the first two
-	// slots of the 14-item conversation-state permit canonical.
+	// slots of the 15-item conversation-state permit canonical. 5 added
+	// pending_device_revocations (0.0.55, Q13).
 	ChatStatePermitDomain           = "dragpass.chat.state"
-	ChatStatePermitCanonicalVersion = 4
+	ChatStatePermitCanonicalVersion = 5
 
 	// ChatStateMaxPendingRemovals bounds pending_removal_account_ids. ariadne
 	// caps a room at 30 members, so an honest list is far below this; a longer
@@ -177,6 +178,13 @@ type ChatStatePermit struct {
 	// only fingerprint a replace Commit may add for that account.
 	PendingLeafReplacements []ChatStateLeafReplacement `json:"pending_leaf_replacements"`
 
+	// PendingDeviceRevocations is the server's claim of which device leaves
+	// their accounts revoked and still await a Remove here (0.0.55, Q13).
+	// Sorted by account then device, no duplicates, [] when none; null is
+	// refused. Like the lists above it is only ever a reason to stop
+	// encrypting: the Remove itself rests on the account's own signature.
+	PendingDeviceRevocations []MLSDeviceRef `json:"pending_device_revocations"`
+
 	IssuedAt         int64  `json:"issued_at"`
 	ExpiresAt        int64  `json:"expires_at"` // issued_at + 300
 	ServerKeyVersion uint   `json:"server_key_version"`
@@ -197,6 +205,9 @@ func (p ChatStatePermit) Validate() error {
 		return err
 	}
 	if err := validatePendingLeafReplacements(p.PendingLeafReplacements); err != nil {
+		return err
+	}
+	if err := validatePendingDeviceRevocations(p.PendingDeviceRevocations); err != nil {
 		return err
 	}
 	if err := requireMessageTimestamp(p.IssuedAt, "permit.issued_at"); err != nil {
@@ -272,6 +283,44 @@ func validatePendingLeafReplacements(entries []ChatStateLeafReplacement) error {
 	return nil
 }
 
+// validatePendingDeviceRevocations holds the list to the same rule as the
+// others: exactly the bytes the canonical reproduces, never repaired.
+func validatePendingDeviceRevocations(refs []MLSDeviceRef) error {
+	const field = "permit.pending_device_revocations"
+	if refs == nil {
+		return newValidationError(field, "must be an array")
+	}
+	if len(refs) > ChatStateMaxPendingRemovals {
+		return newValidationError(field,
+			"must hold at most "+strconv.Itoa(ChatStateMaxPendingRemovals)+" entries")
+	}
+	for i, r := range refs {
+		if err := requireMessageUUID(r.AccountID, field+".account_id"); err != nil {
+			return err
+		}
+		if err := requireMessageUUID(r.DeviceID, field+".device_id"); err != nil {
+			return err
+		}
+		if i > 0 {
+			prev := refs[i-1]
+			if prev.AccountID > r.AccountID || (prev.AccountID == r.AccountID && prev.DeviceID >= r.DeviceID) {
+				return newValidationError(field, "must be sorted by account_id then device_id without duplicates")
+			}
+		}
+	}
+	return nil
+}
+
+// chatStateDeviceRevocationsCanonical is `<account_id>:<device_id>` per entry,
+// joined with ",", and "" for none.
+func chatStateDeviceRevocationsCanonical(refs []MLSDeviceRef) string {
+	parts := make([]string, len(refs))
+	for i, r := range refs {
+		parts[i] = r.AccountID + ":" + r.DeviceID
+	}
+	return strings.Join(parts, ",")
+}
+
 // chatStateLeafReplacementsCanonical is the slot's canonical form:
 // `<account_id>:<fp>` per entry, joined with ",", and "" for none. Validate
 // has already required the order, so this only joins.
@@ -283,8 +332,8 @@ func chatStateLeafReplacementsCanonical(entries []ChatStateLeafReplacement) stri
 	return strings.Join(parts, ",")
 }
 
-// ChatStatePermitCanonical builds the 14-item string the server signs and the
-// Keeper verifies. No trailing newline; the schema slot is always 4.
+// ChatStatePermitCanonical builds the 15-item string the server signs and the
+// Keeper verifies. No trailing newline; the schema slot is always 5.
 //
 // Pure function on purpose, like the other canonicals in this package: ariadne
 // has to produce these bytes exactly.
@@ -301,6 +350,7 @@ func ChatStatePermitCanonical(p ChatStatePermit) string {
 		strconv.FormatUint(p.WatermarkNextApplication, 10),
 		strings.Join(p.PendingRemovalAccountIDs, ","),
 		chatStateLeafReplacementsCanonical(p.PendingLeafReplacements),
+		chatStateDeviceRevocationsCanonical(p.PendingDeviceRevocations),
 		strconv.FormatInt(p.IssuedAt, 10),
 		strconv.FormatInt(p.ExpiresAt, 10),
 		strconv.FormatUint(uint64(p.ServerKeyVersion), 10),

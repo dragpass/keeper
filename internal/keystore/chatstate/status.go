@@ -36,6 +36,9 @@ type ConversationStatus struct {
 	// nil.
 	LeafReplacementLatch []LeafReplacement
 
+	// DeviceRevokeLatch is the same for the device revocation latch.
+	DeviceRevokeLatch []DeviceRef
+
 	// RemovedFromGroup is Record.RemovedFromGroup: the last Commit applied to
 	// the confirmed state removed this device, so ForgetRemovedGroup must run
 	// before a Welcome is joined. Reported so a caller that restarted, and no
@@ -74,7 +77,9 @@ type StatusCipher interface {
 // the send's job (refuseWhileLatched), and a status read has no position to
 // refuse.
 func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusCipher) (ConversationStatus, error) {
-	out := ConversationStatus{RemovalLatch: []string{}, LeafReplacementLatch: []LeafReplacement{}}
+	out := ConversationStatus{
+		RemovalLatch: []string{}, LeafReplacementLatch: []LeafReplacement{}, DeviceRevokeLatch: []DeviceRef{},
+	}
 	err := s.withConversation(conversationID, func(p convPaths) error {
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
@@ -102,7 +107,8 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		}
 		latch := storedLatches(rec)
 		if out.HasGroupState && (latch.held() ||
-			len(wm.PendingRemovals) > 0 || len(wm.PendingLeafReplacements) > 0) {
+			len(wm.PendingRemovals) > 0 || len(wm.PendingLeafReplacements) > 0 ||
+			len(wm.PendingDeviceRevocations) > 0) {
 			if err := cipher.Load(rec.GroupState); err != nil {
 				return err
 			}
@@ -112,6 +118,7 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		}
 		out.RemovalLatch = append(out.RemovalLatch, latch.removals...)
 		out.LeafReplacementLatch = append(out.LeafReplacementLatch, latch.expected()...)
+		out.DeviceRevokeLatch = append(out.DeviceRevokeLatch, latch.devices...)
 		return nil
 	})
 	return out, err

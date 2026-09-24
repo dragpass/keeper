@@ -135,10 +135,30 @@ type CommitPlan struct {
 	// (R2). The caller has already verified each account's signed request.
 	Rejoin []RejoinMember
 
-	// UserInitiated says a person on this device asked for this Add or
-	// Remove (R4i, authority.go). Automation never sets it. It is the app's
-	// word, not something the Keeper can check.
+	// RevokeDevices takes out exactly the leaf of each (account, device): a
+	// device the account itself revoked (Q13). The signed revocation rides in
+	// CommitAAD.
+	RevokeDevices []DeviceRef
+
+	// SetRoles is a roles payload (roles.go) this Commit writes into the group
+	// context: alone a roles-only Commit, or beside a Remove, a revoke or an
+	// Add. Nil changes nothing.
+	SetRoles []byte
+
+	// CommitAAD is the Commit's authenticated data: the signed statements its
+	// Removes rest on, which every receiver verifies from the Commit itself.
+	CommitAAD []byte
+
+	// UserInitiated says a person on this device asked for this Add, Remove
+	// or roles change (authority.go). Automation never sets it. It gates the
+	// app's intent and is never authority on its own.
 	UserInitiated bool
+}
+
+// DeviceRef names one leaf by the account and device of its credential.
+type DeviceRef struct {
+	AccountID string `json:"account_id"`
+	DeviceID  string `json:"device_id"`
 }
 
 // RejoinMember is one account to re-seat and the KeyPackage its signed rejoin
@@ -371,13 +391,13 @@ func (s *Store) BeginCommit(
 		if err := requireListedReplacements(req.Plan, wm); err != nil {
 			return err
 		}
-		if err := requireAuthorizedPlan(req.Plan, rec, wm); err != nil {
-			return err
-		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}
 		if err := cipher.Load(rec.GroupState); err != nil {
+			return err
+		}
+		if err := judgeLocalPlan(req.Plan, cipher); err != nil {
 			return err
 		}
 		if req.ExpectedEpoch != 0 {
@@ -495,7 +515,7 @@ func (s *Store) ConfirmCommit(
 					return err
 				}
 			}
-			s.armAuthority(cipher, rec, wm, members)
+			s.armAuthority(cipher, members)
 			// Order matters and is one operation in the library: applying the
 			// winner runs on the state that never moved, and it drops our fork
 			// as it goes. ClearPending first would work too, but only this way

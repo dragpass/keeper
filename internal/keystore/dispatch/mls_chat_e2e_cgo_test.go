@@ -54,6 +54,16 @@ type keeper struct {
 	// replacing is what the server lists in pending_leaf_replacements of the
 	// permits it signs for this Keeper.
 	replacing []proto.ChatStateLeafReplacement
+
+	// revoked is what the server lists in pending_device_revocations.
+	revoked []proto.MLSDeviceRef
+}
+
+func (k *keeper) revoking() []proto.MLSDeviceRef {
+	if k.revoked == nil {
+		return []proto.MLSDeviceRef{}
+	}
+	return k.revoked
 }
 
 func newKeeper(t *testing.T, id string) *keeper {
@@ -171,6 +181,7 @@ func (k *keeper) permit(removals ...string) proto.ChatStatePermit {
 		AccountID: k.id, OrgID: e2eOrg, ConversationID: e2eConv,
 		PendingRemovalAccountIDs: removals,
 		PendingLeafReplacements:  replacing,
+		PendingDeviceRevocations: k.revoking(),
 		IssuedAt:                 now,
 		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
 		ServerKeyVersion:         1,
@@ -580,6 +591,7 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	remove := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(c.bob.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, RemoveAccountIDs: []string{c.bob.id},
+		OrgRemovalStatements: []proto.MLSOrgRemovalStatement{orgRemoval(newKeeper(t, e2eAdmin), c.bob.id)},
 	}))
 	// Pending is not confirmed: still latched, and now also waiting.
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
@@ -595,9 +607,8 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	if sent.Epoch != 2 || sent.Generation != 0 {
 		t.Fatalf("after the remove alice sent %+v", sent)
 	}
-	// Bob learns he was removed. The row's attestation no longer names him
-	// (R3b); without one, his own Keeper would not take a Remove it cannot
-	// tie to a departure.
+	// Bob learns he was removed, from the admin's statement the Commit
+	// carries.
 	if got := c.bob.processAttested(c.nextSeq(), 2, remove.CommitB64, c.alice.id); !got.Removed {
 		t.Fatalf("bob processed his removal as %+v", got)
 	}

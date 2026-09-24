@@ -113,9 +113,10 @@ func TestMLSAuthority_ASameSetRemoveOfAnotherMemberIsRefusedAndLatches(t *testin
 		proto.ChatStateErrorCodeRekeyRequired)
 }
 
-// Automation cannot build a Remove of a member or an Add: only a person on
-// this device asking for it (R4i), or for a Remove a departure the permit
-// names (R3). The Commit authority rules refuse before anything is built.
+// Automation cannot build a Remove of a member or an Add in a legacy room:
+// only a person on this device asking for it (legacy_temporary), or for a
+// Remove a signed statement. The Commit authority rules refuse before anything
+// is built.
 func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	r := newRoom(t)
 	resp := r.bob.buildRemove(2, e2eCarol)
@@ -139,16 +140,23 @@ func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, UpdateSelf: true, UserInitiated: true,
 	}, proto.ChatStateErrorCodeInvalidInput)
 
-	// R3: a departure the permit names is anyone's to carry out.
+	// The permit naming a departure is no longer enough (wave 5a): only the
+	// org admin's signed statement makes it anyone's to carry out.
+	r.bob.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: r.bob.permit(e2eCarol), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eCarol},
+	}, proto.ChatMLSErrorCodeCommitUnauthorized)
 	r.bob.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r.bob.permit(e2eCarol), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eCarol},
+		OrgRemovalStatements: []proto.MLSOrgRemovalStatement{orgRemoval(newKeeper(t, e2eAdmin), e2eCarol)},
 	})
 }
 
-// An owner's room Remove is applied by every receiver whose row names the new
-// member set (R3b), and an R-b Remove by a plain member whose permit names the
-// departure (R3), even once the server no longer lists it.
+// In a legacy room an owner's Remove is applied by every receiver whose row
+// names the new member set (R3b, legacy_temporary), and an R-b Remove by a
+// plain member carrying the org admin's statement even once the server no
+// longer lists the departure.
 func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	r := newRoom(t)
 	built := r.alice.userRemove(2, e2eCarol)
@@ -161,11 +169,12 @@ func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	}
 
 	// A signed departure: Bob (a member) removes Alice after she left the
-	// org. Carol is gone; Alice's own Keeper is not asked.
+	// org, on the org admin's statement. Alice's own Keeper is not asked.
 	r2 := newRoom(t)
 	departed := commitOf(r2.bob.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r2.bob.permit(e2eAlice), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r2.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eAlice},
+		OrgRemovalStatements: []proto.MLSOrgRemovalStatement{orgRemoval(newKeeper(t, e2eAdmin), e2eAlice)},
 	}))
 	r2.bob.confirm(departed.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	// Carol's permit before the Remove named Alice; she latched it then.
@@ -173,7 +182,7 @@ func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	r2.carol.refused(proto.MLSEncrypt, r2.carol.encryptRequest(messageID(1), 2, "hi", e2eAlice),
 		proto.ChatMLSErrorCodeRotationPending)
 	// Now the server has cleared the row and serves no attestation (an old
-	// row): R3 still holds through the latch.
+	// row): the statement inside the Commit is what carol verifies.
 	if got := r2.carol.process(r2.nextSeq(), 3, departed.CommitB64); got.Epoch != 3 {
 		t.Fatalf("carol applied the departure at %+v", got)
 	}

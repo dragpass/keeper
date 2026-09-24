@@ -305,8 +305,11 @@ func (s *Store) refuseWhileLatched(p convPaths, rec *Record, anchor Anchor, latc
 			return err
 		}
 	}
-	if len(latch.removals) > 0 {
+	switch {
+	case len(latch.removals) > 0:
 		return ErrRotationPending
+	case len(latch.devices) > 0:
+		return ErrDeviceRevocationPending
 	}
 	return ErrLeafReplacementPending
 }

@@ -1,0 +1,366 @@
+// mls_roles.go — the wire shapes of room roles and of the signed statements a
+// Remove rests on (0.0.55, design Q3 phase 2, Q5 (b), Q13).
+//
+// The statements are account-key signatures over a canonical, the same shape
+// as the rejoin request and the rotation statement: no new crypto. The Keeper
+// that builds a Remove carries the ones it rests on inside the Commit's
+// authenticated data (MLSCommitEvidence), so every receiver verifies the same
+// bytes without asking the server.
+
+package proto
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+)
+
+const (
+	// ChatMLSErrorCodeStatementUnverified — a signed statement handed to
+	// mls_commit_build does not verify. Nothing was built.
+	ChatMLSErrorCodeStatementUnverified = "CHAT_MLS_STATEMENT_UNVERIFIED"
+
+	// ChatMLSErrorCodeRolesUnsupported — a member's leaf or KeyPackage does not
+	// advertise the room roles extension, which a group carrying roles
+	// requires of every leaf. That member's Keeper must update. Nothing was
+	// built.
+	ChatMLSErrorCodeRolesUnsupported = "CHAT_MLS_ROLES_UNSUPPORTED"
+
+	// MLSRoleOwner / MLSRoleAdmin are the listed roles. A member is anyone
+	// holding a leaf and is not listed.
+	MLSRoleOwner = "owner"
+	MLSRoleAdmin = "admin"
+
+	MLSRolesKindRoom = "room"
+	MLSRolesKindDM   = "dm"
+
+	// MLSStatementMaxPerKind bounds each statement list in one request and in
+	// one Commit's authenticated data.
+	MLSStatementMaxPerKind = ChatStateMaxPendingRemovals
+
+	// MLSAccountPublicKeyMaxBytes bounds an admin public key PEM.
+	MLSAccountPublicKeyMaxBytes = 4096
+
+	orgRemovalDomain   = "dragpass.org.member.removal"
+	chatLeaveDomain    = "dragpass.chat.leave"
+	deviceRevokeDomain = "dragpass.mls.device.revoke"
+	statementVersion   = "1"
+
+	// MLSCommitEvidenceVersion is the version of the authenticated data
+	// layout.
+	MLSCommitEvidenceVersion = 1
+)
+
+// MLSRoleEntry is one listed account.
+type MLSRoleEntry struct {
+	AccountID string `json:"account_id"`
+	Role      string `json:"role"`
+}
+
+// MLSRoleSet is a complete role list: a room's owner and admins, or a DM with
+// none.
+type MLSRoleSet struct {
+	Kind    string         `json:"kind"`
+	Entries []MLSRoleEntry `json:"entries"`
+}
+
+func (r MLSRoleSet) Validate(field string) error {
+	switch r.Kind {
+	case MLSRolesKindDM:
+		if len(r.Entries) != 0 {
+			return newValidationError(field+".entries", "a DM carries no roles")
+		}
+		return nil
+	case MLSRolesKindRoom:
+	default:
+		return newValidationError(field+".kind", "must be room or dm")
+	}
+	if len(r.Entries) == 0 || len(r.Entries) > MLSStatementMaxPerKind {
+		return newValidationError(field+".entries", "must hold 1.."+strconv.Itoa(MLSStatementMaxPerKind)+" entries")
+	}
+	owners := 0
+	seen := map[string]bool{}
+	for _, e := range r.Entries {
+		if err := requireMessageUUID(e.AccountID, field+".entries.account_id"); err != nil {
+			return err
+		}
+		if seen[e.AccountID] {
+			return newValidationError(field+".entries", "must not name one account twice")
+		}
+		seen[e.AccountID] = true
+		switch e.Role {
+		case MLSRoleOwner:
+			owners++
+		case MLSRoleAdmin:
+		default:
+			return newValidationError(field+".entries.role", "must be owner or admin")
+		}
+	}
+	if owners != 1 {
+		return newValidationError(field+".entries", "a room has exactly one owner")
+	}
+	return nil
+}
+
+// MLSOrgRemovalStatement is an org admin's signed statement that an account
+// was removed from the organization (Q5 (b)). AdminPublicKey is the admin's
+// account public key PEM as the server serves it; the Keeper holds it to its
+// pin for the admin account.
+type MLSOrgRemovalStatement struct {
+	OrgID            string `json:"org_id"`
+	RemovedAccountID string `json:"removed_account_id"`
+	AdminAccountID   string `json:"admin_account_id"`
+	RemovedAt        int64  `json:"removed_at"`
+	Signature        string `json:"signature"`
+	AdminPublicKey   string `json:"admin_public_key,omitempty"`
+}
+
+// MLSOrgRemovalCanonical is what the admin signs:
+//
+//	dragpass.org.member.removal|1|<org_id>|<removed_account_id>|<admin_account_id>|<removed_at>
+func MLSOrgRemovalCanonical(s MLSOrgRemovalStatement) string {
+	return strings.Join([]string{
+		orgRemovalDomain, statementVersion, s.OrgID, s.RemovedAccountID, s.AdminAccountID,
+		strconv.FormatInt(s.RemovedAt, 10),
+	}, "|")
+}
+
+func (s MLSOrgRemovalStatement) Validate(field string, needKey bool) error {
+	for _, f := range []struct{ name, id string }{
+		{".org_id", s.OrgID}, {".removed_account_id", s.RemovedAccountID}, {".admin_account_id", s.AdminAccountID},
+	} {
+		if err := requireMessageUUID(f.id, field+f.name); err != nil {
+			return err
+		}
+	}
+	if s.RemovedAt <= 0 {
+		return newValidationError(field+".removed_at", "must be a positive Unix time")
+	}
+	if err := requireString(s.Signature, field+".signature"); err != nil {
+		return err
+	}
+	if needKey && (s.AdminPublicKey == "" || len(s.AdminPublicKey) > MLSAccountPublicKeyMaxBytes) {
+		return newValidationError(field+".admin_public_key", "must be the admin's public key PEM")
+	}
+	return nil
+}
+
+// MLSLeaveStatement is a member's signed request to leave a conversation
+// (Q13).
+type MLSLeaveStatement struct {
+	ConversationID string `json:"conversation_id"`
+	AccountID      string `json:"account_id"`
+	RequestedAt    int64  `json:"requested_at"`
+	Signature      string `json:"signature"`
+}
+
+// MLSLeaveCanonical is what the member signs:
+//
+//	dragpass.chat.leave|1|<conversation_id>|<account_id>|<requested_at>
+func MLSLeaveCanonical(s MLSLeaveStatement) string {
+	return strings.Join([]string{
+		chatLeaveDomain, statementVersion, s.ConversationID, s.AccountID, strconv.FormatInt(s.RequestedAt, 10),
+	}, "|")
+}
+
+func (s MLSLeaveStatement) Validate(field string) error {
+	if err := requireMessageUUID(s.ConversationID, field+".conversation_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(s.AccountID, field+".account_id"); err != nil {
+		return err
+	}
+	if s.RequestedAt <= 0 {
+		return newValidationError(field+".requested_at", "must be a positive Unix time")
+	}
+	return requireString(s.Signature, field+".signature")
+}
+
+// MLSDeviceRef names one leaf by the account and device of its credential.
+type MLSDeviceRef struct {
+	AccountID string `json:"account_id"`
+	DeviceID  string `json:"device_id"`
+}
+
+// MLSDeviceRevocation is an account's signed revocation of one of its
+// devices' leaves (Q13).
+type MLSDeviceRevocation struct {
+	AccountID string `json:"account_id"`
+	DeviceID  string `json:"device_id"`
+	RevokedAt int64  `json:"revoked_at"`
+	Signature string `json:"signature"`
+}
+
+// MLSDeviceRevocationCanonical is what the account signs:
+//
+//	dragpass.mls.device.revoke|1|<account_id>|<device_id>|<revoked_at>
+func MLSDeviceRevocationCanonical(s MLSDeviceRevocation) string {
+	return strings.Join([]string{
+		deviceRevokeDomain, statementVersion, s.AccountID, s.DeviceID, strconv.FormatInt(s.RevokedAt, 10),
+	}, "|")
+}
+
+func (s MLSDeviceRevocation) Validate(field string) error {
+	if err := requireMessageUUID(s.AccountID, field+".account_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(s.DeviceID, field+".device_id"); err != nil {
+		return err
+	}
+	if s.RevokedAt <= 0 {
+		return newValidationError(field+".revoked_at", "must be a positive Unix time")
+	}
+	return requireString(s.Signature, field+".signature")
+}
+
+// MLSCommitEvidence is the authenticated data of a Commit whose Removes rest
+// on signed statements. Canonical JSON is not required: the bytes are covered
+// by the committer's signature as they are, and every receiver parses them.
+type MLSCommitEvidence struct {
+	V                 int                      `json:"v"`
+	OrgRemovals       []MLSOrgRemovalStatement `json:"org_removals,omitempty"`
+	Leaves            []MLSLeaveStatement      `json:"leaves,omitempty"`
+	DeviceRevocations []MLSDeviceRevocation    `json:"device_revocations,omitempty"`
+}
+
+// Empty reports whether the evidence carries no statement.
+func (e MLSCommitEvidence) Empty() bool {
+	return len(e.OrgRemovals) == 0 && len(e.Leaves) == 0 && len(e.DeviceRevocations) == 0
+}
+
+// Encode is the authenticated data bytes, or nil when there is nothing.
+func (e MLSCommitEvidence) Encode() ([]byte, error) {
+	if e.Empty() {
+		return nil, nil
+	}
+	e.V = MLSCommitEvidenceVersion
+	return json.Marshal(e)
+}
+
+// DecodeMLSCommitEvidence reads a Commit's authenticated data. Empty data is
+// no evidence. Data that is not this layout, or holds too many statements, is
+// an error: a receiver treats it as no evidence at all.
+func DecodeMLSCommitEvidence(aad []byte) (MLSCommitEvidence, error) {
+	var e MLSCommitEvidence
+	if len(aad) == 0 {
+		return e, nil
+	}
+	if err := json.Unmarshal(aad, &e); err != nil {
+		return MLSCommitEvidence{}, err
+	}
+	if e.V != MLSCommitEvidenceVersion {
+		return MLSCommitEvidence{}, newValidationError("authenticated_data.v", "unknown evidence version")
+	}
+	if len(e.OrgRemovals) > MLSStatementMaxPerKind || len(e.Leaves) > MLSStatementMaxPerKind ||
+		len(e.DeviceRevocations) > MLSStatementMaxPerKind {
+		return MLSCommitEvidence{}, newValidationError("authenticated_data", "too many statements")
+	}
+	return e, nil
+}
+
+func validateStatements(orgs []MLSOrgRemovalStatement, leaves []MLSLeaveStatement, revs []MLSDeviceRevocation) error {
+	if len(orgs) > MLSStatementMaxPerKind || len(leaves) > MLSStatementMaxPerKind || len(revs) > MLSStatementMaxPerKind {
+		return newValidationError("statements", "at most "+strconv.Itoa(MLSStatementMaxPerKind)+" of each kind")
+	}
+	for _, s := range orgs {
+		if err := s.Validate("org_removal_statements", true); err != nil {
+			return err
+		}
+	}
+	for _, s := range leaves {
+		if err := s.Validate("leave_statements"); err != nil {
+			return err
+		}
+	}
+	for _, s := range revs {
+		if err := s.Validate("device_revocations"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDeviceRefs(refs []MLSDeviceRef, field string) error {
+	if len(refs) == 0 || len(refs) > MLSChatMaxRemoveAccounts {
+		return newValidationError(field, "must hold 1.."+strconv.Itoa(MLSChatMaxRemoveAccounts)+" devices")
+	}
+	seen := map[MLSDeviceRef]bool{}
+	for _, r := range refs {
+		if err := requireMessageUUID(r.AccountID, field+".account_id"); err != nil {
+			return err
+		}
+		if err := requireMessageUUID(r.DeviceID, field+".device_id"); err != nil {
+			return err
+		}
+		if seen[r] {
+			return newValidationError(field, "must not name one device twice")
+		}
+		seen[r] = true
+	}
+	return nil
+}
+
+// MLSLeaveRequestSignRequest asks for this device's signed leave request.
+type MLSLeaveRequestSignRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+}
+
+func (r MLSLeaveRequestSignRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSLeaveRequestSignRequest) Validate() error {
+	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+}
+
+type MLSLeaveRequestSignResponseData struct {
+	Statement MLSLeaveStatement `json:"statement"`
+}
+
+// OrgMemberRemovalSignRequest asks this device, an org admin's, to sign the
+// removal of an account from the organization.
+type OrgMemberRemovalSignRequest struct {
+	OrgID            string `json:"org_id"`
+	RemovedAccountID string `json:"removed_account_id"`
+	AdminAccountID   string `json:"admin_account_id"`
+}
+
+func (r OrgMemberRemovalSignRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.RemovedAccountID, "removed_account_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.AdminAccountID, "admin_account_id"); err != nil {
+		return err
+	}
+	if r.RemovedAccountID == r.AdminAccountID {
+		return newValidationError("removed_account_id", "an admin does not remove itself")
+	}
+	return nil
+}
+
+type OrgMemberRemovalSignResponseData struct {
+	Statement MLSOrgRemovalStatement `json:"statement"`
+}
+
+// MLSDeviceRevokeSignRequest asks this device to sign the revocation of one
+// of its account's devices.
+type MLSDeviceRevokeSignRequest struct {
+	AccountID string `json:"account_id"`
+	DeviceID  string `json:"device_id"`
+}
+
+func (r MLSDeviceRevokeSignRequest) Validate() error {
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	return requireMessageUUID(r.DeviceID, "device_id")
+}
+
+type MLSDeviceRevokeSignResponseData struct {
+	Statement MLSDeviceRevocation `json:"statement"`
+}

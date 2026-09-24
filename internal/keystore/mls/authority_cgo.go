@@ -8,6 +8,8 @@ package mls
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 )
 
 // decodeCollected reads dpmls_group_process_collect's framing: the entering
@@ -44,10 +46,68 @@ func decodeCollected(buf []byte) ([]Leaf, CommitShape, error) {
 		}
 		shape.Other = append(shape.Other, binary.BigEndian.Uint16(b))
 	}
+	epoch, ok := r.take(8)
+	if !ok {
+		return nil, CommitShape{}, bad
+	}
+	shape.Epoch = binary.BigEndian.Uint64(epoch)
+	has, ok := r.take(1)
+	if !ok || has[0] > 1 {
+		return nil, CommitShape{}, bad
+	}
+	if has[0] == 1 {
+		if shape.RolesBefore, ok = r.prefixed(); !ok {
+			return nil, CommitShape{}, bad
+		}
+		if shape.RolesBefore == nil {
+			shape.RolesBefore = []byte{}
+		}
+	}
+	change, ok := r.take(1)
+	if !ok || change[0] > 3 {
+		return nil, CommitShape{}, bad
+	}
+	shape.RolesChange = chatstate.RolesChangeKind(change[0])
+	if shape.RolesChange == chatstate.RolesSet {
+		if shape.RolesAfter, ok = r.prefixed(); !ok {
+			return nil, CommitShape{}, bad
+		}
+	}
+	if shape.AuthenticatedData, ok = r.prefixed(); !ok {
+		return nil, CommitShape{}, bad
+	}
 	if r.at != len(r.buf) {
 		return nil, CommitShape{}, bad
 	}
 	return entering, shape, nil
+}
+
+// decodeAuthority reads dpmls_group_authority's framing: u8 has, a
+// length-prefixed payload, u8 supported.
+func decodeAuthority(buf []byte) ([]byte, bool, error) {
+	bad := errors.New("mls: group authority framing is malformed")
+	r := leafReader{buf: buf}
+	has, ok := r.take(1)
+	if !ok || has[0] > 1 {
+		return nil, false, bad
+	}
+	payload, ok := r.prefixed()
+	if !ok {
+		return nil, false, bad
+	}
+	supported, ok := r.take(1)
+	if !ok || supported[0] > 1 || r.at != len(r.buf) {
+		return nil, false, bad
+	}
+	if has[0] == 0 {
+		if len(payload) != 0 {
+			return nil, false, bad
+		}
+		payload = nil
+	} else if payload == nil {
+		payload = []byte{}
+	}
+	return payload, supported[0] == 1, nil
 }
 
 // encodeRemovals frames leaves the way authority::decode_removals reads them:

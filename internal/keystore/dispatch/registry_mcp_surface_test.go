@@ -117,6 +117,9 @@ var mlsChatActionNames = []string{
 	proto.MLSConversationStatus,
 	proto.MLSRejoinRequestSign,
 	proto.MLSCommitAbandon,
+	proto.MLSLeaveRequestSign,
+	proto.OrgMemberRemovalSign,
+	proto.MLSDeviceRevokeSign,
 }
 
 func TestMCPCallableActions_ExcludeTheMLSChatActions(t *testing.T) {
