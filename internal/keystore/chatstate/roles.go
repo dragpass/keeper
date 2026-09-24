@@ -214,6 +214,11 @@ func (c CommitChange) holdsBefore(account string) bool {
 
 // holdsAfter reports whether account holds a leaf after the Commit.
 func (c CommitChange) holdsAfter(account string) bool {
+	return c.leavesAfter(account) > 0
+}
+
+// leavesAfter is how many leaves account holds once the Commit is applied.
+func (c CommitChange) leavesAfter(account string) int {
 	count := func(list []string) int {
 		n := 0
 		for _, a := range list {
@@ -223,7 +228,8 @@ func (c CommitChange) holdsAfter(account string) bool {
 		}
 		return n
 	}
-	return count(c.Before)-min(count(c.Removed), count(c.Before))+count(c.Added) > 0
+	before := count(c.Before)
+	return before - min(count(c.Removed), before) + count(c.Added)
 }
 
 func (c CommitChange) accountsAfter() int {
@@ -271,15 +277,18 @@ func judgeRoles(c CommitChange) string {
 			return reason
 		}
 	}
+	// One active device per account (Q14), judged on the tree the Commit
+	// leaves behind (roles::check has the same rule and the same reason for
+	// holding only the accounts it adds to).
+	for _, account := range c.Added {
+		if account != "" && c.leavesAfter(account) > 1 {
+			return "an account holds more than one leaf after the commit"
+		}
+	}
 	roles := c.effectiveRoles()
 	for _, account := range c.Added {
 		if slices.Contains(c.Removed, account) {
 			continue // R2
-		}
-		// One active device per account: a second leaf of an account comes
-		// in only in place of the one it holds (R2 above).
-		if slices.Contains(c.Before, account) {
-			return "an account that holds a leaf is added again"
 		}
 		switch {
 		case roles == nil:

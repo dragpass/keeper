@@ -88,3 +88,31 @@ func TestRoles_AnAccountThatHoldsALeafIsAddedAgainOnlyInItsPlace(t *testing.T) {
 		}
 	}
 }
+
+// Q14: one device per account is judged on the whole tree after the Commit,
+// not on the add list alone. Two new leaves of one account in one Commit, and a
+// re-seat that brings in two leaves for the one it removes, both leave the
+// account with two leaves, and are refused in every kind of group.
+func TestRoles_OneLeafPerAccountAfterTheCommit(t *testing.T) {
+	for name, roles := range map[string]*Roles{"legacy": nil, "room": room(rolesA), "dm": {Kind: RolesKindDM}} {
+		epoch := uint64(5)
+		if roles != nil && roles.Kind == RolesKindDM {
+			epoch = 0 // a DM adds only at its create
+		}
+		twoNew := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA}, RolesBefore: roles,
+			Added: []string{rolesB, rolesB}, Epoch: epoch}
+		if err := JudgeReceived(twoNew, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+			t.Errorf("%s: two new leaves of one account in one commit = %v; want refused", name, err)
+		}
+		reseatTwo := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA, rolesB}, RolesBefore: roles,
+			Removed: []string{rolesB}, Added: []string{rolesB, rolesB}, Epoch: epoch}
+		if err := JudgeReceived(reseatTwo, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+			t.Errorf("%s: a re-seat that brings two leaves = %v; want refused", name, err)
+		}
+		one := twoNew
+		one.Added = []string{rolesB}
+		if err := JudgeReceived(one, CommitAuthority{}); err != nil {
+			t.Errorf("%s: one new leaf = %v", name, err)
+		}
+	}
+}

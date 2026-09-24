@@ -38,10 +38,11 @@
 //
 // roles.go: in a room an Add needs the committer to be owner or admin, in a
 // DM there is none after the create, and a group without roles (legacy) takes
-// any Add whose leaf verifies. In every group an account holds one leaf: an
-// Add of an account already in the tree is refused unless the same Commit
-// removes its leaf (R2). Only Add, Remove and a roles-only group context
-// change are allowed at all.
+// any Add whose leaf verifies. In every group an account holds one leaf (Q14),
+// judged on the tree after the Commit: an Add that leaves the account it adds
+// with two leaves is refused, whether the other one was already in the tree
+// or comes in with the same Commit. Only Add, Remove and a roles-only group
+// context change are allowed at all.
 //
 // # Building
 //

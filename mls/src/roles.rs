@@ -208,12 +208,18 @@ impl Change<'_> {
     }
 
     fn holds_after(&self, account: &str) -> bool {
+        self.leaves_after(account) > 0
+    }
+
+    /// How many leaves the account holds once the Commit is applied.
+    fn leaves_after(&self, account: &str) -> usize {
         let count = |list: &[Option<String>]| {
             list.iter()
                 .filter(|a| a.as_deref() == Some(account))
                 .count()
         };
-        count(self.before) - count(&self.removed).min(count(self.before)) + count(&self.added) > 0
+        let before = count(self.before);
+        before - count(&self.removed).min(before) + count(&self.added)
     }
 
     fn accounts_after(&self) -> usize {
@@ -257,17 +263,26 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
     if let Some(after) = &change.roles_after {
         check_roles_change(change, after.as_ref())?;
     }
+    // One active device per account (Q14), judged on the tree the Commit
+    // leaves behind rather than on the add list: two new leaves of one
+    // account, or a new leaf next to one it keeps, are both refused. Only an
+    // account the Commit adds to is held to it, so a group that already held
+    // two leaves of an account before this rule is not locked by every later
+    // Commit; it can never gain one.
+    if change
+        .added
+        .iter()
+        .flatten()
+        .any(|a| change.leaves_after(a) > 1)
+    {
+        return Err("an account holds more than one leaf after the commit");
+    }
     let roles = effective_roles(change);
     for added in &change.added {
         let account = added.as_deref();
         // R2: the account is also removed here — a replace or a rejoin.
         if account.is_some_and(|a| change.is_removed(a)) {
             continue;
-        }
-        // One active device per account: a second leaf of an account comes
-        // in only in place of the one it holds (the R2 shapes above).
-        if account.is_some_and(|a| change.holds_before(a)) {
-            return Err("an account that holds a leaf is added again");
         }
         match &roles {
             None => {}
@@ -616,6 +631,28 @@ mod tests {
             assert!(check(&c).is_err());
             c.removed = vec![acct(B)];
             assert!(check(&c).is_ok());
+        }
+    }
+
+    // Q14: one device per account is judged on the tree after the Commit, not
+    // on the add list alone.
+    #[test]
+    fn an_account_holds_one_leaf_after_the_commit() {
+        for roles in [None, Some(room(A, &[])), Some(Roles::Dm)] {
+            let before = [acct(A)];
+            let mut two_new = change(&before, A, roles.clone());
+            two_new.epoch = 0;
+            two_new.added = vec![acct(B), acct(B)];
+            assert!(check(&two_new).is_err(), "two new leaves of one account");
+            two_new.added = vec![acct(B)];
+            assert!(check(&two_new).is_ok(), "one new leaf");
+
+            let seated = [acct(A), acct(B)];
+            let mut reseat_two = change(&seated, A, roles);
+            reseat_two.epoch = 0;
+            reseat_two.removed = vec![acct(B)];
+            reseat_two.added = vec![acct(B), acct(B)];
+            assert!(check(&reseat_two).is_err(), "a re-seat that brings two leaves");
         }
     }
 

@@ -1413,6 +1413,64 @@ mod tests {
         );
     }
 
+    fn room_device(account: &str, device: &str) -> Session {
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{account}|{device}");
+        Session::new(identity.as_bytes(), &sk, &pk, b"declaration").unwrap()
+    }
+
+    // Q14 through real MLS: an admin's modified client adds two devices of one
+    // account in one Commit. The owner refuses it on receipt and stays where
+    // it was, and the same Commit built through the session never exists.
+    #[test]
+    fn two_devices_of_one_account_in_one_commit_are_refused() {
+        let (mut a, mut b, _c) = roles_room();
+        let d1 = room_device(ROOM_D, "0f000000-0000-4000-8000-000000000006");
+        let d2 = room_device(ROOM_D, "0f000000-0000-4000-8000-000000000007");
+        let (kp1, kp2) = (kp(&d1), kp(&d2));
+
+        b.rules.collect().unwrap();
+        b.gate.collect().unwrap();
+        let group = b.group_mut().unwrap();
+        let output = group
+            .commit_builder()
+            .add_member(MlsMessage::from_bytes(&kp1).unwrap())
+            .unwrap()
+            .add_member(MlsMessage::from_bytes(&kp2).unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        b.disarm().unwrap();
+        let commit = output.commit_message.to_bytes().unwrap();
+
+        let epoch = a.epoch().unwrap();
+        let (entering, _) = a.process_collect(&commit).unwrap();
+        a.approve(entering.iter().map(approval).collect());
+        let Err(refused) = a.process(&commit) else {
+            panic!("two devices of one account were applied");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert_eq!(a.epoch().unwrap(), epoch);
+        assert_eq!(a.roster_len(), 3);
+
+        b.clear_pending_commit().unwrap();
+        b.approve(vec![
+            approval(&key_package_leaf(&kp1).unwrap()),
+            approval(&key_package_leaf(&kp2).unwrap()),
+        ]);
+        let Err(refused) = b.commit_add_members(&[&kp1, &kp2]) else {
+            panic!("an admin built two devices of one account");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert!(!b.has_pending_commit().unwrap());
+    }
+
     #[test]
     fn a_leaf_without_the_roles_capability_cannot_join_a_roles_room() {
         let (mut a, _b, _c) = roles_room();
