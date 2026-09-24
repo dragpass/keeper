@@ -486,6 +486,22 @@ type MLSKeyPackage struct {
 // LeafSignatureKeyFingerprint names the leaf every KeyPackage was built for.
 // The client passes it on upload, and the server refuses the batch unless it
 // is the live declaration's fingerprint.
+// MLSKeyPackagePoolSweepRequest names the owner whose pool is swept.
+type MLSKeyPackagePoolSweepRequest struct {
+	AccountID string `json:"account_id"`
+}
+
+func (r MLSKeyPackagePoolSweepRequest) Validate() error {
+	return requireMessageUUID(r.AccountID, "account_id")
+}
+
+// MLSKeyPackagePoolSweepResponseData reports the entries dropped and those
+// left in the pool.
+type MLSKeyPackagePoolSweepResponseData struct {
+	Dropped   int `json:"dropped"`
+	Remaining int `json:"remaining"`
+}
+
 type MLSKeyPackageGenerateResponseData struct {
 	KeyPackages                 []MLSKeyPackage `json:"key_packages"`
 	LeafSignatureKeyFingerprint string          `json:"leaf_signature_key_fingerprint"`

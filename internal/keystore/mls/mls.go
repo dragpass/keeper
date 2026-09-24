@@ -1055,6 +1055,20 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 // identity, its signature key and its declaration payload. The index is 0.
 func KeyPackageLeaf(keyPackage []byte) (Leaf, error) { return keyPackageLeaf(keyPackage) }
 
+// SweepKeyPackagePool drops the owner's pool entries whose KeyPackage does not
+// advertise the room roles extension, and reports how many it dropped and how
+// many remain (Q11). A KeyPackage built by a Keeper before 0.0.55's wave 5
+// lacks it, and such a KeyPackage can never be added to a room that carries
+// roles: mls-rs requires every leaf to support the group context's
+// extensions, so the adder would see CHAT_MLS_ROLES_UNSUPPORTED for a member
+// that has in fact upgraded. An entry whose KeyPackage cannot be read is
+// dropped too; it could not be joined from either. Idempotent, and safe under
+// several Keeper processes (chatstate.DropKeyPackagesUnless). The server still
+// holds the matching KeyPackages; the caller discards those and refills.
+func SweepKeyPackagePool(secrets keychain.SecretStore, ownerAccountID string, now time.Time) (dropped, remaining int, err error) {
+	return chatstate.DropKeyPackagesUnless(secrets, ownerAccountID, now, keyPackageEntrySupportsRoles)
+}
+
 // KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
 // without a group. It is how a caller that asked the server for one member's
 // KeyPackage checks it was handed that member's and not some other account's:

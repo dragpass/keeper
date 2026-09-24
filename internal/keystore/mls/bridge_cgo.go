@@ -62,6 +62,7 @@ int32_t dpmls_session_set_next_commit_aad(DpSession *handle, const uint8_t *aad,
 int32_t dpmls_group_authority(DpSession *handle, DpBuf *out);
 int32_t dpmls_key_package_leaf(const uint8_t *key_package, size_t key_package_len, DpBuf *out);
 int32_t dpmls_key_package_not_after(const uint8_t *key_package, size_t key_package_len, uint64_t *out);
+int32_t dpmls_key_package_entry_supports_roles(const uint8_t *entry, size_t entry_len, uint8_t *out);
 int32_t dpmls_group_process_collect(DpSession *handle, const uint8_t *message, size_t message_len, DpBuf *out);
 int32_t dpmls_group_join_collect(DpSession *handle, const uint8_t *welcome, size_t welcome_len, DpBuf *out);
 
@@ -676,6 +677,19 @@ func keyPackageNotAfter(keyPackage []byte) (uint64, error) {
 		return 0, statusError(rc)
 	}
 	return uint64(out), nil
+}
+
+// keyPackageEntrySupportsRoles reports whether the KeyPackage inside a pool
+// entry advertises the roles extension. The entry holds private keys; the
+// Rust side keeps nothing of it.
+func keyPackageEntrySupportsRoles(entry []byte) (bool, error) {
+	var out C.uint8_t
+	rc := C.dpmls_key_package_entry_supports_roles(bytePtr(entry), C.size_t(len(entry)), &out)
+	runtime.KeepAlive(entry)
+	if rc != 0 {
+		return false, statusError(rc)
+	}
+	return out == 1, nil
 }
 
 func WireFormOf(message []byte) (WireForm, error) {

@@ -289,4 +289,17 @@ const (
 	//           account_id, device_id, count (1..32)
 	//   Output: { key_packages: [{ key_package_b64, not_after }] }
 	MLSKeyPackageGenerate = "mls_key_package_generate"
+
+	// MLSKeyPackagePoolSweep drops this owner's KeyPackage pool entries whose
+	// KeyPackage does not advertise the room roles extension (0xF0D1), which
+	// a Keeper before wave 5 built, and reports how many it dropped (Q11). The
+	// caller discards the server's unconsumed KeyPackages when it dropped any,
+	// and refills. Idempotent. No gate: it only deletes private keys this
+	// device's own pool holds and could never use in a room with roles; the
+	// account id scopes it, as chat_state_purge's does. Not on the MCP
+	// surface.
+	//
+	//   Inputs: account_id
+	//   Output: { dropped, remaining }
+	MLSKeyPackagePoolSweep = "mls_key_package_pool_sweep"
 )

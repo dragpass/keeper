@@ -11,11 +11,12 @@ use mls_rs::group::proposal::{AddProposal, Proposal};
 use mls_rs::group::{CommitEffect, ReceivedMessage};
 use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
+use mls_rs::mls_rs_codec::MlsDecode;
 use mls_rs::mls_rules::EncryptionOptions;
 use mls_rs::time::MlsTime;
 use mls_rs::{
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
-    MlsMessage,
+    KeyPackage, MlsMessage,
 };
 use mls_rs_core::crypto::SignatureSecretKey;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
@@ -216,6 +217,21 @@ pub fn key_package_leaf(key_package: &[u8]) -> Res<Leaf> {
         add.signing_identity(),
         &add.leaf_node_extensions(),
     ))
+}
+
+/// Whether the KeyPackage a pool entry holds advertises the roles extension
+/// (Q11). A KeyPackage built before the extension existed can never be added
+/// to a room that carries roles, since every leaf must support the group
+/// context's extensions; after an upgrade those entries are swept and the pool
+/// refilled.
+pub fn key_package_entry_supports_roles(entry: &[u8]) -> Res<bool> {
+    let bytes = crate::storage::key_package_of_entry(entry).map_err(str::to_string)?;
+    let key_package =
+        KeyPackage::mls_decode(&mut bytes.as_slice()).map_err(|e| err("key package decode", e))?;
+    Ok(AddProposal::from(key_package)
+        .capabilities()
+        .extensions
+        .contains(&roles_extension_type()))
 }
 
 /// The leaves a Commit that removed this device adds for everyone else.
@@ -1469,6 +1485,37 @@ mod tests {
             "{refused}"
         );
         assert!(!b.has_pending_commit().unwrap());
+    }
+
+    // Q11: an entry this session makes advertises the roles extension; one a
+    // client without it made (a Keeper before the extension) does not, and a
+    // damaged entry is an error rather than either answer.
+    #[test]
+    fn a_pool_entry_reports_whether_its_key_package_supports_roles() {
+        let current = room_member(ROOM_D);
+        let generated = current.key_package(far_future()).unwrap();
+        assert!(key_package_entry_supports_roles(&generated.private).unwrap());
+
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{ROOM_D}|{ROOM_DEVICE}");
+        let custody = KeyPackageCustody::new();
+        let old = Client::builder()
+            .extension_type(LEAF_DECLARATION_EXTENSION.into())
+            .crypto_provider(RustCryptoProvider::default())
+            .identity_provider(BasicIdentityProvider::new())
+            .key_package_repo(custody.clone())
+            .signing_identity(
+                signing_identity(identity.as_bytes(), &pk),
+                sk.into(),
+                CIPHER_SUITE,
+            )
+            .build();
+        old.generate_key_package_message(Default::default(), ExtensionList::new(), None)
+            .unwrap();
+        let (_, entry) = custody.take().unwrap();
+        assert!(!key_package_entry_supports_roles(&entry).unwrap());
+
+        assert!(key_package_entry_supports_roles(&entry[..entry.len() - 1]).is_err());
     }
 
     #[test]

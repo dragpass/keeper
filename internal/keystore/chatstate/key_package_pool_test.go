@@ -325,3 +325,80 @@ func TestKeyPackagePool_DropMintsNoSealKey(t *testing.T) {
 		t.Fatal("a drop for no leaf was accepted")
 	}
 }
+
+// Q11: the sweep drops what keep refuses or cannot judge, keeps a claimed
+// entry whatever keep says, prunes expired entries without counting them, and
+// a second run drops nothing and writes nothing.
+func TestKeyPackagePool_SweepDropsUnsupportedEntriesOnce(t *testing.T) {
+	store, secrets := newTestStore(t)
+	supported := poolEntry(2, poolNow.Add(time.Hour))
+	unsupported := poolEntry(3, poolNow.Add(time.Hour))
+	unreadable := poolEntry(4, poolNow.Add(time.Hour))
+	claimed := poolEntry(5, poolNow.Add(time.Hour))
+	expired := poolEntry(6, poolNow.Add(-time.Hour))
+	if err := store.AddKeyPackages([]KeyPackagePoolEntry{supported, unsupported, unreadable, claimed}, poolNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClaimKeyPackage(claimed.Ref, "c0000000-0000-4000-8000-000000000001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
+		pool.Entries = append(pool.Entries, expired)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	keep := func(private []byte) (bool, error) {
+		switch {
+		case bytes.Equal(private, unsupported.Private), bytes.Equal(private, claimed.Private):
+			return false, nil
+		case bytes.Equal(private, unreadable.Private):
+			return false, errors.New("not a key package")
+		}
+		return true, nil
+	}
+
+	dropped, remaining, err := DropKeyPackagesUnless(secrets, testOwner, poolNow, keep)
+	if err != nil || dropped != 2 || remaining != 2 {
+		t.Fatalf("sweep = %d dropped, %d remaining, %v; want 2, 2", dropped, remaining, err)
+	}
+	for _, e := range []KeyPackagePoolEntry{unsupported, unreadable, expired} {
+		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); !errors.Is(err, ErrKeyPackageNotInPool) {
+			t.Fatalf("entry %x survived the sweep: %v", e.Ref[0], err)
+		}
+	}
+	for _, e := range []KeyPackagePoolEntry{supported, claimed} {
+		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); err != nil {
+			t.Fatalf("entry %x was dropped: %v", e.Ref[0], err)
+		}
+	}
+
+	before, err := os.ReadFile(poolPath(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, remaining, err = DropKeyPackagesUnless(secrets, testOwner, poolNow, keep)
+	if err != nil || dropped != 0 || remaining != 2 {
+		t.Fatalf("a repeated sweep = %d, %d, %v", dropped, remaining, err)
+	}
+	after, err := os.ReadFile(poolPath(store))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("a sweep with nothing to drop rewrote the pool (%v)", err)
+	}
+}
+
+func TestKeyPackagePool_SweepMintsNoSealKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
+	secrets := keychain.NewMemorySecretStore()
+	dropped, remaining, err := DropKeyPackagesUnless(secrets, testOwner, poolNow,
+		func([]byte) (bool, error) { return false, nil })
+	if err != nil || dropped != 0 || remaining != 0 {
+		t.Fatalf("sweep without a seal key = %d, %d, %v", dropped, remaining, err)
+	}
+	if _, err := loadSealKey(secrets, testOwner); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatalf("the sweep minted a seal key: %v", err)
+	}
+}

@@ -253,6 +253,13 @@ fn encode_key_package_entry(reference: &[u8], data: &KeyPackageData) -> Zeroizin
     out
 }
 
+/// The public KeyPackage a pool entry holds. The private keys it also holds
+/// are dropped (and zeroized) here and never leave.
+pub fn key_package_of_entry(entry: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let (_, data) = decode_key_package_entry(entry)?;
+    Ok(data.key_package_bytes.clone())
+}
+
 // The messages never describe the entry's contents or size: it carries two
 // private keys.
 fn decode_key_package_entry(entry: &[u8]) -> Result<(Vec<u8>, KeyPackageData), &'static str> {

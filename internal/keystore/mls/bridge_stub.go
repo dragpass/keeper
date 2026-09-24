@@ -41,6 +41,8 @@ func keyPackageLeaf(keyPackage []byte) (Leaf, error) { return Leaf{}, ErrUnavail
 
 func keyPackageNotAfter(keyPackage []byte) (uint64, error) { return 0, ErrUnavailable }
 
+func keyPackageEntrySupportsRoles(entry []byte) (bool, error) { return false, ErrUnavailable }
+
 func WireFormOf(message []byte) (WireForm, error) { return WireFormOther, ErrUnavailable }
 
 func (s *Session) Close() {}

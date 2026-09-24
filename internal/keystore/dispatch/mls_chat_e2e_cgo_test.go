@@ -793,3 +793,23 @@ func TestMLSChatE2E_ALatchedConversationKeepsItsHistoryReadable(t *testing.T) {
 		t.Fatalf("the latch did not hold: %+v", got)
 	}
 }
+
+// Q11: KeyPackages this Keeper builds advertise the roles extension, so the
+// sweep keeps them all; it is idempotent. The drop of entries an older Keeper
+// built is TestMLSAdversary_ThePoolSweepDropsAnOldKeepersKeyPackage.
+func TestMLSChatE2E_ThePoolSweepKeepsThisKeepersKeyPackages(t *testing.T) {
+	e2eStateRoot(t)
+	bob := newKeeper(t, e2eBob)
+	bob.keyPackage()
+	bob.keyPackage()
+	for range 2 {
+		got := bob.must(proto.MLSKeyPackagePoolSweep, proto.MLSKeyPackagePoolSweepRequest{AccountID: bob.id}).
+			Data.(proto.MLSKeyPackagePoolSweepResponseData)
+		if got.Dropped != 0 || got.Remaining != 2 {
+			t.Fatalf("sweep = %+v; want nothing dropped and 2 remaining", got)
+		}
+	}
+	if n := bob.poolSize(); n != 2 {
+		t.Fatalf("pool size after the sweep = %d", n)
+	}
+}

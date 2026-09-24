@@ -652,7 +652,10 @@ mod tests {
             reseat_two.epoch = 0;
             reseat_two.removed = vec![acct(B)];
             reseat_two.added = vec![acct(B), acct(B)];
-            assert!(check(&reseat_two).is_err(), "a re-seat that brings two leaves");
+            assert!(
+                check(&reseat_two).is_err(),
+                "a re-seat that brings two leaves"
+            );
         }
     }
 

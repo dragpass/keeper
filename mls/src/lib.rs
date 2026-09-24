@@ -516,6 +516,34 @@ pub unsafe extern "C" fn dpmls_key_package_leaf(
     })
 }
 
+/// Whether the KeyPackage inside a pool entry advertises the roles extension:
+/// `out` receives 1 or 0 (Q11). The entry carries private keys; nothing of it
+/// is kept or returned.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `out` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_key_package_entry_supports_roles(
+    entry: *const u8,
+    entry_len: usize,
+    out: *mut u8,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `entry` points to `entry_len` readable
+        // bytes for the duration of this call; the borrow ends before this
+        // block does.
+        let supported =
+            session::key_package_entry_supports_roles(unsafe { slice(entry, entry_len)? })?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u8.
+        unsafe { *out = u8::from(supported) };
+        Ok(DPMLS_OK)
+    })
+}
+
 /// The `not_after` of a KeyPackage's lifetime, in Unix seconds.
 ///
 /// # Safety
