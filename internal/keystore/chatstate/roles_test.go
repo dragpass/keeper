@@ -116,3 +116,18 @@ func TestRoles_OneLeafPerAccountAfterTheCommit(t *testing.T) {
 		}
 	}
 }
+
+// N1: the whole candidate tree, not only the accounts a Commit adds to.
+func TestRoles_ATreeThatHoldsTwoLeavesOfAnAccountTakesNoCommitThatKeepsThem(t *testing.T) {
+	before := []string{rolesA, rolesB, rolesB}
+	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Errorf("an update over the duplicate = %v; want refused", err)
+	}
+	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before, Added: []string{rolesC}}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Errorf("an unrelated add = %v; want refused", err)
+	}
+	fix := CommitChange{CommitterAccountID: rolesB, Before: before, Removed: []string{rolesB}}
+	if err := JudgeReceived(fix, CommitAuthority{}); err != nil {
+		t.Errorf("removing one of the two = %v", err)
+	}
+}

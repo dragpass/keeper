@@ -263,15 +263,15 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
     if let Some(after) = &change.roles_after {
         check_roles_change(change, after.as_ref())?;
     }
-    // One active device per account (Q14), judged on the tree the Commit
-    // leaves behind rather than on the add list: two new leaves of one
-    // account, or a new leaf next to one it keeps, are both refused. Only an
-    // account the Commit adds to is held to it, so a group that already held
-    // two leaves of an account before this rule is not locked by every later
-    // Commit; it can never gain one.
+    // One active device per account (Q14, N1), judged on the whole candidate
+    // tree the Commit leaves behind: every account in it holds at most one
+    // leaf. A group that already held two leaves of an account before this
+    // rule takes no Commit that keeps both; nothing here repairs it, and its
+    // way on is a new group.
     if change
-        .added
+        .before
         .iter()
+        .chain(change.added.iter())
         .flatten()
         .any(|a| change.leaves_after(a) > 1)
     {
@@ -657,6 +657,22 @@ mod tests {
                 "a re-seat that brings two leaves"
             );
         }
+    }
+
+    // N1: a tree that already holds two leaves of an account takes no Commit
+    // that keeps both, an empty one included; one that removes one of them
+    // is accepted.
+    #[test]
+    fn a_tree_that_already_holds_two_leaves_of_an_account_takes_no_commit_that_keeps_them() {
+        let before = [acct(A), acct(B), acct(B)];
+        let update = change(&before, A, None);
+        assert!(check(&update).is_err(), "an update over the duplicate");
+        let mut add = change(&before, A, None);
+        add.added = vec![acct(C)];
+        assert!(check(&add).is_err(), "an unrelated add");
+        let mut fix = change(&before, A, None);
+        fix.removed = vec![acct(B)];
+        assert!(check(&fix).is_ok(), "removing one of the two");
     }
 
     #[test]

@@ -277,10 +277,10 @@ func judgeRoles(c CommitChange) string {
 			return reason
 		}
 	}
-	// One active device per account (Q14), judged on the tree the Commit
-	// leaves behind (roles::check has the same rule and the same reason for
-	// holding only the accounts it adds to).
-	for _, account := range c.Added {
+	// One active device per account (Q14, N1), judged on the whole candidate
+	// tree the Commit leaves behind, as roles::check does: an existing
+	// duplicate is not repaired, and no Commit that keeps it is accepted.
+	for _, account := range append(slices.Clone(c.Before), c.Added...) {
 		if account != "" && c.leavesAfter(account) > 1 {
 			return "an account holds more than one leaf after the commit"
 		}

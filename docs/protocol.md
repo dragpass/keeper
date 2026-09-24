@@ -1036,15 +1036,16 @@ a group (`CHAT_MLS_ROLES_UNSUPPORTED`). The rules:
   holds a role entry needs the owner to reset the roles in the same Commit.
 - **One active device per account**, in every group (room, DM or
   `legacy_temporary`), on receipt as on build, judged on the tree **after**
-  the Commit (wave 5c, Q14): every account the Commit adds a leaf for must
+  the Commit (wave 5c, Q14, N1): every account in the candidate tree must
   hold at most one leaf once it is applied. That refuses a new leaf beside one
-  the account keeps, two new leaves of one account in the same Commit, and a
-  re-seat that brings two leaves for the one it removes. A second device
-  takes the first one's seat (a handover replace, a recovery replace, or a
-  rejoin); it never sits beside it. An account the Commit adds nothing for is
-  not held to it, so a group that already held two leaves of an account
-  before the rule is not locked by every later Commit; such an account can
-  never gain a leaf. Two entering leaves of one account are usually refused
+  the account keeps, two new leaves of one account in the same Commit, a
+  re-seat that brings two leaves for the one it removes, and any Commit that
+  keeps a duplicate a group already held from before the rule (an empty
+  Update included; only a Commit that removes all but one of those leaves is
+  accepted). Nothing repairs such a group on its own; its way on is a new
+  group. A second device takes the first one's seat (a handover replace, a
+  recovery replace, or a rejoin); it never sits beside it. Two entering
+  leaves of one account are usually refused
   earlier, by the leaf check: both declarations cannot be that account's
   newest.
 - A **Remove** of account A's leaf by committer C is accepted when **R1** A is
