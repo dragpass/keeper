@@ -35,7 +35,9 @@ func TestMLSTimeTrust_AnExpiredKeyPackageIsRefusedAtTheAdd(t *testing.T) {
 	r := newRolesRoom(t)
 	dave := newKeeper(t, e2eDave)
 	kp := dave.keyPackage()
-	r.alice.deps.Clock = func() time.Time { return time.Now().Add(time.Duration(proto.MLSLeafMaxValiditySeconds+3600) * time.Second) }
+	r.alice.deps.Clock = func() time.Time {
+		return time.Now().Add(time.Duration(proto.MLSLeafMaxValiditySeconds+3600) * time.Second)
+	}
 	defer func() { r.alice.deps.Clock = nil }()
 	req := r.alice.buildRequest(1)
 	req.Permit = r.alice.permitAt(time.Duration(proto.MLSLeafMaxValiditySeconds+3600) * time.Second)
