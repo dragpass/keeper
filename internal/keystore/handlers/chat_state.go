@@ -317,7 +317,10 @@ func chatStateNotAuthorized(d Deps, stage string) proto.BaseResponse {
 
 func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	code, message := proto.ChatStateErrorCodeStorageFailure, "chat state could not be read or written"
+	var unverified *MLSPeerUnverifiedError
 	switch {
+	case errors.As(err, &unverified):
+		return peerUnverifiedResponse(d, stage, unverified)
 	case errors.Is(err, mls.ErrLeafUntrusted):
 		return mlsLeafUntrustedResponse(d, stage, err)
 	case errors.Is(err, errAttestationRefused):

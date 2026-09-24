@@ -65,7 +65,22 @@ const (
 	// conversation and this KeyPackage's leaf, or one too old (0.0.55).
 	// Nothing was built.
 	ChatMLSErrorCodeRejoinUnverified = "CHAT_MLS_REJOIN_UNVERIFIED"
+
+	// ChatMLSErrorCodePeerUnverified — this device's strict policy
+	// (require_verified_peers) is on and the operation would bring in, or
+	// send to, another account whose key no person here verified: a local
+	// Add or Join of such a leaf, or a send in a conversation that holds one
+	// (0.0.55, design Q8). Carries MLSPeerUnverifiedData naming them. Nothing
+	// was built, joined, consumed or written. A received Commit is never
+	// refused for this.
+	ChatMLSErrorCodePeerUnverified = "CHAT_MLS_PEER_UNVERIFIED"
 )
+
+// MLSPeerUnverifiedData rides on CHAT_MLS_PEER_UNVERIFIED: the accounts, in
+// order, whose pins are not verified (none at all counts).
+type MLSPeerUnverifiedData struct {
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
+}
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in
 // step with it by a test in the handlers package, which can import both.
@@ -1235,6 +1250,15 @@ type MLSConversationStatusResponseData struct {
 	// its pin now (0.0.55); see MLSAccountTrust. Absent with needs_rekey, with
 	// no group, and when the pins could not be read.
 	MemberTrust []MLSAccountTrust `json:"member_trust,omitempty"`
+
+	// RequireVerifiedPeers is this device's strict policy (0.0.55, design
+	// Q8), and UnverifiedAccountIDs, under it, every other account in the
+	// confirmed tree whose pin is not verified: what a send would be refused
+	// for now with CHAT_MLS_PEER_UNVERIFIED. Empty, never null, when the
+	// policy is off, when every member is verified, and when there is no
+	// group.
+	RequireVerifiedPeers bool     `json:"require_verified_peers"`
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
 }
 
 // ChatStateRekeyLatchedData rides on CHAT_STATE_REKEY_REQUIRED from the

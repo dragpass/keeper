@@ -101,6 +101,18 @@ func (c *mlsChat) verifier(d Deps, statements []proto.KeyRotationStatement) *MLS
 	return NewMLSLeafVerifier(d, c.permit.AccountID, statementsByAccount(statements))
 }
 
+// localVerifier is verifier for an operation this device starts (a create, a
+// Commit build, a Join), with the strict policy applied (mls_strict.go).
+func (c *mlsChat) localVerifier(d Deps, statements []proto.KeyRotationStatement) (*MLSLeafVerifier, proto.BaseResponse, bool) {
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return nil, errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error()), false
+	}
+	v := c.verifier(d, statements)
+	v.requireVerified = strict
+	return v, proto.BaseResponse{}, true
+}
+
 func statementsByAccount(statements []proto.KeyRotationStatement) map[string][]proto.KeyRotationStatement {
 	if len(statements) == 0 {
 		return nil
@@ -210,7 +222,10 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
-	v := c.verifier(d, req.RotationStatements)
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
@@ -350,7 +365,10 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
-	v := c.verifier(d, req.RotationStatements)
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
@@ -509,7 +527,10 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateInvalidInput("welcome_b64 must be valid standard Base64")
 	}
-	v := c.verifier(d, req.RotationStatements)
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
 	if err := c.session.JoinFromPool(c.store, c.conv, c.wm, welcome, v, d.Now()); err != nil {
 		return chatStateFailure(d, "mls join", err)
 	}
@@ -564,11 +585,19 @@ func HandleMLSEncrypt(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !utf8.Valid(plaintext) {
 		return chatStateInvalidInput("plaintext_b64 must decode to UTF-8 text")
 	}
-	result, err := c.store.Send(c.conv, c.wm, chatstate.SendRequest{
+	send := chatstate.SendRequest{
 		ClientMessageID: req.ClientMessageID,
 		Plaintext:       plaintext,
 		ExpectedEpoch:   req.ExpectedEpoch,
-	}, mls.NewCipher(c.session, c.verifier(d, nil)))
+	}
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	}
+	if strict {
+		send.Admit = sendAdmission(d, c.permit.AccountID, c.session)
+	}
+	result, err := c.store.Send(c.conv, c.wm, send, mls.NewCipher(c.session, c.verifier(d, nil)))
 	if err != nil {
 		return chatStateFailure(d, "mls encrypt", err)
 	}
@@ -813,7 +842,46 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	if status.HasGroupState && !status.NeedsRekey {
 		data.MemberTrust = c.memberTrust(d)
 	}
+	data.UnverifiedAccountIDs = []string{}
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	}
+	data.RequireVerifiedPeers = strict
+	if strict && status.HasGroupState && !status.NeedsRekey {
+		unverified, ok := c.unverified(d)
+		if !ok {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "the members could not be held to the strict policy")
+		}
+		data.UnverifiedAccountIDs = unverified
+	}
 	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// unverified is mls_conversation_status's unverified_account_ids. Unlike
+// member_trust it is what a send would be refused for, so a read that fails
+// fails the status rather than reporting nobody.
+func (c *mlsChat) unverified(d Deps) ([]string, bool) {
+	state, err := c.store.LoadGroupState(c.conv, c.wm)
+	if err == nil {
+		err = c.session.Load(state)
+		secure.Zeroize(state)
+	}
+	var leaves []mls.Leaf
+	if err == nil {
+		leaves, err = c.session.Roster()
+	}
+	var out []string
+	if err == nil {
+		out, err = unverifiedMembers(d, c.permit.AccountID, leaves)
+	}
+	if err != nil {
+		return nil, false
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, true
 }
 
 // memberTrust is mls_conversation_status's member_trust. It is a display
