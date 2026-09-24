@@ -183,6 +183,13 @@ func (c *Client) KeyPackageEntry() (entry, ref []byte, notAfter uint64) {
 	return c.unhex(f[0]), c.unhex(f[1]), n
 }
 
+// Create makes a group of the adversary's own with the roles payload given
+// (nil for none), at epoch 0.
+func (c *Client) Create(groupID, roles []byte) {
+	c.t.Helper()
+	c.do("create", hex.EncodeToString(groupID), hexOr(roles))
+}
+
 // Join joins from a Welcome and reports the epoch.
 func (c *Client) Join(welcome []byte) uint64 {
 	c.t.Helper()

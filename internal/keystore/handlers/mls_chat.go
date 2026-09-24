@@ -226,6 +226,11 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateInvalidInput("roles must be one owner and admins, or a DM with none")
 	}
+	if req.Roles != nil && req.Roles.Kind == proto.MLSRolesKindRoom && !roleSetOwnedBy(req.Roles, c.permit.AccountID) {
+		// N11: a new room's creator is its owner, in the authenticated group
+		// context from its first epoch; nothing about another room carries over.
+		return chatStateInvalidInput("a new room's owner is the account that creates it")
+	}
 	v, resp, ok := c.localVerifier(d, req.RotationStatements)
 	if !ok {
 		return resp
@@ -998,4 +1003,14 @@ func permitLeafReplacements(entries []chatstate.LeafReplacement) []proto.ChatSta
 		out[i] = proto.ChatStateLeafReplacement{AccountID: e.AccountID, NewSignatureKeyFP: e.NewFingerprint}
 	}
 	return out
+}
+
+// roleSetOwnedBy reports whether a room's role set names account as owner.
+func roleSetOwnedBy(set *proto.MLSRoleSet, account string) bool {
+	for _, e := range set.Entries {
+		if e.Role == proto.MLSRoleOwner {
+			return e.AccountID == account
+		}
+	}
+	return false
 }

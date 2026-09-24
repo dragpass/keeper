@@ -23,6 +23,7 @@
 //     identity <identity> <secret> <public> <declaration> <lifetime_secs> <roles 0|1>
 //     key-package                  -> ok <key package message>
 //     key-package-entry            -> ok <Keeper pool entry> <reference> <not_after>
+//     create <group_id> <roles>    -> ok       (a group of its own, roles "-" for none)
 //     join <welcome>               -> ok <epoch>
 //     process <message>            -> ok <epoch>
 //     commit <adds> <removes> <roles> <aad> <apply 0|1>
@@ -44,6 +45,7 @@ use std::time::Duration;
 use mls_rs::client_builder::{
     BaseConfig, WithCryptoProvider, WithIdentityProvider, WithKeyPackageRepo,
 };
+use mls_rs::extension::built_in::RequiredCapabilitiesExt;
 use mls_rs::extension::ExtensionType;
 use mls_rs::identity::basic::{BasicCredential, BasicIdentityProvider};
 use mls_rs::identity::SigningIdentity;
@@ -218,6 +220,34 @@ impl Adversary {
         ))
     }
 
+    /// A group of this client's own, with the required capabilities a Keeper
+    /// sets and the roles payload it is told, whatever that names.
+    fn create(&mut self, group_id: &str, roles: &str) -> Res<()> {
+        let mut context = ExtensionList::new();
+        context
+            .set_from(RequiredCapabilitiesExt {
+                extensions: vec![ExtensionType::new(LEAF_DECLARATION_EXTENSION)],
+                proposals: Vec::new(),
+                credentials: Vec::new(),
+            })
+            .map_err(|err| e("required capabilities", err))?;
+        let roles = unhex(roles)?;
+        if !roles.is_empty() {
+            context.set(Extension::new(ExtensionType::new(ROLES_EXTENSION), roles));
+        }
+        let group = self
+            .client
+            .create_group_with_id(
+                unhex(group_id)?,
+                context,
+                self.leaf_extensions.clone(),
+                None,
+            )
+            .map_err(|err| e("create", err))?;
+        self.group = Some(group);
+        Ok(())
+    }
+
     fn join(&mut self, welcome: &str) -> Res<u64> {
         let msg = MlsMessage::from_bytes(&unhex(welcome)?).map_err(|err| e("welcome", err))?;
         let (group, _) = self
@@ -329,6 +359,7 @@ fn answer(adversary: &mut Option<Adversary>, line: &str) -> Res<String> {
     match (op, args.as_slice()) {
         ("key-package", []) => Ok(hex(&a.key_package()?)),
         ("key-package-entry", []) => a.key_package_entry(),
+        ("create", [group_id, roles]) => a.create(group_id, roles).map(|()| String::new()),
         ("join", [welcome]) => Ok(a.join(welcome)?.to_string()),
         ("process", [message]) => Ok(a.process(message)?.to_string()),
         ("commit", rest) => a.commit(rest),

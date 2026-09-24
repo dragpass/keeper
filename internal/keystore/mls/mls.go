@@ -1402,7 +1402,46 @@ func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	if err := s.Join(welcome); err != nil {
 		return err
 	}
+	if err := s.requireCreatorOwnsNewRoom(); err != nil {
+		return err
+	}
 	return recordVerified(v, leaves)
+}
+
+// ErrCreatorNotOwner — a Welcome to a room's first epoch whose roles name as
+// owner someone other than the room's creator (N11). Nothing was joined.
+var ErrCreatorNotOwner = errors.New("mls: the new room's roles do not name its creator as owner")
+
+// requireCreatorOwnsNewRoom holds a room's first epoch to N11: the creator,
+// whose leaf is leaf 0, is the owner. Only the first epoch can be checked this
+// way; later the owner may have changed by a Commit the members judged. A
+// group without roles, and a DM, are not judged here.
+func (s *Session) requireCreatorOwnsNewRoom() error {
+	epoch, err := s.Epoch()
+	if err != nil || epoch != 1 {
+		return err
+	}
+	payload, _, err := s.groupAuthority()
+	if err != nil {
+		return err
+	}
+	roles, err := parseRolesOrNil(payload)
+	if err != nil || roles == nil || roles.Kind != chatstate.RolesKindRoom {
+		return err
+	}
+	roster, err := s.Roster()
+	if err != nil {
+		return err
+	}
+	for _, l := range roster {
+		if l.Index != 0 {
+			continue
+		}
+		if account, _, perr := ParseCredentialIdentity(l.Identity); perr == nil && account == roles.Owner {
+			return nil
+		}
+	}
+	return ErrCreatorNotOwner
 }
 
 // CommitAddMembersVerified verifies the leaves these KeyPackages would add, as
