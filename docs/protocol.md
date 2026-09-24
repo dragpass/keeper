@@ -1033,6 +1033,12 @@ a group (`CHAT_MLS_ROLES_UNSUPPORTED`). The rules:
   is none after the create; an Add paired with a Remove of the same account
   (R2: a replace or a rejoin) is always allowed. An added account that still
   holds a role entry needs the owner to reset the roles in the same Commit.
+- **One active device per account**, in every group (room, DM or
+  `legacy_temporary`), on receipt as on build: an Add of an account that
+  already holds a leaf in the tree before the Commit is refused unless the
+  same Commit removes that account's leaf (the R2 shapes). A second device
+  takes the first one's seat (a handover replace, a recovery replace, or a
+  rejoin); it never sits beside it.
 - A **Remove** of account A's leaf by committer C is accepted when **R1** A is
   C's own account; **R2** the same Commit adds a leaf of A; **S** a verified
   statement the Commit carries covers that leaf (below); or **RR** C's role

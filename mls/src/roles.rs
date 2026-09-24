@@ -264,6 +264,11 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
         if account.is_some_and(|a| change.is_removed(a)) {
             continue;
         }
+        // One active device per account: a second leaf of an account comes
+        // in only in place of the one it holds (the R2 shapes above).
+        if account.is_some_and(|a| change.holds_before(a)) {
+            return Err("an account that holds a leaf is added again");
+        }
         match &roles {
             None => {}
             Some(Roles::Dm) => {
@@ -597,6 +602,21 @@ mod tests {
         let mut c = change(&before, B, Some(room(A, &[B, C])));
         c.added = vec![acct(C)];
         assert!(check(&c).is_err());
+    }
+
+    // One active device per account, in every kind of group: a second leaf of
+    // an account in the tree comes in only in place of the one it holds.
+    #[test]
+    fn an_account_that_holds_a_leaf_is_added_again_only_in_its_place() {
+        let before = [acct(A), acct(B)];
+        for roles in [None, Some(room(A, &[])), Some(Roles::Dm)] {
+            let mut c = change(&before, A, roles);
+            c.epoch = 0;
+            c.added = vec![acct(B)];
+            assert!(check(&c).is_err());
+            c.removed = vec![acct(B)];
+            assert!(check(&c).is_ok());
+        }
     }
 
     #[test]

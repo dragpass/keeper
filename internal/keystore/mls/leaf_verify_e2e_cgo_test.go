@@ -335,7 +335,10 @@ func untrustedKeyPackages(t *testing.T, pinned string) map[string][]byte {
 }
 
 // V3 A1–A5 at the Add: alice's Keeper refuses to build the Commit. Nothing is
-// applied, nothing is persisted, no pin is written.
+// applied, nothing is persisted, no pin is written. Bob was a member and has
+// left, so alice holds his pin and A4's leaf of his account is a first leaf in
+// the group: one active device per account refuses a second leaf of an
+// account still in the tree before its key is even looked at.
 func TestV3_AnHonestKeeperRefusesToAddAnUntrustedLeaf(t *testing.T) {
 	g := newGroup(t)
 	bob := newAccount(t, accountB)
@@ -349,6 +352,7 @@ func TestV3_AnHonestKeeperRefusesToAddAnUntrustedLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.confirm(t, in.ClientCommitID)
+	g.confirm(t, g.beginRemove(t, noWatermark, accountB).ClientCommitID)
 	pinB, _ := g.alice.pinOf(t, accountB)
 
 	for name, kp := range untrustedKeyPackages(t, accountB) {
@@ -410,8 +414,10 @@ func (g groupOf) memberOf(t *testing.T, a *account, deviceID string) (*mls.Sessi
 }
 
 // V3 A1–A5 at the receiver: a member that does not check commits an
-// untrusted leaf, and bob's Keeper refuses to apply it. Bob pinned alice's
-// account when he joined, so A4 swaps hers.
+// untrusted leaf, and bob's Keeper refuses to apply it. A4 swaps the key of
+// carol, whom bob has pinned but who holds no leaf here: one of alice's own
+// account would be a second leaf of an account in the tree, which the rules
+// refuse before its key is looked at.
 func TestV3_AMemberRefusesACommitThatBringsInAnUntrustedLeaf(t *testing.T) {
 	g := newGroup(t)
 	bob := newAccount(t, accountB)
@@ -420,12 +426,21 @@ func TestV3_AMemberRefusesACommitThatBringsInAnUntrustedLeaf(t *testing.T) {
 	if !found {
 		t.Fatal("joining did not pin the committer's account")
 	}
+	carol := newAccount(t, accountC)
+	now := time.Now().Unix()
+	pinC := keychain.PeerKeyPin{
+		V: 1, Fingerprint: crypto.AccountKeyFingerprint([]byte(carol.pem)),
+		State: keychain.PeerKeyPinStateTOFU, FirstSeenAt: now, LastSeenAt: now,
+	}
+	if err := keychain.SavePeerKeyPin(bob.store, bob.id, accountC, pinC); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := mls.Restore(g.aliceStore, conv, noWatermark, g.aliceS); err != nil {
 		t.Fatal(err)
 	}
 
 	seq := uint64(0)
-	for name, kp := range untrustedKeyPackages(t, accountA) {
+	for name, kp := range untrustedKeyPackages(t, accountC) {
 		t.Run(name, func(t *testing.T) {
 			commit, _, _, err := g.aliceS.CommitAddMemberVerified(kp, trustAll{})
 			if name == "A1 no declaration" {
@@ -468,6 +483,9 @@ func TestV3_AMemberRefusesACommitThatBringsInAnUntrustedLeaf(t *testing.T) {
 			}
 			if pin, _ := bob.pinOf(t, accountA); pin.Fingerprint != pinA.Fingerprint {
 				t.Fatal("a refused commit moved the pin of the committer's account")
+			}
+			if pin, _ := bob.pinOf(t, accountC); pin != pinC {
+				t.Fatalf("a refused commit moved carol's pin to %+v", pin)
 			}
 		})
 	}
@@ -628,6 +646,9 @@ func TestASupersededDeclarationIsRefusedOnceANewerOneWasAccepted(t *testing.T) {
 	if rec, _ := g.alice.newestOf(t, accountB); rec.NotBefore != t0+60 {
 		t.Fatalf("newest = %+v; want the rotated declaration", rec)
 	}
+	// Bob leaves, so each key below is offered as his first leaf here and not
+	// as a second one, which one active device per account refuses anyway.
+	g.confirm(t, g.beginRemove(t, noWatermark, accountB).ClientCommitID)
 
 	v = g.alice.verifier()
 	if _, err := g.add(v, oldKP); !errors.Is(err, mls.ErrLeafUntrusted) ||

@@ -276,6 +276,11 @@ func judgeRoles(c CommitChange) string {
 		if slices.Contains(c.Removed, account) {
 			continue // R2
 		}
+		// One active device per account: a second leaf of an account comes
+		// in only in place of the one it holds (R2 above).
+		if slices.Contains(c.Before, account) {
+			return "an account that holds a leaf is added again"
+		}
 		switch {
 		case roles == nil:
 		case roles.Kind == RolesKindDM:

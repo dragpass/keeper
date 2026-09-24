@@ -1,6 +1,9 @@
 package chatstate
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // The golden vectors mls/src/roles.rs pins too: both sides must read one
 // payload one way.
@@ -60,5 +63,28 @@ func TestRoles_OwnerlessClaim(t *testing.T) {
 	if got := judgeRoles(CommitChange{CommitterAccountID: rolesC, Before: []string{rolesB, rolesC},
 		RolesBefore: noAdmin, RolesChange: RolesSet, RolesAfter: room(rolesC)}); got != "" {
 		t.Fatalf("with no admin, a member's claim: %s", got)
+	}
+}
+
+// One active device per account, in every kind of group: a second leaf of an
+// account in the tree comes in only in place of the one it holds (R2), on
+// receipt as on build, whoever commits it.
+func TestRoles_AnAccountThatHoldsALeafIsAddedAgainOnlyInItsPlace(t *testing.T) {
+	for name, roles := range map[string]*Roles{"legacy": nil, "room": room(rolesA), "dm": {Kind: RolesKindDM}} {
+		add := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA, rolesB}, RolesBefore: roles,
+			Added: []string{rolesB}}
+		if err := JudgeReceived(add, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+			t.Errorf("%s: a second leaf of an account in the tree = %v; want refused", name, err)
+		}
+		own := add
+		own.Added = []string{rolesA}
+		if err := JudgeReceived(own, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+			t.Errorf("%s: a second leaf of the committer's own account = %v; want refused", name, err)
+		}
+		replace := add
+		replace.Removed = []string{rolesB}
+		if err := JudgeReceived(replace, CommitAuthority{}); err != nil {
+			t.Errorf("%s: a leaf in place of the account's own = %v", name, err)
+		}
 	}
 }
