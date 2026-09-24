@@ -492,6 +492,33 @@ func validateMLSRejoin(members []MLSRejoinMember, conversationID string) error {
 	return nil
 }
 
+// MLSCommitAbandonRequest drops a pending Commit built before 0.0.55, which
+// carries no app_context_b64, on the user's confirmation (design Q23). The
+// caller has read the handshake log first: no row at the pending Commit's
+// epoch + 1.
+type MLSCommitAbandonRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+	ClientCommitID string          `json:"client_commit_id"`
+}
+
+func (r MLSCommitAbandonRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSCommitAbandonRequest) Validate() error {
+	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
+		return err
+	}
+	return requireMessageUUID(r.ClientCommitID, "client_commit_id")
+}
+
+// MLSCommitAbandonResponseData is the record's write counter after the drop.
+type MLSCommitAbandonResponseData struct {
+	Generation uint64 `json:"generation"`
+}
+
 // MLSRejoinRequestSignRequest asks for this device's signed rejoin request
 // for the conversation (0.0.55). The permit binds it to the account.
 type MLSRejoinRequestSignRequest struct {

@@ -29,5 +29,6 @@ func mlsChatActions() map[string]actionHandlerFunc {
 		proto.MLSRoomNameOpen:              handlers.HandleMLSRoomNameOpen,
 		proto.MLSConversationStatus:        handlers.HandleMLSConversationStatus,
 		proto.MLSRejoinRequestSign:         handlers.HandleMLSRejoinRequestSign,
+		proto.MLSCommitAbandon:             handlers.HandleMLSCommitAbandon,
 	}
 }

@@ -580,6 +580,72 @@ func latchIfRefused(s *Store, p convPaths, anchor Anchor, err error, epoch uint6
 	})
 }
 
+// ErrNotLegacyPending — the pending Commit carries the app's description of
+// it (built by 0.0.55 or later), so the app can post it again; abandoning it
+// would throw away a Commit that can still be settled.
+var ErrNotLegacyPending = errors.New("chat state pending commit carries an app context and can be reposted")
+
+// AbandonCipher is what AbandonLegacyPending needs from MLS.
+type AbandonCipher interface {
+	Load(groupState []byte) error
+	ClearPending() error
+	State() ([]byte, error)
+}
+
+// AbandonLegacyPending drops a pending Commit that was built before the app
+// could describe it (no AppContext), on the user's confirmation (design Q23).
+// Nothing can post such a Commit again once the app lost its own note of it,
+// so without this the conversation is commit_pending for good.
+//
+// Only the pending fork goes: the confirmed epoch, the latches and the history
+// stay, and the anchor does not move. The caller is the one that asked the
+// server first: the handshake log holds no row at ExpectedEpoch+1, so the
+// Commit never won its epoch. What this cannot rule out, and states: a post of
+// these bytes still in flight from an app that has since died could still
+// land; this device would then refuse its own Commit on catch-up.
+func (s *Store) AbandonLegacyPending(
+	conversationID string, wm ServerWatermark, clientCommitID string, cipher AbandonCipher,
+) (uint64, error) {
+	if clientCommitID == "" {
+		return 0, errors.New("abandon needs a client commit id")
+	}
+	var generation uint64
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		if rec.Pending == nil {
+			return ErrNoPendingCommit
+		}
+		if rec.Pending.ClientCommitID != clientCommitID {
+			return ErrCommitMismatch
+		}
+		if len(rec.Pending.AppContext) > 0 {
+			return ErrNotLegacyPending
+		}
+		if err := cipher.Load(rec.GroupState); err != nil {
+			return err
+		}
+		if err := cipher.ClearPending(); err != nil {
+			return err
+		}
+		state, err := cipher.State()
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		rec.GroupState = state
+		rec.Pending = nil
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		generation = rec.Generation
+		return nil
+	})
+	return generation, err
+}
+
 // PendingCommit reports the unsettled Commit so the caller can ask the server
 // what became of it. It answers with the bytes to repost and deliberately not
 // with the Welcome: until the server says this Commit was accepted, there is no

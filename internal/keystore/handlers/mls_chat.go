@@ -428,6 +428,24 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 	return proto.BaseResponse{Success: true, Data: data}
 }
 
+// HandleMLSCommitAbandon drops a legacy pending Commit on the user's
+// confirmation (chatstate.AbandonLegacyPending).
+func HandleMLSCommitAbandon(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSCommitAbandonRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	generation, err := c.store.AbandonLegacyPending(c.conv, c.wm, req.ClientCommitID, mls.NewCipher(c.session, nil))
+	if err != nil {
+		return chatStateFailure(d, "mls commit abandon", err)
+	}
+	d.Logger.Println("mls commit abandon successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSCommitAbandonResponseData{Generation: generation}}
+}
+
 // HandleMLSProcess applies one handshake row: somebody else's Commit.
 func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSProcessRequest

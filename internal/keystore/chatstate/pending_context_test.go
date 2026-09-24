@@ -112,3 +112,43 @@ func TestAPendingCommitReportsTheNameItsFirstBuildSealed(t *testing.T) {
 		t.Fatalf("status after the verdict = %+v, %v", status, err)
 	}
 }
+
+// Q23: a pending Commit built before the app could describe it is abandoned
+// only on request and only when it carries no description; the confirmed
+// state does not move. One that carries a description is posted again
+// instead.
+func TestALegacyPendingCommitIsAbandonedAndADescribedOneIsNot(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 4, 2, 7)
+	if _, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
+		ClientCommitID: testCommitA, Plan: CommitPlan{},
+	}, &fakeCommitter{}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Status(testConvA, noWatermark, &fakeCommitter{})
+	if err != nil || !before.CommitPending {
+		t.Fatalf("status before = %+v, %v", before, err)
+	}
+	if _, err := store.AbandonLegacyPending(testConvA, noWatermark, testClientA, &fakeCommitter{}); !errors.Is(err, ErrCommitMismatch) {
+		t.Fatalf("abandon of another id = %v", err)
+	}
+	if _, err := store.AbandonLegacyPending(testConvA, noWatermark, testCommitA, &fakeCommitter{}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Status(testConvA, noWatermark, &fakeCommitter{})
+	if err != nil || after.CommitPending || after.Epoch != before.Epoch || after.NeedsRekey {
+		t.Fatalf("status after the abandon = %+v, %v", after, err)
+	}
+	if _, err := store.AbandonLegacyPending(testConvA, noWatermark, testCommitA, &fakeCommitter{}); !errors.Is(err, ErrNoPendingCommit) {
+		t.Fatalf("a second abandon = %v", err)
+	}
+
+	if _, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
+		ClientCommitID: testCommitA, Plan: CommitPlan{}, AppContext: []byte(`{"v":1}`),
+	}, &fakeCommitter{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AbandonLegacyPending(testConvA, noWatermark, testCommitA, &fakeCommitter{}); !errors.Is(err, ErrNotLegacyPending) {
+		t.Fatalf("abandon of a described commit = %v", err)
+	}
+}
