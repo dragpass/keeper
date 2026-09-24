@@ -109,7 +109,7 @@ types are in `internal/keystore/proto/`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`ping`|_empty_|`{ version, hash, path, chat_contract }`|Liveness + version. Used by Extension health check. `chat_contract` (integer, 5 since the wave 5 chat contract) names the chat request contract this build speaks: two builds can report the same version string (the unreleased 0.0.55 before and after wave 5), and the MLS actions drop unknown request fields, so the extension refuses chat with a build below the contract it needs rather than send fields that would be ignored.|
+|`ping`|_empty_|`{ version, hash, path, chat_contract, chat_capabilities }`|Liveness + version. Used by Extension health check. `chat_contract` (integer, 5 for the wave 5 chat contract) and `chat_capabilities` (strings: `permit.v5`, `roles.v1`, `statements.v1`, `handover.v1`, `recovery.v1`, `pool_sweep.v1`, `sync_block.v1`, `safety_number.v1`) name the chat request contract this build speaks. Two builds can report the same version string, and the MLS actions drop unknown request fields, so a caller states the contract range it supports and the capabilities it requires, and refuses a build outside that range (older or newer) or missing one. They are a compatibility signal only: they prove nothing, and every request is validated and every signature verified on its own.|
 
 The current production backend is macOS Cocoa. Keeper exposes no approval or
 confirmation action. Native UI is limited to recovery-key display through

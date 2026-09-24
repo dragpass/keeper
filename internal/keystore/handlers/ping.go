@@ -4,6 +4,8 @@
 package handlers
 
 import (
+	"slices"
+
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/version"
 )
@@ -18,7 +20,8 @@ func HandlePing(d Deps, req proto.PingRequest) proto.BaseResponse {
 			Hash:    version.BinaryHash,
 			Path:    version.BinaryPath,
 
-			ChatContract: proto.ChatContract,
+			ChatContract:     proto.ChatContract,
+			ChatCapabilities: slices.Clone(proto.ChatCapabilities),
 		},
 	}
 }
