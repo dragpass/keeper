@@ -22,6 +22,7 @@
 // native-messaging daemon means the process dies on input the extension merely
 // got wrong.
 
+mod authority;
 mod gate;
 mod session;
 mod storage;
@@ -42,6 +43,9 @@ pub const DPMLS_ERR_ARG: i32 = -3;
 pub const DPMLS_ERR_UNTRUSTED: i32 = -4;
 /// The message was sent by this session's own leaf. Nothing was consumed.
 pub const DPMLS_ERR_FROM_SELF: i32 = -5;
+/// A Commit carried a Remove, or a proposal type, the Go side did not approve
+/// for this operation, and it was refused with nothing applied.
+pub const DPMLS_ERR_UNAUTHORIZED: i32 = -6;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -89,6 +93,8 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
                 DPMLS_ERR_UNTRUSTED
             } else if msg.contains(session::FROM_SELF) {
                 DPMLS_ERR_FROM_SELF
+            } else if msg.contains(authority::NOT_AUTHORIZED) {
+                DPMLS_ERR_UNAUTHORIZED
             } else {
                 DPMLS_ERR
             };
@@ -386,6 +392,31 @@ pub unsafe extern "C" fn dpmls_session_approve(
     })
 }
 
+/// Set the Removes the Go side judged authorized for the next group operation
+/// on this session: the next process or Commit build. That operation consumes
+/// the list whether it succeeds or not. Framed as in
+/// `authority::decode_removals`.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_session_approve_removals(
+    handle: *mut Session,
+    removals: *const u8,
+    removals_len: usize,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `removals` points to
+        // `removals_len` readable bytes for the duration of this call. The
+        // bytes are decoded into owned values before the call returns.
+        let (session, buf) = unsafe { (session_of(handle)?, slice(removals, removals_len)?) };
+        let approved = authority::decode_removals(buf).map_err(|e| format!("mls: {e}"))?;
+        session.approve_removals(approved);
+        Ok(DPMLS_OK)
+    })
+}
+
 /// Read the leaf a KeyPackage would add, without a session. `out` receives it
 /// in the leaf framing of `gate::encode_leaves`, as a list of one.
 ///
@@ -452,10 +483,12 @@ pub unsafe extern "C" fn dpmls_group_process_collect(
         // is not used concurrently, and that `message` points to `message_len`
         // readable bytes for the duration of this call.
         let (session, msg) = unsafe { (session_of(handle)?, slice(message, message_len)?) };
-        let leaves = session.process_collect(msg)?;
+        let (leaves, shape) = session.process_collect(msg)?;
+        let mut framed = gate::encode_leaves(&leaves);
+        framed.extend(authority::encode_shape(&shape));
         // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
         // checks it for null and overwrites it without reading it.
-        unsafe { put(out, gate::encode_leaves(&leaves))? };
+        unsafe { put(out, framed)? };
         Ok(DPMLS_OK)
     })
 }

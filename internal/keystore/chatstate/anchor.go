@@ -61,7 +61,74 @@ type Anchor struct {
 	// unable to do, so the only ways out are establishing a new epoch (the MLS
 	// layer, not yet present) and Purge.
 	NeedsRekey bool `json:"needs_rekey"`
+
+	// RekeyCause is why NeedsRekey latched, written with it and never changed
+	// afterwards: the first reason is the one that describes what happened.
+	// Empty on an anchor latched before the field existed.
+	RekeyCause RekeyCause `json:"rekey_cause,omitempty"`
+
+	// RekeyEpoch and RekeyCommitter* say what an unauthorized_commit or a fork
+	// latch was about: the epoch the refused or conflicting Commit produces, and
+	// for an unauthorized one the leaf that committed it, as the group's own
+	// tree names it. Written with the cause and never changed afterwards.
+	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
+	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
+	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
 }
+
+// RekeyCause says which check latched NeedsRekey. The recovery is the same for
+// every cause; the distinction is for the person looking at the conversation,
+// because a restored backup, a deleted file and a server claim are different
+// events to explain.
+type RekeyCause string
+
+const (
+	// RekeyCauseRollback — the file is behind the anchor: an older generation,
+	// an older epoch, or a position the anchor never authorized.
+	RekeyCauseRollback RekeyCause = "rollback_detected"
+
+	// RekeyCauseStateMissing — the file is gone while the anchor says
+	// positions were handed out.
+	RekeyCauseStateMissing RekeyCause = "state_missing"
+
+	// RekeyCauseWatermarkAhead — the server, or the anchor's copy of an
+	// earlier server claim, says this device's own chain went further than
+	// the file does.
+	RekeyCauseWatermarkAhead RekeyCause = "watermark_ahead"
+
+	// RekeyCauseAnchorUnreadable — the anchor itself could not be read. Not
+	// stored: loadAnchor reports it on every read until the entry is replaced.
+	RekeyCauseAnchorUnreadable RekeyCause = "anchor_unreadable"
+
+	// RekeyCauseUnauthorizedCommit — a member's Commit carried an Add or a
+	// Remove the authority rules do not allow (authority.go), and this device
+	// refused to apply it. Every member that applied it is now on an epoch
+	// this device will never reach, so from here the group is forked.
+	RekeyCauseUnauthorizedCommit RekeyCause = "unauthorized_commit"
+
+	// RekeyCauseFork — the server served, for an epoch this device already
+	// confirmed, a Commit other than the one this device applied there.
+	RekeyCauseFork RekeyCause = "fork"
+)
+
+// RekeyDetail is a latch cause and what it was about.
+type RekeyDetail struct {
+	Cause              RekeyCause
+	Epoch              uint64
+	CommitterAccountID string
+	CommitterDeviceID  string
+}
+
+// RekeyLatchedError is ErrRekeyRequired from the operation that set the latch,
+// carrying why. Every later operation answers the bare ErrRekeyRequired; the
+// detail stays readable through Status.
+type RekeyLatchedError struct{ Detail RekeyDetail }
+
+func (e *RekeyLatchedError) Error() string {
+	return ErrRekeyRequired.Error() + ": " + string(e.Detail.Cause)
+}
+
+func (e *RekeyLatchedError) Unwrap() error { return ErrRekeyRequired }
 
 // ServerWatermark is the server's claim about how far this sender's chain has
 // been accepted. It arrives inside the signed permit rather than as a free
@@ -124,7 +191,7 @@ func loadAnchor(secrets keychain.SecretStore, conversationTag string) (Anchor, e
 		// An unreadable anchor is treated as a rewind rather than as an empty
 		// one: "cannot tell how far this chain got" must never resolve to
 		// "start again from zero".
-		return Anchor{Version: AnchorVersion, NeedsRekey: true}, nil
+		return Anchor{Version: AnchorVersion, NeedsRekey: true, RekeyCause: RekeyCauseAnchorUnreadable}, nil
 	}
 	if a.Version == 0 {
 		// The single axis a version-0 anchor held is the application one. Not
@@ -134,7 +201,7 @@ func loadAnchor(secrets keychain.SecretStore, conversationTag string) (Anchor, e
 		// both lose the only position this anchor ever knew about.
 		var legacy legacyAnchor
 		if err := json.Unmarshal([]byte(value), &legacy); err != nil {
-			return Anchor{Version: AnchorVersion, NeedsRekey: true}, nil
+			return Anchor{Version: AnchorVersion, NeedsRekey: true, RekeyCause: RekeyCauseAnchorUnreadable}, nil
 		}
 		a.WatermarkNextApplication = legacy.WatermarkNextIndex
 		a.Version = AnchorVersion
@@ -159,7 +226,14 @@ func deleteAnchor(secrets keychain.SecretStore, conversationTag string) error {
 	return err
 }
 
-// rewound reports whether the record has fallen behind either axis.
+// rewound reports whether the record has fallen behind either axis: the
+// local one (rewoundLocally) or the watermark (watermarkAhead).
+func (a Anchor) rewound(rec *Record, wm ServerWatermark) bool {
+	return a.rewoundLocally(rec) || a.watermarkAhead(rec, wm)
+}
+
+// rewoundLocally is the half of the judgement that needs nothing but the file
+// and the keyring:
 //
 //   - rec.Generation < a.Generation: the file is older than what was committed.
 //     The reverse (file ahead of the anchor) is the ordinary crash window
@@ -167,7 +241,18 @@ func deleteAnchor(secrets keychain.SecretStore, conversationTag string) error {
 //     positions are already spent in the file, which is the safe direction.
 //   - rec.NextIndex > a.ReservedBefore: the file claims positions the anchor
 //     never authorized.
-//   - the server has accepted a position this file does not know it sent.
+//   - rec.Epoch < a.Epoch: the file is from before an epoch this device
+//     already confirmed.
+func (a Anchor) rewoundLocally(rec *Record) bool {
+	return rec.Generation < a.Generation ||
+		rec.NextIndex > a.ReservedBefore ||
+		rec.Epoch < a.Epoch
+}
+
+// watermarkAhead reports whether the server, or the anchor's copy of an
+// earlier server claim, has accepted a position this file does not know it
+// sent. A watermark that is not this device's chain (Record.ownsChain) takes
+// no part.
 //
 // Only the application axis of the watermark is compared, and the handshake one
 // is carried without being looked at. encrypt_control_messages is pinned false,
@@ -179,24 +264,39 @@ func deleteAnchor(secrets keychain.SecretStore, conversationTag string) error {
 // A server inflating that slot is an availability attack that learns no
 // plaintext, which is the position design §7.4's table already takes. The slot
 // is kept because flipping that setting brings the axis back.
-func (a Anchor) rewound(rec *Record, wm ServerWatermark) bool {
-	if rec.Generation < a.Generation {
-		return true
+func (a Anchor) watermarkAhead(rec *Record, wm ServerWatermark) bool {
+	var epoch, nextIndex uint64
+	if rec.ownsChain(a.WatermarkEpoch, a.WatermarkLeafIndex, a.hasWatermark()) {
+		epoch, nextIndex = a.WatermarkEpoch, a.WatermarkNextApplication
 	}
-	if rec.NextIndex > a.ReservedBefore {
-		return true
-	}
-	if rec.Epoch < a.Epoch {
-		return true
-	}
-	epoch, nextIndex := a.WatermarkEpoch, a.WatermarkNextApplication
-	if wm.Epoch > epoch || (wm.Epoch == epoch && wm.NextApplicationIndex > nextIndex) {
+	if rec.ownsChain(wm.Epoch, wm.LeafIndex, wm.HasAccepted()) &&
+		(wm.Epoch > epoch || (wm.Epoch == epoch && wm.NextApplicationIndex > nextIndex)) {
 		epoch, nextIndex = wm.Epoch, wm.NextApplicationIndex
 	}
 	if epoch > rec.Epoch {
 		return true
 	}
 	return epoch == rec.Epoch && nextIndex > rec.NextIndex
+}
+
+func (a Anchor) hasWatermark() bool {
+	return a.WatermarkNextHandshake != 0 || a.WatermarkNextApplication != 0
+}
+
+// advancedBy is withWatermark for a watermark judged against rec: one that is
+// not this device's chain moves nothing, and a stored watermark that is not
+// this device's chain is replaced rather than merged into. The second case is
+// an anchor that took another leaf's claim before the leaf was known here;
+// taking the higher slot of two chains would leave neither one protected.
+func (a Anchor) advancedBy(rec *Record, wm ServerWatermark) Anchor {
+	if !rec.ownsChain(wm.Epoch, wm.LeafIndex, wm.HasAccepted()) {
+		return a
+	}
+	if !rec.ownsChain(a.WatermarkEpoch, a.WatermarkLeafIndex, a.hasWatermark()) {
+		a.WatermarkEpoch, a.WatermarkLeafIndex = 0, 0
+		a.WatermarkNextHandshake, a.WatermarkNextApplication = 0, 0
+	}
+	return a.withWatermark(wm)
 }
 
 // withWatermark returns the anchor advanced to the higher of its own watermark

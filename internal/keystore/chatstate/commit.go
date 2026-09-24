@@ -50,6 +50,7 @@ package chatstate
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -128,6 +129,23 @@ type CommitPlan struct {
 	// Replace swaps each account's leaves for the leaf of the device that took
 	// it over (design M4.4), in one Commit.
 	Replace []ReplaceMember
+
+	// Rejoin re-seats each account whose every Welcome was unusable: every
+	// leaf it holds goes out and its new KeyPackage comes in, in one Commit
+	// (R2). The caller has already verified each account's signed request.
+	Rejoin []RejoinMember
+
+	// UserInitiated says a person on this device asked for this Add or
+	// Remove (R4i, authority.go). Automation never sets it. It is the app's
+	// word, not something the Keeper can check.
+	UserInitiated bool
+}
+
+// RejoinMember is one account to re-seat and the KeyPackage its signed rejoin
+// request names the leaf of.
+type RejoinMember struct {
+	AccountID  string
+	KeyPackage []byte
 }
 
 // ReplaceMember is one account to replace. NewFingerprint is the one the
@@ -182,6 +200,29 @@ type BeginCommitRequest struct {
 	// the pending Commit and before the CAS, so the server can store it with
 	// the Commit in one row. The caller owns and wipes it.
 	RoomName []byte
+
+	// AppContext is stored with the pending Commit (PendingCommit.AppContext).
+	// A retry keeps the first build's.
+	AppContext []byte
+}
+
+// MaxPendingAppContextBytes bounds PendingCommit.AppContext. The app's
+// description of a Commit names at most a room's members and their claimed
+// KeyPackages; the bound keeps a caller from growing the record with it.
+const MaxPendingAppContextBytes = 65536
+
+func checkAppContext(context []byte) error {
+	if len(context) > MaxPendingAppContextBytes {
+		return fmt.Errorf("app context is over %d bytes", MaxPendingAppContextBytes)
+	}
+	return nil
+}
+
+func storedName(name *SealedRoomName) *PendingRoomName {
+	if name == nil {
+		return nil
+	}
+	return &PendingRoomName{IV: name.IV, Ciphertext: name.Ciphertext}
 }
 
 // BeginCommitResult is what the caller posts to the server's CAS endpoint.
@@ -251,6 +292,11 @@ type CommitOutcome struct {
 	// keeps the losing device's discard and the winner's application inside
 	// one lock and one file replacement.
 	WinnerMessage []byte
+
+	// WinnerMembers verifies the member set the server signed for the winning
+	// Commit against the epoch it produces, which only the pending Commit
+	// here knows, and returns it. Nil when the winner's row carried none.
+	WinnerMembers func(epoch uint64) (*ServerCommitMembers, error)
 }
 
 // ConfirmCommitResult is the state after the verdict.
@@ -266,7 +312,18 @@ type ConfirmCommitResult struct {
 	// Removed reports a winning Commit that took this device out of the group.
 	Removed bool
 
+	// Winner is what the winning Commit of a superseded outcome did, in
+	// accounts, so a caller whose Commit lost can tell whether the winner
+	// touched the accounts it was about (Q20). Nil when accepted, or when the
+	// cipher does not report it.
+	Winner *CommitChange
+
 	Generation uint64
+}
+
+// ChangeReporter is a cipher that reports what the last Commit it applied did.
+type ChangeReporter interface {
+	LastCommitChange() (CommitChange, bool)
 }
 
 // BeginCommit builds a Commit and stores it as pending. The confirmed state
@@ -283,6 +340,9 @@ func (s *Store) BeginCommit(
 		return BeginCommitResult{}, errors.New("commit needs a client commit id")
 	}
 	if err := checkRoomName(req.RoomName); err != nil {
+		return BeginCommitResult{}, err
+	}
+	if err := checkAppContext(req.AppContext); err != nil {
 		return BeginCommitResult{}, err
 	}
 	var out BeginCommitResult
@@ -309,6 +369,9 @@ func (s *Store) BeginCommit(
 		// After the retry branch: a retry answers with bytes already built,
 		// and the permit it arrives with may have dropped the entry since.
 		if err := requireListedReplacements(req.Plan, wm); err != nil {
+			return err
+		}
+		if err := requireAuthorizedPlan(req.Plan, rec, wm); err != nil {
 			return err
 		}
 		if len(rec.GroupState) == 0 {
@@ -360,6 +423,8 @@ func (s *Store) BeginCommit(
 			ExpectedEpoch:  built.ExpectedEpoch,
 			Commit:         built.Commit,
 			Welcome:        built.Welcome,
+			AppContext:     req.AppContext,
+			Name:           storedName(name),
 		}
 		loaded := rec.Generation
 		rec.GroupState = state
@@ -413,6 +478,7 @@ func (s *Store) ConfirmCommit(
 			epoch   uint64
 			removed bool
 			welcome []byte
+			winner  *CommitChange
 		)
 		if outcome.Kind == CommitAccepted {
 			if err := cipher.ApplyPending(); err != nil {
@@ -423,13 +489,25 @@ func (s *Store) ConfirmCommit(
 			}
 			welcome = pending.Welcome
 		} else {
+			var members *ServerCommitMembers
+			if outcome.WinnerMembers != nil {
+				if members, err = outcome.WinnerMembers(pending.ExpectedEpoch + 1); err != nil {
+					return err
+				}
+			}
+			s.armAuthority(cipher, rec, wm, members)
 			// Order matters and is one operation in the library: applying the
 			// winner runs on the state that never moved, and it drops our fork
 			// as it goes. ClearPending first would work too, but only this way
 			// is there no moment where the fork is gone and the winner is not
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
-				return err
+				return latchIfRefused(s, p, anchor, err, pending.ExpectedEpoch+1)
+			}
+			if reporter, ok := cipher.(ChangeReporter); ok {
+				if change, ok := reporter.LastCommitChange(); ok {
+					winner = &change
+				}
 			}
 			// Normally a no-op: mls-rs drops the pending as part of
 			// applying another member's Commit. It is here because "the fork
@@ -455,11 +533,17 @@ func (s *Store) ConfirmCommit(
 		if err != nil {
 			return err
 		}
+		crashAt(CrashConfirmAfterApply)
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil
 		latch.apply(rec)
 		rec.enterEpoch(epoch)
+		if outcome.Kind == CommitAccepted {
+			rec.noteConfirmed(pending.ExpectedEpoch+1, pending.Commit)
+		} else {
+			rec.noteConfirmed(pending.ExpectedEpoch+1, outcome.WinnerMessage)
+		}
 		if removed {
 			rec.RemovedFromGroup = true
 		}
@@ -471,11 +555,95 @@ func (s *Store) ConfirmCommit(
 			Welcome:           welcome,
 			WelcomeReleasable: outcome.Kind == CommitAccepted && len(welcome) > 0,
 			Removed:           removed,
+			Winner:            winner,
 			Generation:        rec.Generation,
 		}
 		return nil
 	})
 	return out, err
+}
+
+// latchIfRefused latches the conversation when err is the authority rules
+// refusing a received Commit (Q4), and passes any other error through. The
+// latch is the anchor's alone: the record is not written, so the Commit is
+// not applied and whatever was pending stays as it was.
+func latchIfRefused(s *Store, p convPaths, anchor Anchor, err error, epoch uint64) error {
+	var refused *UnauthorizedCommitError
+	if !errors.As(err, &refused) {
+		return err
+	}
+	return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{
+		Cause:              RekeyCauseUnauthorizedCommit,
+		Epoch:              epoch,
+		CommitterAccountID: refused.CommitterAccountID,
+		CommitterDeviceID:  refused.CommitterDeviceID,
+	})
+}
+
+// ErrNotLegacyPending — the pending Commit carries the app's description of
+// it (built by 0.0.55 or later), so the app can post it again; abandoning it
+// would throw away a Commit that can still be settled.
+var ErrNotLegacyPending = errors.New("chat state pending commit carries an app context and can be reposted")
+
+// AbandonCipher is what AbandonLegacyPending needs from MLS.
+type AbandonCipher interface {
+	Load(groupState []byte) error
+	ClearPending() error
+	State() ([]byte, error)
+}
+
+// AbandonLegacyPending drops a pending Commit that was built before the app
+// could describe it (no AppContext), on the user's confirmation (design Q23).
+// Nothing can post such a Commit again once the app lost its own note of it,
+// so without this the conversation is commit_pending for good.
+//
+// Only the pending fork goes: the confirmed epoch, the latches and the history
+// stay, and the anchor does not move. The caller is the one that asked the
+// server first: the handshake log holds no row at ExpectedEpoch+1, so the
+// Commit never won its epoch. What this cannot rule out, and states: a post of
+// these bytes still in flight from an app that has since died could still
+// land; this device would then refuse its own Commit on catch-up.
+func (s *Store) AbandonLegacyPending(
+	conversationID string, wm ServerWatermark, clientCommitID string, cipher AbandonCipher,
+) (uint64, error) {
+	if clientCommitID == "" {
+		return 0, errors.New("abandon needs a client commit id")
+	}
+	var generation uint64
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		if rec.Pending == nil {
+			return ErrNoPendingCommit
+		}
+		if rec.Pending.ClientCommitID != clientCommitID {
+			return ErrCommitMismatch
+		}
+		if len(rec.Pending.AppContext) > 0 {
+			return ErrNotLegacyPending
+		}
+		if err := cipher.Load(rec.GroupState); err != nil {
+			return err
+		}
+		if err := cipher.ClearPending(); err != nil {
+			return err
+		}
+		state, err := cipher.State()
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		rec.GroupState = state
+		rec.Pending = nil
+		if err := s.commit(p, rec, loaded, anchor); err != nil {
+			return err
+		}
+		generation = rec.Generation
+		return nil
+	})
+	return generation, err
 }
 
 // PendingCommit reports the unsettled Commit so the caller can ask the server

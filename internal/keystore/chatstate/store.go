@@ -15,6 +15,7 @@
 package chatstate
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -235,7 +236,7 @@ func (s *Store) MarkReceived(
 
 // SaveGroupState replaces the conversation's serialized MLS state with the
 // blob the library handed out and returns the record generation that now
-// carries it. Send and Receive persist the state themselves as part of their
+// carries it. The store writes a copy; the caller keeps blob and wipes it. Send and Receive persist the state themselves as part of their
 // transactions; this is for the paths that move the group without sending or
 // receiving, such as establishing it in the first place.
 //
@@ -264,7 +265,7 @@ func (s *Store) SaveGroupState(
 			return err
 		}
 		loaded := rec.Generation
-		rec.GroupState = blob
+		rec.GroupState = bytes.Clone(blob)
 		rec.RemovedFromGroup = false
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
@@ -275,8 +276,8 @@ func (s *Store) SaveGroupState(
 	return generation, err
 }
 
-// LoadGroupState returns the stored blob, or nil when this conversation has
-// never held one. Nil is an answer, not a failure: a conversation exists before
+// LoadGroupState returns a copy of the stored blob, which the caller owns and
+// wipes, or nil when this conversation has never held one. Nil is an answer, not a failure: a conversation exists before
 // its group does.
 func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byte, error) {
 	var blob []byte
@@ -285,36 +286,10 @@ func (s *Store) LoadGroupState(conversationID string, wm ServerWatermark) ([]byt
 		if err != nil {
 			return err
 		}
-		blob = rec.GroupState
+		blob = bytes.Clone(rec.GroupState)
 		return nil
 	})
 	return blob, err
-}
-
-// LocalLeafIndex reports this device's leaf in the conversation's MLS group,
-// and false when the conversation has never learned one — no record, no group,
-// or nothing sent yet. False is an answer: a leaf nobody knows cannot be
-// compared against the leaf a server watermark names.
-//
-// It reads the record without judging it against the anchor, unlike every
-// other call here. The value it takes out is one this device wrote about
-// itself and a rewound copy of the file carries the same leaf as a current
-// one, so nothing is decided on the unjudged bytes; the caller's real
-// operation runs the judgement immediately afterwards.
-func (s *Store) LocalLeafIndex(conversationID string) (uint32, bool, error) {
-	var (
-		leaf  uint32
-		known bool
-	)
-	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, err := s.readRecord(p, conversationID)
-		if err != nil || rec == nil {
-			return err
-		}
-		leaf, known = rec.localLeafIndex()
-		return nil
-	})
-	return leaf, known, err
 }
 
 // Purge erases every trace of one owner's chat state: the files, the anchors,
@@ -409,6 +384,37 @@ type convPaths struct {
 	dir    string
 	record string
 	lock   string
+
+	// scrub is set by withConversation and collects the group state buffers
+	// of the cycle. Nil for paths built outside one.
+	scrub *groupStateScrub
+}
+
+// groupStateScrub is every group state one locked cycle held: the buffer
+// each record was read with, and whatever the record holds when the cycle
+// ends (the state the MLS layer handed back to be written). The serialized
+// state carries the leaf signature secret key, so none of it should outlive
+// the lock. What this cannot reach is listed on withConversation.
+type groupStateScrub struct {
+	records []*Record
+	buffers [][]byte
+}
+
+func (p convPaths) track(rec *Record) {
+	if p.scrub == nil {
+		return
+	}
+	p.scrub.records = append(p.scrub.records, rec)
+	p.scrub.buffers = append(p.scrub.buffers, rec.GroupState)
+}
+
+func (g *groupStateScrub) wipe() {
+	for _, b := range g.buffers {
+		secure.Zeroize(b)
+	}
+	for _, rec := range g.records {
+		secure.Zeroize(rec.GroupState)
+	}
 }
 
 func (s *Store) ownerDir() string { return filepath.Join(s.root, ownerTag(s.owner)) }
@@ -447,6 +453,15 @@ func conversationTagsIn(dir string) ([]string, error) {
 	return tags, nil
 }
 
+// withConversation runs fn under the conversation's lock and wipes every group
+// state buffer the cycle held when it ends, so an operation hands nothing of
+// it back except through a copy (LoadGroupState).
+//
+// Best effort, and only for the buffers this package owns. Not reached: the
+// copies the Go runtime makes of its own accord (a slice that grew, a moved
+// stack, memory the GC has not yet reused), the base64 decode json.Unmarshal
+// runs over the record body, and the pooled encoder buffer json.Marshal keeps
+// after writeRecord; the record body itself is wiped on both paths.
 func (s *Store) withConversation(conversationID string, fn func(convPaths) error) error {
 	p := s.paths(conversationID)
 	if err := ensureOwnerOnlyDir(s.root, p.dir); err != nil {
@@ -457,6 +472,8 @@ func (s *Store) withConversation(conversationID string, fn func(convPaths) error
 		return err
 	}
 	defer release()
+	p.scrub = &groupStateScrub{}
+	defer p.scrub.wipe()
 	return fn(p)
 }
 
@@ -484,6 +501,18 @@ func ensureOwnerOnlyDir(dirs ...string) error {
 func (s *Store) loadChecked(
 	p convPaths, conversationID string, wm ServerWatermark,
 ) (*Record, Anchor, error) {
+	rec, anchor, err := s.loadLocal(p, conversationID)
+	if err != nil {
+		return nil, anchor, err
+	}
+	return s.judgeWatermark(p, rec, anchor, wm)
+}
+
+// loadLocal is loadChecked's first half: the checks that need only the file
+// and the keyring. SaveJoinedGroupState runs the halves apart, because the
+// watermark describes a chain that only exists once the join has moved the
+// record onto its epoch and leaf.
+func (s *Store) loadLocal(p convPaths, conversationID string) (*Record, Anchor, error) {
 	anchor, err := loadAnchor(s.secrets, p.tag)
 	if err != nil {
 		return nil, Anchor{}, err
@@ -500,22 +529,65 @@ func (s *Store) loadChecked(
 		// deletion, not a first use: those positions were handed out and the
 		// only record of that is gone.
 		if anchor.Generation > 0 || anchor.ReservedBefore > 0 {
-			return nil, anchor, s.latchRekey(p.tag, anchor)
+			return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseStateMissing)
 		}
 		rec = newRecord(s.owner, conversationID)
+		p.track(rec)
 	}
-	if anchor.rewound(rec, wm) {
-		return nil, anchor, s.latchRekey(p.tag, anchor)
+	if anchor.rewoundLocally(rec) {
+		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseRollback)
 	}
-	return rec, anchor.withWatermark(wm), nil
+	return rec, anchor, nil
 }
 
-func (s *Store) latchRekey(tag string, anchor Anchor) error {
+// judgeWatermark is loadChecked's second half.
+func (s *Store) judgeWatermark(
+	p convPaths, rec *Record, anchor Anchor, wm ServerWatermark,
+) (*Record, Anchor, error) {
+	if anchor.watermarkAhead(rec, wm) {
+		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseWatermarkAhead)
+	}
+	return rec, anchor.advancedBy(rec, wm), nil
+}
+
+// latchRekey sets NeedsRekey. Nothing in this package clears it again.
+func (s *Store) latchRekey(tag string, anchor Anchor, cause RekeyCause) error {
+	return s.latchRekeyDetail(tag, anchor, RekeyDetail{Cause: cause})
+}
+
+// latchRekeyDetail is latchRekey with what the latch was about. The first
+// cause and its detail are kept: a second reason never rewrites the first.
+func (s *Store) latchRekeyDetail(tag string, anchor Anchor, detail RekeyDetail) error {
 	anchor.NeedsRekey = true
+	if anchor.RekeyCause == "" {
+		anchor.RekeyCause = detail.Cause
+		anchor.RekeyEpoch = detail.Epoch
+		anchor.RekeyCommitterAccountID = detail.CommitterAccountID
+		anchor.RekeyCommitterDeviceID = detail.CommitterDeviceID
+	}
 	if err := saveAnchor(s.secrets, tag, anchor); err != nil {
 		return err
 	}
+	if detail.Cause == RekeyCauseUnauthorizedCommit || detail.Cause == RekeyCauseFork {
+		return &RekeyLatchedError{Detail: detail}
+	}
 	return ErrRekeyRequired
+}
+
+// rekeyDetail reads why the conversation is latched, with a zero Cause when
+// it is not or when the latch predates the cause being recorded. It judges
+// nothing.
+func (s *Store) rekeyDetail(p convPaths) (RekeyDetail, error) {
+	anchor, err := loadAnchor(s.secrets, p.tag)
+	if err != nil || !anchor.NeedsRekey {
+		return RekeyDetail{}, err
+	}
+	return RekeyDetail{
+		Cause:              anchor.RekeyCause,
+		Epoch:              anchor.RekeyEpoch,
+		CommitterAccountID: anchor.RekeyCommitterAccountID,
+		CommitterDeviceID:  anchor.RekeyCommitterDeviceID,
+	}, nil
 }
 
 // commit bumps the generation, replaces the file, and then raises the anchor to
@@ -525,6 +597,7 @@ func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor
 	if err := s.writeRecord(p, rec, loadedGeneration); err != nil {
 		return err
 	}
+	crashAt(CrashCommitAfterFile)
 	anchor.Generation = rec.Generation
 	if rec.Epoch > anchor.Epoch {
 		// The anchor's half of Record.enterEpoch, which explains why the
@@ -560,6 +633,7 @@ func (s *Store) readRecord(p convPaths, conversationID string) (*Record, error) 
 	if err := json.Unmarshal(body, &rec); err != nil {
 		return nil, errSealedRecordMalformed
 	}
+	p.track(&rec)
 	if rec.SchemaVersion != SchemaVersion ||
 		rec.Generation != generation ||
 		rec.OwnerAccountID != s.owner ||

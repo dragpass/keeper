@@ -151,6 +151,7 @@ func Persist(
 	if err != nil {
 		return 0, err
 	}
+	defer secure.Zeroize(blob)
 	return store.SaveGroupState(conversationID, wm, blob)
 }
 
@@ -170,6 +171,7 @@ func Restore(
 	if len(blob) == 0 {
 		return false, nil
 	}
+	defer secure.Zeroize(blob)
 	return true, s.Load(blob)
 }
 
@@ -187,12 +189,36 @@ func Restore(
 //
 // Every path that can bring a leaf into the group — applying somebody's
 // Commit, and building an Add — goes through verifier first. What a
-// successful verification would record (a first-use pin, a newer declaration)
-// is the verifier's to hold until the caller has seen the whole chatstate
-// transaction succeed; this type never writes it.
+// successful verification records (a first-use pin, a newer declaration) is
+// written by the session once the MLS operation has succeeded, before
+// chatstate writes the state (LeafVerifier); this type writes nothing itself.
 type Cipher struct {
 	session  *Session
 	verifier LeafVerifier
+
+	// authority is the evidence the next applied Commit is judged by, handed
+	// in by chatstate before every Open and ApplyMessage (AuthorityReceiver).
+	// Unset it is empty, which admits only R1 and R2.
+	authority chatstate.CommitAuthority
+
+	// lastChange is what the last Commit this cipher applied did.
+	lastChange *chatstate.CommitChange
+}
+
+var (
+	_ chatstate.AuthorityReceiver = (*Cipher)(nil)
+	_ chatstate.ChangeReporter    = (*Cipher)(nil)
+)
+
+// SetCommitAuthority is chatstate.AuthorityReceiver.
+func (c *Cipher) SetCommitAuthority(auth chatstate.CommitAuthority) { c.authority = auth }
+
+// LastCommitChange is chatstate.ChangeReporter.
+func (c *Cipher) LastCommitChange() (chatstate.CommitChange, bool) {
+	if c.lastChange == nil {
+		return chatstate.CommitChange{}, false
+	}
+	return *c.lastChange, true
 }
 
 func NewCipher(s *Session, verifier LeafVerifier) *Cipher {
@@ -236,13 +262,22 @@ func (c *Cipher) CreateGroup(groupID []byte) error { return c.session.CreateGrou
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
 	kinds := 0
-	for _, present := range []bool{len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0} {
+	for _, present := range []bool{
+		len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0, len(plan.Rejoin) > 0,
+	} {
 		if present {
 			kinds++
 		}
 	}
 	if kinds > 1 {
-		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes or replaces, never two of them")
+		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes, replaces or rejoins, never two of them")
+	}
+	if len(plan.Rejoin) > 0 {
+		commit, welcome, expected, err := c.commitRejoinAccounts(plan.Rejoin)
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Replace) > 0 {
 		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
@@ -275,12 +310,15 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 // commitRemoveAccounts removes every leaf of each account. An account with no
 // leaf in the confirmed tree is refused rather than skipped: a Commit that
 // removes less than it was asked to would read as the removal having happened.
+//
+// The plan was judged before this (chatstate.requireAuthorizedPlan), so the
+// leaves it names are exactly the Removes approved to the Rust rules.
 func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, error) {
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, 0, err
 	}
-	var indices []uint32
+	var removed []Leaf
 	for _, want := range accountIDs {
 		found := false
 		for _, leaf := range leaves {
@@ -289,7 +327,7 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 				return nil, 0, err
 			}
 			if account == want {
-				indices = append(indices, leaf.Index)
+				removed = append(removed, leaf)
 				found = true
 			}
 		}
@@ -297,7 +335,65 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 			return nil, 0, failed("an account to remove has no leaf in the group")
 		}
 	}
-	return c.session.CommitRemoveMembers(indices)
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, 0, err
+	}
+	return c.session.CommitRemoveMembers(leafIndices(removed))
+}
+
+func leafIndices(leaves []Leaf) []uint32 {
+	out := make([]uint32, len(leaves))
+	for i, l := range leaves {
+		out[i] = l.Index
+	}
+	return out
+}
+
+// commitRejoinAccounts re-seats each account (design Q6): every leaf it holds
+// in the confirmed tree goes out and its new KeyPackage comes in, in one
+// Commit, which is the R2 shape every receiver accepts. The caller has
+// verified the account's signed rejoin request against this KeyPackage's leaf.
+//
+// An account with no leaf in the authenticated tree is refused and never added:
+// the unusable-Welcome case a rejoin exists for always leaves the account's
+// dead leaf there. Adding one that is not there would let whoever lists
+// rejoins (the server) have an account of its choosing added.
+func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit, welcome []byte, expected uint64, err error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	var (
+		removed []Leaf
+		kps     [][]byte
+	)
+	for _, m := range members {
+		account, _, err := KeyPackageIdentity(m.KeyPackage)
+		if err != nil || account != m.AccountID {
+			return nil, nil, 0, fmt.Errorf("%w: the rejoin key package names another account", ErrLeafUntrusted)
+		}
+		held := false
+		for _, l := range leaves {
+			owner, _, err := ParseCredentialIdentity(l.Identity)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if owner == m.AccountID {
+				removed = append(removed, l)
+				held = true
+			}
+		}
+		if !held {
+			return nil, nil, 0, &chatstate.UnauthorizedCommitError{
+				Reason: "a rejoin names an account with no leaf in the group",
+			}
+		}
+		kps = append(kps, m.KeyPackage)
+	}
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, nil, 0, err
+	}
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -321,7 +417,7 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		return nil, nil, 0, err
 	}
 	var (
-		indices []uint32
+		removed []Leaf
 		kps     [][]byte
 	)
 	for _, m := range members {
@@ -351,7 +447,7 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 				return nil, nil, 0, failed("a leaf in the group has an unreadable signature key")
 			}
 			if heldFingerprint != m.NewFingerprint {
-				indices = append(indices, l.Index)
+				removed = append(removed, l)
 				found = true
 			}
 		}
@@ -360,7 +456,10 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		}
 		kps = append(kps, m.KeyPackage)
 	}
-	return c.session.CommitReplaceMembersVerified(indices, kps, c.verifier)
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, nil, 0, err
+	}
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
 }
 
 // ConfirmedAccounts reads the confirmed roster, which a pending Commit is not
@@ -412,10 +511,11 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
-	processed, err := c.session.ProcessVerified(message, c.verifier)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return 0, false, err
 	}
+	c.lastChange = change
 	return processed.Epoch, processed.Removed, nil
 }
 
@@ -436,10 +536,11 @@ func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint
 // choose. A sender this cannot attribute is a refusal, never an anonymous
 // message.
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
-	processed, err := c.session.ProcessVerified(message, c.verifier)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
+	c.lastChange = change
 	var account, device string
 	if processed.Application {
 		if account, device, err = c.senderOf(processed.SenderLeafIndex); err != nil {
@@ -663,6 +764,10 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 	return out, pool, nil
 }
 
+// KeyPackageLeaf reads the leaf a KeyPackage would add, without a group: its
+// identity, its signature key and its declaration payload. The index is 0.
+func KeyPackageLeaf(keyPackage []byte) (Leaf, error) { return keyPackageLeaf(keyPackage) }
+
 // KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
 // without a group. It is how a caller that asked the server for one member's
 // KeyPackage checks it was handed that member's and not some other account's:
@@ -689,10 +794,11 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 // with a pending Commit refuses the join and keeps the pool entry.
 //
 // The order is the point. The group state is written first and the pool entry
-// deleted second. A crash between the two leaves an entry behind, which is
-// harmless: the server marked that KeyPackage consumed when it served it and
-// will not hand it out again. The other order could lose the invitation — the
-// keys gone and the group never written.
+// deleted second; the other order could lose the invitation — the keys gone
+// and the group never written. A crash between the two leaves the entry's
+// private keys behind, and those must not stay: the entry is claimed for this
+// conversation before the state write and the joined record names it, so the
+// next pool open deletes it (chatstate's pool sweep).
 //
 // mls-rs deletes the KeyPackage from its own repository when the joined group
 // is written to storage, outside any transaction (design §15). That repository
@@ -706,8 +812,9 @@ var ErrNoKeyPackageForWelcome = errors.New("mls: no key package private keys for
 // would name a key the session does not hold. The entry is kept, because a
 // refusal persists nothing; the next promote's drop removes it.
 //
-// What v would record (first-use pins) is the caller's to commit once this
-// returns nil, as with every verified operation.
+// What v records (first-use pins) is written when the Welcome has been
+// joined and before the group state is, as with every verified operation
+// (LeafVerifier). A refused join writes none.
 func (s *Session) JoinFromPool(
 	store *chatstate.Store,
 	conversationID string,
@@ -770,14 +877,36 @@ func (s *Session) joinFromEntry(
 	if err != nil {
 		return err
 	}
+	defer secure.Zeroize(blob)
 	epoch, err := s.Epoch()
 	if err != nil {
 		return err
 	}
-	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch); err != nil {
+	ownLeaf, err := s.OwnLeafIndex()
+	if err != nil {
+		return err
+	}
+	if err := store.ClaimKeyPackage(entry.Ref, conversationID); err != nil {
+		return err
+	}
+	if _, err := store.SaveJoinedGroupState(conversationID, wm, blob, epoch, ownLeaf, entry.Ref); err != nil {
+		return err
+	}
+	if err := afterJoinedStateSaved(); err != nil {
 		return err
 	}
 	return store.DeleteKeyPackage(entry.Ref, now)
+}
+
+// afterJoinedStateSaved runs between the joined group state write and the
+// pool delete. A test sets it to stop there, the way a crash would.
+var afterJoinedStateSaved = func() error { return nil }
+
+// OwnLeafIndex is this device's leaf in the group the session holds: the
+// library's current member index, read from the group state itself.
+func (s *Session) OwnLeafIndex() (uint32, error) {
+	_, leaf, _, err := s.SendPosition()
+	return leaf, err
 }
 
 // decodeRefs reads dpmls_welcome_key_package_refs' framing strictly.
@@ -836,12 +965,24 @@ type Leaf struct {
 
 // LeafVerifier runs design §5.3 over the leaves one operation brings in.
 //
-// It judges them as one unit: nil only when every leaf passes. It must not
-// persist anything. Whatever a success would record belongs to the caller to
-// write after the whole operation has succeeded, because a leaf that passed
-// here can still be part of an operation that fails later.
+// VerifyLeaves judges them as one unit: nil only when every leaf passes. It
+// must not persist anything, because it runs before MLS has authenticated the
+// operation: a Commit's leaves are collected from a pass that admits every
+// leaf, so a message that later fails MLS could otherwise plant a first-use
+// pin for a key of its choosing.
+//
+// Commit writes what the last successful VerifyLeaves staged. The session
+// calls it once the MLS operation those leaves belong to has succeeded, and
+// before it returns, so before the caller writes the group state that holds
+// them. That order is what closes the crash window: the state is never on
+// disk with a leaf whose account key is not pinned, so a crash can at most
+// leave a pin whose state was not written, and the retry pins the same key
+// again. The other order let a crash leave the group without the pin, and the
+// next leaf of that account was then taken as a first use whatever key it
+// carried.
 type LeafVerifier interface {
 	VerifyLeaves(leaves []Leaf) error
+	Commit() error
 }
 
 // verifyLeaves is the Go half. A nil verifier with leaves to judge is a
@@ -854,6 +995,16 @@ func verifyLeaves(v LeafVerifier, leaves []Leaf) error {
 		return ErrLeafUntrusted
 	}
 	return v.VerifyLeaves(leaves)
+}
+
+// recordVerified is Commit for an operation whose MLS half has just
+// succeeded. With no leaves VerifyLeaves never ran, so whatever v holds is
+// from some earlier operation and is not written.
+func recordVerified(v LeafVerifier, leaves []Leaf) error {
+	if len(leaves) == 0 {
+		return nil
+	}
+	return v.Commit()
 }
 
 // ProcessVerified applies one inbound message, verifying every leaf it brings
@@ -872,24 +1023,61 @@ func verifyLeaves(v LeafVerifier, leaves []Leaf) error {
 // current members and nobody new. A PrivateMessage Commit that adds a member
 // is therefore refused rather than verified; nothing this Keeper sends is one.
 func (s *Session) ProcessVerified(message []byte, v LeafVerifier) (Processed, error) {
+	processed, _, err := s.processAuthorized(message, v, chatstate.CommitAuthority{})
+	return processed, err
+}
+
+// ProcessAuthorized is ProcessVerified with the evidence the Commit authority
+// rules judge by (chatstate/authority.go). ProcessVerified judges with none,
+// which admits only a Commit whose every Remove is the committer's own
+// account or paired with an Add of the same account.
+func (s *Session) ProcessAuthorized(message []byte, v LeafVerifier, auth chatstate.CommitAuthority) (Processed, error) {
+	processed, _, err := s.processAuthorized(message, v, auth)
+	return processed, err
+}
+
+// processAuthorized is where the collect pass is judged twice: the leaves by
+// v (§5.3), then the Commit's Adds and Removes by the authority rules. Both
+// are decided before the enforce pass, which applies nothing either half did not
+// approve. It also reports what the Commit did.
+func (s *Session) processAuthorized(
+	message []byte, v LeafVerifier, auth chatstate.CommitAuthority,
+) (Processed, *chatstate.CommitChange, error) {
 	form, err := WireFormOf(message)
 	if err != nil {
-		return Processed{}, err
+		return Processed{}, nil, err
 	}
-	if form == WireFormPublicMessage {
-		leaves, err := s.processCollect(message)
-		if err != nil {
-			return Processed{}, err
-		}
-		markEntering(leaves)
-		if err := verifyLeaves(v, leaves); err != nil {
-			return Processed{}, err
-		}
-		if err := s.approve(leaves); err != nil {
-			return Processed{}, err
-		}
+	if form != WireFormPublicMessage {
+		processed, err := s.Process(message)
+		return processed, nil, err
 	}
-	return s.Process(message)
+	leaves, shape, err := s.processCollect(message)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	markEntering(leaves)
+	if err := verifyLeaves(v, leaves); err != nil {
+		return Processed{}, nil, err
+	}
+	// After the leaves: a Commit that brings in a leaf its account does not
+	// vouch for is refused as that, and only a Commit whose leaves are all
+	// genuine is judged on whether its committer may make the change.
+	change, err := s.judgeCollected(shape, auth)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	if err := s.approve(leaves); err != nil {
+		return Processed{}, nil, err
+	}
+	processed, err := s.Process(message)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		secure.Zeroize(processed.Plaintext)
+		return Processed{}, nil, err
+	}
+	return processed, change, nil
 }
 
 // JoinVerified joins from a Welcome after verifying every leaf of its tree —
@@ -910,7 +1098,10 @@ func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	if err := s.approve(leaves); err != nil {
 		return err
 	}
-	return s.Join(welcome)
+	if err := s.Join(welcome); err != nil {
+		return err
+	}
+	return recordVerified(v, leaves)
 }
 
 // CommitAddMembersVerified verifies the leaves these KeyPackages would add, as
@@ -937,7 +1128,13 @@ func (s *Session) CommitAddMembersVerified(
 	if err := s.approve(leaves); err != nil {
 		return nil, nil, 0, err
 	}
-	return s.CommitAddMembers(keyPackages)
+	if commit, welcome, expectedEpoch, err = s.CommitAddMembers(keyPackages); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return commit, welcome, expectedEpoch, nil
 }
 
 // CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
@@ -964,7 +1161,13 @@ func (s *Session) CommitReplaceMembersVerified(
 	if err := s.approve(leaves); err != nil {
 		return nil, nil, 0, err
 	}
-	return s.CommitReplaceMembers(leafIndices, keyPackages)
+	if commit, welcome, expectedEpoch, err = s.CommitReplaceMembers(leafIndices, keyPackages); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		return nil, nil, 0, err
+	}
+	return commit, welcome, expectedEpoch, nil
 }
 
 // CommitAddMemberVerified is CommitAddMembersVerified for one member.
@@ -1026,45 +1229,10 @@ func encodeApprovals(leaves []Leaf) []byte {
 // decodeLeaves reads gate::encode_leaves' framing strictly: a truncated,
 // oversized or trailing-byte buffer is an error, never a shorter list.
 func decodeLeaves(buf []byte) ([]Leaf, error) {
-	bad := errors.New("mls: leaf list framing is malformed")
 	r := leafReader{buf: buf}
-	count, ok := r.u32()
-	if !ok || count > maxLeaves {
-		return nil, bad
-	}
-	leaves := make([]Leaf, 0, count)
-	for i := uint32(0); i < count; i++ {
-		var l Leaf
-		if l.Index, ok = r.u32(); !ok {
-			return nil, bad
-		}
-		if l.Identity, ok = r.prefixed(); !ok {
-			return nil, bad
-		}
-		if l.SignatureKey, ok = r.prefixed(); !ok {
-			return nil, bad
-		}
-		present, ok := r.take(1)
-		if !ok {
-			return nil, bad
-		}
-		switch present[0] {
-		case 0:
-		case 1:
-			if l.Declaration, ok = r.prefixed(); !ok {
-				return nil, bad
-			}
-			// Present and empty stays distinguishable from absent.
-			if l.Declaration == nil {
-				l.Declaration = []byte{}
-			}
-		default:
-			return nil, bad
-		}
-		leaves = append(leaves, l)
-	}
-	if len(r.buf) != r.at {
-		return nil, bad
+	leaves, ok := r.leaves()
+	if !ok || len(r.buf) != r.at {
+		return nil, errors.New("mls: leaf list framing is malformed")
 	}
 	return leaves, nil
 }

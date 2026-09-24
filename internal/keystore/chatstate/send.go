@@ -250,6 +250,7 @@ func (s *Store) Send(
 		if err != nil {
 			return err
 		}
+		crashAt(CrashSendAfterSeal)
 		if len(ciphertext) == 0 || len(ciphertext) > MaxCiphertextBytes {
 			return fmt.Errorf("mls ciphertext is %d bytes, outside 1..%d",
 				len(ciphertext), MaxCiphertextBytes)
@@ -284,6 +285,7 @@ func (s *Store) Send(
 			return err
 		}
 		out = SendResult{Entry: entry, Created: true, Generation: rec.Generation, Burned: burned}
+		crashAt(CrashSendAfterWrite)
 		return nil
 	})
 	return out, err

@@ -12,7 +12,7 @@ func TestStatusReportsTheRecordAndWritesNothing(t *testing.T) {
 		t.Fatalf("status of a fresh conversation = %+v, %v", empty, err)
 	}
 
-	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3); err != nil {
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(3, 1, 0), 3, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	before := readRecordForTest(t, store, testConvA).Generation
@@ -30,9 +30,11 @@ func TestStatusReportsTheRecordAndWritesNothing(t *testing.T) {
 	}
 
 	// A rewind found by the read is latched and reported, and nothing else is.
-	ahead := ServerWatermark{Epoch: 9, NextApplicationIndex: 1}
+	// The watermark names the leaf this device joined as; another leaf's
+	// chain would not be this device's to be behind on.
+	ahead := ServerWatermark{Epoch: 9, LeafIndex: 1, NextApplicationIndex: 1}
 	rewound, err := store.Status(testConvA, ahead, &fakeInbound{})
-	if err != nil || !rewound.NeedsRekey || rewound.HasGroupState {
+	if err != nil || !rewound.NeedsRekey || rewound.HasGroupState || rewound.RekeyCause != RekeyCauseWatermarkAhead {
 		t.Fatalf("status of a rewound record = %+v, %v", rewound, err)
 	}
 	if again, _ := store.Status(testConvA, noWatermark, &fakeInbound{}); !again.NeedsRekey {

@@ -36,6 +36,7 @@ package chatstate
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -110,6 +111,18 @@ type ReceiveRequest struct {
 	// the Commit actually produced before anything is written.
 	Handshake     bool
 	ProducedEpoch uint64
+
+	// CommitMembers is the member set the server signed for this handshake's
+	// Commit, already verified by the caller, and nil when the row carried
+	// none. It is evidence for the authority rules (authority.go).
+	CommitMembers *ServerCommitMembers
+
+	// FramedEpoch is the epoch an application message's cleartext header
+	// claims (mls.PrivateMessageEpoch), nil when the caller did not read it.
+	// A display batch uses it for one thing: a message from before the epoch
+	// this device's leaf entered the group at is answered as BeforeJoin
+	// instead of being handed to MLS, which has no key for it.
+	FramedEpoch *uint64
 }
 
 // Sender is who sent an application message, as the MLS credential of the
@@ -141,6 +154,21 @@ type ReceiveResult struct {
 	// sealed copy here, and none that bindUnmarkedSent could bind. There is no plaintext and no position, and nothing was
 	// consumed or written for it. Only ReceiveBatch reports it.
 	OwnWithoutCopy bool
+
+	// HistoryUnavailable is true for a seq MLS already opened on this device
+	// whose sealed copy is no longer held: the ring evicted it. Its key was
+	// consumed at that first delivery, so there is no plaintext, no position
+	// and no sender, and nothing was opened or written for it. Only
+	// ReceiveBatch reports it.
+	HistoryUnavailable bool
+
+	// BeforeJoin is true for a seq this device never opened whose message
+	// claims an epoch before Record.OwnLeaf.SinceEpoch: it was sent to the
+	// group before this device's leaf was in it, so this device never held
+	// its key. Not an error and not lost history. No plaintext, no position,
+	// no sender, and nothing was opened or written for it. Only ReceiveBatch
+	// reports it.
+	BeforeJoin bool
 
 	// Generation is the record's write counter after the confirmation, or the
 	// current one when nothing was written.
@@ -175,6 +203,24 @@ var ErrOwnMessage = errors.New("chat state was handed a message this device sent
 // was first delivered, so the server's ciphertext cannot stand in.
 var ErrHistoryUnavailable = errors.New("chat state has no local copy of that message")
 
+// errOpenedWithoutCopy is ErrHistoryUnavailable for a seq Record.OpenedSeqs
+// says was opened here: the one form of it ReceiveBatch answers per item
+// rather than refusing the page. A copy that is present but cannot say who
+// sent it stays a refusal.
+var errOpenedWithoutCopy = fmt.Errorf("%w: it was opened here and its copy is gone", ErrHistoryUnavailable)
+
+// errBeforeJoin — the message claims an epoch before this device's leaf
+// entered the group (ReceiveResult.BeforeJoin). ReceiveBatch answers it per
+// item.
+var errBeforeJoin = errors.New("chat state was handed a message from before this device joined")
+
+// beforeJoin reports whether a message claiming framedEpoch was sent before
+// this device's leaf entered the group. A record with no OwnLeaf (written
+// before it existed) cannot say, and the message goes to MLS as before.
+func (r *Record) beforeJoin(framedEpoch *uint64) bool {
+	return framedEpoch != nil && r.OwnLeaf != nil && *framedEpoch < r.OwnLeaf.SinceEpoch
+}
+
 // Receive confirms one inbound message and returns its plaintext.
 //
 // A sequence already in the local history is answered from there: no MLS call,
@@ -195,8 +241,18 @@ func (s *Store) Receive(
 		loaded := rec.Generation
 		var changed bool
 		out, changed, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
-		if err != nil || !changed {
-			return err
+		var fork *forkDetected
+		if errors.As(err, &fork) {
+			return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{Cause: RekeyCauseFork, Epoch: fork.epoch})
+		}
+		if err != nil {
+			return latchIfRefused(s, p, anchor, err, req.ProducedEpoch)
+		}
+		if !changed {
+			return nil
+		}
+		if req.Handshake {
+			crashAt(CrashProcessAfterApply)
 		}
 		// One replacement carries the advanced state, the mark and the sealed
 		// copy. There is no arrangement of these three that can be observed
@@ -249,9 +305,24 @@ const MaxReceiveBatch = 200
 // Re-reads from the history are not shown to it: they were accepted when they
 // were first delivered.
 //
+// A second outcome is not a refusal either: a seq MLS already opened here
+// whose copy the ring has since evicted. Its key is gone, so it is never
+// handed to Open again; it is answered as HistoryUnavailable, with no
+// plaintext, and the rest of the batch proceeds. Record.OpenedSeqs is what
+// tells it apart from a message nobody has opened yet, which still goes to
+// Open.
+//
+// A third: a seq never opened here whose message claims an epoch before the
+// one this device's leaf entered the group at (Record.beforeJoin). This device
+// never held its key, so it is not handed to Open; it is answered as
+// BeforeJoin and the rest of the batch proceeds. The claim is the cleartext
+// header's and is not authenticated. Believing a false one hides one message
+// from this device, which the server could do by not serving it.
+//
 // On a conversation latched NeedsRekey a batch made only of re-reads is still
-// answered, from the history and without MLS (loadLatched). A batch holding
-// even one sequence the history does not have is refused whole with
+// answered, from the history and without MLS (loadLatched), an evicted seq as
+// HistoryUnavailable and a pre-join one as BeforeJoin. A batch holding even
+// one other sequence that was never opened here is refused whole with
 // ErrRekeyRequired, by the same all-or-nothing rule.
 func (s *Store) ReceiveBatch(
 	conversationID string, wm ServerWatermark, reqs []ReceiveRequest,
@@ -282,6 +353,14 @@ func (s *Store) ReceiveBatch(
 			}
 			for _, req := range reqs {
 				stored, ok := rec.findHistory(req.Seq)
+				if !ok && rec.opened(req.Seq, s.HistoryPolicy) {
+					out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
+					continue
+				}
+				if !ok && rec.beforeJoin(req.FramedEpoch) {
+					out = append(out, ReceiveResult{Application: true, BeforeJoin: true, Generation: rec.Generation})
+					continue
+				}
 				if !ok {
 					return ErrRekeyRequired
 				}
@@ -312,6 +391,14 @@ func (s *Store) ReceiveBatch(
 				changed = changed || ok
 				continue
 			}
+			if errors.Is(err, errOpenedWithoutCopy) {
+				out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
+				continue
+			}
+			if errors.Is(err, errBeforeJoin) {
+				out = append(out, ReceiveResult{Application: true, BeforeJoin: true, Generation: rec.Generation})
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -324,6 +411,7 @@ func (s *Store) ReceiveBatch(
 		if !changed {
 			return nil
 		}
+		crashAt(CrashReceiveBatchAfterOpen)
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
 			return err
 		}
@@ -381,6 +469,14 @@ func (s *Store) bindUnmarkedSent(conversationID string, rec *Record, req Receive
 	return out, true, nil
 }
 
+// forkDetected is a handshake for an epoch this device confirmed whose Commit
+// is not the one it applied there. Receive turns it into the fork latch.
+type forkDetected struct{ epoch uint64 }
+
+func (e *forkDetected) Error() string {
+	return "chat state was served another commit for an epoch it already confirmed"
+}
+
 // ErrNotApplication — a message in a display batch was a handshake. Commits
 // go through the handshake path, in epoch order; nothing was written.
 var ErrNotApplication = errors.New("chat state was handed a handshake as an application message")
@@ -398,6 +494,24 @@ func (s *Store) receiveOne(
 	if stored, ok := rec.findHistory(req.Seq); ok && !req.Handshake {
 		out, err := s.reread(conversationID, rec, stored)
 		return out, false, err
+	}
+	// Opened here before and no copy left: the key was consumed at that
+	// delivery, and handing the ciphertext to MLS again can only fail.
+	if !req.Handshake && rec.opened(req.Seq, s.HistoryPolicy) {
+		return ReceiveResult{}, false, errOpenedWithoutCopy
+	}
+	if !req.Handshake && rec.beforeJoin(req.FramedEpoch) {
+		return ReceiveResult{}, false, errBeforeJoin
+	}
+	// A handshake for an epoch already confirmed here touches no MLS state,
+	// so it is judged before anything that would refuse to feed MLS a new
+	// message: a redelivery is ErrHandshakeApplied, and a different Commit
+	// for an epoch the fork ring holds is a fork (Q16).
+	if req.Handshake && len(rec.GroupState) > 0 && req.ProducedEpoch <= rec.Epoch {
+		if rec.forkAt(req.ProducedEpoch, req.Message) {
+			return ReceiveResult{}, false, &forkDetected{epoch: req.ProducedEpoch}
+		}
+		return ReceiveResult{}, false, ErrHandshakeApplied
 	}
 	// A re-read above is served from the sealed copy and never reaches
 	// here, so an unsettled Commit does not stop anyone from reading what
@@ -423,6 +537,7 @@ func (s *Store) receiveOne(
 	if err := cipher.Load(rec.GroupState); err != nil {
 		return ReceiveResult{}, false, err
 	}
+	s.armAuthority(cipher, rec, wm, req.CommitMembers)
 
 	opened, err := cipher.Open(req.Message)
 	if err != nil {
@@ -487,6 +602,10 @@ func (s *Store) receiveOne(
 	rec.GroupState = state
 	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
+	if req.Handshake {
+		rec.noteConfirmed(req.ProducedEpoch, req.Message)
+	}
+	rec.markOpened(req.Seq, s.HistoryPolicy)
 	if opened.Removed {
 		rec.RemovedFromGroup = true
 	}

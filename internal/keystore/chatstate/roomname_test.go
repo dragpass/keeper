@@ -98,7 +98,7 @@ func TestACreateSealsTheNameForEpochOne(t *testing.T) {
 	store, _ := newTestStore(t)
 	built, err := store.CreateGroup(testConvA, noWatermark, BeginCommitRequest{
 		ClientCommitID: testCommitA,
-		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}, UserInitiated: true},
 		RoomName:       []byte("room"),
 	}, &fakeCreator{})
 	if err != nil || built.RoomName == nil || built.RoomName.Epoch != 1 {
@@ -134,7 +134,7 @@ func TestAFailedResealPersistsNoCommit(t *testing.T) {
 	}
 	if _, err := store.CreateGroup(testConvB, noWatermark, BeginCommitRequest{
 		ClientCommitID: testCommitA,
-		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}, UserInitiated: true},
 		RoomName:       []byte("x"),
 	}, &fakeCreator{fakeCommitter{exportErr: refuse}}); !errors.Is(err, refuse) {
 		t.Fatalf("create with a failing reseal = %v", err)

@@ -5,12 +5,12 @@
 //	the chat-state gate (size cap → strict decode → validation → binding →
 //	  permit window → server signature), exactly authorizeChatState's
 //	  → the MLS library is linked
-//	  → the permit owner's store opens and the watermark names this leaf
+//	  → the permit owner's store opens
 //	  → the device session opens as the active leaf, which must belong to
 //	    the permit's account
-//	  → one chatstate transaction, with every leaf it brings in verified
-//	  → only after that transaction is on disk, the verifier's pins and
-//	    newest-declaration records are written
+//	  → one chatstate transaction, with every leaf it brings in verified,
+//	    and the verifier's pins and newest-declaration records written once
+//	    the MLS operation has succeeded and before the state is
 //
 // so a refusal at any step persists nothing, and an unauthorized caller does
 // not even open the state directory.
@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
@@ -64,7 +65,7 @@ func openMLSChat(
 			"this Keeper was built without the MLS library"), false
 	}
 	permit, _, conversationID := req.ChatStateContext()
-	store, wm, resp, ok := openChatStateStore(d, permit, conversationID)
+	store, wm, resp, ok := openChatStateStore(d, permit)
 	if !ok {
 		return nil, resp, false
 	}
@@ -111,18 +112,6 @@ func statementsByAccount(statements []proto.KeyRotationStatement) map[string][]p
 	return out
 }
 
-// commitVerified writes what the verifier staged, once the chatstate write it
-// was for is on disk. A failure here is reported rather than swallowed: the
-// group moved, but a pin that was not saved is a first use the next time.
-func commitVerified(d Deps, stage string, v *MLSLeafVerifier) (proto.BaseResponse, bool) {
-	if err := v.Commit(); err != nil {
-		d.Logger.Printf("mls chat %s: the verified leaves could not be recorded", stage)
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatStateErrorCodeStorageFailure),
-			"the group moved but its verified leaves could not be recorded"), false
-	}
-	return proto.BaseResponse{}, true
-}
-
 // memberKeyPackages decodes the KeyPackages and refuses any whose credential
 // is not the account and device the caller asked the server for. Validate has
 // already bounded and Base64-checked each one.
@@ -146,7 +135,7 @@ func memberKeyPackages(d Deps, members []proto.MLSMemberKeyPackage) ([][]byte, p
 	return out, proto.BaseResponse{}, true
 }
 
-func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
+func commitResponse(r chatstate.BeginCommitResult, trust []proto.MLSAccountTrust) proto.BaseResponse {
 	data := proto.MLSCommitResponseData{
 		ClientCommitID:    r.ClientCommitID,
 		ExpectedEpoch:     r.ExpectedEpoch,
@@ -155,6 +144,7 @@ func commitResponse(r chatstate.BeginCommitResult) proto.BaseResponse {
 		WelcomeReleasable: r.WelcomeReleasable,
 		Created:           r.Created,
 		Generation:        r.Generation,
+		LeafTrust:         trust,
 	}
 	if r.RoomName != nil {
 		data.NameEpoch = r.RoomName.Epoch
@@ -185,6 +175,18 @@ func roomNameInput(b64 string) ([]byte, proto.BaseResponse, bool) {
 // Membership and handshake.
 // ────────────────────────────────────────────────────────────────────────
 
+// appContextInput decodes app_context_b64. Validate has already bounded it.
+func appContextInput(b64 string) ([]byte, proto.BaseResponse, bool) {
+	if b64 == "" {
+		return nil, proto.BaseResponse{}, true
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, chatStateInvalidInput("app_context_b64 must be valid standard Base64"), false
+	}
+	return raw, proto.BaseResponse{}, true
+}
+
 // HandleMLSGroupCreate creates the conversation's group and builds the pending
 // Add for its first members, in one chatstate transaction.
 func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
@@ -204,20 +206,22 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return resp
 	}
 	defer secure.Zeroize(name)
+	appContext, resp, ok := appContextInput(req.AppContextB64)
+	if !ok {
+		return resp
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
 		RoomName:       name,
+		AppContext:     appContext,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
 	}
-	if resp, ok := commitVerified(d, "group create", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls group create successful")
-	return commitResponse(result)
+	return commitResponse(result, v.Reported())
 }
 
 // HandleMLSGroupDiscardUnaccepted drops this device's create that lost the
@@ -323,27 +327,36 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 			return resp
 		}
 		plan.Replace = members
+	case req.Rejoin != nil:
+		members, resp, ok := rejoinMembers(d, req.Rejoin)
+		if !ok {
+			return resp
+		}
+		plan.Rejoin = members
 	}
+	plan.UserInitiated = req.UserInitiated
 	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
 	if !ok {
 		return resp
 	}
 	defer secure.Zeroize(name)
+	appContext, resp, ok := appContextInput(req.AppContextB64)
+	if !ok {
+		return resp
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
 		ExpectedEpoch:  req.ExpectedEpoch,
 		RoomName:       name,
+		AppContext:     appContext,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)
 	}
-	if resp, ok := commitVerified(d, "commit build", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls commit build successful")
-	return commitResponse(result)
+	return commitResponse(result, v.Reported())
 }
 
 // HandleMLSCommitConfirm applies the server's CAS verdict, or, for unknown,
@@ -381,23 +394,56 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 			return chatStateInvalidInput("winner_commit_b64 must be valid standard Base64")
 		}
 		outcome.Kind, outcome.WinnerMessage = chatstate.CommitSuperseded, winner
+		// The winner's epoch is not in the request: it is the one after the
+		// pending Commit's, which only the store knows, so the attestation is
+		// verified there against that epoch.
+		if a := req.WinnerAttestation; a != nil {
+			outcome.WinnerMembers = func(epoch uint64) (*chatstate.ServerCommitMembers, error) {
+				members, ok := commitMembers(d, c.conv, epoch, winner, a)
+				if !ok {
+					return nil, errAttestationRefused
+				}
+				return members, nil
+			}
+		}
 	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
-	if resp, ok := commitVerified(d, "commit confirm", v); !ok {
-		return resp
-	}
 	d.Logger.Println("mls commit confirm successful")
-	return proto.BaseResponse{Success: true, Data: proto.MLSCommitConfirmResponseData{
+	data := proto.MLSCommitConfirmResponseData{
 		Outcome:           req.Outcome,
 		Epoch:             result.Epoch,
 		WelcomeReleasable: result.WelcomeReleasable,
 		Removed:           result.Removed,
 		Generation:        result.Generation,
-	}}
+		LeafTrust:         v.Reported(),
+	}
+	if w := result.Winner; w != nil {
+		data.WinnerAddedAccountIDs = distinctAccounts(w.Added)
+		data.WinnerRemovedAccountIDs = distinctAccounts(w.Removed)
+	}
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// HandleMLSCommitAbandon drops a legacy pending Commit on the user's
+// confirmation (chatstate.AbandonLegacyPending).
+func HandleMLSCommitAbandon(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSCommitAbandonRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	generation, err := c.store.AbandonLegacyPending(c.conv, c.wm, req.ClientCommitID, mls.NewCipher(c.session, nil))
+	if err != nil {
+		return chatStateFailure(d, "mls commit abandon", err)
+	}
+	d.Logger.Println("mls commit abandon successful")
+	return proto.BaseResponse{Success: true, Data: proto.MLSCommitAbandonResponseData{Generation: generation}}
 }
 
 // HandleMLSProcess applies one handshake row: somebody else's Commit.
@@ -419,18 +465,20 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if form, err := mls.WireFormOf(commit); err != nil || form != mls.WireFormPublicMessage {
 		return chatStateInvalidInput("commit_b64 is not an MLS PublicMessage")
 	}
+	members, ok := commitMembers(d, c.conv, req.Epoch, commit, req.CommitAttestation)
+	if !ok {
+		return chatStateNotAuthorized(d, "commit attestation")
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.Receive(c.conv, c.wm, chatstate.ReceiveRequest{
 		Seq:           req.Seq,
 		Message:       commit,
 		Handshake:     true,
 		ProducedEpoch: req.Epoch,
+		CommitMembers: members,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls process", err)
-	}
-	if resp, ok := commitVerified(d, "process", v); !ok {
-		return resp
 	}
 	d.Logger.Println("mls process successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSProcessResponseData{
@@ -438,6 +486,7 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		Epoch:      result.Position.Epoch,
 		Removed:    result.Removed,
 		Generation: result.Generation,
+		LeafTrust:  v.Reported(),
 	}}
 }
 
@@ -458,15 +507,12 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err := c.session.JoinFromPool(c.store, c.conv, c.wm, welcome, v, d.Now()); err != nil {
 		return chatStateFailure(d, "mls join", err)
 	}
-	if resp, ok := commitVerified(d, "join", v); !ok {
-		return resp
-	}
 	epoch, err := c.session.Epoch()
 	if err != nil {
 		return chatStateFailure(d, "mls join", err)
 	}
 	d.Logger.Println("mls join successful")
-	return proto.BaseResponse{Success: true, Data: proto.MLSJoinResponseData{Epoch: epoch}}
+	return proto.BaseResponse{Success: true, Data: proto.MLSJoinResponseData{Epoch: epoch, LeafTrust: v.Reported()}}
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -557,7 +603,9 @@ func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
 
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
 // for the app's own screen, all or nothing but for a message of this device
-// that has no local copy (chatstate.ReceiveBatch).
+// that has no local copy, a message whose copy the history evicted, and a
+// message from before this device's leaf entered the group
+// (chatstate.ReceiveBatch).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
@@ -577,7 +625,11 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		if form, err := mls.WireFormOf(ciphertext); err != nil || form != mls.WireFormPrivateMessage {
 			return chatStateInvalidInput("ciphertext_b64 is not an MLS PrivateMessage")
 		}
-		reqs = append(reqs, chatstate.ReceiveRequest{Seq: m.Seq, Message: ciphertext})
+		req := chatstate.ReceiveRequest{Seq: m.Seq, Message: ciphertext}
+		if epoch, err := mls.PrivateMessageEpoch(ciphertext); err == nil {
+			req.FramedEpoch = &epoch
+		}
+		reqs = append(reqs, req)
 	}
 	acceptText := func(plaintext []byte) error {
 		if !utf8.Valid(plaintext) {
@@ -603,6 +655,14 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	plaintexts := make([]string, len(results))
 	items := make([]proto.MLSDisplayItem, len(results))
 	for i, r := range results {
+		if r.HistoryUnavailable {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateHistoryUnavailable}
+			continue
+		}
+		if r.BeforeJoin {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateBeforeJoin}
+			continue
+		}
 		if r.OwnWithoutCopy {
 			items[i] = proto.MLSDisplayItem{
 				Seq:             req.Messages[i].Seq,
@@ -723,16 +783,85 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	if err != nil {
 		return chatStateFailure(d, "mls conversation status", err)
 	}
-	return proto.BaseResponse{Success: true, Data: proto.MLSConversationStatusResponseData{
+	data := proto.MLSConversationStatusResponseData{
 		Epoch:                 status.Epoch,
 		HasGroupState:         status.HasGroupState,
 		CommitPending:         status.CommitPending,
 		PendingClientCommitID: status.PendingClientCommitID,
+		PendingAppContextB64:  appContextOutput(status.PendingAppContext),
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
 		NeedsRekey:            status.NeedsRekey,
+		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
-	}}
+
+		RekeyEpoch:              status.RekeyEpoch,
+		RekeyCommitterAccountID: status.RekeyCommitterAccountID,
+		RekeyCommitterDeviceID:  status.RekeyCommitterDeviceID,
+	}
+	if name := status.PendingName; name != nil {
+		data.PendingNameEpoch = name.Epoch
+		data.PendingNameIVb64 = base64.StdEncoding.EncodeToString(name.IV)
+		data.PendingNameCiphertextB64 = base64.StdEncoding.EncodeToString(name.Ciphertext)
+	}
+	if status.HasGroupState && !status.NeedsRekey {
+		data.MemberTrust = c.memberTrust(d)
+	}
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// memberTrust is mls_conversation_status's member_trust. It is a display
+// hint and not a gate, so a read that fails leaves it out rather than failing
+// the status the app needs before it sends.
+func (c *mlsChat) memberTrust(d Deps) []proto.MLSAccountTrust {
+	state, err := c.store.LoadGroupState(c.conv, c.wm)
+	if err == nil {
+		err = c.session.Load(state)
+		secure.Zeroize(state)
+	}
+	var leaves []mls.Leaf
+	if err == nil {
+		leaves, err = c.session.Roster()
+	}
+	var trust []proto.MLSAccountTrust
+	if err == nil {
+		trust, err = MLSMemberTrust(d, c.permit.AccountID, leaves)
+	}
+	if err != nil {
+		d.Logger.Println("mls conversation status: member trust was not read")
+		return nil
+	}
+	return trust
+}
+
+// distinctAccounts is one entry per account, sorted, and nil for none.
+func distinctAccounts(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func appContextOutput(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func rekeyCauseOf(status chatstate.ConversationStatus) string {
+	switch {
+	case !status.NeedsRekey:
+		return ""
+	case status.RekeyCause == "":
+		return proto.ChatStateRekeyCauseUnknown
+	default:
+		return string(status.RekeyCause)
+	}
 }
 
 func permitLeafReplacements(entries []chatstate.LeafReplacement) []proto.ChatStateLeafReplacement {

@@ -121,6 +121,28 @@ type PendingCommit struct {
 
 	// Welcome is released only once the Commit is accepted (RFC 9420 §14).
 	Welcome []byte `json:"welcome,omitempty"`
+
+	// AppContext is the caller's own description of this Commit, opaque here
+	// and never a secret by contract: what the app needs to post it again
+	// (the member set it declares, which flow built it) once its own note of
+	// the Commit is gone. Without it an app that lost that note cannot tell
+	// the server what the Commit is, and the conversation stays pending.
+	// Absent on a Commit built before 0.0.55.
+	AppContext []byte `json:"app_context,omitempty"`
+
+	// Name is the room name the first build sealed for ExpectedEpoch+1, kept
+	// because an app that lost the build's answer holds no plaintext to seal
+	// it again. Ciphertext only, the same bytes the server stores. Reported by
+	// Status, not by a retried build: an app that asks a retry for no name
+	// refuses an answer that carries one.
+	Name *PendingRoomName `json:"name,omitempty"`
+}
+
+// PendingRoomName is SealedRoomName as the record stores it. The epoch is the
+// pending Commit's ExpectedEpoch+1 and is not repeated.
+type PendingRoomName struct {
+	IV         []byte `json:"iv"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 
 // Record is one conversation's whole state. Everything that has to change
@@ -192,6 +214,23 @@ type Record struct {
 	// rewrite leaves it false, and false only refuses ForgetRemovedGroup.
 	RemovedFromGroup bool `json:"removed_from_group,omitempty"`
 
+	// OwnLeaf is this device's leaf in the group GroupState holds, read from
+	// the group state when this device entered it. It names the only chain a
+	// server watermark can describe for this device (Record.ownsChain).
+	//
+	// Absent in a record written before it existed, and in one whose group
+	// was created or joined before it: ownLeaf falls back to the send path's
+	// positions, and then to "unknown", which judges a watermark as before.
+	// SchemaVersion is not raised for it: a Keeper that drops it on rewrite
+	// leaves exactly that fallback.
+	OwnLeaf *OwnLeaf `json:"own_leaf,omitempty"`
+
+	// JoinedKeyPackageRef is the KeyPackage the last join into this record
+	// consumed. It is written with the joined group state, so it is the
+	// durable proof the pool sweep deletes that KeyPackage's private keys on
+	// (key_package_pool.go).
+	JoinedKeyPackageRef []byte `json:"joined_key_package_ref,omitempty"`
+
 	Outbox   []OutboxEntry `json:"outbox,omitempty"`
 	Received []Position    `json:"received,omitempty"`
 
@@ -200,6 +239,32 @@ type Record struct {
 	// and storing its copy is one replacement; see history.go for what that
 	// settles and what it leaves open.
 	History []HistoryEntry `json:"history,omitempty"`
+
+	// ConfirmedCommits is the fork ring (authority.go): which Commit produced
+	// each of the last epochs this device confirmed from a Commit it held.
+	// Absent in a record written before it existed, which only means nothing
+	// can be compared yet. SchemaVersion is not raised for it: a Keeper that
+	// drops it on rewrite leaves an empty ring, which compares nothing and
+	// latches nothing, the direction that loses detection rather than state.
+	ConfirmedCommits []ConfirmedCommit `json:"confirmed_commits,omitempty"`
+
+	// OpenedSeqs is every server seq MLS has opened on this device, sorted
+	// and merged. It outlives the History ring on purpose: the ring evicts the
+	// copy, and this is what still knows the key behind it is gone. Absent in
+	// a record written before it existed; see legacyOpenedFloor.
+	OpenedSeqs []SeqRange `json:"opened_seqs,omitempty"`
+}
+
+// OwnLeaf is a leaf index and the first epoch this device held it in.
+//
+// SinceEpoch is what separates this device's chain from a previous
+// occupant's. A leaf index is reused once a Commit blanks it (a takeover
+// replaces the old device's leaf at the same place), and a Welcome enters at
+// the epoch the Commit that added this leaf created, so every position on this
+// index below SinceEpoch was sent by somebody else.
+type OwnLeaf struct {
+	Index      uint32 `json:"index"`
+	SinceEpoch uint64 `json:"since_epoch"`
 }
 
 func newRecord(ownerAccountID, conversationID string) *Record {
@@ -287,14 +352,15 @@ func (r *Record) appendOutbox(e OutboxEntry) {
 	}
 }
 
-// localLeafIndex reports this device's own leaf in the group, and whether the
-// record has ever learned it.
+// localLeafIndex reports this device's own leaf in the group as the send path
+// last wrote it, and whether it ever did. It is ownLeaf's fallback for a record
+// without OwnLeaf.
 //
 // The authoritative copy is inside GroupState, which this package treats as
-// opaque and which the protocol edge cannot read without linking the MLS
-// library into it. What is readable here is the positions this device's own
-// send path wrote: those come from SendCipher.Peek, so they carry the real
-// leaf and name the ratchet they sit on. The positions the pre-MLS
+// opaque; OwnLeaf is that copy as it was read when the group was entered.
+// What is readable here without it is the positions this device's own send
+// path wrote: those come from SendCipher.Peek, so they carry the real leaf and
+// name the ratchet they sit on. The positions the pre-MLS
 // commit_outbox path writes name neither, and that is what separates "never
 // learned" from "leaf 0" — a distinction a bare uint32 cannot carry, and the
 // one a watermark's leaf slot has to be judged against.
@@ -308,6 +374,44 @@ func (r *Record) localLeafIndex() (uint32, bool) {
 		}
 	}
 	return 0, false
+}
+
+// ownLeaf is OwnLeaf, or for a record that predates it the leaf the send
+// path last wrote, which this device has held since some epoch it cannot
+// name. Zero is the safe answer for that epoch: SinceEpoch never exceeds
+// Record.Epoch, and a watermark below Record.Epoch cannot latch anything.
+func (r *Record) ownLeaf() (OwnLeaf, bool) {
+	if r.OwnLeaf != nil {
+		return *r.OwnLeaf, true
+	}
+	if index, ok := r.localLeafIndex(); ok {
+		return OwnLeaf{Index: index}, true
+	}
+	return OwnLeaf{}, false
+}
+
+// ownsChain reports whether a watermark on (epoch, leaf) can describe this
+// device's own sending chain. One that cannot is not this chain: it is neither
+// merged into the anchor nor compared against the record, which is the same
+// as the server sending no watermark at all — something it can always do.
+//
+// Two cases reach here legitimately. The server keeps its watermark per
+// (conversation, account), so a second device of the account is handed the
+// other device's leaf. And a device that took over a leaf index is handed the
+// chain the replaced leaf left on it, from before SinceEpoch.
+//
+// A watermark that has accepted nothing names no chain and is kept as it is,
+// as is every watermark while this device's leaf is unknown: both are judged
+// exactly as before this rule existed.
+func (r *Record) ownsChain(epoch uint64, leaf uint32, accepted bool) bool {
+	if !accepted {
+		return true
+	}
+	own, known := r.ownLeaf()
+	if !known {
+		return true
+	}
+	return leaf == own.Index && epoch >= own.SinceEpoch
 }
 
 func (r *Record) receivedContains(p Position) bool {

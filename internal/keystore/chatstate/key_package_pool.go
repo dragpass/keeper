@@ -22,6 +22,19 @@
 // Nothing about an entry's private part reaches a log or an error, not even its
 // length.
 //
+// # A join that crashed before its delete
+//
+// A join writes the group state and only then deletes the entry, so that a
+// crash between the two costs a leftover entry and never the invitation. The
+// leftover must not stay: it is the private keys of a KeyPackage whose group
+// is already on disk. So the join first marks the entry with the conversation
+// it is joining (ClaimKeyPackage), and the joined record carries the
+// KeyPackage's ref (Record.JoinedKeyPackageRef) in the same write as the group
+// state. Every pool open resolves the claims it finds (sweepJoined): an entry
+// whose claimed conversation's record names its ref was consumed and is
+// deleted, and any other claim is left, because its join either has not
+// written yet or never will, and in both cases the keys are still needed.
+//
 // A rewound copy of this file brings back entries for KeyPackages that were
 // consumed since. That is harmless: the server marks a KeyPackage consumed when
 // it hands it out and never hands it out again, so no Welcome will name one.
@@ -89,6 +102,10 @@ type KeyPackagePoolEntry struct {
 	// that old shape readable; this version never writes an empty one.
 	Leaf string `json:"leaf,omitempty"`
 
+	// Claim is the conversation a join is consuming this entry for, set just
+	// before the join writes its group state. Empty until then.
+	Claim string `json:"claim,omitempty"`
+
 	Private []byte `json:"private"`
 }
 
@@ -147,6 +164,27 @@ func (s *Store) LookupKeyPackage(refs [][]byte, now time.Time) (KeyPackagePoolEn
 		return false, ErrKeyPackageNotInPool
 	})
 	return found, err
+}
+
+// ClaimKeyPackage marks the entry for ref as being joined into
+// conversationID. Call it before the join writes its group state: after a
+// crash between that write and DeleteKeyPackage, the claim is what lets the
+// next pool open find the record that proves the entry was consumed. A
+// missing entry is not an error; there is nothing left to protect.
+func (s *Store) ClaimKeyPackage(ref []byte, conversationID string) error {
+	if conversationID == "" {
+		return errors.New("key package claim needs a conversation")
+	}
+	return s.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
+		for i := range pool.Entries {
+			if bytes.Equal(pool.Entries[i].Ref, ref) {
+				changed := pool.Entries[i].Claim != conversationID
+				pool.Entries[i].Claim = conversationID
+				return changed, nil
+			}
+		}
+		return false, nil
+	})
 }
 
 // DeleteKeyPackage removes one entry, once the join it served is persisted.
@@ -313,11 +351,54 @@ func (s *Store) withKeyPackagePool(fn func(*keyPackagePool) (bool, error)) error
 		return err
 	}
 	defer pool.wipe()
+	if s.sweepJoined(pool) {
+		if err := s.writeKeyPackagePool(dir, path, pool); err != nil {
+			return err
+		}
+	}
 	changed, err := fn(pool)
 	if err != nil || !changed {
 		return err
 	}
 	return s.writeKeyPackagePool(dir, path, pool)
+}
+
+// sweepJoined deletes every claimed entry whose conversation's record names
+// it as the KeyPackage its join consumed, and reports whether it deleted any.
+//
+// It reads each record without the rollback judgement: the only question is
+// whether a group state built from this KeyPackage was ever written, and a
+// record that says so answers it whatever else is wrong with it. A record it
+// cannot read keeps the entry, which is the direction that loses nothing.
+//
+// It takes the conversation lock inside the pool lock. No path takes them the
+// other way round: a join takes the pool lock, the conversation lock and the
+// pool lock one after another, never one inside the other.
+func (s *Store) sweepJoined(pool *keyPackagePool) bool {
+	swept := false
+	kept := pool.Entries[:0]
+	for _, e := range pool.Entries {
+		if e.Claim != "" && s.joinedWith(e.Claim, e.Ref) {
+			secure.Zeroize(e.Private)
+			swept = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	pool.Entries = kept
+	return swept
+}
+
+func (s *Store) joinedWith(conversationID string, ref []byte) bool {
+	joined := false
+	_ = s.withConversation(conversationID, func(p convPaths) error {
+		rec, err := s.readRecord(p, conversationID)
+		if err == nil && rec != nil {
+			joined = bytes.Equal(rec.JoinedKeyPackageRef, ref)
+		}
+		return err
+	})
+	return joined
 }
 
 func (s *Store) keyPackagePoolAAD() []byte {

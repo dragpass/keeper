@@ -18,6 +18,14 @@ type ConversationStatus struct {
 	CommitPending         bool
 	PendingClientCommitID string
 
+	// PendingAppContext is PendingCommit.AppContext, nil when no Commit is
+	// pending or the pending one was built without it.
+	PendingAppContext []byte
+
+	// PendingName is the room name the pending Commit's first build sealed,
+	// nil when there is none.
+	PendingName *SealedRoomName
+
 	// RemovalLatch is what a send would be judged against now: the stored
 	// latch plus the permit's list, kept where the confirmed roster still
 	// holds the account. Sorted, and empty rather than nil.
@@ -37,6 +45,16 @@ type ConversationStatus struct {
 	// NeedsRekey is the rewind latch. When it is set nothing else is read:
 	// the record behind it is not trusted to say anything.
 	NeedsRekey bool
+
+	// RekeyCause is why NeedsRekey latched, and "" when it is not latched or
+	// the latch predates the cause being recorded.
+	RekeyCause RekeyCause
+
+	// RekeyEpoch and RekeyCommitter* are the latch's detail for
+	// unauthorized_commit and fork (Anchor.RekeyEpoch), zero otherwise.
+	RekeyEpoch              uint64
+	RekeyCommitterAccountID string
+	RekeyCommitterDeviceID  string
 }
 
 // StatusCipher is what Status needs from MLS: the confirmed roster, to judge
@@ -61,7 +79,10 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
 			out.NeedsRekey = true
-			return nil
+			detail, err := s.rekeyDetail(p)
+			out.RekeyCause, out.RekeyEpoch = detail.Cause, detail.Epoch
+			out.RekeyCommitterAccountID, out.RekeyCommitterDeviceID = detail.CommitterAccountID, detail.CommitterDeviceID
+			return err
 		}
 		if err != nil {
 			return err
@@ -72,6 +93,12 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		if rec.Pending != nil {
 			out.CommitPending = true
 			out.PendingClientCommitID = rec.Pending.ClientCommitID
+			out.PendingAppContext = rec.Pending.AppContext
+			if name := rec.Pending.Name; name != nil {
+				out.PendingName = &SealedRoomName{
+					Epoch: rec.Pending.ExpectedEpoch + 1, IV: name.IV, Ciphertext: name.Ciphertext,
+				}
+			}
 		}
 		latch := storedLatches(rec)
 		if out.HasGroupState && (latch.held() ||

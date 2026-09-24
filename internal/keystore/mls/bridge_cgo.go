@@ -56,6 +56,7 @@ int32_t dpmls_session_new(const uint8_t *identity, size_t identity_len,
                           DpSession **out);
 void    dpmls_session_free(DpSession *handle);
 int32_t dpmls_session_approve(DpSession *handle, const uint8_t *approvals, size_t approvals_len);
+int32_t dpmls_session_approve_removals(DpSession *handle, const uint8_t *removals, size_t removals_len);
 int32_t dpmls_key_package_leaf(const uint8_t *key_package, size_t key_package_len, DpBuf *out);
 int32_t dpmls_key_package_not_after(const uint8_t *key_package, size_t key_package_len, uint64_t *out);
 int32_t dpmls_group_process_collect(DpSession *handle, const uint8_t *message, size_t message_len, DpBuf *out);
@@ -549,22 +550,38 @@ func (s *Session) approve(leaves []Leaf) error {
 	return statusError(rc)
 }
 
-// processCollect reports the leaves message would bring in and leaves the
-// group exactly as it was.
-func (s *Session) processCollect(message []byte) ([]Leaf, error) {
+// approveRemovals hands the Rust rules the Removes Go judged authorized for
+// the next group operation on this session. That operation consumes the list
+// either way.
+func (s *Session) approveRemovals(leaves []Leaf) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return nil, err
+		return err
+	}
+	buf := encodeRemovals(leaves)
+	rc := C.dpmls_session_approve_removals(h, bytePtr(buf), C.size_t(len(buf)))
+	runtime.KeepAlive(buf)
+	return statusError(rc)
+}
+
+// processCollect reports the leaves message would bring in and what the
+// Commit does, and leaves the group exactly as it was.
+func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, CommitShape{}, err
 	}
 	var buf C.DpBuf
 	rc := C.dpmls_group_process_collect(h, bytePtr(message), C.size_t(len(message)), &buf)
 	runtime.KeepAlive(message)
 	if rc != 0 {
-		return nil, statusError(rc)
+		return nil, CommitShape{}, statusError(rc)
 	}
-	return decodeLeaves(takeBuf(&buf))
+	return decodeCollected(takeBuf(&buf))
 }
 
 // joinCollect reports every leaf of a Welcome's tree and keeps no group.
@@ -778,6 +795,12 @@ func statusError(rc C.int32_t) error {
 	// Not ErrFailed, because the display path answers it from local history.
 	if rc == -5 {
 		return fmt.Errorf("%w (status %d): %s", chatstate.ErrOwnMessage, int(rc), msg)
+	}
+	// -6 is DPMLS_ERR_UNAUTHORIZED: a Remove or a proposal type nobody
+	// approved reached the rules. Go judges first, so reaching this is the
+	// Rust half refusing what the Go half would have refused.
+	if rc == -6 {
+		return &chatstate.UnauthorizedCommitError{Reason: "the mls rules refused a proposal nobody approved"}
 	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

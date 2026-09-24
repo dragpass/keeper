@@ -77,11 +77,14 @@ func threeMembers(t *testing.T) (g groupOf, carolS *mls.Session, carolStore *cha
 	return g, carolS, carolStore
 }
 
-// carolCommits builds carol's attempt at the epoch alice is also on. Only its
-// bytes matter: in the race alice loses, it is the Commit the server kept.
-func carolCommits(t testing.TB, s *mls.Session, store *chatstate.Store, plan chatstate.CommitPlan) []byte {
+// carolCommits builds carol's attempt at the epoch alice is also on, under
+// carol's own permit. Only its bytes matter: in the race alice loses, it is
+// the Commit the server kept.
+func carolCommits(
+	t testing.TB, s *mls.Session, store *chatstate.Store, wm chatstate.ServerWatermark, plan chatstate.CommitPlan,
+) []byte {
 	t.Helper()
-	out, err := store.BeginCommit(conv, noWatermark, chatstate.BeginCommitRequest{
+	out, err := store.BeginCommit(conv, wm, chatstate.BeginCommitRequest{
 		ClientCommitID: nextCommitID(), Plan: plan,
 	}, mls.NewCipher(s, trustAll{}))
 	if err != nil {
@@ -166,7 +169,7 @@ func TestS1_LosingToAWinnerThatAlsoRemovesUnlatches(t *testing.T) {
 	g, carolS, carolStore := threeMembers(t)
 	g.refusedSend(t, removalOf(accountB), "a permit named bob")
 
-	winner := carolCommits(t, carolS, carolStore, chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}})
+	winner := carolCommits(t, carolS, carolStore, removalOf(accountB), chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}})
 	pending := g.beginRemove(t, removalOf(accountB), accountB)
 	g.loseTo(t, pending.ClientCommitID, winner, removalOf(accountB))
 
@@ -179,7 +182,7 @@ func TestS1_LosingToAWinnerThatDoesNotRemoveStaysLatched(t *testing.T) {
 	g, carolS, carolStore := threeMembers(t)
 	g.refusedSend(t, removalOf(accountB), "a permit named bob")
 
-	winner := carolCommits(t, carolS, carolStore, chatstate.CommitPlan{})
+	winner := carolCommits(t, carolS, carolStore, noWatermark, chatstate.CommitPlan{})
 	pending := g.beginRemove(t, removalOf(accountB), accountB)
 	g.loseTo(t, pending.ClientCommitID, winner, noWatermark)
 

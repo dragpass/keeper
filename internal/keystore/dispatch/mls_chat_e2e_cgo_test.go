@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -214,6 +215,26 @@ func (k *keeper) process(seq, epoch uint64, commitB64 string) proto.MLSProcessRe
 	return k.must(proto.MLSProcess, k.processRequest(seq, epoch, commitB64)).Data.(proto.MLSProcessResponseData)
 }
 
+// attested is the commit attestation the server would sign for a row whose
+// Commit declared these members. AlwaysOKVerifier accepts any signature.
+func attested(members ...string) *proto.MLSCommitAttestation {
+	sorted := append([]string(nil), members...)
+	slices.Sort(sorted)
+	return &proto.MLSCommitAttestation{
+		MemberAccountIDs: sorted,
+		ServerKeyVersion: 1,
+		Signature:        base64.StdEncoding.EncodeToString([]byte("signed by the test server")),
+	}
+}
+
+// processAttested is process with the row's attestation naming members.
+func (k *keeper) processAttested(seq, epoch uint64, commitB64 string, members ...string) proto.MLSProcessResponseData {
+	k.t.Helper()
+	req := k.processRequest(seq, epoch, commitB64)
+	req.CommitAttestation = attested(members...)
+	return k.must(proto.MLSProcess, req).Data.(proto.MLSProcessResponseData)
+}
+
 // dm is Alice and Bob in one conversation, both confirmed at epoch 1: Alice
 // creates it with Bob's KeyPackage, the server accepts her Add, and Bob joins
 // from the Welcome the accepted row carries.
@@ -270,7 +291,7 @@ func (c *dm) nextSeq() uint64 {
 func TestMLSChatE2E_ADMIsCreatedConfirmedAndJoined(t *testing.T) {
 	c := newDM(t)
 
-	// Bob's pins now hold Alice, recorded only once the join was on disk.
+	// Bob's pins now hold Alice, recorded before the joined state was written.
 	if _, err := keychain.GetPeerKeyPin(c.bob.store, c.bob.id, c.alice.id); err != nil {
 		t.Fatalf("bob has no pin for alice after joining: %v", err)
 	}
@@ -574,8 +595,10 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	if sent.Epoch != 2 || sent.Generation != 0 {
 		t.Fatalf("after the remove alice sent %+v", sent)
 	}
-	// Bob learns he was removed.
-	if got := c.bob.process(c.nextSeq(), 2, remove.CommitB64); !got.Removed {
+	// Bob learns he was removed. The row's attestation no longer names him
+	// (R3b); without one, his own Keeper would not take a Remove it cannot
+	// tie to a departure.
+	if got := c.bob.processAttested(c.nextSeq(), 2, remove.CommitB64, c.alice.id); !got.Removed {
 		t.Fatalf("bob processed his removal as %+v", got)
 	}
 }
