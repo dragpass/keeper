@@ -64,7 +64,9 @@
 //     can have it remove members; it cannot forge the signature.
 //   - A replayed statement. A leave or a removal names an account, not an
 //     epoch; a server that re-serves an old one after the account was added
-//     back can have it removed again (availability, not confidentiality).
+//     back can have it removed again (availability, not confidentiality),
+//     for as long as the statement is inside its 30-day window
+//     (proto.MLSStatementMaxAgeSeconds, Q10).
 //
 // 임시, 정책 미충족 (legacy_temporary): a group created before 0.0.55 carries
 // no roles until its owner's Commit sets them. Until then a received Add rests

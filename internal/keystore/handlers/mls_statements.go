@@ -2,6 +2,13 @@
 // Q5 (b), Q13), the actions that sign them, and the verifier every Commit's
 // authenticated data is held to (chatstate.RemovalEvidence).
 //
+// An org removal and a leave are valid for proto.MLSStatementMaxAgeSeconds
+// after the time they were signed at, against this Keeper's clock (Q10): an
+// older one is invalid, so a build carrying it is refused and a received
+// Commit whose Remove rests on it is refused and latches. A device revocation
+// has no window (it names one device, and a device enrolled again after it is
+// not removed by it, ownStatementVerifies).
+//
 // Which key verifies what:
 //
 //   - A leave and a device revocation are the removed account's own word. They
@@ -73,9 +80,11 @@ func (e statementEvidence) Authorized(change chatstate.CommitChange) ([]bool, in
 			}
 		}
 	}
+	now := e.d.Now().Unix()
 	for _, s := range ev.Leaves {
 		ok, seen := e.ownStatementVerifies(change, s.AccountID, "", 0, s.Signature, proto.MLSLeaveCanonical(s))
-		if seen && (!ok || s.ConversationID != e.conversationID || s.Validate("leave") != nil) {
+		if seen && (!ok || s.ConversationID != e.conversationID || s.Validate("leave") != nil ||
+			proto.MLSStatementExpired(s.RequestedAt, now)) {
 			invalid++
 			continue
 		}
@@ -141,7 +150,8 @@ func (e statementEvidence) ownStatementVerifies(
 // organization, the signature under the key it carries, and that key against
 // this owner's pin for the admin account (first use recorded).
 func (e statementEvidence) orgRemovalVerifies(s proto.MLSOrgRemovalStatement) bool {
-	if s.Validate("org_removal", true) != nil || s.OrgID != e.orgID {
+	if s.Validate("org_removal", true) != nil || s.OrgID != e.orgID ||
+		proto.MLSStatementExpired(s.RemovedAt, e.d.Now().Unix()) {
 		return false
 	}
 	if verifyStatementSignature([]byte(s.AdminPublicKey), s.Signature, proto.MLSOrgRemovalCanonical(s)) != nil {

@@ -1102,7 +1102,17 @@ organization: a server that serves no statement keeps that account in the
 group. Who the org admins are: the admin set is server-attested, and an admin's
 first key is taken on trust. A replayed statement: a leave or a removal names
 an account, not an epoch, so a server that serves an old one after the account
-came back can have it removed again. The pending removal list in the permit is
+came back can have it removed again, for as long as the statement is inside its
+window. **The window (Q10):** an org removal and a leave are valid for 30 days
+(`MLSStatementMaxAgeSeconds`) after the time they were signed at (`removed_at`,
+`requested_at`), read against the verifying Keeper's clock, at build and on
+receipt. Past it the build is refused with `CHAT_MLS_STATEMENT_UNVERIFIED`, and a
+received Commit whose Remove rests on it is refused and latches
+`unauthorized_commit`. A device that was offline for more than 30 days and
+catches up on a Commit whose Remove rested on a statement that was fresh when
+it was built latches on it too: the receiver has no trusted time for when the
+Commit was accepted (stated, not hidden). A statement dated ahead of the clock
+is not refused, since only its signer can date it. The pending removal list in the permit is
 only a reason to stop encrypting (S-1); it is no longer authority for a Remove.
 
 **legacy_temporary (임시, 정책 미충족).** A group created before 0.0.55 carries

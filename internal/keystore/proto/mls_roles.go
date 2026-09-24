@@ -103,6 +103,22 @@ func (r MLSRoleSet) Validate(field string) error {
 	return nil
 }
 
+// MLSStatementMaxAgeSeconds is how long an org removal or a leave stays valid
+// after the time it was signed at (removed_at, requested_at), read against the
+// verifying Keeper's clock, at build and on receipt alike (Q10). A statement
+// names an account and not an epoch, so without it a server could re-serve an
+// old statement against an account that came back, forever; the window bounds
+// that replay to 30 days. A statement dated ahead of the clock is not refused:
+// only its signer can date it, and a signer can sign a fresh one anyway, so a
+// future date lets nobody but the signer extend anything.
+const MLSStatementMaxAgeSeconds = 30 * 24 * 60 * 60
+
+// MLSStatementExpired reports whether a statement signed at signedAt is past
+// the window at now (Unix seconds).
+func MLSStatementExpired(signedAt, now int64) bool {
+	return now-signedAt > MLSStatementMaxAgeSeconds
+}
+
 // MLSOrgRemovalStatement is an org admin's signed statement that an account
 // was removed from the organization (Q5 (b)). AdminPublicKey is the admin's
 // account public key PEM as the server serves it; the Keeper holds it to its

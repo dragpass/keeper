@@ -334,8 +334,10 @@ func TestMLSRoles_AnAdminKeyThatChangedIsRefused(t *testing.T) {
 }
 
 // Replayed: the server serves a statement again after the account came back.
-// The Keeper accepts it (a statement names an account, not an epoch): the
-// stated limit, pinned so it is not mistaken for a guarantee.
+// Inside the statement's 30-day window the Keeper accepts it (a statement
+// names an account, not an epoch): the stated limit, pinned so it is not
+// mistaken for a guarantee. Past the window it is refused
+// (mls_statement_window_e2e_cgo_test.go).
 func TestMLSRoles_AReplayedOrgRemovalIsAcceptedAsStated(t *testing.T) {
 	r := newRolesRoom(t)
 	admin := newKeeper(t, e2eAdmin)
