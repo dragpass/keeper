@@ -225,3 +225,41 @@ func TestMLSRecovery_InARoomWithRolesOnlyTheOwnerOrAnAdminSeatsARecoveredIdentit
 		}
 	}
 }
+
+// Q15: the owner of a room with no admin recovers her account. Nobody holds
+// the power to seat her recovered identity: the plain members cannot build
+// it, whether a person asks or not, and her recovered device holds no group
+// to commit from. Nothing grants the old room's power to her or to anyone
+// else; the way on is a new room, where every member is added and verified
+// afresh (the app's room recovery). The old room keeps her old leaf and its
+// owner entry, which is only ever a record: no rule reads it to let the
+// recovered identity in.
+func TestMLSRecovery_AnOwnerWithNoAdminWhoRecoversIsNotSeatedBack(t *testing.T) {
+	r := newRolesRoom(t)
+	alice2, chain := recoveredKeeper(t, r.alice, e2eDevice2)
+	decl := alice2.declare(proto.MLSLeafReasonRotate, time.Now().Unix()+60)
+	listed := []proto.ChatStateLeafReplacement{{AccountID: r.alice.id, NewSignatureKeyFP: decl.SignatureKeyFingerprint}}
+	r.bob.replacing, r.carol.replacing, alice2.replacing = listed, listed, listed
+	kp := alice2.keyPackage()
+
+	for _, member := range []*keeper{r.bob, r.carol} {
+		for _, asked := range []bool{false, true} {
+			resp := member.buildRecoveryReplace(1, kp, asked, chain)
+			if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+				t.Fatalf("%s seating the recovered owner (asked %t) = %+v; want %s",
+					member.id[:8], asked, resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+			}
+			if got := member.status(); got.CommitPending || got.Epoch != 1 {
+				t.Fatalf("a refused seat left %+v", got)
+			}
+		}
+	}
+	if got := alice2.status(); got.HasGroupState {
+		t.Fatalf("the recovered owner holds the old room's group: %+v", got)
+	}
+	// The group context still names the old owner; no rule reads it for her
+	// recovered identity, and a claim needs her old leaf to be gone.
+	if got := r.bob.status(); got.Authority != "roles" || len(got.Roles) != 1 || got.Roles[0].AccountID != e2eAlice {
+		t.Fatalf("the old room's roles = %+v", got.Roles)
+	}
+}
