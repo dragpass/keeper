@@ -192,3 +192,36 @@ func (k *keeper) processWith(
 	req.RotationStatements = chain
 	return k.must(proto.MLSProcess, req).Data.(proto.MLSProcessResponseData)
 }
+
+// Once the room carries roles, seating a recovered identity is the owner's or
+// an admin's decision. Carol, a plain member, cannot build it; as an admin she
+// can, and Alice, the owner, applies it.
+func TestMLSRecovery_InARoomWithRolesOnlyTheOwnerOrAnAdminSeatsARecoveredIdentity(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		var r *room
+		if admin {
+			r = newRolesRoom(t, e2eCarol)
+		} else {
+			r = newRolesRoom(t)
+		}
+		bob2, chain := recoveredKeeper(t, r.bob, e2eDevice2)
+		oldBob, _, _ := keychain.GetMLSLeafNewest(r.alice.store, r.alice.id, r.bob.id)
+		decl := bob2.declare(proto.MLSLeafReasonRotate, oldBob.NotBefore+60)
+		listed := []proto.ChatStateLeafReplacement{{AccountID: r.bob.id, NewSignatureKeyFP: decl.SignatureKeyFingerprint}}
+		r.alice.replacing, r.bob.replacing, r.carol.replacing, bob2.replacing = listed, listed, listed, listed
+
+		resp := r.carol.buildRecoveryReplace(1, bob2.keyPackage(), true, chain)
+		if !admin {
+			if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+				t.Fatalf("a plain member seating a recovered identity = %+v; want %s",
+					resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+			}
+			continue
+		}
+		built := commitOf(mustSucceed(t, "admin carol seats bob2", resp))
+		r.carol.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+		if got := r.alice.processWith(r.nextSeq(), 2, built.CommitB64, []proto.KeyRotationStatement{chain}); got.Epoch != 2 {
+			t.Fatalf("alice applied the admin's seat as %+v", got)
+		}
+	}
+}

@@ -240,6 +240,12 @@ func (c CommitChange) accountsAfter() int {
 // the group's roles, or for the Commit that first sets a room's roles on a
 // legacy group, the ones it sets (the migration).
 func (c CommitChange) effectiveRoles() *Roles {
+	return c.EffectiveRoles()
+}
+
+// EffectiveRoles is effectiveRoles for the rules outside this file (the
+// succession rule, succession.go).
+func (c CommitChange) EffectiveRoles() *Roles {
 	if c.RolesBefore != nil {
 		return c.RolesBefore
 	}

@@ -1177,10 +1177,12 @@ differs from the removed leaf's (and it verified at all only over a rotation
 chain from the pinned key, so `rotation_statements` must carry the recovery
 statement), and the committer is another account. Building one also needs
 `user_initiated: true`: automation never seats a recovered identity, a person
-does — in a DM the peer, once; in a room its owner or admin (the app shows the
-action; **임시, 정책 미충족 (Q2, Q3)**: until room roles live in the
-authenticated group context the Keeper cannot tell an admin's Commit from a
-member's, on either side). It is not the old identity's succession: the peer's
+does — in a DM the peer, once; in a room its owner or admin. In a room whose
+group context carries roles the Keeper holds that on both sides: a plain
+member's build is `CHAT_MLS_COMMIT_UNAUTHORIZED`, and a received one is
+refused and latches `unauthorized_commit`, judged by the roles before the
+Commit (**임시, 정책 미충족** only for a `legacy_temporary` room, which has no
+roles to hold it to). It is not the old identity's succession: the peer's
 pin for the account moves to `rotated` over the chain (never to `verified`),
 and the leaf-replacement latch keeps every member's sends in that conversation
 refused until the Commit is confirmed or applied. A device of the **same**

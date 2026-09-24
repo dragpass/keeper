@@ -16,11 +16,13 @@
 //	Rv  account recovery (Q2): the added leaf's account key is not the
 //	    removed leaf's (RK24 recovery registers a new account key, and a key
 //	    change only verifies at all over a rotation chain the leaf verifier
-//	    accepted), and the committer is another account. Building one also
-//	    needs a person on this device to ask for it (UserInitiated): a
-//	    recovered identity is seated only by a peer's decision, never by
-//	    automation. It is a new identity taking a seat, not the old one's
-//	    succession: the pin moves to rotated, not verified.
+//	    accepted), and the committer is another account. In a room with
+//	    roles the committer must also be its owner or an admin under the
+//	    roles before the Commit; in a DM the other account is the peer.
+//	    Building one also needs a person on this device to ask for it
+//	    (UserInitiated): a recovered identity is seated only by a peer's
+//	    decision, never by automation. It is a new identity taking a seat,
+//	    not the old one's succession: the pin moves to rotated, not verified.
 //
 // A server login token alone never satisfies either: it neither holds the old
 // leaf's key nor changes the account key. A device that has the account key
@@ -39,11 +41,10 @@
 // replacement. What a late use can do is only the succession the old leaf
 // approved, for that exact old leaf and that exact new leaf.
 //
-// 임시, 정책 미충족 (Q2, Q3): Rv on receipt rests on the committer being
-// another member, and on building on the app's word that a person asked.
-// Which members may seat a recovered account in a room (its owner or admin)
-// waits for room roles in the authenticated group context (wave 5a).
-// TODO(Q3 phase 2): narrow Rv to owner/admin committers in rooms once roles land.
+// 임시, 정책 미충족 (legacy_temporary only): in a group created without roles
+// Rv rests on the committer being another member, as every Add there rests on
+// its leaf alone. Building one still rests on the app's word that a person
+// asked.
 
 package chatstate
 
@@ -246,6 +247,11 @@ type SuccessionChange struct {
 	// app's word is no evidence on another device.
 	Building      bool
 	UserInitiated bool
+
+	// Roles are the group's roles the Commit is judged against (nil for a
+	// group without roles). In a room only its owner or an admin seats a
+	// recovered identity.
+	Roles *Roles
 }
 
 // JudgeSuccession holds a Commit to the rule above. Nil means allowed.
@@ -272,12 +278,18 @@ func JudgeSuccession(c SuccessionChange) error {
 			continue // H
 		}
 		if recoveredIdentity(removedOfAccount, added) && c.CommitterAccountID != added.AccountID &&
-			(!c.Building || c.UserInitiated) {
+			(!c.Building || c.UserInitiated) && maySeatRecovered(c.Roles, c.CommitterAccountID) {
 			continue // Rv
 		}
 		return refuse("a leaf of an account replaces another of its leaves without the old leaf's handover or a person seating a recovered identity")
 	}
 	return nil
+}
+
+// maySeatRecovered is Rv's committer rule: in a room with roles its owner or
+// an admin; in a DM or a group without roles any other member.
+func maySeatRecovered(roles *Roles, committer string) bool {
+	return roles == nil || roles.Kind != RolesKindRoom || roles.RoleOf(committer) != ""
 }
 
 func approvedByOldLeaf(handovers []LeafHandover, removed []SuccessionLeaf, added SuccessionLeaf) bool {

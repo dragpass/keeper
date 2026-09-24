@@ -612,7 +612,11 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, nil, true, false); err != nil {
+	roles, _, err := c.Authority()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, nil, roles, true, false); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
@@ -732,7 +736,11 @@ func (c *Cipher) commitReplaceAccounts(
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, carried, true, userInitiated); err != nil {
+	roles, _, err := c.Authority()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, carried, roles, true, userInitiated); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {

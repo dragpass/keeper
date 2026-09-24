@@ -207,3 +207,44 @@ func TestJudgeSuccession_ARecoveredIdentityIsSeatedOnlyByAPerson(t *testing.T) {
 		t.Fatalf("an account seating its own recovered identity = %v", err)
 	}
 }
+
+// In a room with roles only its owner or an admin seats a recovered identity,
+// on receipt as on build; a plain member's Commit is refused. A DM, whose
+// roles list nobody, and a group without roles keep the peer rule.
+func TestJudgeSuccession_InARoomOnlyTheOwnerOrAnAdminSeatsARecoveredIdentity(t *testing.T) {
+	const owner, admin, member = "e1111111-1111-4111-8111-111111111111", "e2222222-2222-4222-8222-222222222222", succOther
+	oldPub, _ := leafKey(t)
+	newPub, _ := leafKey(t)
+	old := succLeaf(succAccount, succOldDev, oldPub, "k1")
+	recovered := succLeaf(succAccount, succNewDev, newPub, "k2")
+	room, err := RolesFromEntries(RolesKindRoom, []RoleEntry{{AccountID: owner, Role: RoleOwner}, {AccountID: admin, Role: RoleAdmin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dm := Roles{Kind: RolesKindDM}
+	for _, tc := range []struct {
+		name      string
+		roles     *Roles
+		committer string
+		allowed   bool
+	}{
+		{"room owner", &room, owner, true},
+		{"room admin", &room, admin, true},
+		{"room member", &room, member, false},
+		{"dm peer", &dm, member, true},
+		{"legacy member", nil, member, true},
+	} {
+		for _, building := range []bool{false, true} {
+			err := JudgeSuccession(SuccessionChange{
+				CommitterAccountID: tc.committer, Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered},
+				Roles: tc.roles, Building: building, UserInitiated: building,
+			})
+			if (err == nil) != tc.allowed {
+				t.Errorf("%s (building %v) = %v; want allowed %v", tc.name, building, err, tc.allowed)
+			}
+			if err != nil && !errors.Is(err, ErrCommitUnauthorized) {
+				t.Errorf("%s: %v; want ErrCommitUnauthorized", tc.name, err)
+			}
+		}
+	}
+}

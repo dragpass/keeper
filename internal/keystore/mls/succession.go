@@ -60,7 +60,8 @@ func committerOf(before []Leaf, index uint32) (string, error) {
 // judgeSuccession holds a Commit to the succession rule. added carries each
 // entering leaf (a KeyPackage's, or an Add the collect pass saw).
 func judgeSuccession(
-	removed, added []Leaf, committer string, handovers []chatstate.LeafHandover, building, userInitiated bool,
+	removed, added []Leaf, committer string, handovers []chatstate.LeafHandover, roles *chatstate.Roles,
+	building, userInitiated bool,
 ) error {
 	r, err := successionLeaves(removed)
 	if err != nil {
@@ -77,6 +78,7 @@ func judgeSuccession(
 		Handovers:          handovers,
 		Building:           building,
 		UserInitiated:      userInitiated,
+		Roles:              roles,
 	})
 }
 
@@ -92,7 +94,8 @@ func judgeReceivedSuccession(shape CommitShape, change chatstate.CommitChange) e
 			Reason:             "the commit carries authenticated data that is not a leaf handover",
 		}
 	}
-	err = judgeSuccession(shape.Removed, shape.Added, change.CommitterAccountID, handovers, false, false)
+	err = judgeSuccession(shape.Removed, shape.Added, change.CommitterAccountID, handovers,
+		change.EffectiveRoles(), false, false)
 	var refused *chatstate.UnauthorizedCommitError
 	if errors.As(err, &refused) {
 		refused.CommitterDeviceID = change.CommitterDeviceID
