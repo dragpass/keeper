@@ -280,7 +280,7 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Replace) > 0 {
-		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
+		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace, plan.UserInitiated)
 		if err != nil {
 			return chatstate.BuiltCommit{}, err
 		}
@@ -401,7 +401,7 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, nil); err != nil {
+	if err := judgeSuccession(removed, entering, committer, nil, true, false); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
@@ -450,10 +450,13 @@ func (c *Cipher) ownAccount(leaves []Leaf) (string, error) {
 //
 // Each account's succession is then held to the rule every receiver applies
 // (chatstate/succession.go): the old leaf's handover, which must verify
-// against the leaf being removed and name the KeyPackage's leaf. The handovers
+// against the leaf being removed and name the KeyPackage's leaf, or a
+// recovered identity a person on this device asked to seat. The handovers
 // ride in the Commit's authenticated data, so every receiver checks the same
 // statements.
-func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commit, welcome []byte, expected uint64, err error) {
+func (c *Cipher) commitReplaceAccounts(
+	members []chatstate.ReplaceMember, userInitiated bool,
+) (commit, welcome []byte, expected uint64, err error) {
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, nil, 0, err
@@ -511,7 +514,7 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, handovers); err != nil {
+	if err := judgeSuccession(removed, entering, committer, handovers, true, userInitiated); err != nil {
 		return nil, nil, 0, err
 	}
 	ad, err := chatstate.EncodeHandovers(handovers)

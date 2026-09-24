@@ -165,3 +165,43 @@ func TestJudgeSuccession_OnlyTheOldLeafsApprovalHandsOverTheSeat(t *testing.T) {
 		t.Errorf("a plain add = %v", err)
 	}
 }
+
+func TestJudgeSuccession_ARecoveredIdentityIsSeatedOnlyByAPerson(t *testing.T) {
+	oldPub, _ := leafKey(t)
+	newPub, _ := leafKey(t)
+	old := succLeaf(succAccount, succOldDev, oldPub, "k1")
+	recovered := succLeaf(succAccount, succNewDev, newPub, "k2")
+	c := SuccessionChange{CommitterAccountID: succOther, Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered}}
+
+	// Received: the account key changed and another member committed it.
+	if err := JudgeSuccession(c); err != nil {
+		t.Fatalf("a received seat of a recovered identity = %v", err)
+	}
+	built := c
+	built.Building = true
+	if err := JudgeSuccession(built); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Fatalf("automation seating a recovered identity = %v", err)
+	}
+	built.UserInitiated = true
+	if err := JudgeSuccession(built); err != nil {
+		t.Fatalf("a person seating a recovered identity = %v", err)
+	}
+	// The same account key is no recovery, whoever asks.
+	sameKey := built
+	sameKey.Added = []SuccessionLeaf{succLeaf(succAccount, succNewDev, newPub, "k1")}
+	if err := JudgeSuccession(sameKey); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Fatalf("a person seating a same-key device = %v", err)
+	}
+	// An unreadable key on either side is never a change.
+	unread := built
+	unread.Added = []SuccessionLeaf{succLeaf(succAccount, succNewDev, newPub, "")}
+	if err := JudgeSuccession(unread); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Fatalf("an unreadable account key = %v", err)
+	}
+	// The account cannot seat itself.
+	self := c
+	self.CommitterAccountID = succAccount
+	if err := JudgeSuccession(self); !errors.Is(err, ErrCommitUnauthorized) {
+		t.Fatalf("an account seating its own recovered identity = %v", err)
+	}
+}

@@ -5,18 +5,27 @@
 //
 // A Commit that removes a leaf of account A and adds a leaf of A under another
 // signature key hands A's seat to a different device. That is a succession,
-// and it is allowed only when the old leaf approved it:
+// and it is allowed in exactly two ways:
 //
-//	H   a handover statement naming the removed leaf (device and key) and the
-//	    added leaf (device and key), signed with the removed leaf's own
-//	    signature key, rides in the Commit's authenticated data. The removed
-//	    leaf is the one in the tree the Commit was applied to, so the key it is
-//	    checked against is the authenticated group's, never one a server hands
-//	    out.
+//	H   the old leaf approved it: a handover statement naming the removed
+//	    leaf (device and key) and the added leaf (device and key), signed with
+//	    the removed leaf's own signature key, rides in the Commit's
+//	    authenticated data. The removed leaf is the one in the tree the Commit
+//	    was applied to, so the key it is checked against is the authenticated
+//	    group's, never one a server hands out.
+//	Rv  account recovery (Q2): the added leaf's account key is not the
+//	    removed leaf's (RK24 recovery registers a new account key, and a key
+//	    change only verifies at all over a rotation chain the leaf verifier
+//	    accepted), and the committer is another account. Building one also
+//	    needs a person on this device to ask for it (UserInitiated): a
+//	    recovered identity is seated only by a peer's decision, never by
+//	    automation. It is a new identity taking a seat, not the old one's
+//	    succession: the pin moves to rotated, not verified.
 //
-// A server login token alone never satisfies it: it does not hold the old
-// leaf's key. A device that has the account key (from a password) but not the
-// old device still needs the old device's approval.
+// A server login token alone never satisfies either: it neither holds the old
+// leaf's key nor changes the account key. A device that has the account key
+// (from a password) but not the old device still needs the old device's
+// approval.
 //
 // A leaf of A re-added under the same signature key it had is a re-seat (a
 // rejoin), not a succession, and is not judged here.
@@ -29,6 +38,12 @@
 // that was offline for a week still has to be able to build or apply the
 // replacement. What a late use can do is only the succession the old leaf
 // approved, for that exact old leaf and that exact new leaf.
+//
+// 임시, 정책 미충족 (Q2, Q3): Rv on receipt rests on the committer being
+// another member, and on building on the app's word that a person asked.
+// Which members may seat a recovered account in a room (its owner or admin)
+// waits for room roles in the authenticated group context (wave 5a).
+// TODO(Q3 phase 2): narrow Rv to owner/admin committers in rooms once roles land.
 
 package chatstate
 
@@ -247,6 +262,12 @@ type SuccessionChange struct {
 	Removed            []SuccessionLeaf
 	Added              []SuccessionLeaf
 	Handovers          []LeafHandover
+
+	// Building is set for a Commit this device builds, and UserInitiated when
+	// a person on this device asked for it. Receiving leaves both false; the
+	// app's word is no evidence on another device.
+	Building      bool
+	UserInitiated bool
 }
 
 // JudgeSuccession holds a Commit to the rule above. Nil means allowed.
@@ -272,7 +293,11 @@ func JudgeSuccession(c SuccessionChange) error {
 		if approvedByOldLeaf(c.Handovers, removedOfAccount, added) {
 			continue // H
 		}
-		return refuse("a leaf of an account replaces another of its leaves without the old leaf's handover")
+		if recoveredIdentity(removedOfAccount, added) && c.CommitterAccountID != added.AccountID &&
+			(!c.Building || c.UserInitiated) {
+			continue // Rv
+		}
+		return refuse("a leaf of an account replaces another of its leaves without the old leaf's handover or a person seating a recovered identity")
 	}
 	return nil
 }
@@ -289,4 +314,19 @@ func approvedByOldLeaf(handovers []LeafHandover, removed []SuccessionLeaf, added
 		}
 	}
 	return false
+}
+
+// recoveredIdentity reports whether the entering leaf carries another account
+// key than every leaf of the account it replaces. An unreadable key on either
+// side is never a change.
+func recoveredIdentity(removed []SuccessionLeaf, added SuccessionLeaf) bool {
+	if added.AccountKey == "" {
+		return false
+	}
+	for _, r := range removed {
+		if r.AccountKey == "" || r.AccountKey == added.AccountKey {
+			return false
+		}
+	}
+	return true
 }

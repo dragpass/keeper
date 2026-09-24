@@ -152,7 +152,8 @@ type RejoinMember struct {
 // permit named for the account, never one the caller picked, and the
 // KeyPackage's leaf must sign with exactly that key.
 //
-// Handover is the old device's approval of the succession (succession.go).
+// Handover is the old device's approval of the succession (succession.go),
+// nil for an account recovery, which then needs UserInitiated.
 type ReplaceMember struct {
 	AccountID      string
 	NewFingerprint string

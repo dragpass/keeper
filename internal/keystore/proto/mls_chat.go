@@ -347,7 +347,9 @@ type MLSConversationForgetRemovedResponseData struct {
 // account is the one the permit names in pending_leaf_replacements.
 //
 // Handover is the old device's signed approval (0.0.55, design Q1), as the
-// server relayed it. A replace without one is refused.
+// server relayed it. Without one the replace is an account recovery (Q2): it
+// needs user_initiated and a leaf carrying another account key than the one
+// it replaces.
 type MLSReplaceMember struct {
 	AccountID     string           `json:"account_id"`
 	KeyPackageB64 string           `json:"key_package_b64"`
@@ -627,9 +629,11 @@ type MLSCommitBuildRequest struct {
 	Rejoin           []MLSRejoinMember     `json:"rejoin,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
-	// UserInitiated says a person on this device asked for this add or
-	// remove_account_ids (0.0.55). Automation never sends it. An add needs it;
-	// a remove needs it unless the permit names every account as departed.
+	// UserInitiated says a person on this device asked for this add,
+	// remove_account_ids or replace (0.0.55). Automation never sends it. An add
+	// needs it; a remove needs it unless the permit names every account as
+	// departed; a replace needs it when it carries no handover (an account
+	// recovery, design Q2).
 	// It is the app's word: 임시, 정책 미충족 (Q3) until room roles live in the
 	// authenticated group context.
 	UserInitiated bool `json:"user_initiated,omitempty"`
@@ -695,8 +699,8 @@ func (r MLSCommitBuildRequest) Validate() error {
 	if r.UpdateSelf {
 		kinds++
 	}
-	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil {
-		return newValidationError("user_initiated", "is only for add and remove_account_ids")
+	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil && r.Replace == nil {
+		return newValidationError("user_initiated", "is only for add, remove_account_ids and replace")
 	}
 	if kinds != 1 {
 		return newValidationError("add",
