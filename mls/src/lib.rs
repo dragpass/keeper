@@ -611,8 +611,9 @@ pub unsafe extern "C" fn dpmls_group_commit_remove_members(
 
 /// Build one Commit that removes the leaves in `leaf_indices` (framed as in
 /// `gate::decode_leaf_indices`) and adds the members in `key_packages` (framed
-/// as in `gate::decode_key_packages`), and hold it pending. `expected_epoch`
-/// receives the confirmed epoch it was built against.
+/// as in `gate::decode_key_packages`), carrying `authenticated_data` (may be
+/// empty), and hold it pending. `expected_epoch` receives the confirmed epoch
+/// it was built against.
 ///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`; `commit` and
@@ -625,6 +626,8 @@ pub unsafe extern "C" fn dpmls_group_commit_replace_members(
     leaf_indices_len: usize,
     key_packages: *const u8,
     key_packages_len: usize,
+    authenticated_data: *const u8,
+    authenticated_data_len: usize,
     commit: *mut DpBuf,
     welcome: *mut DpBuf,
     expected_epoch: *mut u64,
@@ -634,21 +637,23 @@ pub unsafe extern "C" fn dpmls_group_commit_replace_members(
             return Ok(DPMLS_ERR_ARG);
         }
         // SAFETY: the caller promises `handle` came from dpmls_session_new and
-        // is not used concurrently, and that `leaf_indices` and `key_packages`
-        // point to `leaf_indices_len` and `key_packages_len` readable bytes for
-        // the duration of this call. Both are decoded before the session is
-        // used, and the key package slices borrow the caller's buffer only
-        // until the Commit is built, inside this call.
-        let (session, indices_framed, kps_framed) = unsafe {
+        // is not used concurrently, and that `leaf_indices`, `key_packages` and
+        // `authenticated_data` point to `leaf_indices_len`, `key_packages_len`
+        // and `authenticated_data_len` readable bytes for the duration of this
+        // call. The first two are decoded before the session is used, and the
+        // key package slices and the authenticated data borrow the caller's
+        // buffers only until the Commit is built, inside this call.
+        let (session, indices_framed, kps_framed, ad) = unsafe {
             (
                 session_of(handle)?,
                 slice(leaf_indices, leaf_indices_len)?,
                 slice(key_packages, key_packages_len)?,
+                slice(authenticated_data, authenticated_data_len)?,
             )
         };
         let indices = gate::decode_leaf_indices(indices_framed).map_err(|e| format!("mls: {e}"))?;
         let kps = gate::decode_key_packages(kps_framed).map_err(|e| format!("mls: {e}"))?;
-        let (c, w, epoch) = session.commit_replace_members(&indices, &kps)?;
+        let (c, w, epoch) = session.commit_replace_members(&indices, &kps, ad)?;
         // SAFETY: `expected_epoch` was checked for null above and the caller
         // promises it points to a writable u64; the caller promises `commit`
         // and `welcome` point to writable DpBufs, which `put` checks for null

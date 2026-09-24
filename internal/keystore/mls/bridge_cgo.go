@@ -77,6 +77,7 @@ int32_t dpmls_group_commit_remove_members(DpSession *handle,
 int32_t dpmls_group_commit_replace_members(DpSession *handle,
                                            const uint8_t *leaf_indices, size_t leaf_indices_len,
                                            const uint8_t *key_packages, size_t key_packages_len,
+                                           const uint8_t *authenticated_data, size_t authenticated_data_len,
                                            DpBuf *commit, DpBuf *welcome, uint64_t *expected_epoch);
 int32_t dpmls_group_roster(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_commit_apply(DpSession *handle);
@@ -340,7 +341,7 @@ func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expe
 // added must have been approved first; CommitReplaceMembersVerified is the path
 // that does both.
 func (s *Session) CommitReplaceMembers(
-	leafIndices []uint32, keyPackages [][]byte,
+	leafIndices []uint32, keyPackages [][]byte, authenticatedData []byte,
 ) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -355,10 +356,12 @@ func (s *Session) CommitReplaceMembers(
 		epoch C.uint64_t
 	)
 	rc := C.dpmls_group_commit_replace_members(
-		h, bytePtr(indices), C.size_t(len(indices)), bytePtr(framed), C.size_t(len(framed)), &c, &w, &epoch,
+		h, bytePtr(indices), C.size_t(len(indices)), bytePtr(framed), C.size_t(len(framed)),
+		bytePtr(authenticatedData), C.size_t(len(authenticatedData)), &c, &w, &epoch,
 	)
 	runtime.KeepAlive(indices)
 	runtime.KeepAlive(framed)
+	runtime.KeepAlive(authenticatedData)
 	if rc != 0 {
 		return nil, nil, 0, statusError(rc)
 	}

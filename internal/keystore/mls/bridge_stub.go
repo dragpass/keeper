@@ -62,7 +62,7 @@ func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expe
 }
 
 func (s *Session) CommitReplaceMembers(
-	leafIndices []uint32, keyPackages [][]byte,
+	leafIndices []uint32, keyPackages [][]byte, authenticatedData []byte,
 ) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	return nil, nil, 0, ErrUnavailable
 }

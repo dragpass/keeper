@@ -151,10 +151,13 @@ type RejoinMember struct {
 // ReplaceMember is one account to replace. NewFingerprint is the one the
 // permit named for the account, never one the caller picked, and the
 // KeyPackage's leaf must sign with exactly that key.
+//
+// Handover is the old device's approval of the succession (succession.go).
 type ReplaceMember struct {
 	AccountID      string
 	NewFingerprint string
 	KeyPackage     []byte
+	Handover       *LeafHandover
 }
 
 // ErrReplacementNotListed — a replace plan names an account, or a key for it,

@@ -223,6 +223,8 @@ pub struct CommitShape {
     pub removed: Vec<Leaf>,
     pub added: Vec<Leaf>,
     pub other: Vec<u16>,
+    /// The Commit's authenticated data, which the committer signed with it.
+    pub authenticated_data: Vec<u8>,
 }
 
 impl CommitShape {
@@ -240,6 +242,7 @@ impl CommitShape {
                     is_commit: true,
                     committer: commit.committer,
                     other: vec![ProposalType::RE_INIT.raw_value()],
+                    authenticated_data: commit.authenticated_data.clone(),
                     ..Self::default()
                 };
             }
@@ -247,6 +250,7 @@ impl CommitShape {
         let mut shape = Self {
             is_commit: true,
             committer: commit.committer,
+            authenticated_data: commit.authenticated_data.clone(),
             ..Self::default()
         };
         for info in applied {
@@ -275,7 +279,8 @@ impl CommitShape {
 
 /// `u8 is_commit`, `u32 committer`, the removed and added leaves each in the
 /// framing of `gate::encode_leaves`, then `u32 count` and one `u16` per other
-/// proposal type. Big-endian throughout.
+/// proposal type, then the authenticated data as `u32 length` and its bytes.
+/// Big-endian throughout.
 pub fn encode_shape(shape: &CommitShape) -> Vec<u8> {
     let mut out = vec![u8::from(shape.is_commit)];
     out.extend_from_slice(&shape.committer.to_be_bytes());
@@ -286,6 +291,9 @@ pub fn encode_shape(shape: &CommitShape) -> Vec<u8> {
     for t in &shape.other {
         out.extend_from_slice(&t.to_be_bytes());
     }
+    let len = u32::try_from(shape.authenticated_data.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&shape.authenticated_data);
     out
 }
 

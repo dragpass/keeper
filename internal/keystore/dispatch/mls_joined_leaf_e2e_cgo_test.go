@@ -132,7 +132,7 @@ func TestMLSChatE2E_ATakeoverDeviceIsNotLatchedByTheLeafItReplaced(t *testing.T)
 	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
-		Replace: []proto.MLSReplaceMember{replaceOf(bob2.keyPackage())},
+		Replace: []proto.MLSReplaceMember{approved(bob2.keyPackage(), c.bob.handoverFor(decl))},
 	}))
 	c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 

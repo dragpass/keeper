@@ -292,9 +292,15 @@ func replaceMembers(
 		if !ok {
 			return nil, chatStateInvalidInput("replace names an account the permit does not list"), false
 		}
-		out = append(out, chatstate.ReplaceMember{
-			AccountID: m.AccountID, NewFingerprint: entry.NewSignatureKeyFP, KeyPackage: kp,
-		})
+		member := chatstate.ReplaceMember{AccountID: m.AccountID, NewFingerprint: entry.NewSignatureKeyFP, KeyPackage: kp}
+		if m.Handover != nil {
+			h, err := handoverFromWire(*m.Handover)
+			if err != nil {
+				return nil, chatStateInvalidInput(err.Error()), false
+			}
+			member.Handover = &h
+		}
+		out = append(out, member)
 	}
 	return out, proto.BaseResponse{}, true
 }

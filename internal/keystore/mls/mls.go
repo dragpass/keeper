@@ -390,10 +390,46 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 		}
 		kps = append(kps, m.KeyPackage)
 	}
+	// A rejoin re-seats the leaf key the account already holds here. One
+	// under another key would be a succession with no handover, which every
+	// receiver refuses; refusing it here builds nothing they would latch on.
+	entering, err := keyPackageLeaves(kps)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, nil); err != nil {
+		return nil, nil, 0, err
+	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
 	}
-	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, nil, c.verifier)
+}
+
+// keyPackageLeaves reads the leaf each KeyPackage would add.
+func keyPackageLeaves(kps [][]byte) ([]Leaf, error) {
+	out := make([]Leaf, 0, len(kps))
+	for _, kp := range kps {
+		leaf, err := keyPackageLeaf(kp)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, leaf)
+	}
+	return out, nil
+}
+
+// ownAccount is the account of this device's leaf in the confirmed tree.
+func (c *Cipher) ownAccount(leaves []Leaf) (string, error) {
+	own, err := c.session.OwnLeafIndex()
+	if err != nil {
+		return "", err
+	}
+	return committerOf(leaves, own)
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -411,14 +447,22 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 //
 // An account with no leaf under another key is refused rather than turned
 // into a bare Add: there is nothing it replaces.
+//
+// Each account's succession is then held to the rule every receiver applies
+// (chatstate/succession.go): the old leaf's handover, which must verify
+// against the leaf being removed and name the KeyPackage's leaf. The handovers
+// ride in the Commit's authenticated data, so every receiver checks the same
+// statements.
 func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commit, welcome []byte, expected uint64, err error) {
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	var (
-		removed []Leaf
-		kps     [][]byte
+		removed   []Leaf
+		entering  []Leaf
+		kps       [][]byte
+		handovers []chatstate.LeafHandover
 	)
 	for _, m := range members {
 		leaf, err := keyPackageLeaf(m.KeyPackage)
@@ -454,12 +498,30 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		if !found {
 			return nil, nil, 0, failed("an account to replace has no other leaf in the group")
 		}
+		if m.Handover != nil {
+			if err := checkHandover(*m.Handover, removed, leaf); err != nil {
+				return nil, nil, 0, err
+			}
+			handovers = append(handovers, *m.Handover)
+		}
+		entering = append(entering, leaf)
 		kps = append(kps, m.KeyPackage)
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, handovers); err != nil {
+		return nil, nil, 0, err
+	}
+	ad, err := chatstate.EncodeHandovers(handovers)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
 	}
-	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, ad, c.verifier)
 }
 
 // ConfirmedAccounts reads the confirmed roster, which a pending Commit is not
@@ -1139,9 +1201,10 @@ func (s *Session) CommitAddMembersVerified(
 
 // CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
 // also removes leafIndices: the leaves the KeyPackages would add are verified
-// as one unit and as entering leaves, and a refused set builds nothing.
+// as one unit and as entering leaves, and a refused set builds nothing. The
+// Commit carries authenticatedData, which may be empty.
 func (s *Session) CommitReplaceMembersVerified(
-	leafIndices []uint32, keyPackages [][]byte, v LeafVerifier,
+	leafIndices []uint32, keyPackages [][]byte, authenticatedData []byte, v LeafVerifier,
 ) (commit, welcome []byte, expectedEpoch uint64, err error) {
 	if len(leafIndices) == 0 || len(keyPackages) == 0 || len(keyPackages) > MaxKeyPackagesPerCall {
 		return nil, nil, 0, errors.New("mls: replace member count is out of range")
@@ -1161,7 +1224,7 @@ func (s *Session) CommitReplaceMembersVerified(
 	if err := s.approve(leaves); err != nil {
 		return nil, nil, 0, err
 	}
-	if commit, welcome, expectedEpoch, err = s.CommitReplaceMembers(leafIndices, keyPackages); err != nil {
+	if commit, welcome, expectedEpoch, err = s.CommitReplaceMembers(leafIndices, keyPackages, authenticatedData); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := recordVerified(v, leaves); err != nil {

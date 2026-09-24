@@ -19,6 +19,10 @@ type CommitShape struct {
 	Removed   []Leaf
 	Added     []Leaf
 	Other     []uint16
+
+	// AuthenticatedData is the Commit's authenticated data, which its
+	// committer signed with it: where a replace carries its leaf handovers.
+	AuthenticatedData []byte
 }
 
 // leaves reads one gate::encode_leaves list from where the reader stands.
@@ -114,6 +118,9 @@ func (s *Session) judgeCollected(shape CommitShape, auth chatstate.CommitAuthori
 		return nil, err
 	}
 	if err := chatstate.JudgeReceived(change, auth); err != nil {
+		return nil, err
+	}
+	if err := judgeReceivedSuccession(shape, change); err != nil {
 		return nil, err
 	}
 	if err := s.approveRemovals(shape.Removed); err != nil {

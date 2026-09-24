@@ -345,9 +345,13 @@ type MLSConversationForgetRemovedResponseData struct {
 // device took over, and that device's KeyPackage as the server handed it out.
 // There is no fingerprint field: the only key the Keeper accepts for the
 // account is the one the permit names in pending_leaf_replacements.
+//
+// Handover is the old device's signed approval (0.0.55, design Q1), as the
+// server relayed it. A replace without one is refused.
 type MLSReplaceMember struct {
-	AccountID     string `json:"account_id"`
-	KeyPackageB64 string `json:"key_package_b64"`
+	AccountID     string           `json:"account_id"`
+	KeyPackageB64 string           `json:"key_package_b64"`
+	Handover      *MLSLeafHandover `json:"handover,omitempty"`
 }
 
 // validateMLSReplace bounds the list like an Add, allows one entry per account,
@@ -371,6 +375,14 @@ func validateMLSReplace(members []MLSReplaceMember, listed []ChatStateLeafReplac
 			return newValidationError(field, "must not name one account twice")
 		}
 		seen[m.AccountID] = true
+		if m.Handover != nil {
+			if err := m.Handover.Validate("replace.handover"); err != nil {
+				return err
+			}
+			if m.Handover.AccountID != m.AccountID {
+				return newValidationError("replace.handover.account_id", "must be the account being replaced")
+			}
+		}
 		if _, ok := LeafReplacementFor(listed, m.AccountID); !ok {
 			return newValidationError(field, "names an account the permit does not list in pending_leaf_replacements")
 		}

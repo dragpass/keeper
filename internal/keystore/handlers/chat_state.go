@@ -397,6 +397,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 		}
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
+	case errors.Is(err, chatstate.ErrHandoverInvalid):
+		code, message = proto.ChatMLSErrorCodeHandoverInvalid,
+			"the leaf handover is not the removed leaf's signed approval of this key package's leaf; nothing was built"
 	case errors.Is(err, chatstate.ErrCommitUnauthorized):
 		code, message = proto.ChatMLSErrorCodeCommitUnauthorized,
 			"the commit carries an add or a remove this device is not authorized to make; nothing was built"

@@ -116,6 +116,11 @@ fn err(context: &str, e: impl core::fmt::Display) -> String {
 /// a failure.
 pub const FROM_SELF: &str = "the message was sent by this leaf";
 
+/// The largest authenticated data a Commit this Keeper builds may carry. The
+/// Go side puts leaf handovers there (chatstate/succession.go) and bounds them
+/// more tightly; this is the library edge's own bound.
+pub const MAX_COMMIT_AUTHENTICATED_DATA: usize = 16384;
+
 pub struct Processed {
     pub epoch: u64,
     pub removed: bool,
@@ -645,9 +650,13 @@ impl Session {
         &mut self,
         leaf_indices: &[u32],
         key_packages: &[&[u8]],
+        authenticated_data: &[u8],
     ) -> Res<(Vec<u8>, Vec<u8>, u64)> {
         if leaf_indices.is_empty() || key_packages.is_empty() {
             return Err("mls: a replace commit needs a leaf to remove and one to add".to_string());
+        }
+        if authenticated_data.len() > MAX_COMMIT_AUTHENTICATED_DATA {
+            return Err("mls: the commit's authenticated data is too large".to_string());
         }
         let mut leaves = Vec::with_capacity(key_packages.len());
         let mut messages = Vec::with_capacity(key_packages.len());
@@ -658,7 +667,7 @@ impl Session {
         self.group_mut()?;
         let approved = self.arm()?;
         let built = require_approved(&leaves, &approved)
-            .and_then(|()| self.build_replace(leaf_indices, messages));
+            .and_then(|()| self.build_replace(leaf_indices, messages, authenticated_data));
         self.disarm()?;
         let (output, expected_epoch) = built?;
         let welcome = match output.welcome_messages.first() {
@@ -676,10 +685,14 @@ impl Session {
         &mut self,
         leaf_indices: &[u32],
         key_packages: Vec<MlsMessage>,
+        authenticated_data: &[u8],
     ) -> Res<(mls_rs::group::CommitOutput, u64)> {
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
         let mut builder = group.commit_builder();
+        if !authenticated_data.is_empty() {
+            builder = builder.authenticated_data(authenticated_data.to_vec());
+        }
         for &index in leaf_indices {
             builder = builder
                 .remove_member(index)
@@ -1076,7 +1089,7 @@ mod tests {
         alice.approve_removals(vec![removal(&old)]);
 
         let (_, welcome, _) = alice
-            .commit_replace_members(&[old.index], &[&new_kp])
+            .commit_replace_members(&[old.index], &[&new_kp], &[])
             .unwrap();
         assert!(!welcome.is_empty());
         assert_eq!(
@@ -1089,6 +1102,37 @@ mod tests {
             identities(&mut alice),
             vec![b"alice".to_vec(), b"bob2".to_vec()]
         );
+    }
+
+    // A replace carries its authenticated data to every receiver, where the
+    // collect pass reports it with the Commit's shape; the Go side reads the
+    // leaf handovers there. An empty one is no data at all, and one past the
+    // bound builds nothing.
+    #[test]
+    fn a_replaces_authenticated_data_reaches_the_receivers_shape() {
+        let (mut alice, mut bob, mut carol) = three();
+        let old = leaf_named(&mut alice, b"bob");
+        let new_kp = kp(&member("bob2"));
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
+        let too_big = vec![0u8; MAX_COMMIT_AUTHENTICATED_DATA + 1];
+        assert!(alice
+            .commit_replace_members(&[old.index], &[&new_kp], &too_big)
+            .is_err());
+        assert!(!alice.has_pending_commit().unwrap());
+
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
+        let (commit, _, _) = alice
+            .commit_replace_members(&[old.index], &[&new_kp], b"handover")
+            .unwrap();
+        let (_, shape) = carol.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+        let (_, shape) = bob.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+
+        let framed = crate::authority::encode_shape(&shape);
+        assert!(framed.ends_with(&[0, 0, 0, 8, b'h', b'a', b'n', b'd', b'o', b'v', b'e', b'r']));
     }
 
     // The old device is removed by the replace, so its group never reaches the
@@ -1113,7 +1157,7 @@ mod tests {
         alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
         alice.approve_removals(vec![removal(&old)]);
         let (commit, _, _) = alice
-            .commit_replace_members(&[old.index], &[&new_kp])
+            .commit_replace_members(&[old.index], &[&new_kp], &[])
             .unwrap();
 
         let (seen, shape) = bob.process_collect(&commit).unwrap();
@@ -1262,11 +1306,13 @@ mod tests {
             .unwrap();
         let new_kp = kp(&member("bob2"));
         assert!(alice
-            .commit_replace_members(&[old.index], &[&new_kp])
+            .commit_replace_members(&[old.index], &[&new_kp], &[])
             .is_err());
         assert!(!alice.has_pending_commit().unwrap());
-        assert!(alice.commit_replace_members(&[], &[&new_kp]).is_err());
-        assert!(alice.commit_replace_members(&[old.index], &[]).is_err());
+        assert!(alice.commit_replace_members(&[], &[&new_kp], &[]).is_err());
+        assert!(alice
+            .commit_replace_members(&[old.index], &[], &[])
+            .is_err());
     }
 
     #[test]

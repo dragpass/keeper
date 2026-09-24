@@ -158,7 +158,8 @@ func TestMLSChatE2E_ANewDeviceTakesOverAndTheOldOneIsRemoved(t *testing.T) {
 	bob2KP := bob2.keyPackage()
 	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
-		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, Replace: []proto.MLSReplaceMember{replaceOf(bob2KP)},
+		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
+		Replace: []proto.MLSReplaceMember{approved(bob2KP, c.bob.handoverFor(decl))},
 	}))
 	if built.WelcomeB64 == "" || built.WelcomeReleasable {
 		t.Fatalf("replace commit = %+v", built)
@@ -272,7 +273,7 @@ func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
 	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
-		Replace: []proto.MLSReplaceMember{replaceOf(bob3.keyPackage())},
+		Replace: []proto.MLSReplaceMember{approved(bob3.keyPackage(), c.bob.handoverFor(decl3))},
 	}))
 	c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	assertReplacementLatch(t, c.alice)
@@ -283,7 +284,7 @@ func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
 }
 
 // takeOver runs the M4.4 takeover of Bob's account by to, from the rotate
-// through Alice's accepted replace, to's join and from's removal, and leaves
+// and from's approval (design Q1) through Alice's accepted replace, to's join and from's removal, and leaves
 // the server as it is once the replace landed: the pending replacement row is
 // gone, so no permit lists it any more. It returns the new epoch.
 func (c *dm) takeOver(from, to *keeper, epoch uint64, notBefore int64) uint64 {
@@ -299,7 +300,7 @@ func (c *dm) takeOver(from, to *keeper, epoch uint64, notBefore int64) uint64 {
 	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: epoch,
-		Replace: []proto.MLSReplaceMember{replaceOf(to.keyPackage())},
+		Replace: []proto.MLSReplaceMember{approved(to.keyPackage(), from.handoverFor(decl))},
 	}))
 	c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.replacing, from.replacing, to.replacing = nil, nil, nil
