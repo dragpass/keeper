@@ -26,7 +26,9 @@
 // 미충족 (Q3): inbound Add authority against a malicious server waits for room
 // roles in the authenticated group context (Q3 phase 2, wave 5).
 //
-// An Add this device builds needs R4i, or a replace the permit lists. A group's first Commit is its create,
+// An Add this device builds needs R4i, a rejoin (R2 with the account's own
+// signed request, and a leaf of the account already in the authenticated
+// tree), or a replace the permit lists. A group's first Commit is its create,
 // judged by nobody but its builder.
 //
 // Only Add and Remove are allowed at all. Any other proposal type is refused.
@@ -172,7 +174,8 @@ func JudgeReceived(change CommitChange, auth CommitAuthority) error {
 // requireAuthorizedPlan holds a locally built plan to the rules above, before
 // anything is built. A create is not judged here: it is the group's first
 // Commit (CreateGroup never calls this). A replace is held to the permit's list
-// (requireListedReplacements).
+// (requireListedReplacements), and a rejoin to its signed request by the
+// caller and to the authenticated tree by the cipher.
 func requireAuthorizedPlan(plan CommitPlan, rec *Record, wm ServerWatermark) error {
 	if len(plan.AddKeyPackages) > 0 && !plan.UserInitiated {
 		return &UnauthorizedCommitError{Reason: "an add outside a create needs a person on this device to ask for it"}

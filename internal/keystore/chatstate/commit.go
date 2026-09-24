@@ -130,10 +130,22 @@ type CommitPlan struct {
 	// it over (design M4.4), in one Commit.
 	Replace []ReplaceMember
 
+	// Rejoin re-seats each account whose every Welcome was unusable: every
+	// leaf it holds goes out and its new KeyPackage comes in, in one Commit
+	// (R2). The caller has already verified each account's signed request.
+	Rejoin []RejoinMember
+
 	// UserInitiated says a person on this device asked for this Add or
 	// Remove (R4i, authority.go). Automation never sets it. It is the app's
 	// word, not something the Keeper can check.
 	UserInitiated bool
+}
+
+// RejoinMember is one account to re-seat and the KeyPackage its signed rejoin
+// request names the leaf of.
+type RejoinMember struct {
+	AccountID  string
+	KeyPackage []byte
 }
 
 // ReplaceMember is one account to replace. NewFingerprint is the one the

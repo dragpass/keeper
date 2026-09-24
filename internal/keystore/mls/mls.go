@@ -248,13 +248,22 @@ func (c *Cipher) CreateGroup(groupID []byte) error { return c.session.CreateGrou
 // §7.3.1 states is enforced a layer below this and not only by the record.
 func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, error) {
 	kinds := 0
-	for _, present := range []bool{len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0} {
+	for _, present := range []bool{
+		len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0, len(plan.Rejoin) > 0,
+	} {
 		if present {
 			kinds++
 		}
 	}
 	if kinds > 1 {
-		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes or replaces, never two of them")
+		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes, replaces or rejoins, never two of them")
+	}
+	if len(plan.Rejoin) > 0 {
+		commit, welcome, expected, err := c.commitRejoinAccounts(plan.Rejoin)
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Replace) > 0 {
 		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
@@ -324,6 +333,53 @@ func leafIndices(leaves []Leaf) []uint32 {
 		out[i] = l.Index
 	}
 	return out
+}
+
+// commitRejoinAccounts re-seats each account (design Q6): every leaf it holds
+// in the confirmed tree goes out and its new KeyPackage comes in, in one
+// Commit, which is the R2 shape every receiver accepts. The caller has
+// verified the account's signed rejoin request against this KeyPackage's leaf.
+//
+// An account with no leaf in the authenticated tree is refused and never added:
+// the unusable-Welcome case a rejoin exists for always leaves the account's
+// dead leaf there. Adding one that is not there would let whoever lists
+// rejoins (the server) have an account of its choosing added.
+func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit, welcome []byte, expected uint64, err error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	var (
+		removed []Leaf
+		kps     [][]byte
+	)
+	for _, m := range members {
+		account, _, err := KeyPackageIdentity(m.KeyPackage)
+		if err != nil || account != m.AccountID {
+			return nil, nil, 0, fmt.Errorf("%w: the rejoin key package names another account", ErrLeafUntrusted)
+		}
+		held := false
+		for _, l := range leaves {
+			owner, _, err := ParseCredentialIdentity(l.Identity)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if owner == m.AccountID {
+				removed = append(removed, l)
+				held = true
+			}
+		}
+		if !held {
+			return nil, nil, 0, &chatstate.UnauthorizedCommitError{
+				Reason: "a rejoin names an account with no leaf in the group",
+			}
+		}
+		kps = append(kps, m.KeyPackage)
+	}
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, nil, 0, err
+	}
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -691,6 +747,10 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 	}
 	return out, pool, nil
 }
+
+// KeyPackageLeaf reads the leaf a KeyPackage would add, without a group: its
+// identity, its signature key and its declaration payload. The index is 0.
+func KeyPackageLeaf(keyPackage []byte) (Leaf, error) { return keyPackageLeaf(keyPackage) }
 
 // KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
 // without a group. It is how a caller that asked the server for one member's

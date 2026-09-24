@@ -43,3 +43,23 @@ func TestMLSCommitAttestation_TheMemberListIsValidatedNotRepaired(t *testing.T) 
 		}
 	}
 }
+
+// The rejoin canonical is signed and verified by Keepers; ariadne only
+// stores and serves it, so this literal is the contract between two Keepers
+// of different versions.
+func TestMLSRejoinStatementCanonical_GoldenVector(t *testing.T) {
+	got := MLSRejoinStatementCanonical(MLSRejoinStatement{
+		ConversationID:          "33333333-3333-4333-8333-333333333333",
+		AccountID:               "11111111-1111-4111-8111-111111111111",
+		DeviceID:                "d1111111-1111-4111-8111-111111111111",
+		SignatureKeyFingerprint: "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+		RequestedAt:             1788999000,
+		Signature:               "not part of the canonical",
+	})
+	want := "dragpass.mls.rejoin|1|33333333-3333-4333-8333-333333333333|" +
+		"11111111-1111-4111-8111-111111111111|d1111111-1111-4111-8111-111111111111|" +
+		"66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925|1788999000"
+	if got != want {
+		t.Fatalf("rejoin canonical = %q, want %q", got, want)
+	}
+}

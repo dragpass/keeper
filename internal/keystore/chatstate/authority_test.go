@@ -69,6 +69,7 @@ func TestRequireAuthorizedPlan_BuildRules(t *testing.T) {
 		"a remove of a departure (R3)":    {CommitPlan{RemoveAccountIDs: []string{authC}}, ServerWatermark{PendingRemovals: []string{authC}}, true},
 		"a remove of a latched departure": {CommitPlan{RemoveAccountIDs: []string{authB}}, ServerWatermark{}, true},
 		"a remove a person asked for":     {CommitPlan{RemoveAccountIDs: []string{authC}, UserInitiated: true}, ServerWatermark{}, true},
+		"a rejoin, its request verified":  {CommitPlan{Rejoin: []RejoinMember{{AccountID: authC}}}, ServerWatermark{}, true},
 	} {
 		err := requireAuthorizedPlan(tc.plan, rec, tc.wm)
 		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrCommitUnauthorized)) {

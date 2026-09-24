@@ -59,6 +59,12 @@ const (
 	// this code: it latches the conversation (CHAT_STATE_REKEY_REQUIRED with
 	// rekey_cause unauthorized_commit).
 	ChatMLSErrorCodeCommitUnauthorized = "CHAT_MLS_COMMIT_UNAUTHORIZED"
+
+	// ChatMLSErrorCodeRejoinUnverified — a rejoin in mls_commit_build carries
+	// a request that is not the account's own signed statement for this
+	// conversation and this KeyPackage's leaf, or one too old (0.0.55).
+	// Nothing was built.
+	ChatMLSErrorCodeRejoinUnverified = "CHAT_MLS_REJOIN_UNVERIFIED"
 )
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in
@@ -382,6 +388,132 @@ func LeafReplacementFor(listed []ChatStateLeafReplacement, accountID string) (Ch
 	return ChatStateLeafReplacement{}, false
 }
 
+// MLSRejoinStatement is an account's own signed request to be re-seated in a
+// conversation whose every Welcome it could not use (0.0.55, design Q6):
+// which device asks, the leaf key its KeyPackages carry, and when. The
+// signature is the account key's RSA-PSS SHA-256 over
+// MLSRejoinStatementCanonical. It is a signed statement in the style of the
+// leaf declaration, not a protocol of its own.
+type MLSRejoinStatement struct {
+	ConversationID          string `json:"conversation_id"`
+	AccountID               string `json:"account_id"`
+	DeviceID                string `json:"device_id"`
+	SignatureKeyFingerprint string `json:"signature_key_fp"`
+	RequestedAt             int64  `json:"requested_at"`
+	Signature               string `json:"signature"`
+}
+
+// MLSRejoinStatementDomain / MLSRejoinStatementVersion — the first two slots
+// of the rejoin canonical.
+const (
+	MLSRejoinStatementDomain  = "dragpass.mls.rejoin"
+	MLSRejoinStatementVersion = 1
+
+	// MLSRejoinStatementMaxAgeSeconds is how long a signed rejoin request is
+	// honoured. Not measured: a request waits for another member to come
+	// online, and a bound keeps a server from replaying one indefinitely.
+	MLSRejoinStatementMaxAgeSeconds = 30 * 24 * 60 * 60
+)
+
+// MLSRejoinStatementCanonical is the signed string:
+//
+//	dragpass.mls.rejoin|1|<conversation_id>|<account_id>|<device_id>|<signature_key_fp>|<requested_at>
+func MLSRejoinStatementCanonical(s MLSRejoinStatement) string {
+	return strings.Join([]string{
+		MLSRejoinStatementDomain,
+		strconv.Itoa(MLSRejoinStatementVersion),
+		s.ConversationID,
+		s.AccountID,
+		s.DeviceID,
+		s.SignatureKeyFingerprint,
+		strconv.FormatInt(s.RequestedAt, 10),
+	}, "|")
+}
+
+func (s MLSRejoinStatement) Validate() error {
+	if err := requireMessageUUID(s.ConversationID, "rejoin.request.conversation_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(s.AccountID, "rejoin.request.account_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(s.DeviceID, "rejoin.request.device_id"); err != nil {
+		return err
+	}
+	if err := requireKeyFingerprint(s.SignatureKeyFingerprint, "rejoin.request.signature_key_fp"); err != nil {
+		return err
+	}
+	if err := requireMessageTimestamp(s.RequestedAt, "rejoin.request.requested_at"); err != nil {
+		return err
+	}
+	_, err := requireBase64(s.Signature, "rejoin.request.signature")
+	return err
+}
+
+// MLSRejoinMember is one account to re-seat: its KeyPackage as the server
+// handed it out and its signed request. Every leaf the account holds goes out
+// and this KeyPackage comes in, in one Commit.
+type MLSRejoinMember struct {
+	AccountID     string             `json:"account_id"`
+	DeviceID      string             `json:"device_id"`
+	KeyPackageB64 string             `json:"key_package_b64"`
+	Request       MLSRejoinStatement `json:"request"`
+}
+
+func validateMLSRejoin(members []MLSRejoinMember, conversationID string) error {
+	const field = "rejoin"
+	if len(members) == 0 || len(members) > MLSChatMaxMembersPerCommit {
+		return newValidationError(field,
+			"must hold 1.."+strconv.Itoa(MLSChatMaxMembersPerCommit)+" accounts")
+	}
+	seen := map[string]bool{}
+	for _, m := range members {
+		if err := requireMessageUUID(m.AccountID, "rejoin.account_id"); err != nil {
+			return err
+		}
+		if err := requireMessageUUID(m.DeviceID, "rejoin.device_id"); err != nil {
+			return err
+		}
+		if err := requireMessageBase64Len(m.KeyPackageB64, "rejoin.key_package_b64", 1, MLSChatMaxKeyPackageBytes); err != nil {
+			return err
+		}
+		if err := m.Request.Validate(); err != nil {
+			return err
+		}
+		if m.Request.AccountID != m.AccountID || m.Request.DeviceID != m.DeviceID ||
+			m.Request.ConversationID != conversationID {
+			return newValidationError(field, "request must name this account, device and conversation")
+		}
+		if seen[m.AccountID] {
+			return newValidationError(field, "must not name one account twice")
+		}
+		seen[m.AccountID] = true
+	}
+	return nil
+}
+
+// MLSRejoinRequestSignRequest asks for this device's signed rejoin request
+// for the conversation (0.0.55). The permit binds it to the account.
+type MLSRejoinRequestSignRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+}
+
+func (r MLSRejoinRequestSignRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSRejoinRequestSignRequest) Validate() error {
+	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+}
+
+// MLSRejoinRequestSignResponseData is the signed request, to post to the
+// server as it is.
+type MLSRejoinRequestSignResponseData struct {
+	Request MLSRejoinStatement `json:"request"`
+}
+
 // MLSCommitAttestation is the server's signature over the member set a
 // handshake row's Commit declared (0.0.55): which accounts the conversation
 // holds once that Commit is applied, bound to the Commit's own bytes. It is
@@ -453,6 +585,7 @@ type MLSCommitBuildRequest struct {
 	Add              []MLSMemberKeyPackage `json:"add,omitempty"`
 	RemoveAccountIDs []string              `json:"remove_account_ids,omitempty"`
 	Replace          []MLSReplaceMember    `json:"replace,omitempty"`
+	Rejoin           []MLSRejoinMember     `json:"rejoin,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
 	// UserInitiated says a person on this device asked for this add or
@@ -514,6 +647,12 @@ func (r MLSCommitBuildRequest) Validate() error {
 			return err
 		}
 	}
+	if r.Rejoin != nil {
+		kinds++
+		if err := validateMLSRejoin(r.Rejoin, r.ConversationID); err != nil {
+			return err
+		}
+	}
 	if r.UpdateSelf {
 		kinds++
 	}
@@ -522,7 +661,7 @@ func (r MLSCommitBuildRequest) Validate() error {
 	}
 	if kinds != 1 {
 		return newValidationError("add",
-			"exactly one of add, remove_account_ids, replace and update_self must be given")
+			"exactly one of add, remove_account_ids, replace, rejoin and update_self must be given")
 	}
 	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
 		return err

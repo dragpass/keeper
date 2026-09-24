@@ -115,6 +115,7 @@ var mlsChatActionNames = []string{
 	proto.MLSRoomNameSeal,
 	proto.MLSRoomNameOpen,
 	proto.MLSConversationStatus,
+	proto.MLSRejoinRequestSign,
 }
 
 func TestMCPCallableActions_ExcludeTheMLSChatActions(t *testing.T) {

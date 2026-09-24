@@ -326,6 +326,12 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 			return resp
 		}
 		plan.Replace = members
+	case req.Rejoin != nil:
+		members, resp, ok := rejoinMembers(d, req.Rejoin)
+		if !ok {
+			return resp
+		}
+		plan.Rejoin = members
 	}
 	plan.UserInitiated = req.UserInitiated
 	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)

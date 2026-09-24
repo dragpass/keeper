@@ -43,7 +43,8 @@ func (s *Store) CreateGroup(
 	if req.ClientCommitID == "" {
 		return BeginCommitResult{}, errors.New("commit needs a client commit id")
 	}
-	if len(req.Plan.AddKeyPackages) == 0 || len(req.Plan.RemoveAccountIDs) > 0 || len(req.Plan.Replace) > 0 {
+	if len(req.Plan.AddKeyPackages) == 0 || len(req.Plan.RemoveAccountIDs) > 0 || len(req.Plan.Replace) > 0 ||
+		len(req.Plan.Rejoin) > 0 {
 		return BeginCommitResult{}, errors.New("a group is created by adding members and nothing else")
 	}
 	if err := checkRoomName(req.RoomName); err != nil {

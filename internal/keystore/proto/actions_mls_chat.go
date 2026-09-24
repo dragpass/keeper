@@ -214,4 +214,12 @@ const (
 	//             removal_latch_account_ids, needs_rekey, rekey_cause?,
 	//             removed_from_group }
 	MLSConversationStatus = "mls_conversation_status"
+
+	// MLSRejoinRequestSign signs this device's request to be re-seated in a
+	// conversation whose every Welcome it could not use (0.0.55, design Q6).
+	// permit-gated. Request: permit, org_id, conversation_id. Response:
+	// request {conversation_id, account_id, device_id, signature_key_fp,
+	// requested_at, signature}, the account key's signature over
+	// dragpass.mls.rejoin|1|<conversation_id>|<account_id>|<device_id>|<signature_key_fp>|<requested_at>.
+	MLSRejoinRequestSign = "mls_rejoin_request_sign"
 )
