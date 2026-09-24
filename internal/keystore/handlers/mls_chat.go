@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
@@ -420,6 +421,10 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		Generation:        result.Generation,
 		LeafTrust:         v.Reported(),
 	}
+	if w := result.Winner; w != nil {
+		data.WinnerAddedAccountIDs = distinctAccounts(w.Added)
+		data.WinnerRemovedAccountIDs = distinctAccounts(w.Removed)
+	}
 	return proto.BaseResponse{Success: true, Data: data}
 }
 
@@ -809,6 +814,18 @@ func (c *mlsChat) memberTrust(d Deps) []proto.MLSAccountTrust {
 		return nil
 	}
 	return trust
+}
+
+// distinctAccounts is one entry per account, sorted, and nil for none.
+func distinctAccounts(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 func appContextOutput(raw []byte) string {

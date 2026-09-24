@@ -200,12 +200,26 @@ type Cipher struct {
 	// in by chatstate before every Open and ApplyMessage (AuthorityReceiver).
 	// Unset it is empty, which admits only R1 and R2.
 	authority chatstate.CommitAuthority
+
+	// lastChange is what the last Commit this cipher applied did.
+	lastChange *chatstate.CommitChange
 }
 
-var _ chatstate.AuthorityReceiver = (*Cipher)(nil)
+var (
+	_ chatstate.AuthorityReceiver = (*Cipher)(nil)
+	_ chatstate.ChangeReporter    = (*Cipher)(nil)
+)
 
 // SetCommitAuthority is chatstate.AuthorityReceiver.
 func (c *Cipher) SetCommitAuthority(auth chatstate.CommitAuthority) { c.authority = auth }
+
+// LastCommitChange is chatstate.ChangeReporter.
+func (c *Cipher) LastCommitChange() (chatstate.CommitChange, bool) {
+	if c.lastChange == nil {
+		return chatstate.CommitChange{}, false
+	}
+	return *c.lastChange, true
+}
 
 func NewCipher(s *Session, verifier LeafVerifier) *Cipher {
 	return &Cipher{session: s, verifier: verifier}
@@ -497,10 +511,11 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
-	processed, _, err := c.session.processAuthorized(message, c.verifier, c.authority)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return 0, false, err
 	}
+	c.lastChange = change
 	return processed.Epoch, processed.Removed, nil
 }
 
@@ -521,10 +536,11 @@ func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint
 // choose. A sender this cannot attribute is a refusal, never an anonymous
 // message.
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
-	processed, _, err := c.session.processAuthorized(message, c.verifier, c.authority)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
+	c.lastChange = change
 	var account, device string
 	if processed.Application {
 		if account, device, err = c.senderOf(processed.SenderLeafIndex); err != nil {

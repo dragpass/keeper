@@ -312,7 +312,18 @@ type ConfirmCommitResult struct {
 	// Removed reports a winning Commit that took this device out of the group.
 	Removed bool
 
+	// Winner is what the winning Commit of a superseded outcome did, in
+	// accounts, so a caller whose Commit lost can tell whether the winner
+	// touched the accounts it was about (Q20). Nil when accepted, or when the
+	// cipher does not report it.
+	Winner *CommitChange
+
 	Generation uint64
+}
+
+// ChangeReporter is a cipher that reports what the last Commit it applied did.
+type ChangeReporter interface {
+	LastCommitChange() (CommitChange, bool)
 }
 
 // BeginCommit builds a Commit and stores it as pending. The confirmed state
@@ -467,6 +478,7 @@ func (s *Store) ConfirmCommit(
 			epoch   uint64
 			removed bool
 			welcome []byte
+			winner  *CommitChange
 		)
 		if outcome.Kind == CommitAccepted {
 			if err := cipher.ApplyPending(); err != nil {
@@ -491,6 +503,11 @@ func (s *Store) ConfirmCommit(
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
 				return latchIfRefused(s, p, anchor, err, pending.ExpectedEpoch+1)
+			}
+			if reporter, ok := cipher.(ChangeReporter); ok {
+				if change, ok := reporter.LastCommitChange(); ok {
+					winner = &change
+				}
 			}
 			// Normally a no-op: mls-rs drops the pending as part of
 			// applying another member's Commit. It is here because "the fork
@@ -533,6 +550,7 @@ func (s *Store) ConfirmCommit(
 			Welcome:           welcome,
 			WelcomeReleasable: outcome.Kind == CommitAccepted && len(welcome) > 0,
 			Removed:           removed,
+			Winner:            winner,
 			Generation:        rec.Generation,
 		}
 		return nil

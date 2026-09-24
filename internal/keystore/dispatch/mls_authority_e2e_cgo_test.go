@@ -9,6 +9,7 @@ package dispatch
 
 import (
 	"encoding/base64"
+	"slices"
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -213,8 +214,24 @@ func TestMLSAuthority_AnAttestationThatDoesNotVerifyIsNotAuthorized(t *testing.T
 	}
 }
 
-// A winner the rules refuse latches the loser instead of being applied.
-func TestMLSAuthority_ARefusedWinnerLatchesTheLoser(t *testing.T) {
+// Q20: a Commit that lost its epoch reports what the winner did, so the app
+// can stop when the winner touched the accounts it was about.
+func TestMLSAuthority_ALostRaceReportsWhatTheWinnerDid(t *testing.T) {
+	r := newRoom(t)
+	winner := r.bob.userRemove(2, e2eCarol)
+	loser := r.alice.userRemove(2, e2eCarol)
+	r.bob.confirm(winner.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	got := r.alice.must(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
+		Permit: r.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: loser.ClientCommitID, Outcome: proto.MLSCommitOutcomeSuperseded,
+		WinnerCommitB64: winner.CommitB64, WinnerAttestation: attested(e2eAlice, e2eBob),
+	}).Data.(proto.MLSCommitConfirmResponseData)
+	if got.Epoch != 3 || !slices.Equal(got.WinnerRemovedAccountIDs, []string{e2eCarol}) ||
+		len(got.WinnerAddedAccountIDs) != 0 {
+		t.Fatalf("confirm superseded = %+v", got)
+	}
+
+	// A winner the rules refuse latches the loser instead of being applied.
 	r2 := newRoom(t)
 	bad := r2.bob.userRemove(2, e2eCarol)
 	lost := r2.alice.buildUpdate(2)

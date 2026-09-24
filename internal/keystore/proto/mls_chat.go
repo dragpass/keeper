@@ -760,6 +760,13 @@ type MLSCommitConfirmResponseData struct {
 	// LeafTrust is set when superseded applied a winner that brought
 	// accounts in (0.0.55); see MLSAccountTrust.
 	LeafTrust []MLSAccountTrust `json:"leaf_trust,omitempty"`
+
+	// WinnerAddedAccountIDs / WinnerRemovedAccountIDs are the accounts the
+	// winning Commit of a superseded outcome added and removed a leaf of
+	// (0.0.55), so a caller whose Commit lost can stop when the winner touched
+	// the accounts it was about (Q20). Absent otherwise.
+	WinnerAddedAccountIDs   []string `json:"winner_added_account_ids,omitempty"`
+	WinnerRemovedAccountIDs []string `json:"winner_removed_account_ids,omitempty"`
 }
 
 // MLSProcessRequest applies one handshake row from GET /:id/mls/handshake:
