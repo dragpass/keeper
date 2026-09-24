@@ -1135,6 +1135,11 @@ const (
 	// Add or a Remove the authority rules do not allow, and this device
 	// refused to apply it (0.0.55). rekey_epoch and rekey_committer_* name it.
 	ChatStateRekeyCauseUnauthorizedCommit = "unauthorized_commit"
+
+	// ChatStateRekeyCauseFork — the server served, for an epoch this device
+	// already confirmed, another Commit than the one it applied (0.0.55).
+	// rekey_epoch names the epoch.
+	ChatStateRekeyCauseFork = "fork"
 )
 
 // MLSConversationStatusResponseData lets the app say "참여자 변경 반영 중"

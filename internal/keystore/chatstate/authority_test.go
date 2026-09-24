@@ -2,6 +2,7 @@ package chatstate
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 )
 
@@ -75,5 +76,31 @@ func TestRequireAuthorizedPlan_BuildRules(t *testing.T) {
 		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrCommitUnauthorized)) {
 			t.Fatalf("%s: requireAuthorizedPlan = %v", name, err)
 		}
+	}
+}
+
+func TestTheForkRingIsBoundedAndComparesBytes(t *testing.T) {
+	rec := newRecord(testOwner, testConvA)
+	for e := uint64(1); e <= ConfirmedCommitCapacity+5; e++ {
+		rec.noteConfirmed(e, []byte("commit "+strconv.FormatUint(e, 10)))
+	}
+	if len(rec.ConfirmedCommits) != ConfirmedCommitCapacity {
+		t.Fatalf("ring holds %d", len(rec.ConfirmedCommits))
+	}
+	last := uint64(ConfirmedCommitCapacity + 5)
+	if rec.forkAt(last, []byte("commit "+strconv.FormatUint(last, 10))) {
+		t.Fatal("the same bytes read as a fork")
+	}
+	if !rec.forkAt(last, []byte("another commit")) {
+		t.Fatal("other bytes for a held epoch did not read as a fork")
+	}
+	// An epoch the ring no longer holds cannot be compared (stated limit).
+	if rec.forkAt(1, []byte("another commit")) {
+		t.Fatal("an epoch older than the ring was judged")
+	}
+	// Noting an epoch again replaces it.
+	rec.noteConfirmed(last, []byte("replacement"))
+	if rec.forkAt(last, []byte("replacement")) || len(rec.ConfirmedCommits) != ConfirmedCommitCapacity {
+		t.Fatal("a re-noted epoch was not replaced in place")
 	}
 }

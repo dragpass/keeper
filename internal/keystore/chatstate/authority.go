@@ -1,5 +1,5 @@
-// authority.go — who may add and remove whom (design §0.3 policy 5, Q3
-// phase 1, Q4).
+// authority.go — who may add and remove whom, and what this device keeps to
+// notice a fork (design §0.3 policy 5, Q3 phase 1, Q4, Q16).
 //
 // # Removes
 //
@@ -57,6 +57,8 @@
 package chatstate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 )
@@ -187,4 +189,51 @@ func requireAuthorizedPlan(plan CommitPlan, rec *Record, wm ServerWatermark) err
 		}
 	}
 	return nil
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// The fork ring (Q16).
+// ────────────────────────────────────────────────────────────────────────
+
+// ConfirmedCommitCapacity bounds the fork ring. A catch-up compares a row for
+// an epoch this device already confirmed against it; an epoch older than the
+// ring cannot be compared, which is stated rather than hidden.
+const ConfirmedCommitCapacity = 64
+
+// ConfirmedCommit is one confirmed epoch and the Commit that produced it.
+// The epoch_authenticator mls-rs exposes would name the epoch too, but a log
+// row cannot be compared against it without applying the Commit, and this
+// device is already past that epoch: the Commit's own bytes are what a row
+// can be held to.
+type ConfirmedCommit struct {
+	Epoch      uint64 `json:"epoch"`
+	CommitHash string `json:"commit_sha256"`
+}
+
+func commitHash(commit []byte) string {
+	sum := sha256.Sum256(commit)
+	return hex.EncodeToString(sum[:])
+}
+
+// noteConfirmed records that the Commit commit produced epoch.
+func (r *Record) noteConfirmed(epoch uint64, commit []byte) {
+	r.ConfirmedCommits = slices.DeleteFunc(r.ConfirmedCommits, func(c ConfirmedCommit) bool {
+		return c.Epoch == epoch
+	})
+	r.ConfirmedCommits = append(r.ConfirmedCommits, ConfirmedCommit{Epoch: epoch, CommitHash: commitHash(commit)})
+	if len(r.ConfirmedCommits) > ConfirmedCommitCapacity {
+		r.ConfirmedCommits = slices.Clone(r.ConfirmedCommits[len(r.ConfirmedCommits)-ConfirmedCommitCapacity:])
+	}
+}
+
+// forkAt reports whether commit, served as the Commit that produced an epoch
+// this device already confirmed, is another one than this device applied
+// there. False when the ring does not hold that epoch: nothing to compare.
+func (r *Record) forkAt(epoch uint64, commit []byte) bool {
+	for _, c := range r.ConfirmedCommits {
+		if c.Epoch == epoch {
+			return c.CommitHash != commitHash(commit)
+		}
+	}
+	return false
 }

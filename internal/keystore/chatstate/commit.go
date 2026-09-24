@@ -539,6 +539,11 @@ func (s *Store) ConfirmCommit(
 		rec.Pending = nil
 		latch.apply(rec)
 		rec.enterEpoch(epoch)
+		if outcome.Kind == CommitAccepted {
+			rec.noteConfirmed(pending.ExpectedEpoch+1, pending.Commit)
+		} else {
+			rec.noteConfirmed(pending.ExpectedEpoch+1, outcome.WinnerMessage)
+		}
 		if removed {
 			rec.RemovedFromGroup = true
 		}

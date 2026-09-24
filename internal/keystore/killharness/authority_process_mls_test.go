@@ -169,3 +169,28 @@ func TestTwoKeeperProcessesRefuseTheSameUnauthorizedCommitOnce(t *testing.T) {
 		t.Fatalf("anchor after two refusals = %+v", anchor)
 	}
 }
+
+// Q16 through the binary: a replay of the Commit Bob applied is only already
+// applied; another Commit served for that epoch latches fork, and the latch
+// survives a SIGKILL.
+func TestKeeperProcessLatchesAForkAndTheLatchSurvivesAKill(t *testing.T) {
+	c := newConversation(t)
+	a := c.alice.start("", 0)
+	first := a.buildUpdate(c.alice.nextCommitID(), 1)
+	a.must(proto.MLSCommitConfirm, c.alice.confirmRequest(first.ClientCommitID), nil)
+	second := a.buildUpdate(c.alice.nextCommitID(), 2)
+
+	b := c.bob.start("", 0)
+	b.must(proto.MLSProcess, c.bob.attestedProcess(c.nextSeq(), 2, first.CommitB64, hAlice, hBob), nil)
+	b.refused(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, first.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	got := latchDetail(t, b.call(proto.MLSProcess, c.bob.attestedProcess(c.nextSeq(), 2, second.CommitB64, hAlice, hBob)))
+	if got.RekeyCause != proto.ChatStateRekeyCauseFork || got.RekeyEpoch != 2 {
+		t.Fatalf("fork detail = %+v", got)
+	}
+	b.killAndAssertKilled()
+
+	b = c.bob.start("", 0)
+	if status := b.status(); !status.NeedsRekey || status.RekeyCause != proto.ChatStateRekeyCauseFork || status.RekeyEpoch != 2 {
+		t.Fatalf("status after the kill = %+v", status)
+	}
+}

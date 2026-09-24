@@ -198,6 +198,29 @@ func TestMLSAuthority_AReceivedAddStandsOnItsLeafAlone(t *testing.T) {
 	}
 }
 
+// Q16's repro. The server serves Bob, for an epoch he already applied, a
+// Commit other than the one he applied there. He latches fork and merges
+// nothing; a redelivery of the Commit he did apply is only already applied.
+func TestMLSFork_AnotherCommitForAConfirmedEpochLatchesFork(t *testing.T) {
+	c := newDM(t)
+	first := c.alice.buildUpdate(1)
+	c.alice.confirm(first.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.bob.processAttested(c.nextSeq(), 2, first.CommitB64, e2eAlice, e2eBob)
+
+	c.bob.refused(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, first.CommitB64),
+		proto.ChatMLSErrorCodeEpochStale)
+
+	other := c.alice.buildUpdate(2)
+	got := latchedData(t, c.bob.call(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, other.CommitB64)))
+	if got.RekeyCause != proto.ChatStateRekeyCauseFork || got.RekeyEpoch != 2 || got.RekeyCommitterAccountID != "" {
+		t.Fatalf("fork latch detail = %+v", got)
+	}
+	status := c.bob.status()
+	if !status.NeedsRekey || status.RekeyCause != proto.ChatStateRekeyCauseFork || status.RekeyEpoch != 2 {
+		t.Fatalf("status after the fork = %+v", status)
+	}
+}
+
 // A tampered attestation is a refusal of the request, never read as a
 // missing one.
 func TestMLSAuthority_AnAttestationThatDoesNotVerifyIsNotAuthorized(t *testing.T) {

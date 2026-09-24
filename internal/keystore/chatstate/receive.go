@@ -241,6 +241,10 @@ func (s *Store) Receive(
 		loaded := rec.Generation
 		var changed bool
 		out, changed, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
+		var fork *forkDetected
+		if errors.As(err, &fork) {
+			return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{Cause: RekeyCauseFork, Epoch: fork.epoch})
+		}
 		if err != nil {
 			return latchIfRefused(s, p, anchor, err, req.ProducedEpoch)
 		}
@@ -465,6 +469,14 @@ func (s *Store) bindUnmarkedSent(conversationID string, rec *Record, req Receive
 	return out, true, nil
 }
 
+// forkDetected is a handshake for an epoch this device confirmed whose Commit
+// is not the one it applied there. Receive turns it into the fork latch.
+type forkDetected struct{ epoch uint64 }
+
+func (e *forkDetected) Error() string {
+	return "chat state was served another commit for an epoch it already confirmed"
+}
+
 // ErrNotApplication — a message in a display batch was a handshake. Commits
 // go through the handshake path, in epoch order; nothing was written.
 var ErrNotApplication = errors.New("chat state was handed a handshake as an application message")
@@ -490,6 +502,16 @@ func (s *Store) receiveOne(
 	}
 	if !req.Handshake && rec.beforeJoin(req.FramedEpoch) {
 		return ReceiveResult{}, false, errBeforeJoin
+	}
+	// A handshake for an epoch already confirmed here touches no MLS state,
+	// so it is judged before anything that would refuse to feed MLS a new
+	// message: a redelivery is ErrHandshakeApplied, and a different Commit
+	// for an epoch the fork ring holds is a fork (Q16).
+	if req.Handshake && len(rec.GroupState) > 0 && req.ProducedEpoch <= rec.Epoch {
+		if rec.forkAt(req.ProducedEpoch, req.Message) {
+			return ReceiveResult{}, false, &forkDetected{epoch: req.ProducedEpoch}
+		}
+		return ReceiveResult{}, false, ErrHandshakeApplied
 	}
 	// A re-read above is served from the sealed copy and never reaches
 	// here, so an unsettled Commit does not stop anyone from reading what
@@ -580,6 +602,9 @@ func (s *Store) receiveOne(
 	rec.GroupState = state
 	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
+	if req.Handshake {
+		rec.noteConfirmed(req.ProducedEpoch, req.Message)
+	}
 	rec.markOpened(req.Seq, s.HistoryPolicy)
 	if opened.Removed {
 		rec.RemovedFromGroup = true

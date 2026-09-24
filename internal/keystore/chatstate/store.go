@@ -568,7 +568,7 @@ func (s *Store) latchRekeyDetail(tag string, anchor Anchor, detail RekeyDetail) 
 	if err := saveAnchor(s.secrets, tag, anchor); err != nil {
 		return err
 	}
-	if detail.Cause == RekeyCauseUnauthorizedCommit {
+	if detail.Cause == RekeyCauseUnauthorizedCommit || detail.Cause == RekeyCauseFork {
 		return &RekeyLatchedError{Detail: detail}
 	}
 	return ErrRekeyRequired

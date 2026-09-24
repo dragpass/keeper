@@ -67,8 +67,8 @@ type Anchor struct {
 	// Empty on an anchor latched before the field existed.
 	RekeyCause RekeyCause `json:"rekey_cause,omitempty"`
 
-	// RekeyEpoch and RekeyCommitter* say what an unauthorized_commit latch
-	// was about: the epoch the refused or conflicting Commit produces, and
+	// RekeyEpoch and RekeyCommitter* say what an unauthorized_commit or a fork
+	// latch was about: the epoch the refused or conflicting Commit produces, and
 	// for an unauthorized one the leaf that committed it, as the group's own
 	// tree names it. Written with the cause and never changed afterwards.
 	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
@@ -105,6 +105,10 @@ const (
 	// refused to apply it. Every member that applied it is now on an epoch
 	// this device will never reach, so from here the group is forked.
 	RekeyCauseUnauthorizedCommit RekeyCause = "unauthorized_commit"
+
+	// RekeyCauseFork — the server served, for an epoch this device already
+	// confirmed, a Commit other than the one this device applied there.
+	RekeyCauseFork RekeyCause = "fork"
 )
 
 // RekeyDetail is a latch cause and what it was about.

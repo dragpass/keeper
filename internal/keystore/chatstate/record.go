@@ -240,6 +240,14 @@ type Record struct {
 	// settles and what it leaves open.
 	History []HistoryEntry `json:"history,omitempty"`
 
+	// ConfirmedCommits is the fork ring (authority.go): which Commit produced
+	// each of the last epochs this device confirmed from a Commit it held.
+	// Absent in a record written before it existed, which only means nothing
+	// can be compared yet. SchemaVersion is not raised for it: a Keeper that
+	// drops it on rewrite leaves an empty ring, which compares nothing and
+	// latches nothing, the direction that loses detection rather than state.
+	ConfirmedCommits []ConfirmedCommit `json:"confirmed_commits,omitempty"`
+
 	// OpenedSeqs is every server seq MLS has opened on this device, sorted
 	// and merged. It outlives the History ring on purpose: the ring evicts the
 	// copy, and this is what still knows the key behind it is gone. Absent in
