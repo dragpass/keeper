@@ -43,6 +43,12 @@ func newStatementEvidence(d Deps, permit proto.ChatStatePermit) statementEvidenc
 	return statementEvidence{d: d, owner: permit.AccountID, orgID: permit.OrgID, conversationID: permit.ConversationID}
 }
 
+// NewStatementEvidence is the verifier the MLS actions set on every cipher
+// (mls.Cipher.SetEvidence), for a caller that drives a cipher itself.
+func NewStatementEvidence(d Deps, permit proto.ChatStatePermit) chatstate.RemovalEvidence {
+	return newStatementEvidence(d, permit)
+}
+
 // Authorized reads the statements in change.AuthenticatedData and marks every
 // removed leaf one of them covers. Data that is not the evidence layout
 // carries no statement and counts as one invalid.
@@ -172,15 +178,23 @@ func (e statementEvidence) adminKeyTrusted(admin, publicKeyPEM string) error {
 	return nil
 }
 
-// commitEvidence is the authenticated data a build carries: the statements
-// the request handed in, as they are. Validate has already bounded them; the
-// judgement verifies them (ErrStatementUnverified).
+// commitEvidence is the authenticated data a build carries, one document for
+// both rules: the statements the request handed in and the handover of each
+// replace entry, as they are. Validate has already bounded them; the
+// judgement verifies the statements (ErrStatementUnverified) and the build
+// the handovers, over these same bytes, as every receiver will.
 func commitEvidence(req proto.MLSCommitBuildRequest) ([]byte, error) {
-	return proto.MLSCommitEvidence{
+	ev := proto.MLSCommitEvidence{
 		OrgRemovals:       req.OrgRemovalStatements,
 		Leaves:            req.LeaveStatements,
 		DeviceRevocations: req.DeviceRevocations,
-	}.Encode()
+	}
+	for _, m := range req.Replace {
+		if m.Handover != nil {
+			ev.Handovers = append(ev.Handovers, *m.Handover)
+		}
+	}
+	return ev.Encode()
 }
 
 // rolesPayload turns a wire role set into the group context payload.

@@ -162,6 +162,9 @@ func (s *Session) judgeCollected(shape CommitShape, auth chatstate.CommitAuthori
 	if err := chatstate.JudgeReceived(change, auth); err != nil {
 		return nil, err
 	}
+	if err := judgeReceivedSuccession(shape, change); err != nil {
+		return nil, err
+	}
 	if err := s.approveRemovals(shape.Removed); err != nil {
 		return nil, err
 	}

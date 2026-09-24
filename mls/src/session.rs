@@ -137,6 +137,12 @@ fn err(context: &str, e: impl core::fmt::Display) -> String {
 /// a failure.
 pub const FROM_SELF: &str = "the message was sent by this leaf";
 
+/// The largest authenticated data a Commit this Keeper builds may carry. The
+/// Go side puts one evidence document there (proto.MLSCommitEvidence: the
+/// signed statements a Remove rests on and the leaf handovers a replace rests
+/// on) and bounds it by the same number; this is the library edge's own bound.
+pub const MAX_COMMIT_AUTHENTICATED_DATA: usize = 1 << 20;
+
 pub struct Processed {
     pub epoch: u64,
     pub removed: bool,
@@ -351,9 +357,15 @@ impl Session {
         Ok(())
     }
 
-    /// Set the authenticated data the next Commit build carries.
-    pub fn set_next_commit_aad(&mut self, aad: &[u8]) {
+    /// Set the authenticated data the next Commit build carries. Data past
+    /// `MAX_COMMIT_AUTHENTICATED_DATA` is refused and clears what was set.
+    pub fn set_next_commit_aad(&mut self, aad: &[u8]) -> Res<()> {
+        if aad.len() > MAX_COMMIT_AUTHENTICATED_DATA {
+            self.next_commit_aad.clear();
+            return Err("mls: the commit's authenticated data is too large".to_string());
+        }
         self.next_commit_aad = aad.to_vec();
+        Ok(())
     }
 
     /// The group context extensions with the next roles set, when there are
@@ -1192,6 +1204,37 @@ mod tests {
             identities(&mut alice),
             vec![b"alice".to_vec(), b"bob2".to_vec()]
         );
+    }
+
+    // A replace carries the authenticated data set for the next build to
+    // every receiver, where the collect pass reports it with the Commit's
+    // shape; the Go side reads the evidence (leaf handovers, signed
+    // statements) there. Data past the bound is refused when it is set and
+    // clears what was set before, so the build that follows carries none.
+    #[test]
+    fn a_replaces_authenticated_data_reaches_the_receivers_shape() {
+        let (mut alice, mut bob, mut carol) = three();
+        let old = leaf_named(&mut alice, b"bob");
+        let new_kp = kp(&member("bob2"));
+        alice.set_next_commit_aad(b"stale").unwrap();
+        let too_big = vec![0u8; MAX_COMMIT_AUTHENTICATED_DATA + 1];
+        assert!(alice.set_next_commit_aad(&too_big).is_err());
+        assert!(alice.next_commit_aad.is_empty());
+
+        alice.set_next_commit_aad(b"handover").unwrap();
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
+        let (commit, _, _) = alice
+            .commit_replace_members(&[old.index], &[&new_kp])
+            .unwrap();
+        assert!(alice.next_commit_aad.is_empty());
+        let (_, shape) = carol.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+        let (_, shape) = bob.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+
+        let framed = crate::authority::encode_shape(&shape);
+        assert!(framed.ends_with(&[0, 0, 0, 8, b'h', b'a', b'n', b'd', b'o', b'v', b'e', b'r']));
     }
 
     // The old device is removed by the replace, so its group never reaches the

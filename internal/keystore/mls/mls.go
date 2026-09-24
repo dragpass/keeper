@@ -339,7 +339,7 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Replace) > 0 {
-		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
+		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace, plan.UserInitiated, plan.CommitAAD)
 		if err != nil {
 			return chatstate.BuiltCommit{}, err
 		}
@@ -601,10 +601,46 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 		}
 		kps = append(kps, m.KeyPackage)
 	}
+	// A rejoin re-seats the leaf key the account already holds here. One
+	// under another key would be a succession with no handover, which every
+	// receiver refuses; refusing it here builds nothing they would latch on.
+	entering, err := keyPackageLeaves(kps)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, nil, true, false); err != nil {
+		return nil, nil, 0, err
+	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
 	}
 	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
+}
+
+// keyPackageLeaves reads the leaf each KeyPackage would add.
+func keyPackageLeaves(kps [][]byte) ([]Leaf, error) {
+	out := make([]Leaf, 0, len(kps))
+	for _, kp := range kps {
+		leaf, err := keyPackageLeaf(kp)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, leaf)
+	}
+	return out, nil
+}
+
+// ownAccount is the account of this device's leaf in the confirmed tree.
+func (c *Cipher) ownAccount(leaves []Leaf) (string, error) {
+	own, err := c.session.OwnLeafIndex()
+	if err != nil {
+		return "", err
+	}
+	return committerOf(leaves, own)
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -622,14 +658,30 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 //
 // An account with no leaf under another key is refused rather than turned
 // into a bare Add: there is nothing it replaces.
-func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commit, welcome []byte, expected uint64, err error) {
+//
+// Each account's succession is then held to the rule every receiver applies
+// (chatstate/succession.go): the old leaf's handover, which must verify
+// against the leaf being removed and name the KeyPackage's leaf, or a
+// recovered identity a person on this device asked to seat. The handovers
+// ride in the Commit's one evidence document (commitAAD, which BuildCommit
+// has already set for this build), and the succession is judged over the
+// handovers read back from those bytes, so this build and every receiver
+// judge exactly the same thing.
+func (c *Cipher) commitReplaceAccounts(
+	members []chatstate.ReplaceMember, userInitiated bool, commitAAD []byte,
+) (commit, welcome []byte, expected uint64, err error) {
+	carried, err := chatstate.DecodeHandovers(commitAAD)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	var (
-		removed []Leaf
-		kps     [][]byte
+		removed  []Leaf
+		entering []Leaf
+		kps      [][]byte
 	)
 	for _, m := range members {
 		leaf, err := keyPackageLeaf(m.KeyPackage)
@@ -665,7 +717,23 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		if !found {
 			return nil, nil, 0, failed("an account to replace has no other leaf in the group")
 		}
+		if m.Handover != nil {
+			if err := checkHandover(*m.Handover, removed, leaf); err != nil {
+				return nil, nil, 0, err
+			}
+			if !slices.ContainsFunc(carried, m.Handover.Same) {
+				return nil, nil, 0, fmt.Errorf("%w: the commit does not carry it", chatstate.ErrHandoverInvalid)
+			}
+		}
+		entering = append(entering, leaf)
 		kps = append(kps, m.KeyPackage)
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, carried, true, userInitiated); err != nil {
+		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
@@ -1350,7 +1418,8 @@ func (s *Session) CommitAddMembersVerified(
 
 // CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
 // also removes leafIndices: the leaves the KeyPackages would add are verified
-// as one unit and as entering leaves, and a refused set builds nothing.
+// as one unit and as entering leaves, and a refused set builds nothing. The
+// Commit carries whatever authenticated data setNextCommitAAD set.
 func (s *Session) CommitReplaceMembersVerified(
 	leafIndices []uint32, keyPackages [][]byte, v LeafVerifier,
 ) (commit, welcome []byte, expectedEpoch uint64, err error) {

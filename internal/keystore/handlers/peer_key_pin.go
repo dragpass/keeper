@@ -13,6 +13,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"errors"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -242,6 +243,22 @@ func HandlePeerKeyPinVerify(d Deps, req proto.PeerKeyPinVerifyRequest) proto.Bas
 			errs.ErrCodeCryptoFailure,
 			"fingerprint does not match the supplied public key; the pin was not changed",
 		)
+	}
+
+	// A compared safety number must be this pair's as this Keeper computes
+	// it: the owner's own key and the key being settled. Otherwise a number
+	// read off another pair, or off a key the server has since swapped, would
+	// settle this one.
+	if req.SafetyNumberB64 != "" {
+		value, _, _, _, resp, ok := ownSafetyNumber(d, req.OwnerAccountID, req.AccountID, req.PublicKey)
+		if !ok {
+			return resp
+		}
+		if base64.StdEncoding.EncodeToString(value) != req.SafetyNumberB64 {
+			d.Logger.Println("peer key pin verify error: the safety number is not this pair's")
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure,
+				"the safety number is not the one this pair of keys produces; the pin was not changed")
+		}
 	}
 
 	existing, err := loadPeerKeyPin(d.Store, req.OwnerAccountID, req.AccountID)

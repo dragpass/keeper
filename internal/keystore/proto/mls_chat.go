@@ -66,7 +66,22 @@ const (
 	// conversation and this KeyPackage's leaf, or one too old (0.0.55).
 	// Nothing was built.
 	ChatMLSErrorCodeRejoinUnverified = "CHAT_MLS_REJOIN_UNVERIFIED"
+
+	// ChatMLSErrorCodePeerUnverified — this device's strict policy
+	// (require_verified_peers) is on and the operation would bring in, or
+	// send to, another account whose key no person here verified: a local
+	// Add or Join of such a leaf, or a send in a conversation that holds one
+	// (0.0.55, design Q8). Carries MLSPeerUnverifiedData naming them. Nothing
+	// was built, joined, consumed or written. A received Commit is never
+	// refused for this.
+	ChatMLSErrorCodePeerUnverified = "CHAT_MLS_PEER_UNVERIFIED"
 )
+
+// MLSPeerUnverifiedData rides on CHAT_MLS_PEER_UNVERIFIED: the accounts, in
+// order, whose pins are not verified (none at all counts).
+type MLSPeerUnverifiedData struct {
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
+}
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in
 // step with it by a test in the handlers package, which can import both.
@@ -360,9 +375,15 @@ type MLSConversationForgetRemovedResponseData struct {
 // device took over, and that device's KeyPackage as the server handed it out.
 // There is no fingerprint field: the only key the Keeper accepts for the
 // account is the one the permit names in pending_leaf_replacements.
+//
+// Handover is the old device's signed approval (0.0.55, design Q1), as the
+// server relayed it. Without one the replace is an account recovery (Q2): it
+// needs user_initiated and a leaf carrying another account key than the one
+// it replaces.
 type MLSReplaceMember struct {
-	AccountID     string `json:"account_id"`
-	KeyPackageB64 string `json:"key_package_b64"`
+	AccountID     string           `json:"account_id"`
+	KeyPackageB64 string           `json:"key_package_b64"`
+	Handover      *MLSLeafHandover `json:"handover,omitempty"`
 }
 
 // validateMLSReplace bounds the list like an Add, allows one entry per account,
@@ -386,6 +407,14 @@ func validateMLSReplace(members []MLSReplaceMember, listed []ChatStateLeafReplac
 			return newValidationError(field, "must not name one account twice")
 		}
 		seen[m.AccountID] = true
+		if m.Handover != nil {
+			if err := m.Handover.Validate("replace.handover"); err != nil {
+				return err
+			}
+			if m.Handover.AccountID != m.AccountID {
+				return newValidationError("replace.handover.account_id", "must be the account being replaced")
+			}
+		}
 		if _, ok := LeafReplacementFor(listed, m.AccountID); !ok {
 			return newValidationError(field, "names an account the permit does not list in pending_leaf_replacements")
 		}
@@ -646,10 +675,12 @@ type MLSCommitBuildRequest struct {
 	LeaveStatements      []MLSLeaveStatement      `json:"leave_statements,omitempty"`
 	DeviceRevocations    []MLSDeviceRevocation    `json:"device_revocations,omitempty"`
 
-	// UserInitiated says a person on this device asked for this add, remove
-	// or roles change (0.0.55). Automation never sends it. It gates the app's
-	// intent and is never authority on its own: the Keeper judges every
-	// Commit by the group's roles and the signed statements.
+	// UserInitiated says a person on this device asked for this add, remove,
+	// roles change or replace (0.0.55). Automation never sends it. It gates
+	// the app's intent and is never authority on its own: the Keeper judges
+	// every Commit by the group's roles, the signed statements and, for a
+	// replace, the old leaf's handover. A replace needs it when it carries no
+	// handover (an account recovery, design Q2).
 	UserInitiated bool `json:"user_initiated,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -727,8 +758,8 @@ func (r MLSCommitBuildRequest) Validate() error {
 			return newValidationError("set_roles", "rides alone or on add, remove_account_ids or revoke_devices")
 		}
 	}
-	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil && r.SetRoles == nil {
-		return newValidationError("user_initiated", "is only for add, remove_account_ids and set_roles")
+	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil && r.SetRoles == nil && r.Replace == nil {
+		return newValidationError("user_initiated", "is only for add, remove_account_ids, set_roles and replace")
 	}
 	if kinds > 1 || (kinds == 0 && r.SetRoles == nil) {
 		return newValidationError("add",
@@ -1281,6 +1312,15 @@ type MLSConversationStatusResponseData struct {
 	// its pin now (0.0.55); see MLSAccountTrust. Absent with needs_rekey, with
 	// no group, and when the pins could not be read.
 	MemberTrust []MLSAccountTrust `json:"member_trust,omitempty"`
+
+	// RequireVerifiedPeers is this device's strict policy (0.0.55, design
+	// Q8), and UnverifiedAccountIDs, under it, every other account in the
+	// confirmed tree whose pin is not verified: what a send would be refused
+	// for now with CHAT_MLS_PEER_UNVERIFIED. Empty, never null, when the
+	// policy is off, when every member is verified, and when there is no
+	// group.
+	RequireVerifiedPeers bool     `json:"require_verified_peers"`
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
 }
 
 // ChatStateRekeyLatchedData rides on CHAT_STATE_REKEY_REQUIRED from the

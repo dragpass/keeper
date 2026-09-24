@@ -99,6 +99,14 @@ type SendRequest struct {
 	// ExpectedEpoch refuses a send built against a different epoch than the
 	// one the record is on. Zero means the caller is not asserting one.
 	ExpectedEpoch uint64
+
+	// Admit, when set, runs under the lock once the confirmed group state is
+	// loaded into the cipher and the latches let the send through, before any
+	// position is burned or peeked. An error refuses the send with nothing
+	// consumed and nothing written. It is how a caller holds a send to what
+	// the group holds right now (the strict policy, design Q8) without a
+	// window between its check and the encryption.
+	Admit func() error
 }
 
 // SendResult carries what the transport needs and nothing else. The plaintext
@@ -177,6 +185,11 @@ func (s *Store) Send(
 		}
 		if latch.held() {
 			return s.refuseWhileLatched(p, rec, anchor, latch)
+		}
+		if req.Admit != nil {
+			if err := req.Admit(); err != nil {
+				return err
+			}
 		}
 		latch.apply(rec)
 		burned, err := burnUnfinished(rec, cipher)

@@ -13,7 +13,8 @@ import (
 )
 
 // decodeCollected reads dpmls_group_process_collect's framing: the entering
-// leaves, then authority::encode_shape. Strict, as decodeLeaves is.
+// leaves, then authority::encode_shape, whose last field is the Commit's
+// authenticated data. Strict, as decodeLeaves is.
 func decodeCollected(buf []byte) ([]Leaf, CommitShape, error) {
 	bad := errors.New("mls: commit shape framing is malformed")
 	r := leafReader{buf: buf}

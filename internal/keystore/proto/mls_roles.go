@@ -10,6 +10,7 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -213,19 +214,33 @@ func (s MLSDeviceRevocation) Validate(field string) error {
 	return requireString(s.Signature, field+".signature")
 }
 
-// MLSCommitEvidence is the authenticated data of a Commit whose Removes rest
-// on signed statements. Canonical JSON is not required: the bytes are covered
-// by the committer's signature as they are, and every receiver parses them.
+// MLSCommitEvidence is the one document a Commit's authenticated data holds:
+// the signed statements its Removes rest on (wave 5a) and the leaf handovers
+// its successions rest on (wave 5b). Both rules read it through
+// DecodeMLSCommitEvidence, so data one of them wrote is never taken for
+// "nothing" by the other. Canonical JSON is not required: the bytes are
+// covered by the committer's signature as they are, and every receiver parses
+// them.
 type MLSCommitEvidence struct {
 	V                 int                      `json:"v"`
 	OrgRemovals       []MLSOrgRemovalStatement `json:"org_removals,omitempty"`
 	Leaves            []MLSLeaveStatement      `json:"leaves,omitempty"`
 	DeviceRevocations []MLSDeviceRevocation    `json:"device_revocations,omitempty"`
+	Handovers         []MLSLeafHandover        `json:"handovers,omitempty"`
 }
 
-// Empty reports whether the evidence carries no statement.
+// MLSCommitEvidenceMaxHandovers bounds the handovers one Commit carries.
+const MLSCommitEvidenceMaxHandovers = 32
+
+// MLSCommitEvidenceMaxBytes bounds the document before it is parsed. It is
+// the library edge's bound too (session.rs MAX_COMMIT_AUTHENTICATED_DATA), and
+// holds every list at its limit with the largest admin key allowed.
+const MLSCommitEvidenceMaxBytes = 1 << 20
+
+// Empty reports whether the evidence carries nothing.
 func (e MLSCommitEvidence) Empty() bool {
-	return len(e.OrgRemovals) == 0 && len(e.Leaves) == 0 && len(e.DeviceRevocations) == 0
+	return len(e.OrgRemovals) == 0 && len(e.Leaves) == 0 && len(e.DeviceRevocations) == 0 &&
+		len(e.Handovers) == 0
 }
 
 // Encode is the authenticated data bytes, or nil when there is nothing.
@@ -233,29 +248,67 @@ func (e MLSCommitEvidence) Encode() ([]byte, error) {
 	if e.Empty() {
 		return nil, nil
 	}
+	if err := e.bounded(); err != nil {
+		return nil, err
+	}
 	e.V = MLSCommitEvidenceVersion
-	return json.Marshal(e)
+	out, err := json.Marshal(e)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MLSCommitEvidenceMaxBytes {
+		return nil, newValidationError("authenticated_data", "is too large")
+	}
+	return out, nil
 }
 
 // DecodeMLSCommitEvidence reads a Commit's authenticated data. Empty data is
-// no evidence. Data that is not this layout, or holds too many statements, is
-// an error: a receiver treats it as no evidence at all.
+// no evidence. Anything else must be exactly a document Encode could have
+// written: an unknown field, another version, trailing bytes, a list past its
+// bound or a handover that is malformed is an error, and a receiver refuses
+// the Commit rather than read it as carrying nothing.
 func DecodeMLSCommitEvidence(aad []byte) (MLSCommitEvidence, error) {
 	var e MLSCommitEvidence
 	if len(aad) == 0 {
 		return e, nil
 	}
-	if err := json.Unmarshal(aad, &e); err != nil {
+	if len(aad) > MLSCommitEvidenceMaxBytes {
+		return MLSCommitEvidence{}, newValidationError("authenticated_data", "is too large")
+	}
+	dec := json.NewDecoder(bytes.NewReader(aad))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&e); err != nil {
 		return MLSCommitEvidence{}, err
+	}
+	if dec.More() {
+		return MLSCommitEvidence{}, newValidationError("authenticated_data", "holds more than one document")
 	}
 	if e.V != MLSCommitEvidenceVersion {
 		return MLSCommitEvidence{}, newValidationError("authenticated_data.v", "unknown evidence version")
 	}
-	if len(e.OrgRemovals) > MLSStatementMaxPerKind || len(e.Leaves) > MLSStatementMaxPerKind ||
-		len(e.DeviceRevocations) > MLSStatementMaxPerKind {
-		return MLSCommitEvidence{}, newValidationError("authenticated_data", "too many statements")
+	if e.Empty() {
+		return MLSCommitEvidence{}, newValidationError("authenticated_data", "is a document that carries nothing")
+	}
+	if err := e.bounded(); err != nil {
+		return MLSCommitEvidence{}, err
 	}
 	return e, nil
+}
+
+func (e MLSCommitEvidence) bounded() error {
+	if len(e.OrgRemovals) > MLSStatementMaxPerKind || len(e.Leaves) > MLSStatementMaxPerKind ||
+		len(e.DeviceRevocations) > MLSStatementMaxPerKind {
+		return newValidationError("authenticated_data", "too many statements")
+	}
+	if len(e.Handovers) > MLSCommitEvidenceMaxHandovers {
+		return newValidationError("authenticated_data.handovers", "too many handovers")
+	}
+	for _, h := range e.Handovers {
+		if err := h.Validate("authenticated_data.handovers"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateStatements(orgs []MLSOrgRemovalStatement, leaves []MLSLeaveStatement, revs []MLSDeviceRevocation) error {

@@ -460,7 +460,7 @@ pub unsafe extern "C" fn dpmls_session_set_next_commit_aad(
     guard(|| {
         // SAFETY: as in dpmls_session_set_next_roles.
         let (session, buf) = unsafe { (session_of(handle)?, slice(aad, aad_len)?) };
-        session.set_next_commit_aad(buf);
+        session.set_next_commit_aad(buf)?;
         Ok(DPMLS_OK)
     })
 }
@@ -688,7 +688,9 @@ pub unsafe extern "C" fn dpmls_group_commit_remove_members(
 /// Build one Commit that removes the leaves in `leaf_indices` (framed as in
 /// `gate::decode_leaf_indices`) and adds the members in `key_packages` (framed
 /// as in `gate::decode_key_packages`), and hold it pending. `expected_epoch`
-/// receives the confirmed epoch it was built against.
+/// receives the confirmed epoch it was built against. The Commit carries the
+/// authenticated data `dpmls_session_set_next_commit_aad` set, as every other
+/// Commit build does.
 ///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`; `commit` and
