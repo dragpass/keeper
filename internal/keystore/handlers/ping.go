@@ -17,6 +17,8 @@ func HandlePing(d Deps, req proto.PingRequest) proto.BaseResponse {
 			Version: version.Version,
 			Hash:    version.BinaryHash,
 			Path:    version.BinaryPath,
+
+			ChatContract: proto.ChatContract,
 		},
 	}
 }

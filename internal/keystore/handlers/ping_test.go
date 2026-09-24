@@ -38,4 +38,9 @@ func TestHandlePing_BareDelegation(t *testing.T) {
 	if data.Version == "" {
 		t.Fatalf("expected non-empty version")
 	}
+	// Old and new builds can report the same version string; the contract is
+	// what the extension gates chat on.
+	if data.ChatContract != proto.ChatContract || proto.ChatContract < 5 {
+		t.Fatalf("chat_contract = %d, want %d (at least 5)", data.ChatContract, proto.ChatContract)
+	}
 }
