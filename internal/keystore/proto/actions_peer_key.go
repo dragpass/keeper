@@ -53,6 +53,20 @@ const (
 	// yet: the user checked before anything was observed.
 	ActionPeerKeyPinVerify = "peer_key_pin_verify"
 
+	// PeerKeySafetyNumber: the pairwise safety number of this owner and one
+	// peer (0.0.55, design Q10 (a)).
+	//
+	//   Inputs: owner_account_id, account_id, public_key (the peer's PEM as
+	//           the directory serves it)
+	//   Output: { safety_number (60 digits), safety_number_b64 (32 bytes),
+	//             own_fingerprint, peer_fingerprint }
+	//
+	// SHA-256 over dragpass.safety_number|1| and the two (account_id,
+	// account key fingerprint) pairs sorted by account id, so both sides of
+	// the pair compute the same value. The own half comes from this Keeper's
+	// own key, never from the request. Carries nothing secret.
+	ActionPeerKeySafetyNumber = "peer_key_safety_number"
+
 	// PeerKeyPinForget: discard a pin deliberately.
 	//
 	//   Inputs: owner_account_id, account_id
