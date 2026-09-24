@@ -317,6 +317,7 @@ func TestMLSAdversary_AnExistingLeafAndANewLeafOfOneAccount(t *testing.T) {
 	kp := keyPackageBytes(t, carol2.keyPackage())
 	commit, _ := r.adv.Build(mlsadversary.Commit{Adds: [][]byte{kp}})
 	r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
+
 }
 
 // (d) A plain member adds somebody to a room with roles: refused and blocked.
@@ -435,5 +436,36 @@ func TestMLSAdversary_ThePoolSweepDropsAnOldKeepersKeyPackage(t *testing.T) {
 	}
 	if _, err := store.LookupKeyPackage([][]byte{ref}, time.Now()); err == nil {
 		t.Fatal("the old KeyPackage survived the sweep")
+	}
+}
+
+// P1-2: a Commit carrying a genuine org removal statement for Carol and an
+// unauthorized removal of Alice beside it. The statement's admin is not yet
+// pinned by either receiver. The whole Commit is refused, and no pin for the
+// admin may be left behind: the receivers' keyrings are compared byte for
+// byte (deliver, assertUnchanged). A later genuine statement is then pinned
+// on first use as usual.
+func TestMLSAdversary_ARefusedCommitLeavesNoAdminPin(t *testing.T) {
+	r := newAdvRoom(t, false)
+	lawfulSeq, lawfulB64 := r.lawfulRow()
+	admin := newKeeper(t, e2eAdmin)
+	aad, err := proto.MLSCommitEvidence{OrgRemovals: []proto.MLSOrgRemovalStatement{orgRemoval(admin, e2eCarol)}}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, _ := r.adv.Build(mlsadversary.Commit{
+		Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device), r.adv.IndexOf(e2eAlice, r.alice.device)},
+		AAD:     aad,
+	})
+	r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
+	// The same statement alone is a lawful Commit for that epoch: Alice
+	// applies it, which clears her block, and only now pins the admin.
+	lawful, _ := r.adv.Build(mlsadversary.Commit{Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device)}, AAD: aad})
+	r.applied(lawful)
+	if st := r.alice.status(); st.SyncBlocked != nil {
+		t.Fatalf("the lawful commit left the block: %+v", st.SyncBlocked)
+	}
+	if pin, err := keychain.GetPeerKeyPin(r.alice.store, e2eAlice, e2eAdmin); err != nil || pin.Fingerprint == "" {
+		t.Fatalf("the admin was not pinned by the applied commit: %v", err)
 	}
 }

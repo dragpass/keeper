@@ -393,7 +393,8 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return resp
 	}
 	cipher := mls.NewCipher(c.session, v)
-	cipher.SetEvidence(newStatementEvidence(d, c.permit))
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
@@ -402,6 +403,9 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		AppContext:     appContext,
 	}, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls commit build", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls commit build", err)
 	}
 	d.Logger.Println("mls commit build successful")
@@ -458,9 +462,13 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 	}
 	v := c.verifier(d, req.RotationStatements)
 	cipher := mls.NewCipher(c.session, v)
-	cipher.SetEvidence(newStatementEvidence(d, c.permit))
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
 	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls commit confirm", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
 	d.Logger.Println("mls commit confirm successful")
@@ -522,7 +530,8 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}
 	v := c.verifier(d, req.RotationStatements)
 	cipher := mls.NewCipher(c.session, v)
-	cipher.SetEvidence(newStatementEvidence(d, c.permit))
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
 	result, err := c.store.Receive(c.conv, c.wm, chatstate.ReceiveRequest{
 		Seq:           req.Seq,
 		Message:       commit,
@@ -531,6 +540,9 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		CommitMembers: members,
 	}, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls process", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
 	d.Logger.Println("mls process successful")

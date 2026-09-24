@@ -37,17 +37,39 @@ import (
 
 // statementEvidence is chatstate.RemovalEvidence for one owner's view of one
 // conversation.
+//
+// A first-seen admin key is not written while the Commit is judged (P1-2): a
+// Commit refused as a whole, one genuine statement beside an unauthorized
+// Remove say, must leave no pin behind, or a rejected input could take the
+// first pin for an account and turn the next genuine key into a "change".
+// The pins are staged here and written by commitPins, which the action calls
+// only once its whole operation has succeeded, as the leaf verifier's are.
 type statementEvidence struct {
 	d              Deps
 	owner          string
 	orgID          string
 	conversationID string
+
+	// staged is the first-use pins this operation's statements would record.
+	staged map[string]keychain.PeerKeyPin
 }
 
-var _ chatstate.RemovalEvidence = statementEvidence{}
+var _ chatstate.RemovalEvidence = (*statementEvidence)(nil)
 
-func newStatementEvidence(d Deps, permit proto.ChatStatePermit) statementEvidence {
-	return statementEvidence{d: d, owner: permit.AccountID, orgID: permit.OrgID, conversationID: permit.ConversationID}
+func newStatementEvidence(d Deps, permit proto.ChatStatePermit) *statementEvidence {
+	return &statementEvidence{d: d, owner: permit.AccountID, orgID: permit.OrgID, conversationID: permit.ConversationID}
+}
+
+// commitPins writes the first-use admin pins staged by this operation. Call it
+// only after the operation they were judged for has succeeded.
+func (e *statementEvidence) commitPins() error {
+	for admin, pin := range e.staged {
+		if err := keychain.SavePeerKeyPin(e.d.Store, e.owner, admin, pin); err != nil {
+			return err
+		}
+	}
+	e.staged = nil
+	return nil
 }
 
 // NewStatementEvidence is the verifier the MLS actions set on every cipher
@@ -59,7 +81,7 @@ func NewStatementEvidence(d Deps, permit proto.ChatStatePermit) chatstate.Remova
 // Authorized reads the statements in change.AuthenticatedData and marks every
 // removed leaf one of them covers. Data that is not the evidence layout
 // carries no statement and counts as one invalid.
-func (e statementEvidence) Authorized(change chatstate.CommitChange) ([]bool, int, error) {
+func (e *statementEvidence) Authorized(change chatstate.CommitChange) ([]bool, int, error) {
 	out := make([]bool, len(change.Removed))
 	if len(change.AuthenticatedData) == 0 || len(change.RemovedLeaves) != len(change.Removed) {
 		return out, 0, nil
@@ -123,7 +145,7 @@ func (e statementEvidence) Authorized(change chatstate.CommitChange) ([]bool, in
 // revoked is not removed by the old revocation. seen reports whether the
 // Commit removes a leaf the statement could be checked against at all; a
 // statement about nobody removed is unused, not invalid.
-func (e statementEvidence) ownStatementVerifies(
+func (e *statementEvidence) ownStatementVerifies(
 	change chatstate.CommitChange, account, device string, notAfter int64, signature, canonical string,
 ) (ok, seen bool) {
 	for _, leaf := range change.RemovedLeaves {
@@ -149,7 +171,7 @@ func (e statementEvidence) ownStatementVerifies(
 // orgRemovalVerifies checks an org admin's statement: this conversation's
 // organization, the signature under the key it carries, and that key against
 // this owner's pin for the admin account (first use recorded).
-func (e statementEvidence) orgRemovalVerifies(s proto.MLSOrgRemovalStatement) bool {
+func (e *statementEvidence) orgRemovalVerifies(s proto.MLSOrgRemovalStatement) bool {
 	if s.Validate("org_removal", true) != nil || s.OrgID != e.orgID ||
 		proto.MLSStatementExpired(s.RemovedAt, e.d.Now().Unix()) {
 		return false
@@ -160,7 +182,7 @@ func (e statementEvidence) orgRemovalVerifies(s proto.MLSOrgRemovalStatement) bo
 	return e.adminKeyTrusted(s.AdminAccountID, s.AdminPublicKey) == nil
 }
 
-func (e statementEvidence) adminKeyTrusted(admin, publicKeyPEM string) error {
+func (e *statementEvidence) adminKeyTrusted(admin, publicKeyPEM string) error {
 	observed := crypto.AccountKeyFingerprint([]byte(publicKeyPEM))
 	if admin == e.owner {
 		own, err := keychain.GetPublicKey(e.d.Store)
@@ -176,14 +198,18 @@ func (e statementEvidence) adminKeyTrusted(admin, publicKeyPEM string) error {
 	if err != nil {
 		return err
 	}
+	if pin, ok := e.staged[admin]; ok && existing == nil {
+		existing = &pin
+	}
 	outcome := evaluatePeerKeyTrust(existing, admin, observed, nil, e.d.Now().Unix())
 	if !outcome.Allowed {
 		return errors.New("the admin's account key changed: " + outcome.Reason)
 	}
 	if existing == nil {
-		if err := keychain.SavePeerKeyPin(e.d.Store, e.owner, admin, outcome.Pin); err != nil {
-			return err
+		if e.staged == nil {
+			e.staged = map[string]keychain.PeerKeyPin{}
 		}
+		e.staged[admin] = outcome.Pin
 	}
 	return nil
 }
