@@ -120,6 +120,13 @@ type device struct {
 	account string
 	dir     string
 	commits int
+
+	// binary, when set, is another Keeper build to run on this device, and
+	// v4Permit says it speaks the chat state permit of canonical version 4
+	// (a Keeper before wave 5), which send rewrites every permit into
+	// (mixed_version_mls_test.go).
+	binary   string
+	v4Permit bool
 }
 
 func newDevice(t *testing.T, account string) *device {
@@ -201,7 +208,11 @@ type keeperProc struct {
 // point, "" for none; skip lets that many earlier passes through it go by.
 func (d *device) start(crashAt string, skip int) *keeperProc {
 	d.t.Helper()
-	cmd := exec.Command(binaryPath)
+	bin := binaryPath
+	if d.binary != "" {
+		bin = d.binary
+	}
+	cmd := exec.Command(bin)
 	mark := filepath.Join(d.dir, fmt.Sprintf("crash-mark-%d", time.Now().UnixNano()))
 	cmd.Env = []string{
 		"KEEPER_E2E_MODE=1",
@@ -246,6 +257,9 @@ type response struct {
 
 func (p *keeperProc) send(action string, payload any) {
 	p.t.Helper()
+	if p.d.v4Permit {
+		payload = p.d.withV4Permit(payload)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		p.t.Fatal(err)
