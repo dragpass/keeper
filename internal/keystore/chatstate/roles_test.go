@@ -131,3 +131,27 @@ func TestRoles_ATreeThatHoldsTwoLeavesOfAnAccountTakesNoCommitThatKeepsThem(t *t
 		t.Errorf("removing one of the two = %v", err)
 	}
 }
+
+// P1-1: the owner and the only admin both left. The remaining member's claim
+// drops the departed admin's entry, which role validation requires (every
+// entry holds a leaf); keeping it would be refused, and so was dropping it.
+func TestRoles_AClaimDropsTheEntriesOfAccountsThatLeft(t *testing.T) {
+	before := room(rolesA, rolesB)
+	claim := func(after *Roles) string {
+		return judgeRoles(CommitChange{CommitterAccountID: rolesC, Before: []string{rolesC}, RolesBefore: before,
+			RolesChange: RolesSet, RolesAfter: after})
+	}
+	if got := claim(room(rolesC)); got != "" {
+		t.Fatalf("the claim that drops the departed admin: %s", got)
+	}
+	if got := claim(room(rolesC, rolesB)); got == "" {
+		t.Fatal("a claim that keeps an entry with no leaf")
+	}
+	// With the admin still holding a leaf, the member may not claim, and the
+	// admin's claim keeps every live admin.
+	live := []string{rolesB, rolesC}
+	if got := judgeRoles(CommitChange{CommitterAccountID: rolesC, Before: live, RolesBefore: before,
+		RolesChange: RolesSet, RolesAfter: room(rolesC)}); got == "" {
+		t.Fatal("a member claimed while an admin holds a leaf")
+	}
+}

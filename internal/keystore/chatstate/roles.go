@@ -353,7 +353,10 @@ func judgeRolesChange(c CommitChange) string {
 
 // isOwnerlessClaim is roles::is_ownerless_claim: an admin (or, with no live
 // admin, any member) takes over a room whose owner holds no leaf, changing
-// nothing but the owner.
+// nothing but the owner, except that the entries of admins who no longer hold
+// a leaf after the Commit go with it (P1-1): every entry must hold a leaf, so
+// a claim that kept them could never pass, and one that dropped them was
+// refused as a change to the admins.
 func (c CommitChange) isOwnerlessClaim(before, after Roles) bool {
 	claimer := c.CommitterAccountID
 	if claimer == "" || c.holdsBefore(before.Owner) {
@@ -370,7 +373,9 @@ func (c CommitChange) isOwnerlessClaim(before, after Roles) bool {
 		mayClaim = c.holdsBefore(claimer)
 	}
 	expected := Roles{Kind: RolesKindRoom, Owner: claimer,
-		Admins: slices.DeleteFunc(slices.Clone(before.Admins), func(a string) bool { return a == claimer })}
+		Admins: slices.DeleteFunc(slices.Clone(before.Admins), func(a string) bool {
+			return a == claimer || !c.holdsAfter(a)
+		})}
 	return mayClaim && after.equal(expected)
 }
 

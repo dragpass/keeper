@@ -107,3 +107,41 @@ func TestMLSOwnerSuccession_NoClaimWhileTheOwnerHoldsALeaf(t *testing.T) {
 	claim.SetRoles = roleSet(e2eBob)
 	assertCode(t, r.bob.call(proto.MLSCommitBuild, claim), proto.ChatMLSErrorCodeCommitUnauthorized)
 }
+
+// P1-1: the owner Alice and the only admin Bob are both removed from the
+// organization, on the admin's signed statements, and only Carol and Dave
+// remain. Carol claims the room; her claim drops Bob's departed entry, and
+// Dave applies it.
+func TestMLSOwnerSuccession_TheOwnerAndTheOnlyAdminLeft(t *testing.T) {
+	r := newRolesRoom(t, e2eBob)
+	dave := newKeeper(t, e2eDave)
+	add := r.alice.buildRequest(1)
+	add.Add, add.UserInitiated = []proto.MLSMemberKeyPackage{dave.keyPackage()}, true
+	added := r.alice.accepted(add)
+	for _, k := range []*keeper{r.bob, r.carol} {
+		k.process(r.nextSeq(), 2, added.CommitB64)
+	}
+	dave.must(proto.MLSJoin, proto.MLSJoinRequest{Permit: dave.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: added.WelcomeB64})
+
+	orgAdmin := newKeeper(t, e2eAdmin)
+	req := r.carol.buildRequest(2)
+	req.Permit, req.RemoveAccountIDs = r.carol.permit(e2eAlice, e2eBob), []string{e2eAlice, e2eBob}
+	req.OrgRemovalStatements = []proto.MLSOrgRemovalStatement{orgRemoval(orgAdmin, e2eAlice), orgRemoval(orgAdmin, e2eBob)}
+	removed := r.carol.accepted(req)
+	if got := dave.process(r.nextSeq(), 3, removed.CommitB64); got.Epoch != 3 {
+		t.Fatalf("dave applied the removals at %+v", got)
+	}
+
+	claim := r.carol.buildRequest(3)
+	claim.SetRoles = roleSet(e2eCarol)
+	claimed := r.carol.accepted(claim)
+	if got := dave.process(r.nextSeq(), 4, claimed.CommitB64); got.Epoch != 4 {
+		t.Fatalf("dave applied carol's claim at %+v", got)
+	}
+	if got := ownerOf(t, dave); got != e2eCarol {
+		t.Fatalf("owner after the claim = %s", got)
+	}
+	if got := dave.status().Roles; len(got) != 1 {
+		t.Fatalf("roles after the claim = %+v; want carol alone", got)
+	}
+}

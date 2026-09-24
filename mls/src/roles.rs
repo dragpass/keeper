@@ -361,7 +361,9 @@ fn check_roles_change(change: &Change<'_>, after: Option<&Roles>) -> Result<(), 
 /// The one change a non-owner may make: take over a room whose owner holds no
 /// leaf any more (removed with the organization's signed statement). An admin
 /// may claim it; only when no admin holds a leaf may any member. The claim
-/// changes nothing but the owner.
+/// changes nothing but the owner, except that the entries of admins who hold
+/// no leaf after the Commit go with it (P1-1): every entry must hold a leaf,
+/// so a claim that kept them could never pass.
 fn is_ownerless_claim(change: &Change<'_>, owner: &str, admins: &[String], next: &Roles) -> bool {
     let Some(claimer) = change.committer.as_deref() else {
         return false;
@@ -379,7 +381,7 @@ fn is_ownerless_claim(change: &Change<'_>, owner: &str, admins: &[String], next:
         owner: claimer.to_string(),
         admins: admins
             .iter()
-            .filter(|a| a.as_str() != claimer)
+            .filter(|a| a.as_str() != claimer && change.holds_after(a))
             .cloned()
             .collect(),
     };
@@ -609,6 +611,18 @@ mod tests {
         let mut early = change(&live, B, Some(room(A, &[B])));
         early.roles_after = Some(Some(room(B, &[])));
         assert!(check(&early).is_err(), "the owner still holds a leaf");
+    }
+
+    // P1-1: the owner and the only admin both left; the remaining member's
+    // claim drops the departed admin's entry.
+    #[test]
+    fn a_claim_drops_the_entries_of_accounts_that_left() {
+        let before = [acct(C)];
+        let mut c = change(&before, C, Some(room(A, &[B])));
+        c.roles_after = Some(Some(room(C, &[])));
+        assert!(check(&c).is_ok(), "the claim that drops the departed admin");
+        c.roles_after = Some(Some(room(C, &[B])));
+        assert!(check(&c).is_err(), "a claim that keeps an entry with no leaf");
     }
 
     #[test]
