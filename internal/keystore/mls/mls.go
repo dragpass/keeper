@@ -195,7 +195,17 @@ func Restore(
 type Cipher struct {
 	session  *Session
 	verifier LeafVerifier
+
+	// authority is the evidence the next applied Commit is judged by, handed
+	// in by chatstate before every Open and ApplyMessage (AuthorityReceiver).
+	// Unset it is empty, which admits only R1 and R2.
+	authority chatstate.CommitAuthority
 }
+
+var _ chatstate.AuthorityReceiver = (*Cipher)(nil)
+
+// SetCommitAuthority is chatstate.AuthorityReceiver.
+func (c *Cipher) SetCommitAuthority(auth chatstate.CommitAuthority) { c.authority = auth }
 
 func NewCipher(s *Session, verifier LeafVerifier) *Cipher {
 	return &Cipher{session: s, verifier: verifier}
@@ -277,12 +287,15 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 // commitRemoveAccounts removes every leaf of each account. An account with no
 // leaf in the confirmed tree is refused rather than skipped: a Commit that
 // removes less than it was asked to would read as the removal having happened.
+//
+// The plan was judged before this (chatstate.requireAuthorizedPlan), so the
+// leaves it names are exactly the Removes approved to the Rust rules.
 func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, error) {
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, 0, err
 	}
-	var indices []uint32
+	var removed []Leaf
 	for _, want := range accountIDs {
 		found := false
 		for _, leaf := range leaves {
@@ -291,7 +304,7 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 				return nil, 0, err
 			}
 			if account == want {
-				indices = append(indices, leaf.Index)
+				removed = append(removed, leaf)
 				found = true
 			}
 		}
@@ -299,7 +312,18 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 			return nil, 0, failed("an account to remove has no leaf in the group")
 		}
 	}
-	return c.session.CommitRemoveMembers(indices)
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, 0, err
+	}
+	return c.session.CommitRemoveMembers(leafIndices(removed))
+}
+
+func leafIndices(leaves []Leaf) []uint32 {
+	out := make([]uint32, len(leaves))
+	for i, l := range leaves {
+		out[i] = l.Index
+	}
+	return out
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -323,7 +347,7 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		return nil, nil, 0, err
 	}
 	var (
-		indices []uint32
+		removed []Leaf
 		kps     [][]byte
 	)
 	for _, m := range members {
@@ -353,7 +377,7 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 				return nil, nil, 0, failed("a leaf in the group has an unreadable signature key")
 			}
 			if heldFingerprint != m.NewFingerprint {
-				indices = append(indices, l.Index)
+				removed = append(removed, l)
 				found = true
 			}
 		}
@@ -362,7 +386,10 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		}
 		kps = append(kps, m.KeyPackage)
 	}
-	return c.session.CommitReplaceMembersVerified(indices, kps, c.verifier)
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, nil, 0, err
+	}
+	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
 }
 
 // ConfirmedAccounts reads the confirmed roster, which a pending Commit is not
@@ -414,7 +441,7 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
-	processed, err := c.session.ProcessVerified(message, c.verifier)
+	processed, _, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return 0, false, err
 	}
@@ -438,7 +465,7 @@ func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint
 // choose. A sender this cannot attribute is a refusal, never an anonymous
 // message.
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
-	processed, err := c.session.ProcessVerified(message, c.verifier)
+	processed, _, err := c.session.processAuthorized(message, c.verifier, c.authority)
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
@@ -920,33 +947,61 @@ func recordVerified(v LeafVerifier, leaves []Leaf) error {
 // current members and nobody new. A PrivateMessage Commit that adds a member
 // is therefore refused rather than verified; nothing this Keeper sends is one.
 func (s *Session) ProcessVerified(message []byte, v LeafVerifier) (Processed, error) {
+	processed, _, err := s.processAuthorized(message, v, chatstate.CommitAuthority{})
+	return processed, err
+}
+
+// ProcessAuthorized is ProcessVerified with the evidence the Commit authority
+// rules judge by (chatstate/authority.go). ProcessVerified judges with none,
+// which admits only a Commit whose every Remove is the committer's own
+// account or paired with an Add of the same account.
+func (s *Session) ProcessAuthorized(message []byte, v LeafVerifier, auth chatstate.CommitAuthority) (Processed, error) {
+	processed, _, err := s.processAuthorized(message, v, auth)
+	return processed, err
+}
+
+// processAuthorized is where the collect pass is judged twice: the leaves by
+// v (§5.3), then the Commit's Adds and Removes by the authority rules. Both
+// are decided before the enforce pass, which applies nothing either half did not
+// approve. It also reports what the Commit did.
+func (s *Session) processAuthorized(
+	message []byte, v LeafVerifier, auth chatstate.CommitAuthority,
+) (Processed, *chatstate.CommitChange, error) {
 	form, err := WireFormOf(message)
 	if err != nil {
-		return Processed{}, err
+		return Processed{}, nil, err
 	}
-	if form == WireFormPublicMessage {
-		leaves, err := s.processCollect(message)
-		if err != nil {
-			return Processed{}, err
-		}
-		markEntering(leaves)
-		if err := verifyLeaves(v, leaves); err != nil {
-			return Processed{}, err
-		}
-		if err := s.approve(leaves); err != nil {
-			return Processed{}, err
-		}
+	if form != WireFormPublicMessage {
 		processed, err := s.Process(message)
-		if err != nil {
-			return Processed{}, err
-		}
-		if err := recordVerified(v, leaves); err != nil {
-			secure.Zeroize(processed.Plaintext)
-			return Processed{}, err
-		}
-		return processed, nil
+		return processed, nil, err
 	}
-	return s.Process(message)
+	leaves, shape, err := s.processCollect(message)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	markEntering(leaves)
+	if err := verifyLeaves(v, leaves); err != nil {
+		return Processed{}, nil, err
+	}
+	// After the leaves: a Commit that brings in a leaf its account does not
+	// vouch for is refused as that, and only a Commit whose leaves are all
+	// genuine is judged on whether its committer may make the change.
+	change, err := s.judgeCollected(shape, auth)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	if err := s.approve(leaves); err != nil {
+		return Processed{}, nil, err
+	}
+	processed, err := s.Process(message)
+	if err != nil {
+		return Processed{}, nil, err
+	}
+	if err := recordVerified(v, leaves); err != nil {
+		secure.Zeroize(processed.Plaintext)
+		return Processed{}, nil, err
+	}
+	return processed, change, nil
 }
 
 // JoinVerified joins from a Welcome after verifying every leaf of its tree —
@@ -1098,45 +1153,10 @@ func encodeApprovals(leaves []Leaf) []byte {
 // decodeLeaves reads gate::encode_leaves' framing strictly: a truncated,
 // oversized or trailing-byte buffer is an error, never a shorter list.
 func decodeLeaves(buf []byte) ([]Leaf, error) {
-	bad := errors.New("mls: leaf list framing is malformed")
 	r := leafReader{buf: buf}
-	count, ok := r.u32()
-	if !ok || count > maxLeaves {
-		return nil, bad
-	}
-	leaves := make([]Leaf, 0, count)
-	for i := uint32(0); i < count; i++ {
-		var l Leaf
-		if l.Index, ok = r.u32(); !ok {
-			return nil, bad
-		}
-		if l.Identity, ok = r.prefixed(); !ok {
-			return nil, bad
-		}
-		if l.SignatureKey, ok = r.prefixed(); !ok {
-			return nil, bad
-		}
-		present, ok := r.take(1)
-		if !ok {
-			return nil, bad
-		}
-		switch present[0] {
-		case 0:
-		case 1:
-			if l.Declaration, ok = r.prefixed(); !ok {
-				return nil, bad
-			}
-			// Present and empty stays distinguishable from absent.
-			if l.Declaration == nil {
-				l.Declaration = []byte{}
-			}
-		default:
-			return nil, bad
-		}
-		leaves = append(leaves, l)
-	}
-	if len(r.buf) != r.at {
-		return nil, bad
+	leaves, ok := r.leaves()
+	if !ok || len(r.buf) != r.at {
+		return nil, errors.New("mls: leaf list framing is malformed")
 	}
 	return leaves, nil
 }

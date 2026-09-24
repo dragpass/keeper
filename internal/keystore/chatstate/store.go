@@ -552,24 +552,42 @@ func (s *Store) judgeWatermark(
 
 // latchRekey sets NeedsRekey. Nothing in this package clears it again.
 func (s *Store) latchRekey(tag string, anchor Anchor, cause RekeyCause) error {
+	return s.latchRekeyDetail(tag, anchor, RekeyDetail{Cause: cause})
+}
+
+// latchRekeyDetail is latchRekey with what the latch was about. The first
+// cause and its detail are kept: a second reason never rewrites the first.
+func (s *Store) latchRekeyDetail(tag string, anchor Anchor, detail RekeyDetail) error {
 	anchor.NeedsRekey = true
 	if anchor.RekeyCause == "" {
-		anchor.RekeyCause = cause
+		anchor.RekeyCause = detail.Cause
+		anchor.RekeyEpoch = detail.Epoch
+		anchor.RekeyCommitterAccountID = detail.CommitterAccountID
+		anchor.RekeyCommitterDeviceID = detail.CommitterDeviceID
 	}
 	if err := saveAnchor(s.secrets, tag, anchor); err != nil {
 		return err
 	}
+	if detail.Cause == RekeyCauseUnauthorizedCommit {
+		return &RekeyLatchedError{Detail: detail}
+	}
 	return ErrRekeyRequired
 }
 
-// rekeyCause reads why the conversation is latched, and "" when it is not or
-// when the latch predates the cause being recorded. It judges nothing.
-func (s *Store) rekeyCause(p convPaths) (RekeyCause, error) {
+// rekeyDetail reads why the conversation is latched, with a zero Cause when
+// it is not or when the latch predates the cause being recorded. It judges
+// nothing.
+func (s *Store) rekeyDetail(p convPaths) (RekeyDetail, error) {
 	anchor, err := loadAnchor(s.secrets, p.tag)
 	if err != nil || !anchor.NeedsRekey {
-		return "", err
+		return RekeyDetail{}, err
 	}
-	return anchor.RekeyCause, nil
+	return RekeyDetail{
+		Cause:              anchor.RekeyCause,
+		Epoch:              anchor.RekeyEpoch,
+		CommitterAccountID: anchor.RekeyCommitterAccountID,
+		CommitterDeviceID:  anchor.RekeyCommitterDeviceID,
+	}, nil
 }
 
 // commit bumps the generation, replaces the file, and then raises the anchor to

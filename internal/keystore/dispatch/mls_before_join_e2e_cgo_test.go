@@ -21,7 +21,7 @@ func TestMLSChatE2E_AMessageFromBeforeTheJoinIsMarkedAndDoesNotRefuseThePage(t *
 	add := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
-		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()},
+		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, UserInitiated: true,
 	}))
 	c.alice.confirm(add.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.bob.process(c.nextSeq(), 2, add.CommitB64)

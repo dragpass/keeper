@@ -129,6 +129,11 @@ type CommitPlan struct {
 	// Replace swaps each account's leaves for the leaf of the device that took
 	// it over (design M4.4), in one Commit.
 	Replace []ReplaceMember
+
+	// UserInitiated says a person on this device asked for this Add or
+	// Remove (R4i, authority.go). Automation never sets it. It is the app's
+	// word, not something the Keeper can check.
+	UserInitiated bool
 }
 
 // ReplaceMember is one account to replace. NewFingerprint is the one the
@@ -275,6 +280,11 @@ type CommitOutcome struct {
 	// keeps the losing device's discard and the winner's application inside
 	// one lock and one file replacement.
 	WinnerMessage []byte
+
+	// WinnerMembers verifies the member set the server signed for the winning
+	// Commit against the epoch it produces, which only the pending Commit
+	// here knows, and returns it. Nil when the winner's row carried none.
+	WinnerMembers func(epoch uint64) (*ServerCommitMembers, error)
 }
 
 // ConfirmCommitResult is the state after the verdict.
@@ -336,6 +346,9 @@ func (s *Store) BeginCommit(
 		// After the retry branch: a retry answers with bytes already built,
 		// and the permit it arrives with may have dropped the entry since.
 		if err := requireListedReplacements(req.Plan, wm); err != nil {
+			return err
+		}
+		if err := requireAuthorizedPlan(req.Plan, rec, wm); err != nil {
 			return err
 		}
 		if len(rec.GroupState) == 0 {
@@ -452,13 +465,20 @@ func (s *Store) ConfirmCommit(
 			}
 			welcome = pending.Welcome
 		} else {
+			var members *ServerCommitMembers
+			if outcome.WinnerMembers != nil {
+				if members, err = outcome.WinnerMembers(pending.ExpectedEpoch + 1); err != nil {
+					return err
+				}
+			}
+			s.armAuthority(cipher, rec, wm, members)
 			// Order matters and is one operation in the library: applying the
 			// winner runs on the state that never moved, and it drops our fork
 			// as it goes. ClearPending first would work too, but only this way
 			// is there no moment where the fork is gone and the winner is not
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
-				return err
+				return latchIfRefused(s, p, anchor, err, pending.ExpectedEpoch+1)
 			}
 			// Normally a no-op: mls-rs drops the pending as part of
 			// applying another member's Commit. It is here because "the fork
@@ -506,6 +526,23 @@ func (s *Store) ConfirmCommit(
 		return nil
 	})
 	return out, err
+}
+
+// latchIfRefused latches the conversation when err is the authority rules
+// refusing a received Commit (Q4), and passes any other error through. The
+// latch is the anchor's alone: the record is not written, so the Commit is
+// not applied and whatever was pending stays as it was.
+func latchIfRefused(s *Store, p convPaths, anchor Anchor, err error, epoch uint64) error {
+	var refused *UnauthorizedCommitError
+	if !errors.As(err, &refused) {
+		return err
+	}
+	return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{
+		Cause:              RekeyCauseUnauthorizedCommit,
+		Epoch:              epoch,
+		CommitterAccountID: refused.CommitterAccountID,
+		CommitterDeviceID:  refused.CommitterDeviceID,
+	})
 }
 
 // PendingCommit reports the unsettled Commit so the caller can ask the server

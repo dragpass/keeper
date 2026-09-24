@@ -20,7 +20,7 @@ func TestMLSChatE2E_APendingCommitComesBackWithItsAppContextForARepost(t *testin
 	build := proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
-		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, AppContextB64: context,
+		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, UserInitiated: true, AppContextB64: context,
 	}
 	first := commitOf(c.alice.must(proto.MLSCommitBuild, build))
 

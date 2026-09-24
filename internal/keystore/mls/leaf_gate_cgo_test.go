@@ -51,7 +51,7 @@ func TestTheEnforcePassRefusesALeafTheCollectPassSawButGoDidNotApprove(t *testin
 	altered := carolLeaf
 	altered.Declaration = []byte("a declaration go never saw")
 
-	seen, err := bob.processCollect(commit)
+	seen, _, err := bob.processCollect(commit)
 	if err != nil || len(seen) != 1 || !bytes.Equal(seen[0].Identity, carolLeaf.Identity) {
 		t.Fatalf("collect = %d leaves, %v; want carol", len(seen), err)
 	}

@@ -17,7 +17,7 @@ func TestAPendingCommitKeepsTheAppContextItWasBuiltWith(t *testing.T) {
 	context := []byte(`{"v":1,"flow":"chat"}`)
 	if _, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
 		ClientCommitID: testCommitA,
-		Plan:           CommitPlan{RemoveAccountIDs: []string{"someone"}},
+		Plan:           CommitPlan{RemoveAccountIDs: []string{"someone"}, UserInitiated: true},
 		AppContext:     context,
 	}, &fakeCommitter{}); err != nil {
 		t.Fatal(err)

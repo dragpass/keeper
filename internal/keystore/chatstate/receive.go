@@ -112,6 +112,11 @@ type ReceiveRequest struct {
 	Handshake     bool
 	ProducedEpoch uint64
 
+	// CommitMembers is the member set the server signed for this handshake's
+	// Commit, already verified by the caller, and nil when the row carried
+	// none. It is evidence for the authority rules (authority.go).
+	CommitMembers *ServerCommitMembers
+
 	// FramedEpoch is the epoch an application message's cleartext header
 	// claims (mls.PrivateMessageEpoch), nil when the caller did not read it.
 	// A display batch uses it for one thing: a message from before the epoch
@@ -236,8 +241,11 @@ func (s *Store) Receive(
 		loaded := rec.Generation
 		var changed bool
 		out, changed, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
-		if err != nil || !changed {
-			return err
+		if err != nil {
+			return latchIfRefused(s, p, anchor, err, req.ProducedEpoch)
+		}
+		if !changed {
+			return nil
 		}
 		if req.Handshake {
 			crashAt(CrashProcessAfterApply)
@@ -507,6 +515,7 @@ func (s *Store) receiveOne(
 	if err := cipher.Load(rec.GroupState); err != nil {
 		return ReceiveResult{}, false, err
 	}
+	s.armAuthority(cipher, rec, wm, req.CommitMembers)
 
 	opened, err := cipher.Open(req.Message)
 	if err != nil {

@@ -23,7 +23,11 @@ func openSession(identity, secretKey, publicKey, declaration []byte) (*Session, 
 
 func (s *Session) approve(leaves []Leaf) error { return ErrUnavailable }
 
-func (s *Session) processCollect(message []byte) ([]Leaf, error) { return nil, ErrUnavailable }
+func (s *Session) approveRemovals(leaves []Leaf) error { return ErrUnavailable }
+
+func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
+	return nil, CommitShape{}, ErrUnavailable
+}
 
 func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) { return nil, ErrUnavailable }
 

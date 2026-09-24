@@ -191,7 +191,7 @@ func beginForTest(t *testing.T, store *Store, clientCommitID string, cipher Comm
 	t.Helper()
 	out, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
 		ClientCommitID: clientCommitID,
-		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}, UserInitiated: true},
 	}, cipher)
 	if err != nil {
 		t.Fatalf("begin commit: %v", err)

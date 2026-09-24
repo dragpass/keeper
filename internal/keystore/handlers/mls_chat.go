@@ -327,6 +327,7 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		}
 		plan.Replace = members
 	}
+	plan.UserInitiated = req.UserInitiated
 	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
 	if !ok {
 		return resp
@@ -386,6 +387,18 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 			return chatStateInvalidInput("winner_commit_b64 must be valid standard Base64")
 		}
 		outcome.Kind, outcome.WinnerMessage = chatstate.CommitSuperseded, winner
+		// The winner's epoch is not in the request: it is the one after the
+		// pending Commit's, which only the store knows, so the attestation is
+		// verified there against that epoch.
+		if a := req.WinnerAttestation; a != nil {
+			outcome.WinnerMembers = func(epoch uint64) (*chatstate.ServerCommitMembers, error) {
+				members, ok := commitMembers(d, c.conv, epoch, winner, a)
+				if !ok {
+					return nil, errAttestationRefused
+				}
+				return members, nil
+			}
+		}
 	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, mls.NewCipher(c.session, v))
@@ -393,14 +406,15 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
 	d.Logger.Println("mls commit confirm successful")
-	return proto.BaseResponse{Success: true, Data: proto.MLSCommitConfirmResponseData{
+	data := proto.MLSCommitConfirmResponseData{
 		Outcome:           req.Outcome,
 		Epoch:             result.Epoch,
 		WelcomeReleasable: result.WelcomeReleasable,
 		Removed:           result.Removed,
 		Generation:        result.Generation,
 		LeafTrust:         v.Reported(),
-	}}
+	}
+	return proto.BaseResponse{Success: true, Data: data}
 }
 
 // HandleMLSProcess applies one handshake row: somebody else's Commit.
@@ -422,12 +436,17 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if form, err := mls.WireFormOf(commit); err != nil || form != mls.WireFormPublicMessage {
 		return chatStateInvalidInput("commit_b64 is not an MLS PublicMessage")
 	}
+	members, ok := commitMembers(d, c.conv, req.Epoch, commit, req.CommitAttestation)
+	if !ok {
+		return chatStateNotAuthorized(d, "commit attestation")
+	}
 	v := c.verifier(d, req.RotationStatements)
 	result, err := c.store.Receive(c.conv, c.wm, chatstate.ReceiveRequest{
 		Seq:           req.Seq,
 		Message:       commit,
 		Handshake:     true,
 		ProducedEpoch: req.Epoch,
+		CommitMembers: members,
 	}, mls.NewCipher(c.session, v))
 	if err != nil {
 		return chatStateFailure(d, "mls process", err)
@@ -746,6 +765,10 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		NeedsRekey:            status.NeedsRekey,
 		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
+
+		RekeyEpoch:              status.RekeyEpoch,
+		RekeyCommitterAccountID: status.RekeyCommitterAccountID,
+		RekeyCommitterDeviceID:  status.RekeyCommitterDeviceID,
 	}
 	if name := status.PendingName; name != nil {
 		data.PendingNameEpoch = name.Epoch

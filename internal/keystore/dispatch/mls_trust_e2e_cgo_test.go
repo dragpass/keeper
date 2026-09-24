@@ -47,7 +47,7 @@ func TestMLSChatE2E_TrustStateComesFromTheKeeperThatJudgedTheLeaf(t *testing.T) 
 	add := commitOf(alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), ExpectedEpoch: 1,
-		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()},
+		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, UserInitiated: true,
 	}))
 	assertTrust(t, "add", add.LeafTrust, trustOf(e2eCarol, keychain.PeerKeyPinStateTOFU))
 	alice.confirm(add.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")

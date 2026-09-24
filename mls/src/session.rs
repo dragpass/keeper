@@ -11,7 +11,7 @@ use mls_rs::group::proposal::{AddProposal, Proposal};
 use mls_rs::group::{CommitEffect, ReceivedMessage};
 use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
-use mls_rs::mls_rules::{DefaultMlsRules, EncryptionOptions};
+use mls_rs::mls_rules::EncryptionOptions;
 use mls_rs::time::MlsTime;
 use mls_rs::{
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
@@ -21,6 +21,7 @@ use mls_rs_core::crypto::SignatureSecretKey;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use zeroize::Zeroizing;
 
+use crate::authority::{AuthorityRules, CommitShape, RemovalApproval};
 use crate::gate::{self, Approval, Leaf, LeafGate, LEAF_DECLARATION_EXTENSION};
 use crate::storage::{KeyPackageCustody, RecordStorage};
 
@@ -42,7 +43,7 @@ pub const KEY_PACKAGE_LIFETIME: std::time::Duration =
 type Config = WithKeyPackageRepo<
     KeyPackageCustody,
     WithMlsRules<
-        DefaultMlsRules,
+        AuthorityRules,
         WithGroupStateStorage<
             RecordStorage,
             WithIdentityProvider<LeafGate, WithCryptoProvider<RustCryptoProvider, BaseConfig>>,
@@ -64,6 +65,7 @@ pub struct Session {
     storage: RecordStorage,
     custody: KeyPackageCustody,
     gate: LeafGate,
+    rules: AuthorityRules,
     /// The leaf this session was opened as: the device's active key, which a
     /// group loaded from an older snapshot may not be signing with yet. An
     /// Update is how a group moves onto it (`build_update`). The client holds
@@ -79,6 +81,9 @@ pub struct Session {
     /// What the Go side approved for the next group operation, and only that
     /// one. Every operation that can bring a leaf in takes it.
     approved: Vec<Approval>,
+    /// The Removes the Go side approved for the next group operation, and only
+    /// that one: the authority half of `approved` (authority.rs).
+    approved_removals: Vec<RemovalApproval>,
     group: Option<Group<Config>>,
 }
 
@@ -274,8 +279,7 @@ impl Session {
         // leaf index, epoch, proposal shapes — is metadata the server can read,
         // and in exchange the handshake ratchet is never consumed, which leaves
         // the send-ordering discipline with a single axis to defend.
-        let rules = DefaultMlsRules::new()
-            .with_encryption_options(EncryptionOptions::new(false, PaddingMode::StepFunction));
+        let rules = AuthorityRules::new(EncryptionOptions::new(false, PaddingMode::StepFunction));
 
         // The capability is advertised by every leaf this client makes, which
         // is what RFC 9420 §7.2 requires of a leaf that carries the extension
@@ -286,7 +290,7 @@ impl Session {
             .crypto_provider(RustCryptoProvider::default())
             .identity_provider(gate.clone())
             .group_state_storage(storage.clone())
-            .mls_rules(rules)
+            .mls_rules(rules.clone())
             .key_package_repo(custody.clone())
             .signing_identity(
                 signing_identity.clone(),
@@ -300,10 +304,12 @@ impl Session {
             storage,
             custody,
             gate,
+            rules,
             signing_identity,
             signer: secret_key.to_vec().into(),
             leaf_extensions,
             approved: Vec::new(),
+            approved_removals: Vec::new(),
             group: None,
         })
     }
@@ -394,6 +400,12 @@ impl Session {
         self.approved = approved;
     }
 
+    /// Set the Removes the Go side approved for the next group operation.
+    /// Replaces any earlier approval that no operation consumed.
+    pub fn approve_removals(&mut self, removals: Vec<RemovalApproval>) {
+        self.approved_removals = removals;
+    }
+
     /// Open the gate to the current members plus this operation's approvals,
     /// and hand the approvals back for the post-check. Taking them here is what
     /// makes an approval single-use.
@@ -413,11 +425,14 @@ impl Session {
                 .map(|a| signing_identity(&a.identity, &a.signature_key)),
         );
         self.gate.enforce(admitted)?;
+        self.rules
+            .enforce(std::mem::take(&mut self.approved_removals))?;
         Ok(approved)
     }
 
     fn disarm(&self) -> Res<()> {
-        self.gate.enforce(Vec::new())
+        self.gate.enforce(Vec::new())?;
+        self.rules.enforce(Vec::new())
     }
 
     /// The collect pass of a join: process the Welcome with every leaf
@@ -445,6 +460,7 @@ impl Session {
     fn join_once(&mut self, welcome: &[u8]) -> Res<()> {
         let msg = MlsMessage::from_bytes(welcome).map_err(|e| err("welcome decode", e))?;
         let approved = std::mem::take(&mut self.approved);
+        self.approved_removals.clear();
         self.gate.enforce(
             approved
                 .iter()
@@ -739,25 +755,27 @@ impl Session {
     }
 
     /// The collect pass of processing: apply `message` to a copy of the group
-    /// with every leaf admitted, report the leaves it would bring in, and put
-    /// the group back exactly as it was. The copy is taken through the storage
-    /// this session installed, the same bytes a flush would hand to Go.
-    pub fn process_collect(&mut self, message: &[u8]) -> Res<Vec<Leaf>> {
+    /// with every leaf admitted and every proposal let through, report the
+    /// leaves it would bring in and the shape of the Commit, and put the group
+    /// back exactly as it was. The copy is taken through the storage this
+    /// session installed, the same bytes a flush would hand to Go.
+    pub fn process_collect(&mut self, message: &[u8]) -> Res<(Vec<Leaf>, CommitShape)> {
         let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
         let snapshot = self.flush()?;
         let group = self.group_mut()?;
         let before = leaves_of(group);
         self.gate.collect()?;
+        self.rules.collect()?;
         let group = self.group_mut()?;
         let applied = group.process_incoming_message(msg).map(|received| {
             let mut after = leaves_of(group);
             after.extend(added_to_a_group_left_behind(&received));
-            after
+            (after, CommitShape::of(&received, &before))
         });
         self.disarm()?;
         self.load(&snapshot)?;
-        let after = applied.map_err(|e| err("process", e))?;
-        Ok(gate::new_leaves(&before, &after))
+        let (after, shape) = applied.map_err(|e| err("process", e))?;
+        Ok((gate::new_leaves(&before, &after), shape))
     }
 
     /// Apply one inbound message. A Commit that brings in a leaf the Go side
@@ -980,6 +998,13 @@ mod tests {
         Session::new(name.as_bytes(), &sk, &pk, decl.as_bytes()).unwrap()
     }
 
+    fn removal(leaf: &Leaf) -> RemovalApproval {
+        RemovalApproval {
+            index: leaf.index,
+            identity: leaf.identity.clone(),
+        }
+    }
+
     fn approval(leaf: &Leaf) -> Approval {
         Approval {
             identity: leaf.identity.clone(),
@@ -1021,6 +1046,7 @@ mod tests {
             .find(|l| l.identity == b"bob")
             .unwrap();
 
+        alice.approve_removals(vec![removal(&bob)]);
         alice.commit_remove_members(&[bob.index]).unwrap();
         assert!(alice.has_pending_commit().unwrap());
         assert_eq!(
@@ -1047,6 +1073,7 @@ mod tests {
             .unwrap();
         let new_kp = kp(&member("bob2"));
         alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
 
         let (_, welcome, _) = alice
             .commit_replace_members(&[old.index], &[&new_kp])
@@ -1084,17 +1111,142 @@ mod tests {
             .unwrap();
         let new_kp = kp(&member("bob2"));
         alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
         let (commit, _, _) = alice
             .commit_replace_members(&[old.index], &[&new_kp])
             .unwrap();
 
-        let seen = bob.process_collect(&commit).unwrap();
+        let (seen, shape) = bob.process_collect(&commit).unwrap();
         assert_eq!(
             seen.iter().map(|l| l.identity.clone()).collect::<Vec<_>>(),
             vec![b"bob2".to_vec()]
         );
+        assert_eq!(shape.removed, vec![old.clone()]);
         bob.approve(seen.iter().map(approval).collect());
+        bob.approve_removals(shape.removed.iter().map(removal).collect());
         assert!(bob.process(&commit).unwrap().removed);
+    }
+
+    /// Alice, Bob and Carol in one group, every one of them at the same epoch.
+    fn three() -> (Session, Session, Session) {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        let mut bob = member("bob");
+        let mut carol = member("carol");
+        let (bob_kp, carol_kp) = (kp(&bob), kp(&carol));
+        alice.approve(vec![
+            approval(&key_package_leaf(&bob_kp).unwrap()),
+            approval(&key_package_leaf(&carol_kp).unwrap()),
+        ]);
+        let (_, welcome, _) = alice.commit_add_members(&[&bob_kp, &carol_kp]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        for joiner in [&mut bob, &mut carol] {
+            let tree = joiner.join_collect(&welcome).unwrap();
+            joiner.approve(tree.iter().map(approval).collect());
+            joiner.join(&welcome).unwrap();
+        }
+        (alice, bob, carol)
+    }
+
+    fn leaf_named(s: &mut Session, name: &[u8]) -> Leaf {
+        s.roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == name)
+            .unwrap()
+    }
+
+    // Nothing approved is the resting state, so a Remove nobody judged is
+    // refused before anything is built.
+    #[test]
+    fn an_unapproved_remove_builds_nothing() {
+        let mut alice = member("alice");
+        alice.create_group(b"g").unwrap();
+        add(&mut alice, &member("bob"));
+        let bob = leaf_named(&mut alice, b"bob");
+
+        let refused = alice.commit_remove_members(&[bob.index]).unwrap_err();
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert!(!alice.has_pending_commit().unwrap());
+
+        // An approval names a leaf, not a slot: another identity at that
+        // index is not what was approved.
+        alice.approve_removals(vec![RemovalApproval {
+            index: bob.index,
+            identity: b"carol".to_vec(),
+        }]);
+        assert!(alice.commit_remove_members(&[bob.index]).is_err());
+        assert!(!alice.has_pending_commit().unwrap());
+    }
+
+    // Q4's repro at the library edge: a member whose own client approved the
+    // Remove of another member's leaf. The collect pass shows who committed
+    // and whom it removed; a receiver that approves nothing refuses the
+    // Commit and its group does not move.
+    #[test]
+    fn a_receiver_refuses_a_remove_it_did_not_approve_and_stays_where_it_was() {
+        let (mut alice, mut bob, _carol) = three();
+        let carol = leaf_named(&mut bob, b"carol");
+        let bob_leaf = leaf_named(&mut bob, b"bob");
+        bob.approve_removals(vec![removal(&carol)]);
+        let (commit, _) = bob.commit_remove_members(&[carol.index]).unwrap();
+
+        let epoch = alice.epoch().unwrap();
+        let (entering, shape) = alice.process_collect(&commit).unwrap();
+        assert!(entering.is_empty());
+        assert!(shape.is_commit);
+        assert_eq!(shape.committer, bob_leaf.index);
+        assert_eq!(shape.removed, vec![carol.clone()]);
+        assert!(shape.added.is_empty() && shape.other.is_empty());
+
+        let Err(refused) = alice.process(&commit) else {
+            panic!("an unapproved remove was applied");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert_eq!(alice.epoch().unwrap(), epoch);
+        assert_eq!(identities(&mut alice).len(), 3);
+
+        // The same Commit with the Remove approved applies.
+        alice.approve_removals(vec![removal(&carol)]);
+        assert!(!alice.process(&commit).unwrap().removed);
+        assert_eq!(alice.epoch().unwrap(), epoch + 1);
+    }
+
+    // Only Add and Remove are proposals this integration makes. A Commit that
+    // changes the group context (required capabilities, say) is refused by a
+    // receiver whatever else was approved.
+    #[test]
+    fn a_group_context_change_is_refused_by_the_receiver() {
+        let (mut alice, mut bob, _carol) = three();
+        bob.rules.collect().unwrap();
+        let group = bob.group_mut().unwrap();
+        let output = group
+            .commit_builder()
+            .set_group_context_ext(ExtensionList::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        bob.rules.enforce(Vec::new()).unwrap();
+        let commit = output.commit_message.to_bytes().unwrap();
+
+        let (_, shape) = alice.process_collect(&commit).unwrap();
+        assert_eq!(
+            shape.other,
+            vec![mls_rs_core::group::ProposalType::GROUP_CONTEXT_EXTENSIONS.raw_value()]
+        );
+        let Err(refused) = alice.process(&commit) else {
+            panic!("a group context change was applied");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -1322,7 +1474,7 @@ mod tests {
         let commit = output.commit_message.to_bytes().unwrap();
 
         assert_eq!(
-            bob.process_collect(&commit).unwrap(),
+            bob.process_collect(&commit).unwrap().0,
             vec![Leaf { index: 2, ..leaf }]
         );
         bob.approve(vec![admit]);
@@ -1437,7 +1589,7 @@ mod tests {
         let (commit, _, _) = alice.commit_add_members(&[&kp]).unwrap();
 
         // The collect pass sees Carol and leaves Bob's group untouched.
-        let seen = bob.process_collect(&commit).unwrap();
+        let seen = bob.process_collect(&commit).unwrap().0;
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].identity, b"carol");
         assert_eq!(bob.epoch().unwrap(), 1);
@@ -1494,7 +1646,7 @@ mod tests {
         let (commit, expected) = alice.commit_update().unwrap();
         assert_eq!(expected, 1);
 
-        let seen = bob.process_collect(&commit).unwrap();
+        let seen = bob.process_collect(&commit).unwrap().0;
         assert_eq!(seen.len(), 1, "the replacement leaf must be reported");
         assert_eq!(seen[0].identity, b"alice");
         assert_ne!(seen[0].signature_key, old_key);
@@ -1573,7 +1725,7 @@ mod tests {
         alice.apply_pending_commit().unwrap();
         assert_eq!(alice.export_secret(ROOM, b"g", 32).unwrap(), pending);
 
-        let seen = bob.process_collect(&commit).unwrap();
+        let seen = bob.process_collect(&commit).unwrap().0;
         bob.approve(seen.iter().map(approval).collect());
         bob.process(&commit).unwrap();
         assert_eq!(bob.export_secret(ROOM, b"g", 32).unwrap(), pending);
@@ -1625,7 +1777,7 @@ mod tests {
         let (mut alice, mut bob) = pair();
         let before = own_key(&mut bob, b"alice");
         let (commit, _) = alice.commit_update().unwrap();
-        assert!(bob.process_collect(&commit).unwrap().is_empty());
+        assert!(bob.process_collect(&commit).unwrap().0.is_empty());
         bob.process(&commit).unwrap();
         assert_eq!(own_key(&mut bob, b"alice"), before);
     }

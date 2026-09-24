@@ -275,7 +275,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 	add := commitOf(alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), ExpectedEpoch: 1,
-		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, RoomNamePlaintextB64: b64(name),
+		Add: []proto.MLSMemberKeyPackage{carol.keyPackage()}, UserInitiated: true, RoomNamePlaintextB64: b64(name),
 	}))
 	second := nameOf(add)
 	if !second.resealed || second.epoch != 2 {

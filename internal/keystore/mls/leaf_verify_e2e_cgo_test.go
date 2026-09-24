@@ -266,7 +266,7 @@ func newGroup(t *testing.T) groupOf {
 func (g groupOf) add(v mls.LeafVerifier, kps ...[]byte) (chatstate.BeginCommitResult, error) {
 	return g.aliceStore.BeginCommit(conv, noWatermark, chatstate.BeginCommitRequest{
 		ClientCommitID: nextCommitID(),
-		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
+		Plan:           chatstate.CommitPlan{AddKeyPackages: kps, UserInitiated: true},
 	}, mls.NewCipher(g.aliceS, v))
 }
 

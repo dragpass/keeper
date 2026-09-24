@@ -726,7 +726,7 @@ func TestAPendingCommitRidesTheGroupStateBlob(t *testing.T) {
 	attempt, err := store.BeginCommit(testConv, chatstate.ServerWatermark{},
 		chatstate.BeginCommitRequest{
 			ClientCommitID: aliceCommitID,
-			Plan:           chatstate.CommitPlan{AddKeyPackages: [][]byte{keyPackage}},
+			Plan:           chatstate.CommitPlan{AddKeyPackages: [][]byte{keyPackage}, UserInitiated: true},
 		}, NewCipher(alice, trustAll{}))
 	if err != nil {
 		t.Fatalf("begin commit: %v", err)

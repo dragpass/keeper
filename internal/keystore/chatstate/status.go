@@ -49,6 +49,12 @@ type ConversationStatus struct {
 	// RekeyCause is why NeedsRekey latched, and "" when it is not latched or
 	// the latch predates the cause being recorded.
 	RekeyCause RekeyCause
+
+	// RekeyEpoch and RekeyCommitter* are the latch's detail for
+	// unauthorized_commit and fork (Anchor.RekeyEpoch), zero otherwise.
+	RekeyEpoch              uint64
+	RekeyCommitterAccountID string
+	RekeyCommitterDeviceID  string
 }
 
 // StatusCipher is what Status needs from MLS: the confirmed roster, to judge
@@ -73,7 +79,9 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		rec, _, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
 			out.NeedsRekey = true
-			out.RekeyCause, err = s.rekeyCause(p)
+			detail, err := s.rekeyDetail(p)
+			out.RekeyCause, out.RekeyEpoch = detail.Cause, detail.Epoch
+			out.RekeyCommitterAccountID, out.RekeyCommitterDeviceID = detail.CommitterAccountID, detail.CommitterDeviceID
 			return err
 		}
 		if err != nil {

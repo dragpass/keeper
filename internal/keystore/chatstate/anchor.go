@@ -66,6 +66,14 @@ type Anchor struct {
 	// afterwards: the first reason is the one that describes what happened.
 	// Empty on an anchor latched before the field existed.
 	RekeyCause RekeyCause `json:"rekey_cause,omitempty"`
+
+	// RekeyEpoch and RekeyCommitter* say what an unauthorized_commit latch
+	// was about: the epoch the refused or conflicting Commit produces, and
+	// for an unauthorized one the leaf that committed it, as the group's own
+	// tree names it. Written with the cause and never changed afterwards.
+	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
+	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
+	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
 }
 
 // RekeyCause says which check latched NeedsRekey. The recovery is the same for
@@ -91,7 +99,32 @@ const (
 	// RekeyCauseAnchorUnreadable — the anchor itself could not be read. Not
 	// stored: loadAnchor reports it on every read until the entry is replaced.
 	RekeyCauseAnchorUnreadable RekeyCause = "anchor_unreadable"
+
+	// RekeyCauseUnauthorizedCommit — a member's Commit carried an Add or a
+	// Remove the authority rules do not allow (authority.go), and this device
+	// refused to apply it. Every member that applied it is now on an epoch
+	// this device will never reach, so from here the group is forked.
+	RekeyCauseUnauthorizedCommit RekeyCause = "unauthorized_commit"
 )
+
+// RekeyDetail is a latch cause and what it was about.
+type RekeyDetail struct {
+	Cause              RekeyCause
+	Epoch              uint64
+	CommitterAccountID string
+	CommitterDeviceID  string
+}
+
+// RekeyLatchedError is ErrRekeyRequired from the operation that set the latch,
+// carrying why. Every later operation answers the bare ErrRekeyRequired; the
+// detail stays readable through Status.
+type RekeyLatchedError struct{ Detail RekeyDetail }
+
+func (e *RekeyLatchedError) Error() string {
+	return ErrRekeyRequired.Error() + ": " + string(e.Detail.Cause)
+}
+
+func (e *RekeyLatchedError) Unwrap() error { return ErrRekeyRequired }
 
 // ServerWatermark is the server's claim about how far this sender's chain has
 // been accepted. It arrives inside the signed permit rather than as a free

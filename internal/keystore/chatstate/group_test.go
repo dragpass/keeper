@@ -85,7 +85,7 @@ func createForTest(t *testing.T, store *Store, clientCommitID string) {
 	t.Helper()
 	if _, err := store.CreateGroup(testConvA, noWatermark, BeginCommitRequest{
 		ClientCommitID: clientCommitID,
-		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+		Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}, UserInitiated: true},
 	}, &fakeCreator{}); err != nil {
 		t.Fatalf("create group: %v", err)
 	}

@@ -17,7 +17,9 @@
 package proto
 
 import (
+	"math"
 	"strconv"
+	"strings"
 )
 
 // Domain error codes the MLS actions add. They ride in the envelope's
@@ -50,6 +52,13 @@ const (
 	// that; the member has to be invited again with a KeyPackage of the
 	// current leaf. Nothing was written and the pool is unchanged.
 	ChatMLSErrorCodeWelcomeUnusable = "CHAT_MLS_WELCOME_UNUSABLE"
+
+	// ChatMLSErrorCodeCommitUnauthorized — a Commit this device was asked to
+	// build carries an Add or a Remove the authority rules do not allow
+	// (0.0.55). Nothing was built. A received Commit the rules refuse is not
+	// this code: it latches the conversation (CHAT_STATE_REKEY_REQUIRED with
+	// rekey_cause unauthorized_commit).
+	ChatMLSErrorCodeCommitUnauthorized = "CHAT_MLS_COMMIT_UNAUTHORIZED"
 )
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in
@@ -373,6 +382,63 @@ func LeafReplacementFor(listed []ChatStateLeafReplacement, accountID string) (Ch
 	return ChatStateLeafReplacement{}, false
 }
 
+// MLSCommitAttestation is the server's signature over the member set a
+// handshake row's Commit declared (0.0.55): which accounts the conversation
+// holds once that Commit is applied, bound to the Commit's own bytes. It is
+// the evidence the authority rules read for R3b, and never for an Add. It is
+// server-attested: 임시, 정책 미충족 (Q5).
+type MLSCommitAttestation struct {
+	MemberAccountIDs []string `json:"member_account_ids"`
+	ServerKeyVersion uint     `json:"server_key_version"`
+	Signature        string   `json:"signature"`
+}
+
+// MLSCommitAttestationDomain / MLSCommitAttestationVersion — the first two
+// slots of the attestation canonical.
+const (
+	MLSCommitAttestationDomain  = "dragpass.chat.commit"
+	MLSCommitAttestationVersion = 1
+)
+
+// MLSCommitAttestationCanonical is the signed string:
+//
+//	dragpass.chat.commit|1|<conversation_id>|<epoch>|<commit_sha256_hex>|<member_account_ids>|<server_key_version>
+//
+// member_account_ids is lowercase UUIDs sorted ascending and joined with ",".
+func MLSCommitAttestationCanonical(conversationID string, epoch uint64, commitSHA256 string, a MLSCommitAttestation) string {
+	return strings.Join([]string{
+		MLSCommitAttestationDomain,
+		strconv.Itoa(MLSCommitAttestationVersion),
+		conversationID,
+		strconv.FormatUint(epoch, 10),
+		commitSHA256,
+		strings.Join(a.MemberAccountIDs, ","),
+		strconv.FormatUint(uint64(a.ServerKeyVersion), 10),
+	}, "|")
+}
+
+func (a MLSCommitAttestation) Validate(field string) error {
+	if len(a.MemberAccountIDs) == 0 {
+		return newValidationError(field+".member_account_ids", "must hold at least one account id")
+	}
+	if len(a.MemberAccountIDs) > ChatStateMaxPendingRemovals {
+		return newValidationError(field+".member_account_ids", "holds too many account ids")
+	}
+	for i, id := range a.MemberAccountIDs {
+		if err := requireMessageUUID(id, field+".member_account_ids"); err != nil {
+			return err
+		}
+		if i > 0 && a.MemberAccountIDs[i-1] >= id {
+			return newValidationError(field+".member_account_ids", "must be sorted ascending without duplicates")
+		}
+	}
+	if a.ServerKeyVersion < 1 || a.ServerKeyVersion > math.MaxUint32 {
+		return newValidationError(field+".server_key_version", "must be a positive uint32")
+	}
+	_, err := requireBase64(a.Signature, field+".signature")
+	return err
+}
+
 // MLSCommitBuildRequest builds one Commit of exactly one kind: an Add, a
 // Remove of every leaf of the named accounts, a replace of the named
 // accounts' leaves with their new devices' (design M4.4), or an Update of this
@@ -388,6 +454,13 @@ type MLSCommitBuildRequest struct {
 	RemoveAccountIDs []string              `json:"remove_account_ids,omitempty"`
 	Replace          []MLSReplaceMember    `json:"replace,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
+
+	// UserInitiated says a person on this device asked for this add or
+	// remove_account_ids (0.0.55). Automation never sends it. An add needs it;
+	// a remove needs it unless the permit names every account as departed.
+	// It is the app's word: 임시, 정책 미충족 (Q3) until room roles live in the
+	// authenticated group context.
+	UserInitiated bool `json:"user_initiated,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
 
@@ -444,6 +517,9 @@ func (r MLSCommitBuildRequest) Validate() error {
 	if r.UpdateSelf {
 		kinds++
 	}
+	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil {
+		return newValidationError("user_initiated", "is only for add and remove_account_ids")
+	}
 	if kinds != 1 {
 		return newValidationError("add",
 			"exactly one of add, remove_account_ids, replace and update_self must be given")
@@ -489,6 +565,10 @@ type MLSCommitConfirmRequest struct {
 	Outcome         string          `json:"outcome"`
 	WinnerCommitB64 string          `json:"winner_commit_b64,omitempty"`
 
+	// WinnerAttestation is the winning row's commit_attestation, for a
+	// superseded outcome (0.0.55). Absent when the row carried none.
+	WinnerAttestation *MLSCommitAttestation `json:"winner_attestation,omitempty"`
+
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
 }
 
@@ -510,8 +590,13 @@ func (r MLSCommitConfirmRequest) Validate() error {
 		); err != nil {
 			return err
 		}
+		if r.WinnerAttestation != nil {
+			if err := r.WinnerAttestation.Validate("winner_attestation"); err != nil {
+				return err
+			}
+		}
 	case MLSCommitOutcomeAccepted, MLSCommitOutcomeUnknown:
-		if r.WinnerCommitB64 != "" {
+		if r.WinnerCommitB64 != "" || r.WinnerAttestation != nil {
 			return newValidationError("winner_commit_b64", "is only for a superseded outcome")
 		}
 	default:
@@ -550,6 +635,10 @@ type MLSProcessRequest struct {
 	Epoch          uint64          `json:"epoch"`
 	CommitB64      string          `json:"commit_b64"`
 
+	// CommitAttestation is the row's commit_attestation (0.0.55). Absent when
+	// the row carried none, which the authority rules read as no evidence.
+	CommitAttestation *MLSCommitAttestation `json:"commit_attestation,omitempty"`
+
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
 }
 
@@ -569,6 +658,11 @@ func (r MLSProcessRequest) Validate() error {
 	}
 	if err := requireMessageBase64Len(r.CommitB64, "commit_b64", 1, MLSChatMaxCommitBytes); err != nil {
 		return err
+	}
+	if r.CommitAttestation != nil {
+		if err := r.CommitAttestation.Validate("commit_attestation"); err != nil {
+			return err
+		}
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -890,6 +984,11 @@ const (
 	// ChatStateRekeyCauseUnknown — latched by a Keeper that did not record a
 	// cause.
 	ChatStateRekeyCauseUnknown = "unknown"
+
+	// ChatStateRekeyCauseUnauthorizedCommit — a member's Commit carried an
+	// Add or a Remove the authority rules do not allow, and this device
+	// refused to apply it (0.0.55). rekey_epoch and rekey_committer_* name it.
+	ChatStateRekeyCauseUnauthorizedCommit = "unauthorized_commit"
 )
 
 // MLSConversationStatusResponseData lets the app say "참여자 변경 반영 중"
@@ -926,6 +1025,14 @@ type MLSConversationStatusResponseData struct {
 	// cause was, and absent when needs_rekey is false.
 	RekeyCause string `json:"rekey_cause,omitempty"`
 
+	// RekeyEpoch and RekeyCommitter* are what an unauthorized_commit or fork
+	// latch was about (0.0.55): the epoch the refused or conflicting Commit
+	// produces, and for unauthorized_commit the committing leaf's account and
+	// device as the group's own tree names them. Absent otherwise.
+	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
+	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
+	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
+
 	// RemovedFromGroup — the last Commit applied here removed this device, so
 	// mls_conversation_forget_removed must run before mls_join (0.0.53).
 	RemovedFromGroup bool `json:"removed_from_group"`
@@ -934,6 +1041,16 @@ type MLSConversationStatusResponseData struct {
 	// its pin now (0.0.55); see MLSAccountTrust. Absent with needs_rekey, with
 	// no group, and when the pins could not be read.
 	MemberTrust []MLSAccountTrust `json:"member_trust,omitempty"`
+}
+
+// ChatStateRekeyLatchedData rides on CHAT_STATE_REKEY_REQUIRED from the
+// operation that latched a conversation unauthorized_commit or fork (0.0.55),
+// with the same fields mls_conversation_status reports.
+type ChatStateRekeyLatchedData struct {
+	RekeyCause              string `json:"rekey_cause"`
+	RekeyEpoch              uint64 `json:"rekey_epoch"`
+	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
+	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
 }
 
 // MLSDisplayResponseData carries the decrypted payloads of

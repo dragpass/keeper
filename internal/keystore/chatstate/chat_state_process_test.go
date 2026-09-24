@@ -310,7 +310,7 @@ func TestChatStateProcessHelper(t *testing.T) {
 		}
 		if _, err := store.BeginCommit(testConvA, noWatermark, BeginCommitRequest{
 			ClientCommitID: os.Getenv(helperClientID),
-			Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}},
+			Plan:           CommitPlan{AddKeyPackages: [][]byte{[]byte("a key package")}, UserInitiated: true},
 		}, &fakeCommitter{}); err != nil {
 			fmt.Printf("error: begin commit: %v\n", err)
 			return

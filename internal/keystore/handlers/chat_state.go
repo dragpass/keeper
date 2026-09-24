@@ -320,6 +320,8 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	switch {
 	case errors.Is(err, mls.ErrLeafUntrusted):
 		return mlsLeafUntrustedResponse(d, stage, err)
+	case errors.Is(err, errAttestationRefused):
+		return chatStateNotAuthorized(d, "commit attestation")
 	case errors.Is(err, mls.ErrUnavailable):
 		code, message = proto.ChatMLSErrorCodeCapabilityRequired,
 			"this Keeper was built without the MLS library"
@@ -386,8 +388,15 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 		code, message = proto.ChatStateErrorCodeInvalidInput,
 			"the replace names a replacement this permit does not list"
 	case errors.Is(err, chatstate.ErrRekeyRequired):
+		var latched *chatstate.RekeyLatchedError
+		if errors.As(err, &latched) {
+			return rekeyLatchedResponse(d, stage, latched.Detail)
+		}
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
+	case errors.Is(err, chatstate.ErrCommitUnauthorized):
+		code, message = proto.ChatMLSErrorCodeCommitUnauthorized,
+			"the commit carries an add or a remove this device is not authorized to make; nothing was built"
 	case errors.Is(err, chatstate.ErrLockTimeout):
 		code, message = proto.ChatStateErrorCodeLockTimeout,
 			"another process is holding this conversation"
@@ -403,6 +412,23 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	}
 	d.Logger.Printf("chat state %s failed: %s", stage, code)
 	return errs.CodeResponse(errs.ErrorCode(code), message)
+}
+
+// rekeyLatchedResponse is CHAT_STATE_REKEY_REQUIRED from the operation that
+// set an unauthorized_commit or fork latch, carrying what it was about, so the
+// app can say why without a second call. Later operations answer the bare
+// code, and mls_conversation_status carries the same detail.
+func rekeyLatchedResponse(d Deps, stage string, detail chatstate.RekeyDetail) proto.BaseResponse {
+	d.Logger.Printf("chat state %s failed: %s (%s)", stage, proto.ChatStateErrorCodeRekeyRequired, detail.Cause)
+	resp := errs.CodeResponse(errs.ErrorCode(proto.ChatStateErrorCodeRekeyRequired),
+		"this device refused what the server served for the conversation and latched it read-only; nothing was applied")
+	resp.Data = proto.ChatStateRekeyLatchedData{
+		RekeyCause:              string(detail.Cause),
+		RekeyEpoch:              detail.Epoch,
+		RekeyCommitterAccountID: detail.CommitterAccountID,
+		RekeyCommitterDeviceID:  detail.CommitterDeviceID,
+	}
+	return resp
 }
 
 // mlsLeafUntrustedResponse is CHAT_MLS_LEAF_UNTRUSTED. When the refusal was a
