@@ -1,4 +1,4 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 // keeper_process_mls_test.go — the Keeper binary, the real MLS library, and a
 // real SIGKILL.
@@ -34,7 +34,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +42,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -74,7 +72,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	binaryPath = filepath.Join(dir, "dragpass-keeper-killseam")
+	binaryPath = filepath.Join(dir, "dragpass-keeper-killseam"+binarySuffix)
 	build := exec.Command("go", "build", "-tags", "mls keeper_killseam", "-o", binaryPath, ".")
 	build.Dir = filepath.Join("..", "..", "..")
 	build.Env = append(os.Environ(), "CGO_ENABLED=1")
@@ -212,6 +210,7 @@ func (d *device) start(crashAt string, skip int) *keeperProc {
 		"HOME=" + filepath.Join(d.dir, "home"),
 		"PATH=" + os.Getenv("PATH"),
 	}
+	cmd.Env = append(cmd.Env, platformEnv(d.dir)...)
 	if crashAt != "" {
 		cmd.Env = append(cmd.Env,
 			"KEEPER_TEST_CRASH_AT="+crashAt,
@@ -333,12 +332,12 @@ func (p *keeperProc) parkAt(action string, payload any) {
 	}
 }
 
-// kill is a SIGKILL and a wait for the process to be gone.
+// kill is a forced kill (forceKill) and a wait for the process to be gone.
 func (p *keeperProc) kill() {
 	if p.cmd.ProcessState != nil {
 		return
 	}
-	_ = p.cmd.Process.Signal(syscall.SIGKILL)
+	_ = forceKill(p.cmd.Process)
 	select {
 	case <-p.done:
 	case <-time.After(10 * time.Second):
@@ -348,13 +347,11 @@ func (p *keeperProc) kill() {
 
 func (p *keeperProc) killAndAssertKilled() {
 	p.t.Helper()
-	if err := p.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if err := forceKill(p.cmd.Process); err != nil {
 		p.t.Fatal(err)
 	}
-	err := <-p.done
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		p.t.Fatalf("the keeper did not die of SIGKILL: %v", err)
+	if err := <-p.done; !diedOfForceKill(err) {
+		p.t.Fatalf("the keeper did not die of the forced kill: %v", err)
 	}
 }
 

@@ -1,4 +1,4 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 package killharness
 

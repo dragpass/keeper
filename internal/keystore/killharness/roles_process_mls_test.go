@@ -1,4 +1,4 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 // Wave 5a in the Keeper binary: a room whose roles are in the group context,
 // a signed leave carried out under contention between two processes of one

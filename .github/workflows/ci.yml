@@ -108,12 +108,10 @@ jobs:
         run: |
           go build -tags mls ./...
           go test -tags mls ./internal/keystore/mls/... ./internal/keystore/chatstate/ ./internal/keystore/handlers/ ./internal/keystore/dispatch/ -count=1
-      # The kill harness is darwin and linux only: it kills the Keeper binary
-      # with SIGKILL and reads the exit through syscall.WaitStatus, neither of
-      # which exists on Windows, and it relies on a killseam build that parks
-      # the process at a named point for that signal.
-      - name: kill harness (real Keeper processes, SIGKILL)
-        if: runner.os != 'Windows'
+      # The kill harness runs the Keeper binary built with keeper_killseam,
+      # parks it at a named point and kills it: SIGKILL on unix,
+      # TerminateProcess (os.Process.Kill) on Windows.
+      - name: kill harness (real Keeper processes, forced kill)
         env:
           CGO_ENABLED: 1
         run: go test -tags mls ./internal/keystore/killharness/ -count=1
