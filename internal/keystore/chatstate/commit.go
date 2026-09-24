@@ -526,7 +526,7 @@ func (s *Store) ConfirmCommit(
 			// is there no moment where the fork is gone and the winner is not
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
-				return latchIfRefused(s, p, anchor, err, pending.ExpectedEpoch+1)
+				return s.refuseWinner(p, rec, anchor, cipher, err, pending.ExpectedEpoch+1, outcome.WinnerMessage)
 			}
 			if reporter, ok := cipher.(ChangeReporter); ok {
 				if change, ok := reporter.LastCommitChange(); ok {
@@ -587,21 +587,38 @@ func (s *Store) ConfirmCommit(
 	return out, err
 }
 
-// latchIfRefused latches the conversation when err is the authority rules
-// refusing a received Commit (Q4), and passes any other error through. The
-// latch is the anchor's alone: the record is not written, so the Commit is
-// not applied and whatever was pending stays as it was.
-func latchIfRefused(s *Store, p convPaths, anchor Anchor, err error, epoch uint64) error {
-	var refused *UnauthorizedCommitError
-	if !errors.As(err, &refused) {
+// refuseWinner handles a winner this device refuses: its own pending Commit
+// lost the epoch either way, so it is dropped and the confirmed state written
+// back as it was, and the winner is recorded as a sync block (syncblock.go).
+// Any other failure passes through and writes nothing.
+func (s *Store) refuseWinner(
+	p convPaths, rec *Record, anchor Anchor, cipher CommitCipher, err error, epoch uint64, winner []byte,
+) error {
+	var refusal RowRefusal
+	if !errors.As(err, &refusal) {
 		return err
 	}
-	return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{
-		Cause:              RekeyCauseUnauthorizedCommit,
-		Epoch:              epoch,
-		CommitterAccountID: refused.CommitterAccountID,
-		CommitterDeviceID:  refused.CommitterDeviceID,
-	})
+	if cerr := cipher.Load(rec.GroupState); cerr != nil {
+		return cerr
+	}
+	if cerr := cipher.ClearPending(); cerr != nil {
+		return cerr
+	}
+	state, cerr := cipher.State()
+	if cerr != nil {
+		return cerr
+	}
+	loaded := rec.Generation
+	rec.GroupState = state
+	rec.Pending = nil
+	if cerr := s.commit(p, rec, loaded, anchor); cerr != nil {
+		return cerr
+	}
+	anchor, cerr = loadAnchor(s.secrets, p.tag)
+	if cerr != nil {
+		return cerr
+	}
+	return blockIfRefused(s, p, anchor, err, epoch, winner)
 }
 
 // ErrNotLegacyPending — the pending Commit carries the app's description of

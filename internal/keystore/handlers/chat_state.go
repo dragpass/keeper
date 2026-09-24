@@ -330,7 +330,13 @@ func chatStateNotAuthorized(d Deps, stage string) proto.BaseResponse {
 func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	code, message := proto.ChatStateErrorCodeStorageFailure, "chat state could not be read or written"
 	var unverified *MLSPeerUnverifiedError
+	var blocked *chatstate.SyncBlockedError
 	switch {
+	case errors.As(err, &blocked) && blocked.Block.Cause == chatstate.SyncBlockUnauthorizedCommit:
+		return rowRefusedResponse(d, stage, blocked.Block)
+	case errors.Is(err, chatstate.ErrSyncBlocked):
+		code, message = proto.ChatMLSErrorCodeSyncBlocked,
+			"the conversation is stopped at a commit this device refused; nothing new may be sent"
 	case errors.As(err, &unverified):
 		return peerUnverifiedResponse(d, stage, unverified)
 	case errors.Is(err, mls.ErrLeafUntrusted):
@@ -459,6 +465,25 @@ func rekeyLatchedResponse(d Deps, stage string, detail chatstate.RekeyDetail) pr
 		RekeyCommitterDeviceID:  detail.CommitterDeviceID,
 	}
 	return resp
+}
+
+// rowRefusedResponse is CHAT_MLS_ROW_REFUSED with the block it recorded.
+func rowRefusedResponse(d Deps, stage string, b chatstate.SyncBlock) proto.BaseResponse {
+	d.Logger.Printf("chat state %s failed: %s (%s)", stage, proto.ChatMLSErrorCodeRowRefused, b.Cause)
+	resp := errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeRowRefused),
+		"this device refused a commit the server served and stopped at its epoch; nothing was applied")
+	resp.Data = syncBlockWire(&b)
+	return resp
+}
+
+func syncBlockWire(b *chatstate.SyncBlock) *proto.MLSSyncBlock {
+	if b == nil {
+		return nil
+	}
+	return &proto.MLSSyncBlock{
+		Epoch: b.Epoch, Cause: b.Cause, CommitterAccountID: b.CommitterAccountID,
+		CommitterDeviceID: b.CommitterDeviceID, CommitSHA256: b.CommitHash,
+	}
 }
 
 // mlsLeafUntrustedResponse is CHAT_MLS_LEAF_UNTRUSTED. When the refusal was a

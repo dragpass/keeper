@@ -43,6 +43,7 @@ import (
 	"errors"
 	"sort"
 
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
@@ -62,6 +63,10 @@ type MLSLeafUntrustedError struct {
 func (e *MLSLeafUntrustedError) Error() string { return "mls leaf untrusted: " + e.Reason }
 
 func (e *MLSLeafUntrustedError) Unwrap() error { return mls.ErrLeafUntrusted }
+
+// RefusalCause makes a leaf refusal of a received Commit a sync block rather
+// than a latch (chatstate.RowRefusal).
+func (e *MLSLeafUntrustedError) RefusalCause() string { return chatstate.SyncBlockLeafUntrusted }
 
 func untrusted(reason string) error { return &MLSLeafUntrustedError{Reason: reason} }
 

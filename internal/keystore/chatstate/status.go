@@ -58,6 +58,11 @@ type ConversationStatus struct {
 	RekeyEpoch              uint64
 	RekeyCommitterAccountID string
 	RekeyCommitterDeviceID  string
+
+	// SyncBlock is the received Commit this device refused and stopped at
+	// (syncblock.go), nil when there is none. It is not a latch: the rest of
+	// the status is read as usual.
+	SyncBlock *SyncBlock
 }
 
 // StatusCipher is what Status needs from MLS: the confirmed roster, to judge
@@ -81,7 +86,7 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 		RemovalLatch: []string{}, LeafReplacementLatch: []LeafReplacement{}, DeviceRevokeLatch: []DeviceRef{},
 	}
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, _, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
 		if errors.Is(err, ErrRekeyRequired) {
 			out.NeedsRekey = true
 			detail, err := s.rekeyDetail(p)
@@ -93,6 +98,7 @@ func (s *Store) Status(conversationID string, wm ServerWatermark, cipher StatusC
 			return err
 		}
 		out.Epoch = rec.Epoch
+		out.SyncBlock = anchor.SyncBlock
 		out.HasGroupState = len(rec.GroupState) > 0
 		out.RemovedFromGroup = rec.RemovedFromGroup
 		if rec.Pending != nil {

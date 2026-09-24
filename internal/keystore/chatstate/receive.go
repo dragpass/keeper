@@ -246,7 +246,7 @@ func (s *Store) Receive(
 			return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{Cause: RekeyCauseFork, Epoch: fork.epoch})
 		}
 		if err != nil {
-			return latchIfRefused(s, p, anchor, err, req.ProducedEpoch)
+			return blockIfRefused(s, p, anchor, err, req.ProducedEpoch, req.Message)
 		}
 		if !changed {
 			return nil

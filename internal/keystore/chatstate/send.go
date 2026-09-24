@@ -171,6 +171,9 @@ func (s *Store) Send(
 		if rec.Pending != nil {
 			return ErrCommitPending
 		}
+		if anchor.SyncBlock != nil {
+			return ErrSyncBlocked
+		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}

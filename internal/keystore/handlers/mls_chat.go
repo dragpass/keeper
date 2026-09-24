@@ -853,6 +853,7 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		DeviceRevokeLatch:     wireDeviceRefs(status.DeviceRevokeLatch),
 		Roles:                 []proto.MLSRoleEntry{},
 		NeedsRekey:            status.NeedsRekey,
+		SyncBlocked:           syncBlockWire(status.SyncBlock),
 		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
 

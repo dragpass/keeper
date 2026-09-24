@@ -79,7 +79,7 @@ func TestMLSStatementWindow_ALeaveOlderThanThirtyDaysIsRefusedAtBuild(t *testing
 
 // On receipt the window is read against the receiver's own clock. A Commit
 // built on a 29-day-old statement is applied by a member whose clock agrees,
-// and refused (latched unauthorized_commit, naming the committer) by one whose
+// and refused (blocked at that epoch, unauthorized_commit, naming the committer) by one whose
 // clock is three days later: the case of a device that catches up after being
 // away. The receiver has no trusted time for when the Commit was accepted,
 // which is the stated cost of the window.
@@ -96,8 +96,8 @@ func TestMLSStatementWindow_AReceiverPastTheWindowRefusesTheRemove(t *testing.T)
 	defer func() { r.alice.deps.Clock = nil }()
 	seq := r.nextSeq()
 	resp := r.alice.call(proto.MLSProcess, r.alice.processRequestAt(seq, 2, removed.CommitB64, 3*day))
-	got := latchedData(t, resp)
-	if got.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.RekeyCommitterAccountID != e2eBob {
+	got := blockedData(t, resp)
+	if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.CommitterAccountID != e2eBob {
 		t.Fatalf("latch detail = %+v", got)
 	}
 }

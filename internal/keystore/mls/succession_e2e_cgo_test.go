@@ -136,8 +136,8 @@ func encode(t *testing.T, hs ...chatstate.LeafHandover) []byte {
 
 // The refusals: no handover, data that is not a handover, a handover the new
 // leaf signed itself, and a genuine handover for another new leaf. Each
-// latches Carol unauthorized_commit, naming Alice; the record is not written,
-// so the Commit is not applied.
+// blocks Carol at that epoch (unauthorized_commit, naming Alice); the record
+// is not written, so the Commit is not applied.
 func TestSuccession_AReceiverRefusesAnUnapprovedTakeover(t *testing.T) {
 	for name, ad := range map[string]func(*testing.T, succession) []byte{
 		"no handover":    func(*testing.T, succession) []byte { return nil },
@@ -160,14 +160,15 @@ func TestSuccession_AReceiverRefusesAnUnapprovedTakeover(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := newSuccession(t)
 			_, err := s.carolReceives(s.craft(t, ad(t, s)))
-			var latched *chatstate.RekeyLatchedError
-			if !errors.As(err, &latched) || latched.Detail.Cause != chatstate.RekeyCauseUnauthorizedCommit ||
-				latched.Detail.CommitterAccountID != accountA {
-				t.Fatalf("receive = %v; want an unauthorized_commit latch naming alice", err)
+			var blocked *chatstate.SyncBlockedError
+			if !errors.As(err, &blocked) || blocked.Block.Cause != chatstate.SyncBlockUnauthorizedCommit ||
+				blocked.Block.CommitterAccountID != accountA {
+				t.Fatalf("receive = %v; want an unauthorized_commit block naming alice", err)
 			}
-			// Read-only from here: nothing further is applied on this group.
-			if _, err := s.carolStore.LoadGroupState(conv, noWatermark); !errors.Is(err, chatstate.ErrRekeyRequired) {
-				t.Fatalf("carol's group after the refusal: %v; want the latch", err)
+			// Not a latch (N3): the group is still there, at the epoch it
+			// was on, and nothing new is sent on it.
+			if _, err := s.carolStore.LoadGroupState(conv, noWatermark); err != nil {
+				t.Fatalf("carol's group after the refusal: %v", err)
 			}
 		})
 	}

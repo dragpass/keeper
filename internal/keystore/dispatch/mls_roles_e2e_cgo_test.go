@@ -307,7 +307,7 @@ func TestMLSRoles_AnOrgRemovalNeedsTheAdminsStatement(t *testing.T) {
 }
 
 // A malicious server serves the builder one admin key and a receiver pinned
-// another: the receiver refuses the Remove and latches, naming the committer.
+// another: the receiver refuses the Remove and stops at its epoch, naming the committer.
 // The admin set is server-attested, so the first key each device sees is
 // taken on trust (TOFU); a changed one is not.
 func TestMLSRoles_AnAdminKeyThatChangedIsRefused(t *testing.T) {
@@ -327,8 +327,8 @@ func TestMLSRoles_AnAdminKeyThatChangedIsRefused(t *testing.T) {
 	req.Permit, req.RemoveAccountIDs = r.bob.permit(e2eCarol), []string{e2eCarol}
 	req.OrgRemovalStatements = []proto.MLSOrgRemovalStatement{orgRemoval(impostor, e2eCarol)}
 	removed := r.bob.accepted(req)
-	got := latchedData(t, r.alice.call(proto.MLSProcess, r.alice.processRequest(r.nextSeq(), 2, removed.CommitB64)))
-	if got.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.RekeyCommitterAccountID != e2eBob {
+	got := blockedData(t, r.alice.call(proto.MLSProcess, r.alice.processRequest(r.nextSeq(), 2, removed.CommitB64)))
+	if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.CommitterAccountID != e2eBob {
 		t.Fatalf("latch detail = %+v", got)
 	}
 }

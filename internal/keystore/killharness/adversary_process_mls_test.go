@@ -1,7 +1,7 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 // A malicious client's Commit refused by the Keeper binary, and the refusal
-// surviving a SIGKILL (wave 5c item 8). Mallory's device is the test-only
+// surviving a forced kill (wave 5c item 8). Mallory's device is the test-only
 // adversary (mls/examples/adversary.rs: mls-rs with its permissive rules and
 // Mallory's own leaf key), so the Commit is valid MLS signed by a real member;
 // Alice's Keeper is the release entry point, every permit and attestation
@@ -83,8 +83,8 @@ func (d *device) state() deviceState {
 			if err := json.Unmarshal([]byte(value), &a); err != nil {
 				d.t.Fatal(err)
 			}
-			a.NeedsRekey, a.RekeyCause, a.RekeyEpoch = false, "", 0
-			a.RekeyCommitterAccountID, a.RekeyCommitterDeviceID = "", ""
+			// The block is the one thing a refusal writes (anchor sync_block).
+			a.SyncBlock = nil
 			raw, err := json.Marshal(a)
 			if err != nil {
 				d.t.Fatal(err)
@@ -107,10 +107,11 @@ func assertSameState(t *testing.T, when string, before, after deviceState) {
 }
 
 // A plain member's Remove of Carol, built by the adversary, is refused by
-// Alice's Keeper process and latched unauthorized_commit naming Mallory. The
-// process is SIGKILLed right after the refusal; the restarted one reports
-// the same latch, refuses the row again, and every state file and keyring
-// entry is what it was before the Commit arrived.
+// Alice's Keeper process, which stops at that epoch (unauthorized_commit
+// naming Mallory, N3: a block, not a latch). The process is force-killed right
+// after the refusal; the restarted one reports the same block, refuses the
+// row again, and every state file and keyring entry is what it was before the
+// Commit arrived, but for the anchor's sync_block.
 func TestKeeperProcessRefusesAMaliciousClientsCommitAcrossAKill(t *testing.T) {
 	alice, carol, mallory := newDevice(t, hAlice), newDevice(t, hCarol), newDevice(t, hMallory)
 	a, c, m := alice.start("", 0), carol.start("", 0), mallory.start("", 0)
@@ -152,10 +153,9 @@ func TestKeeperProcessRefusesAMaliciousClientsCommitAcrossAKill(t *testing.T) {
 	req := alice.attestedProcess(2, 2, commitB64, hAlice, hCarol, hMallory)
 
 	before := alice.state()
-	got := latchDetail(t, a.call(proto.MLSProcess, req))
-	if got.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.RekeyEpoch != 2 ||
-		got.RekeyCommitterAccountID != hMallory {
-		t.Fatalf("latch detail = %+v", got)
+	got := blockDetail(t, a.call(proto.MLSProcess, req))
+	if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.Epoch != 2 || got.CommitterAccountID != hMallory {
+		t.Fatalf("block detail = %+v", got)
 	}
 	assertSameState(t, "after the refusal", before, alice.state())
 	a.killAndAssertKilled()
@@ -163,14 +163,14 @@ func TestKeeperProcessRefusesAMaliciousClientsCommitAcrossAKill(t *testing.T) {
 
 	a = alice.start("", 0)
 	status := a.status()
-	if !status.NeedsRekey || status.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit ||
-		status.RekeyCommitterAccountID != hMallory {
+	if status.NeedsRekey || status.SyncBlocked == nil || status.SyncBlocked.CommitterAccountID != hMallory || status.Epoch != 1 {
 		t.Fatalf("status after the restart = %+v", status)
 	}
 	a.refused(proto.MLSProcess, alice.attestedProcess(2, 2, commitB64, hAlice, hCarol, hMallory),
-		proto.ChatStateErrorCodeRekeyRequired)
+		proto.ChatMLSErrorCodeRowRefused)
+	a.refused(proto.MLSEncrypt, alice.encryptRequest(messageID(3), 1, "not on top of it"), proto.ChatMLSErrorCodeSyncBlocked)
 	assertSameState(t, "after the restart and a retry", before, alice.state())
-	if anchor := alice.anchor(); anchor.Epoch != 1 || !anchor.NeedsRekey {
+	if anchor := alice.anchor(); anchor.Epoch != 1 || anchor.NeedsRekey || anchor.SyncBlock == nil {
 		t.Fatalf("anchor after the restart = %+v", anchor)
 	}
 }

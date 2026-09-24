@@ -11,11 +11,12 @@
 // lawful row behind, both rows carrying the server's attestation.
 //
 // Every refusal leaves the receiver where it was: the same state files byte
-// for byte, the same keyring entries (pins included) but for the latch fields
-// of the anchor, the same epoch and roles. Where the refusal is the authority
-// rules', the conversation latches unauthorized_commit naming Mallory. Each
-// case has a positive control: the same client's lawful Commit is applied, so
-// a refusal is never the fixture's fault.
+// for byte, the same keyring entries (pins included) but for the one field a
+// refusal writes, the anchor's sync_block (N3), and the same epoch and roles.
+// The conversation is not latched: it stops at that epoch, refuses to send,
+// and is still read as usual. Each case has a positive control: the same
+// client's lawful Commit is applied, so a refusal is never the fixture's
+// fault.
 
 package dispatch
 
@@ -117,8 +118,8 @@ func (r *advRoom) lawfulRow() (seq uint64, commitB64 string) {
 // receiverState is everything a refused Commit must leave as it was. The
 // group state (epoch, tree, roles) and the record's generation are in the
 // state files; the pins and the newest-declaration records in the keyring; the
-// epoch, generation and watermark of the rollback anchor in anchors. A latched
-// conversation's status reports no group, so none of this is read through it.
+// epoch, generation, watermark and rekey fields of the rollback anchor in
+// anchors.
 type receiverState struct {
 	files   map[string][]byte
 	secrets map[string]string
@@ -148,9 +149,9 @@ func stateOf(t *testing.T, k *keeper) receiverState {
 		if err := json.Unmarshal([]byte(value), &a); err != nil {
 			t.Fatal(err)
 		}
-		// The latch is the one thing a refusal writes.
-		a.NeedsRekey, a.RekeyCause, a.RekeyEpoch = false, "", 0
-		a.RekeyCommitterAccountID, a.RekeyCommitterDeviceID = "", ""
+		// The sync block is the one thing a refusal writes (anchor
+		// sync_block); the rekey latch fields must stay as they were.
+		a.SyncBlock = nil
 		s.anchors[key] = a
 	}
 	if len(s.anchors) != 1 {
@@ -172,14 +173,15 @@ func assertUnchanged(t *testing.T, who string, before, after receiverState) {
 	}
 }
 
-// refusal is how a receiver must refuse: latched unauthorized_commit naming
-// Mallory, or (latch false) refused with code and nothing latched.
+// refusal is how a receiver must refuse: the row refused as unauthorized,
+// naming Mallory (block true), or refused with code (the leaf check), both
+// stopping the conversation at that epoch without a latch.
 type refusal struct {
-	latch bool
+	block bool
 	code  string
 }
 
-var latchedUnauthorized = refusal{latch: true}
+var blockedUnauthorized = refusal{block: true}
 
 func (r *advRoom) assertRefused(who *keeper, req proto.MLSProcessRequest, want refusal) {
 	r.t.Helper()
@@ -195,22 +197,20 @@ func (r *advRoom) assertRefused(who *keeper, req proto.MLSProcessRequest, want r
 	}
 	resp := who.call(proto.MLSProcess, req)
 	name := who.id[:8]
-	if want.latch {
-		got := latchedData(r.t, resp)
-		if got.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.RekeyCommitterAccountID != advMallory {
-			r.t.Fatalf("%s latched %+v; want unauthorized_commit naming mallory", name, got)
+	if want.block {
+		got := blockedData(r.t, resp)
+		if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.CommitterAccountID != advMallory || got.Epoch != 3 {
+			r.t.Fatalf("%s blocked %+v; want unauthorized_commit at epoch 3 naming mallory", name, got)
 		}
-		if st := who.status(); !st.NeedsRekey || st.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit {
-			r.t.Fatalf("%s status after the refusal = %+v", name, st)
-		}
-	} else {
-		if resp.Success || string(resp.ErrorCode) != want.code {
-			r.t.Fatalf("%s answered %+v; want %s", name, resp, want.code)
-		}
-		if st := who.status(); st.NeedsRekey {
-			r.t.Fatalf("%s latched on a %s refusal: %+v", name, want.code, st)
-		}
+	} else if resp.Success || string(resp.ErrorCode) != want.code {
+		r.t.Fatalf("%s answered %+v; want %s", name, resp, want.code)
 	}
+	st = who.status()
+	if st.NeedsRekey || st.SyncBlocked == nil || st.SyncBlocked.Epoch != 3 || st.Epoch != 2 {
+		r.t.Fatalf("%s status after the refusal = %+v; want blocked at 3, not latched", name, st)
+	}
+	who.refused(proto.MLSEncrypt, who.encryptRequest(messageID(7), 2, "not on top of a refused commit"),
+		proto.ChatMLSErrorCodeSyncBlocked)
 	assertUnchanged(r.t, name, before, stateOf(r.t, who))
 }
 
@@ -254,7 +254,7 @@ func keyPackageBytes(t *testing.T, kp proto.MLSMemberKeyPackage) []byte {
 
 // (a) A plain member seats Carol's recovered identity in place of her leaf.
 // Only the room's owner or an admin may (Q2, Q4 of wave 5b): refused and
-// latched. Carol's own old device refuses it at the leaf check, since the
+// blocked at its epoch. Carol's own old device refuses it at the leaf check, since the
 // leaf claims her account under another account key.
 func TestMLSAdversary_APlainMemberSeatsARecoveredIdentity(t *testing.T) {
 	for _, admin := range []bool{false, true} {
@@ -271,15 +271,15 @@ func TestMLSAdversary_APlainMemberSeatsARecoveredIdentity(t *testing.T) {
 			r.applied(commit, chain)
 			continue
 		}
-		r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized,
+		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized,
 			refusal{code: proto.ChatMLSErrorCodeLeafUntrusted}, chain)
 	}
 }
 
 // (b) Two devices of one account in one Commit, from an admin, who may add.
 // The leaf check refuses it first: two entering declarations of one account
-// cannot both be its newest (mls_leaf_verify.go checkNewest). Nothing is
-// latched; the Q14 rule behind it is pinned by the Rust session test
+// cannot both be its newest (mls_leaf_verify.go checkNewest); the row is
+// blocked with cause leaf_untrusted; the Q14 rule behind it is pinned by the Rust session test
 // two_devices_of_one_account_in_one_commit_are_refused and the Go unit test.
 func TestMLSAdversary_TwoDevicesOfOneAccountInOneCommit(t *testing.T) {
 	r := newAdvRoom(t, true)
@@ -306,7 +306,7 @@ func TestMLSAdversary_TwoDevicesOfOneAccountInOneCommit(t *testing.T) {
 }
 
 // (c) An admin adds Carol's second device next to the one she holds. After
-// the Commit her account would hold two leaves (Q14): refused and latched by
+// the Commit her account would hold two leaves (Q14): refused and blocked by
 // both receivers.
 func TestMLSAdversary_AnExistingLeafAndANewLeafOfOneAccount(t *testing.T) {
 	r := newAdvRoom(t, true)
@@ -316,10 +316,10 @@ func TestMLSAdversary_AnExistingLeafAndANewLeafOfOneAccount(t *testing.T) {
 	carol2.declare(proto.MLSLeafReasonRotate, oldCarol.NotBefore+60)
 	kp := keyPackageBytes(t, carol2.keyPackage())
 	commit, _ := r.adv.Build(mlsadversary.Commit{Adds: [][]byte{kp}})
-	r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized, latchedUnauthorized)
+	r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
 }
 
-// (d) A plain member adds somebody to a room with roles: refused and latched.
+// (d) A plain member adds somebody to a room with roles: refused and blocked.
 func TestMLSAdversary_APlainMemberAdds(t *testing.T) {
 	for _, admin := range []bool{false, true} {
 		r := newAdvRoom(t, admin)
@@ -330,12 +330,12 @@ func TestMLSAdversary_APlainMemberAdds(t *testing.T) {
 			r.applied(commit)
 			continue
 		}
-		r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized, latchedUnauthorized)
+		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
 	}
 }
 
 // (e) A role change by somebody who is not the owner: an admin making itself
-// owner, and a member making itself admin. Refused and latched. Control: the
+// owner, and a member making itself admin. Refused and blocked. Control: the
 // owner's own change is applied (TestMLSRoles_* covers that build side).
 func TestMLSAdversary_ARoleChangeByANonOwner(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -349,19 +349,19 @@ func TestMLSAdversary_ARoleChangeByANonOwner(t *testing.T) {
 			r := newAdvRoom(t, tc.admin)
 			lawfulSeq, lawfulB64 := r.lawfulRow()
 			commit, _ := r.adv.Build(mlsadversary.Commit{Roles: tc.roles.Encode()})
-			r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized, latchedUnauthorized)
+			r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
 		})
 	}
 }
 
 // (f) A Remove with no authority: a plain member removes Carol with no
-// statement. Refused and latched by Alice, and by Carol, the one removed.
+// statement. Refused and blocked by Alice, and by Carol, the one removed.
 // Control: an admin's removal of the plain member is applied.
 func TestMLSAdversary_ARemoveWithoutAuthority(t *testing.T) {
 	r := newAdvRoom(t, false)
 	lawfulSeq, lawfulB64 := r.lawfulRow()
 	commit, _ := r.adv.Build(mlsadversary.Commit{Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device)}})
-	r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized, latchedUnauthorized)
+	r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
 
 	admin := newAdvRoom(t, true)
 	admin.lawfulRow()
@@ -372,7 +372,7 @@ func TestMLSAdversary_ARemoveWithoutAuthority(t *testing.T) {
 // Q10 on receipt, from a client that carries what a normal Keeper refuses to
 // build: a plain member removes Carol on an org admin's statement signed 31
 // days ago. The statement is past its window, so the Remove rests on nothing:
-// refused and latched. Control: the same statement 29 days old is applied.
+// refused and blocked. Control: the same statement 29 days old is applied.
 func TestMLSAdversary_AnExpiredStatementCarriesNoRemove(t *testing.T) {
 	for _, age := range []time.Duration{31 * day, 29 * day} {
 		r := newAdvRoom(t, false)
@@ -390,7 +390,7 @@ func TestMLSAdversary_AnExpiredStatementCarriesNoRemove(t *testing.T) {
 			r.applied(commit)
 			continue
 		}
-		r.deliver(lawfulSeq, lawfulB64, commit, latchedUnauthorized, latchedUnauthorized)
+		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
 	}
 }
 

@@ -148,9 +148,9 @@ func TestEvidence_EachRuleStillNeedsItsOwnPart(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newEvidenceGroup(t)
 			_, err := e.carolReceivesWithEvidence(e.craftBoth(t, ev(t, e)))
-			var latched *chatstate.RekeyLatchedError
-			if !errors.As(err, &latched) || latched.Detail.Cause != chatstate.RekeyCauseUnauthorizedCommit {
-				t.Fatalf("receive = %v; want an unauthorized_commit latch", err)
+			var blocked *chatstate.SyncBlockedError
+			if !errors.As(err, &blocked) || blocked.Block.Cause != chatstate.SyncBlockUnauthorizedCommit {
+				t.Fatalf("receive = %v; want an unauthorized_commit block", err)
 			}
 		})
 	}

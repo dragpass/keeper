@@ -57,9 +57,23 @@ const (
 	// ChatMLSErrorCodeCommitUnauthorized — a Commit this device was asked to
 	// build carries an Add or a Remove the authority rules do not allow
 	// (0.0.55). Nothing was built. A received Commit the rules refuse is not
-	// this code: it latches the conversation (CHAT_STATE_REKEY_REQUIRED with
-	// rekey_cause unauthorized_commit).
+	// this code: it is CHAT_MLS_ROW_REFUSED.
 	ChatMLSErrorCodeCommitUnauthorized = "CHAT_MLS_COMMIT_UNAUTHORIZED"
+
+	// ChatMLSErrorCodeRowRefused — mls_process (or a superseded
+	// mls_commit_confirm) refused a received Commit the authority rules do
+	// not allow (N3). Nothing was applied. The conversation is not latched:
+	// it stops at that epoch (sync_blocked in the status, MLSSyncBlock in
+	// data), a new message is refused with CHAT_MLS_SYNC_BLOCKED, and another
+	// valid Commit for the same epoch is applied as usual and clears it. A
+	// received Commit refused by the leaf check keeps its own code
+	// (CHAT_MLS_LEAF_UNTRUSTED) and blocks the same way.
+	ChatMLSErrorCodeRowRefused = "CHAT_MLS_ROW_REFUSED"
+
+	// ChatMLSErrorCodeSyncBlocked — a new message was refused because the
+	// conversation is stopped at a received Commit this device refused
+	// (sync_blocked). Nothing was consumed.
+	ChatMLSErrorCodeSyncBlocked = "CHAT_MLS_SYNC_BLOCKED"
 
 	// ChatMLSErrorCodeRejoinUnverified — a rejoin in mls_commit_build carries
 	// a request that is not the account's own signed statement for this
@@ -1291,6 +1305,11 @@ type MLSConversationStatusResponseData struct {
 
 	NeedsRekey bool `json:"needs_rekey"`
 
+	// SyncBlocked is the received Commit this conversation is stopped at
+	// (N3), null when none. Not a latch: a valid Commit for its epoch clears
+	// it.
+	SyncBlocked *MLSSyncBlock `json:"sync_blocked"`
+
 	// RekeyCause says why needs_rekey latched (0.0.55): one of the
 	// ChatStateRekeyCause* values, "unknown" for a latch recorded before the
 	// cause was, and absent when needs_rekey is false.
@@ -1321,6 +1340,18 @@ type MLSConversationStatusResponseData struct {
 	// group.
 	RequireVerifiedPeers bool     `json:"require_verified_peers"`
 	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
+}
+
+// MLSSyncBlock is the received Commit a conversation is stopped at: the epoch
+// it would produce, why it was refused (unauthorized_commit or
+// leaf_untrusted), who committed it when that is known, and the SHA-256 of
+// the Commit.
+type MLSSyncBlock struct {
+	Epoch              uint64 `json:"epoch"`
+	Cause              string `json:"cause"`
+	CommitterAccountID string `json:"committer_account_id,omitempty"`
+	CommitterDeviceID  string `json:"committer_device_id,omitempty"`
+	CommitSHA256       string `json:"commit_sha256"`
 }
 
 // ChatStateRekeyLatchedData rides on CHAT_STATE_REKEY_REQUIRED from the

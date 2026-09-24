@@ -74,6 +74,11 @@ type Anchor struct {
 	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
 	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
 	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
+
+	// SyncBlock is a received Commit this device refused and nothing has
+	// superseded yet (syncblock.go). It is not a latch: a valid Commit for
+	// its epoch clears it.
+	SyncBlock *SyncBlock `json:"sync_block,omitempty"`
 }
 
 // RekeyCause says which check latched NeedsRekey. The recovery is the same for
