@@ -622,7 +622,10 @@ mod tests {
         c.roles_after = Some(Some(room(C, &[])));
         assert!(check(&c).is_ok(), "the claim that drops the departed admin");
         c.roles_after = Some(Some(room(C, &[B])));
-        assert!(check(&c).is_err(), "a claim that keeps an entry with no leaf");
+        assert!(
+            check(&c).is_err(),
+            "a claim that keeps an entry with no leaf"
+        );
     }
 
     #[test]
