@@ -62,6 +62,10 @@ import (
 // period and must not be quoted as one; that number is M4.6.1's.
 const DefaultHistoryMaxEntries = 64
 
+// DefaultHistoryMaxAge removes sealed local copies after 90 days on the next
+// conversation write. The entry ring remains the tighter bound when it fills.
+const DefaultHistoryMaxAge = 90 * 24 * time.Hour
+
 const (
 	historyAADDomain     = "dragpass.chat.state.history"
 	sentHistoryAADDomain = "dragpass.chat.state.history.sent"
