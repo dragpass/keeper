@@ -933,10 +933,11 @@ func (r MLSProcessRequest) Validate() error {
 }
 
 type MLSProcessResponseData struct {
-	Seq        uint64 `json:"seq"`
-	Epoch      uint64 `json:"epoch"`
-	Removed    bool   `json:"removed"`
-	Generation uint64 `json:"generation"`
+	Seq               uint64   `json:"seq"`
+	Epoch             uint64   `json:"epoch"`
+	Removed           bool     `json:"removed"`
+	Generation        uint64   `json:"generation"`
+	RemovedAccountIDs []string `json:"removed_account_ids,omitempty"`
 
 	// LeafTrust is how the Commit's entering accounts were judged (0.0.55);
 	// absent when it brought none in. See MLSAccountTrust.

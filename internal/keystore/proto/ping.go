@@ -18,14 +18,15 @@ const ChatContract = 5
 // Like chat_contract it is a compatibility signal and proves nothing: every
 // request is still validated, and every signature still verified, on its own.
 var ChatCapabilities = []string{
-	"permit.v5",        // chat state permit canonical 5 (pending_device_revocations)
-	"roles.v1",         // room roles in the group context (0xF0D1)
-	"statements.v1",    // signed org removal / leave / device revoke, 30-day window
-	"handover.v1",      // leaf handover approval for a device takeover
-	"recovery.v1",      // a recovered identity is seated only by owner / admin / DM peer
-	"pool_sweep.v1",    // mls_key_package_pool_sweep
-	"sync_block.v1",    // a refused received Commit blocks the row, not the conversation
-	"safety_number.v1", // pairwise safety number on peer_key_pin_verify
+	"permit.v5",           // chat state permit canonical 5 (pending_device_revocations)
+	"roles.v1",            // room roles in the group context (0xF0D1)
+	"statements.v1",       // signed org removal / leave / device revoke, 30-day window
+	"handover.v1",         // leaf handover approval for a device takeover
+	"recovery.v1",         // a recovered identity is seated only by owner / admin / DM peer
+	"pool_sweep.v1",       // mls_key_package_pool_sweep
+	"sync_block.v1",       // a refused received Commit blocks the row, not the conversation
+	"safety_number.v1",    // pairwise safety number on peer_key_pin_verify
+	"removed_accounts.v1", // mls_process reports the accounts a confirmed Commit removed
 }
 
 type PingResponseData struct {

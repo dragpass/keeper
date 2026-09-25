@@ -545,13 +545,19 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
+	change, hasChange := cipher.LastCommitChange()
+	var removedAccountIDs []string
+	if hasChange {
+		removedAccountIDs = append([]string(nil), change.Removed...)
+	}
 	d.Logger.Println("mls process successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSProcessResponseData{
-		Seq:        req.Seq,
-		Epoch:      result.Position.Epoch,
-		Removed:    result.Removed,
-		Generation: result.Generation,
-		LeafTrust:  v.Reported(),
+		Seq:               req.Seq,
+		Epoch:             result.Position.Epoch,
+		Removed:           result.Removed,
+		Generation:        result.Generation,
+		LeafTrust:         v.Reported(),
+		RemovedAccountIDs: removedAccountIDs,
 	}}
 }
 

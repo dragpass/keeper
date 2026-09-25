@@ -45,7 +45,7 @@ func TestHandlePing_BareDelegation(t *testing.T) {
 		t.Fatalf("chat_contract = %d, want 5", data.ChatContract)
 	}
 	want := []string{"permit.v5", "roles.v1", "statements.v1", "handover.v1", "recovery.v1",
-		"pool_sweep.v1", "sync_block.v1", "safety_number.v1"}
+		"pool_sweep.v1", "sync_block.v1", "safety_number.v1", "removed_accounts.v1"}
 	if !slices.Equal(data.ChatCapabilities, want) {
 		t.Fatalf("chat_capabilities = %v, want %v", data.ChatCapabilities, want)
 	}
