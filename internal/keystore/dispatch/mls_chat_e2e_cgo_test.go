@@ -374,8 +374,8 @@ func TestMLSChatE2E_ACommitRaceConverges(t *testing.T) {
 	}
 }
 
-// Handshakes apply in epoch order. The same row again, and a row that comes
-// after one not yet applied, are both refused and change nothing.
+// Handshakes apply in epoch order. A row that skips an epoch or repeats a
+// non-removal Commit is refused.
 func TestMLSChatE2E_HandshakesApplyInOrder(t *testing.T) {
 	c := newDM(t)
 	first := c.bob.buildUpdate(1)

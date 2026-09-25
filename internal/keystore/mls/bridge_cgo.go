@@ -868,5 +868,8 @@ func statusError(rc C.int32_t) error {
 	if rc == -7 {
 		return fmt.Errorf("%w (status %d): %s", ErrRolesUnsupported, int(rc), msg)
 	}
+	if rc == -8 {
+		return fmt.Errorf("%w (status %d): %s", chatstate.ErrEpochUnavailable, int(rc), msg)
+	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

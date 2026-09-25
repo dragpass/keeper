@@ -318,8 +318,10 @@ const ConfirmedCommitCapacity = 64
 // device is already past that epoch: the Commit's own bytes are what a row
 // can be held to.
 type ConfirmedCommit struct {
-	Epoch      uint64 `json:"epoch"`
-	CommitHash string `json:"commit_sha256"`
+	Epoch             uint64   `json:"epoch"`
+	Seq               uint64   `json:"seq,omitempty"`
+	CommitHash        string   `json:"commit_sha256"`
+	RemovedAccountIDs []string `json:"removed_account_ids,omitempty"`
 }
 
 func commitHash(commit []byte) string {
@@ -329,13 +331,28 @@ func commitHash(commit []byte) string {
 
 // noteConfirmed records that the Commit commit produced epoch.
 func (r *Record) noteConfirmed(epoch uint64, commit []byte) {
+	r.noteConfirmedRemoval(0, epoch, commit, nil)
+}
+
+func (r *Record) noteConfirmedRemoval(seq, epoch uint64, commit []byte, removed []string) {
 	r.ConfirmedCommits = slices.DeleteFunc(r.ConfirmedCommits, func(c ConfirmedCommit) bool {
 		return c.Epoch == epoch
 	})
-	r.ConfirmedCommits = append(r.ConfirmedCommits, ConfirmedCommit{Epoch: epoch, CommitHash: commitHash(commit)})
+	r.ConfirmedCommits = append(r.ConfirmedCommits, ConfirmedCommit{
+		Epoch: epoch, Seq: seq, CommitHash: commitHash(commit), RemovedAccountIDs: slices.Clone(removed),
+	})
 	if len(r.ConfirmedCommits) > ConfirmedCommitCapacity {
 		r.ConfirmedCommits = slices.Clone(r.ConfirmedCommits[len(r.ConfirmedCommits)-ConfirmedCommitCapacity:])
 	}
+}
+
+func (r *Record) confirmedRemoval(seq, epoch uint64, commit []byte) ([]string, bool) {
+	for _, c := range r.ConfirmedCommits {
+		if c.Seq == seq && c.Epoch == epoch && c.CommitHash == commitHash(commit) {
+			return slices.Clone(c.RemovedAccountIDs), true
+		}
+	}
+	return nil, false
 }
 
 // forkAt reports whether commit, served as the Commit that produced an epoch

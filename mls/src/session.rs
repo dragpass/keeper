@@ -137,6 +137,7 @@ fn err(context: &str, e: impl core::fmt::Display) -> String {
 /// status code because Go treats it as "read this from local history", not as
 /// a failure.
 pub const FROM_SELF: &str = "the message was sent by this leaf";
+pub const PRIOR_EPOCH_UNAVAILABLE: &str = "the prior epoch is no longer retained";
 
 /// The largest authenticated data a Commit this Keeper builds may carry. The
 /// Go side puts one evidence document there (proto.MLSCommitEvidence: the
@@ -915,6 +916,16 @@ impl Session {
     /// caller reloads from the record, which never saw it.
     pub fn process(&mut self, message: &[u8]) -> Res<Processed> {
         let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        if matches!(msg.wire_format(), mls_rs::WireFormat::PrivateMessage) {
+            if let Some(epoch) = msg.epoch() {
+                let group = self.group_mut()?;
+                let current_epoch = group.current_epoch();
+                let group_id = group.group_id().to_vec();
+                if epoch < current_epoch && !self.storage.has_prior_epoch(&group_id, epoch) {
+                    return Err(format!("mls: process: {PRIOR_EPOCH_UNAVAILABLE}"));
+                }
+            }
+        }
         let before = leaves_of(self.group_mut()?);
         let approved = self.arm()?;
         let group = self.group_mut()?;

@@ -254,9 +254,14 @@ func TestMLSRoles_RoleBasedRemoves(t *testing.T) {
 	req = r.bob.buildRequest(1)
 	req.RemoveAccountIDs, req.UserInitiated = []string{e2eCarol}, true
 	removed := r.bob.accepted(req)
-	if got := r.alice.process(r.nextSeq(), 2, removed.CommitB64); got.Epoch != 2 {
+	seq := r.nextSeq()
+	if got := r.alice.process(seq, 2, removed.CommitB64); got.Epoch != 2 {
 		t.Fatalf("alice applied the admin's remove at %+v", got)
 	}
+	if replay := r.alice.process(seq, 2, removed.CommitB64); !slices.Equal(replay.RemovedAccountIDs, []string{e2eCarol}) {
+		t.Fatalf("removal receipt after a lost response = %+v", replay)
+	}
+	r.alice.refused(proto.MLSProcess, r.alice.processRequest(seq+1, 2, removed.CommitB64), proto.ChatMLSErrorCodeEpochStale)
 	if got := r.carol.process(r.nextSeq(), 2, removed.CommitB64); !got.Removed {
 		t.Fatalf("carol processed her removal as %+v", got)
 	}

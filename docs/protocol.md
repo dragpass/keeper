@@ -1278,7 +1278,20 @@ a gap between two handshake seqs is ordinary and says nothing about a skipped
 handshake; the server keeps one handshake per epoch and MLS binds the epoch
 into the Commit. A row already applied (including this device's own accepted
 Commit coming back) and a row that comes after one not yet applied are both
-`CHAT_MLS_EPOCH_STALE`.
+`CHAT_MLS_EPOCH_STALE`, except an exact replay of a received Remove Commit at
+the same `seq` and epoch. The latter returns its persisted
+`removed_account_ids` receipt so a lost IPC response cannot hide the removal.
+Replaying the same bytes at another `seq` remains stale.
+
+`mls_decrypt_batch_for_app_display` also returns `epoch_unavailable` for a
+message from a prior epoch whose local key is no longer retained. Its
+`plaintext_b64` entry and sender fields are empty, and other messages in the
+page may still open. Keeper uses at most 16 prior epochs for at most 30
+days, whichever bound is reached first. Expired keys disappear from memory
+on access and from the active sealed file on its next state write; an offline
+file is not rewritten at the exact expiry time. A sealed state loaded from the old
+`DPMLSGS1` format has no trusted insertion times, so its prior epoch keys
+are discarded on upgrade.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|

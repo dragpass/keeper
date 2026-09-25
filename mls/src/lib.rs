@@ -50,6 +50,7 @@ pub const DPMLS_ERR_UNAUTHORIZED: i32 = -6;
 /// A leaf or KeyPackage does not advertise the room roles extension, which a
 /// group carrying it requires of every leaf. Nothing was built.
 pub const DPMLS_ERR_ROLES_UNSUPPORTED: i32 = -7;
+pub const DPMLS_ERR_PRIOR_EPOCH_UNAVAILABLE: i32 = -8;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -101,6 +102,8 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
                 DPMLS_ERR_UNAUTHORIZED
             } else if msg.contains(session::ROLES_UNSUPPORTED) {
                 DPMLS_ERR_ROLES_UNSUPPORTED
+            } else if msg.contains(session::PRIOR_EPOCH_UNAVAILABLE) {
+                DPMLS_ERR_PRIOR_EPOCH_UNAVAILABLE
             } else {
                 DPMLS_ERR
             };

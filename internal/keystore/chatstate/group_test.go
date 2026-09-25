@@ -2,8 +2,47 @@ package chatstate
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
+
+type reportedRemovalInbound struct {
+	*fakeInbound
+	removed []string
+}
+
+func (c *reportedRemovalInbound) LastCommitChange() (CommitChange, bool) {
+	return CommitChange{Removed: c.removed}, true
+}
+
+func TestAConfirmedRemovalSurvivesALostProcessResponse(t *testing.T) {
+	store, _ := newTestStore(t)
+	if _, err := store.SaveJoinedGroupState(testConvA, noWatermark, fakeState(1, 0, 0), 1, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	commit := []byte("remove bob")
+	req := ReceiveRequest{Seq: 7, Message: commit, Handshake: true, ProducedEpoch: 2}
+	cipher := &reportedRemovalInbound{
+		fakeInbound: &fakeInbound{opened: Opened{Epoch: 2}},
+		removed:     []string{"bob"},
+	}
+	if _, err := store.Receive(testConvA, noWatermark, req, cipher); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Receive(testConvA, noWatermark, req, cipher); !errors.Is(err, ErrHandshakeApplied) {
+		t.Fatalf("replayed Commit = %v", err)
+	}
+	removed, generation, found, err := store.ConfirmedRemoval(testConvA, noWatermark, 7, 2, commit)
+	if err != nil || !found || !slices.Equal(removed, []string{"bob"}) || generation != readRecordForTest(t, store, testConvA).Generation {
+		t.Fatalf("confirmed removal = %v, generation %d, found %t, err %v", removed, generation, found, err)
+	}
+	if _, _, found, err := store.ConfirmedRemoval(testConvA, noWatermark, 7, 2, []byte("another Commit")); err != nil || found {
+		t.Fatalf("other Commit was accepted: found %t, err %v", found, err)
+	}
+	if _, _, found, err := store.ConfirmedRemoval(testConvA, noWatermark, 8, 2, commit); err != nil || found {
+		t.Fatalf("same Commit at another seq was accepted: found %t, err %v", found, err)
+	}
+}
 
 // A joined group records the epoch it joined at, so the handshake ordering
 // rule and the anchor are judged against the real confirmed epoch.
