@@ -848,13 +848,48 @@ func TestHistoryRingAndAgeBoundWhatTheRecordKeeps(t *testing.T) {
 		t.Fatalf("an evicted entry = %v, want ErrHistoryUnavailable", err)
 	}
 
-	// MaxAge is the M4.6.1 seam. Zero applies no expiry; a value prunes on the
-	// next write rather than on a timer, because the record is only ever
-	// touched under the conversation lock.
+	// Zero applies no age-based expiry; a configured value prunes old entries.
 	aged := Record{History: []HistoryEntry{{Seq: 1, StoredAt: time.Now().Add(-2 * time.Hour).Unix()}}}
 	aged.appendHistory(HistoryEntry{Seq: 2, StoredAt: time.Now().Unix()},
 		HistoryPolicy{MaxAge: time.Hour}, time.Now())
 	if len(aged.History) != 1 || aged.History[0].Seq != 2 {
 		t.Fatalf("MaxAge kept %+v", aged.History)
+	}
+}
+
+func TestReadHistoryExpiresAndPersistsAgedCopies(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.HistoryPolicy = HistoryPolicy{MaxEntries: 3, MaxAge: time.Hour}
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+	for seq, message := range []string{"expired", "retained"} {
+		if _, err := store.Receive(testConvA, noWatermark,
+			ReceiveRequest{Seq: uint64(seq + 1), Message: []byte("wire")},
+			inbound(3, uint32(seq), message),
+		); err != nil {
+			t.Fatalf("receive %q: %v", message, err)
+		}
+	}
+	rec := readRecordForTest(t, store, testConvA)
+	rec.History[0].StoredAt = time.Now().Add(-2 * time.Hour).Unix()
+	if err := store.writeRecord(store.paths(testConvA), rec, rec.Generation); err != nil {
+		t.Fatalf("age history entry: %v", err)
+	}
+
+	got, err := store.ReceiveBatch(testConvA, noWatermark, []ReceiveRequest{
+		{Seq: 1, Message: []byte("wire")},
+		{Seq: 2, Message: []byte("wire")},
+	}, nil, inbound(3, 0, "unused"))
+	if err != nil || len(got) != 2 || !got[0].HistoryUnavailable || string(got[1].Plaintext) != "retained" {
+		t.Fatalf("expired batch replay = %+v, %v; want unavailable then retained", got, err)
+	}
+	if _, err := store.ReadHistory(testConvA, noWatermark, 1); !errors.Is(err, ErrHistoryUnavailable) {
+		t.Fatalf("expired entry read = %v, want ErrHistoryUnavailable", err)
+	}
+	if got, err := store.ReadHistory(testConvA, noWatermark, 2); err != nil || string(got.Plaintext) != "retained" {
+		t.Fatalf("retained entry = %q, %v", got.Plaintext, err)
+	}
+	rec = readRecordForTest(t, store, testConvA)
+	if len(rec.History) != 1 || rec.History[0].Seq != 2 {
+		t.Fatalf("persisted history after expiry = %+v, want only seq 2", rec.History)
 	}
 }

@@ -39,9 +39,8 @@ const MaxReserveCount = 64
 // Store is one owner account's view of the chat state directory. It holds
 // derived key material, so it is built per operation and closed after.
 type Store struct {
-	// HistoryPolicy is the tunable part of the local message history. Its
-	// zero value is the shipped behaviour; see history.go for which of its
-	// values are still undecided.
+	// HistoryPolicy is the tunable part of the local message history. Open
+	// applies the shipped 90-day age and 64-entry defaults.
 	HistoryPolicy HistoryPolicy
 
 	secrets     keychain.SecretStore
@@ -91,6 +90,10 @@ func Open(secrets keychain.SecretStore, ownerAccountID string) (*Store, error) {
 		historyKey:  deriveSubkey(master, historySubkeyLabel),
 		poolKey:     deriveSubkey(master, keyPackagePoolSubkeyLabel),
 		lockTimeout: LockTimeout,
+		HistoryPolicy: HistoryPolicy{
+			MaxEntries: DefaultHistoryMaxEntries,
+			MaxAge:     DefaultHistoryMaxAge,
+		},
 	}, nil
 }
 
