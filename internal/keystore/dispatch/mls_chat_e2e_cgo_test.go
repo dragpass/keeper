@@ -609,7 +609,7 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	}
 	// Bob learns he was removed, from the admin's statement the Commit
 	// carries.
-	if got := c.bob.processAttested(c.nextSeq(), 2, remove.CommitB64, c.alice.id); !got.Removed {
+	if got := c.bob.processAttested(c.nextSeq(), 2, remove.CommitB64, c.alice.id); !got.Removed || !slices.Equal(got.RemovedAccountIDs, []string{c.bob.id}) {
 		t.Fatalf("bob processed his removal as %+v", got)
 	}
 }
