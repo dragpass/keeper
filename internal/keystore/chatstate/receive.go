@@ -240,8 +240,9 @@ func (s *Store) Receive(
 			return err
 		}
 		loaded := rec.Generation
-		var changed bool
-		out, changed, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
+		changed := rec.pruneHistory(s.HistoryPolicy, time.Now())
+		var wrote bool
+		out, wrote, err = s.receiveOne(conversationID, rec, wm, req, cipher, nil)
 		var fork *forkDetected
 		if errors.As(err, &fork) {
 			return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{Cause: RekeyCauseFork, Epoch: fork.epoch})
@@ -249,6 +250,7 @@ func (s *Store) Receive(
 		if err != nil {
 			return blockIfRefused(s, p, anchor, err, req.ProducedEpoch, req.Message)
 		}
+		changed = changed || wrote
 		if !changed {
 			return nil
 		}
@@ -383,6 +385,10 @@ func (s *Store) ReceiveBatch(
 				if !ok {
 					return ErrRekeyRequired
 				}
+				if historyEntryExpired(stored, s.HistoryPolicy, time.Now()) {
+					out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
+					continue
+				}
 				result, err := s.reread(conversationID, rec, stored)
 				if err != nil {
 					return err
@@ -395,7 +401,7 @@ func (s *Store) ReceiveBatch(
 			return err
 		}
 		loaded := rec.Generation
-		changed := false
+		changed := rec.pruneHistory(s.HistoryPolicy, time.Now())
 		for _, req := range reqs {
 			result, wrote, err := s.receiveOne(conversationID, rec, wm, req, cipher, accept)
 			if errors.Is(err, ErrOwnMessage) {
@@ -670,12 +676,27 @@ func (s *Store) ReadHistory(
 ) (ReceiveResult, error) {
 	var out ReceiveResult
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, _, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		latched := false
 		if errors.Is(err, ErrRekeyRequired) {
+			latched = true
 			rec, err = s.loadLatched(p, conversationID)
 		}
 		if err != nil {
 			return err
+		}
+		loadedGeneration := rec.Generation
+		_, wasStored := rec.findHistory(seq)
+		pruned := rec.pruneHistory(s.HistoryPolicy, time.Now())
+		if pruned && !latched {
+			if err := s.commit(p, rec, loadedGeneration, anchor); err != nil {
+				return err
+			}
+		}
+		if _, ok := rec.findHistory(seq); !ok {
+			if wasStored {
+				return ErrHistoryUnavailable
+			}
 		}
 		stored, ok := rec.findHistory(seq)
 		if !ok {
@@ -719,6 +740,9 @@ func (s *Store) loadLatched(p convPaths, conversationID string) (*Record, error)
 }
 
 func (s *Store) reread(conversationID string, rec *Record, stored HistoryEntry) (ReceiveResult, error) {
+	if historyEntryExpired(stored, s.HistoryPolicy, time.Now()) {
+		return ReceiveResult{}, ErrHistoryUnavailable
+	}
 	plaintext, position, err := s.openHistory(conversationID, stored)
 	if err != nil {
 		return ReceiveResult{}, err
@@ -731,4 +755,9 @@ func (s *Store) reread(conversationID string, rec *Record, stored HistoryEntry) 
 		FromHistory: true,
 		Generation:  rec.Generation,
 	}, nil
+}
+
+func historyEntryExpired(entry HistoryEntry, policy HistoryPolicy, now time.Time) bool {
+	return policy.MaxAge > 0 &&
+		entry.StoredAt < now.Add(-policy.MaxAge).Unix()
 }

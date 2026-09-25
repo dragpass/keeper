@@ -451,7 +451,8 @@ func TestCredentialHTTP_SecretEchoedInResponseHeader_Masked(t *testing.T) {
 func TestCredentialHTTP_UndecodableContentEncoding_Rejected(t *testing.T) {
 	var compressed bytes.Buffer
 	zw := zlib.NewWriter(&compressed)
-	if _, err := zw.Write([]byte("your token is SUPER_SECRET_TOKEN_XYZ done")); err != nil {
+	payload := strings.Repeat("compressible response padding ", 16) + "your token is SUPER_SECRET_TOKEN_XYZ done"
+	if _, err := zw.Write([]byte(payload)); err != nil {
 		t.Fatalf("zlib write: %v", err)
 	}
 	if err := zw.Close(); err != nil {

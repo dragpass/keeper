@@ -10,23 +10,9 @@
 // state and a sealed copy of the plaintext in the same write, and by serving a
 // re-read from the copy instead of the wire.
 //
-// # What this file does and does not settle
-//
-// Settled by §8.4's conditions: the copy is sealed, never written as
-// plaintext, keyed by something other than an MLS message key, and confirmed
-// atomically with the receive state. It lives in the Record because that is
-// what makes the last one true — a separate file would be a second atomicity
-// unit, which ADR §3.5 rejected for the group state for the same reason.
-//
-// Not settled here, and deliberately not given a default that reads like an
-// answer:
-//
-//   - M4.6.1, how long a message is kept. HistoryPolicy.MaxAge is the seam and
-//     is zero until somebody names a number.
-//   - M4.6.2, what else erases it besides expiry.
-//   - M4.6.3, whether the record is the right home and whether the sealing key
-//     should be its own keyring entry rather than derived from the owner's
-//     seal key.
+// History is sealed, atomically confirmed with receive state, and retained for
+// at most 90 days and 64 entries. Its sealing key is derived from the owner's
+// seal key. Separate erasure controls and key placement remain undecided.
 //
 // # What the sealing key is and is not
 //
@@ -56,14 +42,12 @@ import (
 )
 
 // DefaultHistoryMaxEntries bounds how many delivered messages one record
-// carries. It is a file-size bound and nothing else: the record is rewritten
-// whole on every change, so the ring is what stops one conversation's file
-// from growing until each write costs a megabyte. It is not a retention
-// period and must not be quoted as one; that number is M4.6.1's.
+// carries. The record is rewritten whole on every change, so the ring also
+// bounds the cost of each write. Age-based expiry is configured separately.
 const DefaultHistoryMaxEntries = 64
 
-// DefaultHistoryMaxAge removes sealed local copies after 90 days on the next
-// conversation write. The entry ring remains the tighter bound when it fills.
+// DefaultHistoryMaxAge removes sealed local copies after 90 days. The entry
+// ring remains the tighter bound when it fills.
 const DefaultHistoryMaxAge = 90 * 24 * time.Hour
 
 const (
@@ -78,10 +62,8 @@ type HistoryPolicy struct {
 	// MaxEntries is the ring bound. Zero means DefaultHistoryMaxEntries.
 	MaxEntries int
 
-	// MaxAge drops entries older than this at the next write. Zero applies no
-	// age-based expiry, which is the honest state of an undecided parameter
-	// and not a promise that history is kept forever: the ring still evicts,
-	// and M4.6.2 may add erasers this field knows nothing about.
+	// MaxAge drops entries older than this on write and read. Zero disables
+	// age-based expiry; the entry limit still applies.
 	MaxAge time.Duration
 }
 
@@ -231,18 +213,13 @@ func (r *Record) findSentHistory(clientMessageID string) (int, bool) {
 }
 
 // appendHistory adds one entry, drops what the policy no longer keeps, and
-// bounds the ring. Expiry runs on write rather than on a timer because this
-// package has no thread of its own: the record is only ever touched under the
-// conversation lock, and that is the only moment an entry can be removed
-// without racing a reader.
+// bounds the ring. Expiry also runs on reads; the conversation lock protects
+// both paths.
 func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Time) {
+	r.pruneHistory(policy, now)
 	kept := r.History[:0:0]
-	cutoff := int64(0)
-	if policy.MaxAge > 0 {
-		cutoff = now.Add(-policy.MaxAge).Unix()
-	}
 	for _, existing := range r.History {
-		if existing.StoredAt < cutoff || e.replaces(existing) {
+		if e.replaces(existing) {
 			continue
 		}
 		kept = append(kept, existing)
@@ -252,6 +229,23 @@ func (r *Record) appendHistory(e HistoryEntry, policy HistoryPolicy, now time.Ti
 		kept = append([]HistoryEntry(nil), kept[len(kept)-limit:]...)
 	}
 	r.History = kept
+}
+
+func (r *Record) pruneHistory(policy HistoryPolicy, now time.Time) bool {
+	kept := r.History[:0:0]
+	cutoff := int64(0)
+	if policy.MaxAge > 0 {
+		cutoff = now.Add(-policy.MaxAge).Unix()
+	}
+	for _, existing := range r.History {
+		if policy.MaxAge > 0 && existing.StoredAt < cutoff {
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	changed := len(kept) != len(r.History)
+	r.History = kept
+	return changed
 }
 
 // replaces reports whether e is a newer copy of the same message as existing.
