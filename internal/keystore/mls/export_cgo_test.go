@@ -52,3 +52,13 @@ func StopAfterJoinedStateSavedForTest(err error) (restore func()) {
 	afterJoinedStateSaved = func() error { return err }
 	return func() { afterJoinedStateSaved = previous }
 }
+
+// ApproveRemovalsForTest hands the Rust rules removals the test chose, so a
+// test can play a member whose client builds a Commit its Keeper's own rules
+// would never approve.
+func (s *Session) ApproveRemovalsForTest(leaves []Leaf) error { return s.approveRemovals(leaves) }
+
+// SetNextCommitAADForTest sets the authenticated data the next Commit build
+// carries, so a test can play a member whose client writes data its Keeper
+// would never write.
+func (s *Session) SetNextCommitAADForTest(aad []byte) error { return s.setNextCommitAAD(aad) }

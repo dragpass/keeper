@@ -77,6 +77,28 @@ func HandleMLSKeyPackageGenerate(d Deps, req proto.MLSKeyPackageGenerateRequest)
 	return resp
 }
 
+// HandleMLSKeyPackagePoolSweep drops the pool entries a Keeper before wave 5
+// built, whose KeyPackages lack the roles extension (Q11,
+// mls.SweepKeyPackagePool).
+func HandleMLSKeyPackagePoolSweep(d Deps, req proto.MLSKeyPackagePoolSweepRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	if !mls.Available() {
+		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeCapabilityRequired),
+			"this Keeper was built without the MLS library")
+	}
+	dropped, remaining, err := mls.SweepKeyPackagePool(d.Store, req.AccountID, d.Now())
+	if err != nil {
+		d.Logger.Println("mls key package pool sweep: the pool could not be swept")
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls key package pool could not be swept")
+	}
+	d.Logger.Printf("mls key package pool sweep successful (%d dropped)", dropped)
+	return proto.BaseResponse{Success: true, Data: proto.MLSKeyPackagePoolSweepResponseData{
+		Dropped: dropped, Remaining: remaining,
+	}}
+}
+
 // generateKeyPackagesLocked is the critical section. The leaf slot is read by
 // NewDeviceSession only, and chatstate touches its own slots and file locks;
 // nothing here takes WithMLSLeafLock again.

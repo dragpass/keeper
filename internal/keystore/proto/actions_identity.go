@@ -262,6 +262,19 @@ const (
 	ActionMLSLeafAbort   = "mls_leaf_abort"
 	ActionMLSLeafStatus  = "mls_leaf_status"
 
+	// MLSLeafHandoverSign is the old device's approval of a takeover (0.0.55,
+	// design Q1): it checks that new_declaration is this account's, signed by
+	// the account key this device holds, for another device, and signs a
+	// handover statement with this device's active leaf key. The app calls it
+	// only after a person on this device approved the request it shows. It
+	// is not gated by a server challenge: it signs nothing the server could
+	// not already relay, and without a declaration signed by this account's
+	// key there is nothing to approve. It is not on the MCP surface.
+	//
+	//   Inputs: account_id, new_declaration, expires_at
+	//   Output: handover
+	ActionMLSLeafHandoverSign = "mls_leaf_handover_sign"
+
 	// MLSKeyPackageGenerate produces single-use KeyPackages for this device's
 	// active leaf, each carrying the active leaf declaration in a LeafNode
 	// extension and ending no later than it, for the caller to upload to the
@@ -276,4 +289,17 @@ const (
 	//           account_id, device_id, count (1..32)
 	//   Output: { key_packages: [{ key_package_b64, not_after }] }
 	MLSKeyPackageGenerate = "mls_key_package_generate"
+
+	// MLSKeyPackagePoolSweep drops this owner's KeyPackage pool entries whose
+	// KeyPackage does not advertise the room roles extension (0xF0D1), which
+	// a Keeper before wave 5 built, and reports how many it dropped (Q11). The
+	// caller discards the server's unconsumed KeyPackages when it dropped any,
+	// and refills. Idempotent. No gate: it only deletes private keys this
+	// device's own pool holds and could never use in a room with roles; the
+	// account id scopes it, as chat_state_purge's does. Not on the MCP
+	// surface.
+	//
+	//   Inputs: account_id
+	//   Output: { dropped, remaining }
+	MLSKeyPackagePoolSweep = "mls_key_package_pool_sweep"
 )

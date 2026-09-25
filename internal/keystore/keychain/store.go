@@ -99,6 +99,18 @@ func (s *MemorySecretStore) Delete(service, account string) error {
 	return nil
 }
 
+// Snapshot copies every entry, keyed service|account (for test assertions
+// that nothing but the entries a test expects changed).
+func (s *MemorySecretStore) Snapshot() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.entries))
+	for k, v := range s.entries {
+		out[k] = v
+	}
+	return out
+}
+
 // Size returns the current entry count (for test assertions).
 func (s *MemorySecretStore) Size() int {
 	s.mu.Lock()

@@ -57,8 +57,12 @@ int32_t dpmls_session_new(const uint8_t *identity, size_t identity_len,
 void    dpmls_session_free(DpSession *handle);
 int32_t dpmls_session_approve(DpSession *handle, const uint8_t *approvals, size_t approvals_len);
 int32_t dpmls_session_approve_removals(DpSession *handle, const uint8_t *removals, size_t removals_len);
+int32_t dpmls_session_set_next_roles(DpSession *handle, const uint8_t *roles, size_t roles_len);
+int32_t dpmls_session_set_next_commit_aad(DpSession *handle, const uint8_t *aad, size_t aad_len);
+int32_t dpmls_group_authority(DpSession *handle, DpBuf *out);
 int32_t dpmls_key_package_leaf(const uint8_t *key_package, size_t key_package_len, DpBuf *out);
 int32_t dpmls_key_package_not_after(const uint8_t *key_package, size_t key_package_len, uint64_t *out);
+int32_t dpmls_key_package_entry_supports_roles(const uint8_t *entry, size_t entry_len, uint8_t *out);
 int32_t dpmls_group_process_collect(DpSession *handle, const uint8_t *message, size_t message_len, DpBuf *out);
 int32_t dpmls_group_join_collect(DpSession *handle, const uint8_t *welcome, size_t welcome_len, DpBuf *out);
 
@@ -566,6 +570,50 @@ func (s *Session) approveRemovals(leaves []Leaf) error {
 	return statusError(rc)
 }
 
+// setNextRoles hands the Rust side the roles payload the next create or
+// Commit build writes into the group context. Empty clears it.
+func (s *Session) setNextRoles(payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	rc := C.dpmls_session_set_next_roles(h, bytePtr(payload), C.size_t(len(payload)))
+	runtime.KeepAlive(payload)
+	return statusError(rc)
+}
+
+// setNextCommitAAD hands the Rust side the authenticated data the next Commit
+// build carries. Empty carries none.
+func (s *Session) setNextCommitAAD(aad []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return err
+	}
+	rc := C.dpmls_session_set_next_commit_aad(h, bytePtr(aad), C.size_t(len(aad)))
+	runtime.KeepAlive(aad)
+	return statusError(rc)
+}
+
+// groupAuthority reads the group context's roles payload (nil when it has
+// none) and whether every confirmed leaf advertises the roles extension.
+func (s *Session) groupAuthority() ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return nil, false, err
+	}
+	var buf C.DpBuf
+	if rc := C.dpmls_group_authority(h, &buf); rc != 0 {
+		return nil, false, statusError(rc)
+	}
+	return decodeAuthority(takeBuf(&buf))
+}
+
 // processCollect reports the leaves message would bring in and what the
 // Commit does, and leaves the group exactly as it was.
 func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
@@ -629,6 +677,19 @@ func keyPackageNotAfter(keyPackage []byte) (uint64, error) {
 		return 0, statusError(rc)
 	}
 	return uint64(out), nil
+}
+
+// keyPackageEntrySupportsRoles reports whether the KeyPackage inside a pool
+// entry advertises the roles extension. The entry holds private keys; the
+// Rust side keeps nothing of it.
+func keyPackageEntrySupportsRoles(entry []byte) (bool, error) {
+	var out C.uint8_t
+	rc := C.dpmls_key_package_entry_supports_roles(bytePtr(entry), C.size_t(len(entry)), &out)
+	runtime.KeepAlive(entry)
+	if rc != 0 {
+		return false, statusError(rc)
+	}
+	return out == 1, nil
 }
 
 func WireFormOf(message []byte) (WireForm, error) {
@@ -801,6 +862,11 @@ func statusError(rc C.int32_t) error {
 	// Rust half refusing what the Go half would have refused.
 	if rc == -6 {
 		return &chatstate.UnauthorizedCommitError{Reason: "the mls rules refused a proposal nobody approved"}
+	}
+	// -7 is DPMLS_ERR_ROLES_UNSUPPORTED: a leaf or KeyPackage does not
+	// advertise the roles extension a group carrying it requires.
+	if rc == -7 {
+		return fmt.Errorf("%w (status %d): %s", ErrRolesUnsupported, int(rc), msg)
 	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

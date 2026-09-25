@@ -11,11 +11,12 @@ use mls_rs::group::proposal::{AddProposal, Proposal};
 use mls_rs::group::{CommitEffect, ReceivedMessage};
 use mls_rs::identity::basic::BasicCredential;
 use mls_rs::identity::SigningIdentity;
+use mls_rs::mls_rs_codec::MlsDecode;
 use mls_rs::mls_rules::EncryptionOptions;
 use mls_rs::time::MlsTime;
 use mls_rs::{
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, Extension, ExtensionList, Group,
-    MlsMessage,
+    KeyPackage, MlsMessage,
 };
 use mls_rs_core::crypto::SignatureSecretKey;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
@@ -23,6 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::authority::{AuthorityRules, CommitShape, RemovalApproval};
 use crate::gate::{self, Approval, Leaf, LeafGate, LEAF_DECLARATION_EXTENSION};
+use crate::roles::{roles_extension_type, Roles, ROLES_EXTENSION};
 use crate::storage::{KeyPackageCustody, RecordStorage};
 
 /// RFC 9420 ciphersuite 1. The rustcrypto provider implements 1, 2, 3 and 7;
@@ -84,7 +86,27 @@ pub struct Session {
     /// The Removes the Go side approved for the next group operation, and only
     /// that one: the authority half of `approved` (authority.rs).
     approved_removals: Vec<RemovalApproval>,
+    /// The roles payload the next create or Commit build sets in the group
+    /// context (roles.rs), and only that one. None sets nothing.
+    next_roles: Option<Vec<u8>>,
+    /// The authenticated data the next Commit build carries: the signed
+    /// statements its Removes rest on, which every receiver verifies from the
+    /// Commit itself. Empty carries none.
+    next_commit_aad: Vec<u8>,
     group: Option<Group<Config>>,
+}
+
+/// Marks a refusal because a leaf or KeyPackage does not advertise the roles
+/// extension, which mls-rs requires of every leaf of a group that carries it.
+/// The C ABI edge turns it into its own status code: the fix is that member's
+/// Keeper updating, not anything this device can do.
+pub const ROLES_UNSUPPORTED: &str = "a member does not support the room roles extension";
+
+fn build_err(context: &str, e: MlsError) -> String {
+    match e {
+        MlsError::UnsupportedGroupExtension(_) => format!("mls: {context}: {ROLES_UNSUPPORTED}"),
+        e => err(context, e),
+    }
 }
 
 /// The wire form a message went out in. Read back off the encoded bytes rather
@@ -115,6 +137,12 @@ fn err(context: &str, e: impl core::fmt::Display) -> String {
 /// status code because Go treats it as "read this from local history", not as
 /// a failure.
 pub const FROM_SELF: &str = "the message was sent by this leaf";
+
+/// The largest authenticated data a Commit this Keeper builds may carry. The
+/// Go side puts one evidence document there (proto.MLSCommitEvidence: the
+/// signed statements a Remove rests on and the leaf handovers a replace rests
+/// on) and bounds it by the same number; this is the library edge's own bound.
+pub const MAX_COMMIT_AUTHENTICATED_DATA: usize = 1 << 20;
 
 pub struct Processed {
     pub epoch: u64,
@@ -189,6 +217,21 @@ pub fn key_package_leaf(key_package: &[u8]) -> Res<Leaf> {
         add.signing_identity(),
         &add.leaf_node_extensions(),
     ))
+}
+
+/// Whether the KeyPackage a pool entry holds advertises the roles extension
+/// (Q11). A KeyPackage built before the extension existed can never be added
+/// to a room that carries roles, since every leaf must support the group
+/// context's extensions; after an upgrade those entries are swept and the pool
+/// refilled.
+pub fn key_package_entry_supports_roles(entry: &[u8]) -> Res<bool> {
+    let bytes = crate::storage::key_package_of_entry(entry).map_err(str::to_string)?;
+    let key_package =
+        KeyPackage::mls_decode(&mut bytes.as_slice()).map_err(|e| err("key package decode", e))?;
+    Ok(AddProposal::from(key_package)
+        .capabilities()
+        .extensions
+        .contains(&roles_extension_type()))
 }
 
 /// The leaves a Commit that removed this device adds for everyone else.
@@ -286,6 +329,7 @@ impl Session {
         // and what lets a group list it in required_capabilities.
         let client = Client::builder()
             .extension_type(LEAF_DECLARATION_EXTENSION.into())
+            .extension_type(ROLES_EXTENSION.into())
             .key_package_lifetime(KEY_PACKAGE_LIFETIME)
             .crypto_provider(RustCryptoProvider::default())
             .identity_provider(gate.clone())
@@ -310,8 +354,79 @@ impl Session {
             leaf_extensions,
             approved: Vec::new(),
             approved_removals: Vec::new(),
+            next_roles: None,
+            next_commit_aad: Vec::new(),
             group: None,
         })
+    }
+
+    /// Set the roles payload the next create or Commit build writes into the
+    /// group context. It must parse (roles.rs); the rules still judge the
+    /// Commit that carries it. Empty clears it.
+    pub fn set_next_roles(&mut self, payload: &[u8]) -> Res<()> {
+        if payload.is_empty() {
+            self.next_roles = None;
+            return Ok(());
+        }
+        Roles::parse(payload).map_err(|e| format!("mls: {e}"))?;
+        self.next_roles = Some(payload.to_vec());
+        Ok(())
+    }
+
+    /// Set the authenticated data the next Commit build carries. Data past
+    /// `MAX_COMMIT_AUTHENTICATED_DATA` is refused and clears what was set.
+    pub fn set_next_commit_aad(&mut self, aad: &[u8]) -> Res<()> {
+        if aad.len() > MAX_COMMIT_AUTHENTICATED_DATA {
+            self.next_commit_aad.clear();
+            return Err("mls: the commit's authenticated data is too large".to_string());
+        }
+        self.next_commit_aad = aad.to_vec();
+        Ok(())
+    }
+
+    /// The group context extensions with the next roles set, when there are
+    /// next roles. Taking them here is what makes them single-use.
+    fn take_next_context(&mut self) -> Res<Option<ExtensionList>> {
+        let Some(roles) = self.next_roles.take() else {
+            return Ok(None);
+        };
+        let mut extensions = self.group_mut()?.context().extensions.clone();
+        extensions.set(Extension::new(roles_extension_type(), roles));
+        Ok(Some(extensions))
+    }
+
+    /// Apply this build's roles and authenticated data to a builder.
+    fn with_extras<'a>(
+        mut builder: mls_rs::group::CommitBuilder<'a, Config>,
+        context: Option<ExtensionList>,
+        aad: Vec<u8>,
+    ) -> Res<mls_rs::group::CommitBuilder<'a, Config>> {
+        if let Some(extensions) = context {
+            builder = builder
+                .set_group_context_ext(extensions)
+                .map_err(|e| err("group context", e))?;
+        }
+        if !aad.is_empty() {
+            builder = builder.authenticated_data(aad);
+        }
+        Ok(builder)
+    }
+
+    /// The group's roles payload, and whether every leaf of the confirmed tree
+    /// advertises the roles extension (a group can only take roles once they
+    /// all do).
+    pub fn authority(&mut self) -> Res<(Option<Vec<u8>>, bool)> {
+        let group = self.group_mut()?;
+        let roles = group
+            .context()
+            .extensions
+            .get(roles_extension_type())
+            .map(|e| e.extension_data().to_vec());
+        let supported = group
+            .roster()
+            .members_iter()
+            .all(|m| m.capabilities.extensions.contains(&roles_extension_type()));
+        Ok((roles, supported))
     }
 
     /// One single-use KeyPackage carrying this device's declaration, ending no
@@ -380,6 +495,9 @@ impl Session {
                 credentials: Vec::new(),
             })
             .map_err(|e| err("required capabilities", e))?;
+        if let Some(roles) = self.next_roles.take() {
+            context_extensions.set(Extension::new(roles_extension_type(), roles));
+        }
         self.gate.enforce(Vec::new())?;
         self.group = Some(
             self.client
@@ -389,7 +507,7 @@ impl Session {
                     self.leaf_extensions.clone(),
                     None,
                 )
-                .map_err(|e| err("create group", e))?,
+                .map_err(|e| build_err("create group", e))?,
         );
         Ok(())
     }
@@ -547,13 +665,17 @@ impl Session {
         &mut self,
         key_packages: Vec<MlsMessage>,
     ) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let context = self.take_next_context()?;
+        let aad = std::mem::take(&mut self.next_commit_aad);
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
-        let mut builder = group.commit_builder();
+        let mut builder = Self::with_extras(group.commit_builder(), context, aad)?;
         for kp in key_packages {
-            builder = builder.add_member(kp).map_err(|e| err("add member", e))?;
+            builder = builder
+                .add_member(kp)
+                .map_err(|e| build_err("add member", e))?;
         }
-        let output = builder.build().map_err(|e| err("commit build", e))?;
+        let output = builder.build().map_err(|e| build_err("commit build", e))?;
         Ok((output, expected_epoch))
     }
 
@@ -584,19 +706,21 @@ impl Session {
         let active = self.signing_identity.clone();
         let signer = self.signer.clone();
         let extensions = self.leaf_extensions.clone();
+        let context = self.take_next_context()?;
+        let aad = std::mem::take(&mut self.next_commit_aad);
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
         let current = group
             .current_member_signing_identity()
             .map_err(|e| err("own leaf", e))?
             .clone();
-        let mut builder = group.commit_builder();
+        let mut builder = Self::with_extras(group.commit_builder(), context, aad)?;
         if current != active {
             builder = builder
                 .set_new_signing_identity(signer, active)
                 .set_leaf_node_extensions(extensions);
         }
-        let output = builder.build().map_err(|e| err("commit build", e))?;
+        let output = builder.build().map_err(|e| build_err("commit build", e))?;
         Ok((output, expected_epoch))
     }
 
@@ -620,15 +744,17 @@ impl Session {
     }
 
     fn build_remove(&mut self, leaf_indices: &[u32]) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let context = self.take_next_context()?;
+        let aad = std::mem::take(&mut self.next_commit_aad);
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
-        let mut builder = group.commit_builder();
+        let mut builder = Self::with_extras(group.commit_builder(), context, aad)?;
         for &index in leaf_indices {
             builder = builder
                 .remove_member(index)
                 .map_err(|e| err("remove member", e))?;
         }
-        let output = builder.build().map_err(|e| err("commit build", e))?;
+        let output = builder.build().map_err(|e| build_err("commit build", e))?;
         Ok((output, expected_epoch))
     }
 
@@ -677,18 +803,22 @@ impl Session {
         leaf_indices: &[u32],
         key_packages: Vec<MlsMessage>,
     ) -> Res<(mls_rs::group::CommitOutput, u64)> {
+        let context = self.take_next_context()?;
+        let aad = std::mem::take(&mut self.next_commit_aad);
         let group = self.group_mut()?;
         let expected_epoch = group.current_epoch();
-        let mut builder = group.commit_builder();
+        let mut builder = Self::with_extras(group.commit_builder(), context, aad)?;
         for &index in leaf_indices {
             builder = builder
                 .remove_member(index)
                 .map_err(|e| err("remove member", e))?;
         }
         for kp in key_packages {
-            builder = builder.add_member(kp).map_err(|e| err("add member", e))?;
+            builder = builder
+                .add_member(kp)
+                .map_err(|e| build_err("add member", e))?;
         }
-        let output = builder.build().map_err(|e| err("commit build", e))?;
+        let output = builder.build().map_err(|e| build_err("commit build", e))?;
         Ok((output, expected_epoch))
     }
 
@@ -764,13 +894,14 @@ impl Session {
         let snapshot = self.flush()?;
         let group = self.group_mut()?;
         let before = leaves_of(group);
+        let context = group.context().clone();
         self.gate.collect()?;
         self.rules.collect()?;
         let group = self.group_mut()?;
         let applied = group.process_incoming_message(msg).map(|received| {
             let mut after = leaves_of(group);
             after.extend(added_to_a_group_left_behind(&received));
-            (after, CommitShape::of(&received, &before))
+            (after, CommitShape::of(&received, &before, &context))
         });
         self.disarm()?;
         self.load(&snapshot)?;
@@ -1091,6 +1222,37 @@ mod tests {
         );
     }
 
+    // A replace carries the authenticated data set for the next build to
+    // every receiver, where the collect pass reports it with the Commit's
+    // shape; the Go side reads the evidence (leaf handovers, signed
+    // statements) there. Data past the bound is refused when it is set and
+    // clears what was set before, so the build that follows carries none.
+    #[test]
+    fn a_replaces_authenticated_data_reaches_the_receivers_shape() {
+        let (mut alice, mut bob, mut carol) = three();
+        let old = leaf_named(&mut alice, b"bob");
+        let new_kp = kp(&member("bob2"));
+        alice.set_next_commit_aad(b"stale").unwrap();
+        let too_big = vec![0u8; MAX_COMMIT_AUTHENTICATED_DATA + 1];
+        assert!(alice.set_next_commit_aad(&too_big).is_err());
+        assert!(alice.next_commit_aad.is_empty());
+
+        alice.set_next_commit_aad(b"handover").unwrap();
+        alice.approve(vec![approval(&key_package_leaf(&new_kp).unwrap())]);
+        alice.approve_removals(vec![removal(&old)]);
+        let (commit, _, _) = alice
+            .commit_replace_members(&[old.index], &[&new_kp])
+            .unwrap();
+        assert!(alice.next_commit_aad.is_empty());
+        let (_, shape) = carol.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+        let (_, shape) = bob.process_collect(&commit).unwrap();
+        assert_eq!(shape.authenticated_data, b"handover".to_vec());
+
+        let framed = crate::authority::encode_shape(&shape);
+        assert!(framed.ends_with(&[0, 0, 0, 8, b'h', b'a', b'n', b'd', b'o', b'v', b'e', b'r']));
+    }
+
     // The old device is removed by the replace, so its group never reaches the
     // new epoch; the collect pass must still report the leaf the Commit adds,
     // or the gate refuses the Commit that tells it it was removed.
@@ -1146,6 +1308,246 @@ mod tests {
             joiner.join(&welcome).unwrap();
         }
         (alice, bob, carol)
+    }
+
+    const ROOM_A: &str = "0a000000-0000-4000-8000-000000000001";
+    const ROOM_B: &str = "0b000000-0000-4000-8000-000000000002";
+    const ROOM_C: &str = "0c000000-0000-4000-8000-000000000003";
+    const ROOM_D: &str = "0d000000-0000-4000-8000-000000000004";
+    const ROOM_DEVICE: &str = "0e000000-0000-4000-8000-000000000005";
+
+    fn room_member(account: &str) -> Session {
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{account}|{ROOM_DEVICE}");
+        Session::new(identity.as_bytes(), &sk, &pk, b"declaration").unwrap()
+    }
+
+    fn room_roles(owner: &str, admins: &[&str]) -> Vec<u8> {
+        crate::roles::Roles::Room {
+            owner: owner.to_string(),
+            admins: admins.iter().map(|a| a.to_string()).collect(),
+        }
+        .encode()
+    }
+
+    /// A (owner), B (admin) and C (member) in a room whose roles A set at
+    /// create.
+    fn roles_room() -> (Session, Session, Session) {
+        let mut a = room_member(ROOM_A);
+        a.set_next_roles(&room_roles(ROOM_A, &[ROOM_B])).unwrap();
+        a.create_group(b"room").unwrap();
+        let (mut b, mut c) = (room_member(ROOM_B), room_member(ROOM_C));
+        let (b_kp, c_kp) = (kp(&b), kp(&c));
+        a.approve(vec![
+            approval(&key_package_leaf(&b_kp).unwrap()),
+            approval(&key_package_leaf(&c_kp).unwrap()),
+        ]);
+        let (_, welcome, _) = a.commit_add_members(&[&b_kp, &c_kp]).unwrap();
+        a.apply_pending_commit().unwrap();
+        for joiner in [&mut b, &mut c] {
+            let tree = joiner.join_collect(&welcome).unwrap();
+            joiner.approve(tree.iter().map(approval).collect());
+            joiner.join(&welcome).unwrap();
+        }
+        (a, b, c)
+    }
+
+    /// A Commit that adds D, built by `by` with the rules let through, the way
+    /// a modified client would.
+    fn forced_add(by: &mut Session, d: &Session) -> Vec<u8> {
+        by.rules.collect().unwrap();
+        by.gate.collect().unwrap();
+        let group = by.group_mut().unwrap();
+        let output = group
+            .commit_builder()
+            .add_member(MlsMessage::from_bytes(&kp(d)).unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        by.disarm().unwrap();
+        output.commit_message.to_bytes().unwrap()
+    }
+
+    #[test]
+    fn a_room_member_add_is_refused_on_receipt_and_on_build() {
+        let (mut a, mut b, mut c) = roles_room();
+        let d = room_member(ROOM_D);
+        let commit = forced_add(&mut c, &d);
+        let (entering, _) = a.process_collect(&commit).unwrap();
+        a.approve(entering.iter().map(approval).collect());
+        let Err(refused) = a.process(&commit) else {
+            panic!("a plain member's add was applied");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+
+        // Built through the session, the same Add is refused before it exists.
+        c.clear_pending_commit().unwrap();
+        let d_kp = kp(&d);
+        c.approve(vec![approval(&key_package_leaf(&d_kp).unwrap())]);
+        let Err(refused) = c.commit_add_members(&[&d_kp]) else {
+            panic!("a plain member built an add");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert!(!c.has_pending_commit().unwrap());
+
+        // The admin's Add is applied.
+        let commit = forced_add(&mut b, &d);
+        let (entering, _) = a.process_collect(&commit).unwrap();
+        a.approve(entering.iter().map(approval).collect());
+        a.process(&commit).unwrap();
+    }
+
+    #[test]
+    fn only_the_owner_changes_the_roles() {
+        let (mut a, mut b, _c) = roles_room();
+        b.set_next_roles(&room_roles(ROOM_B, &[ROOM_A])).unwrap();
+        let Err(refused) = b.commit_update() else {
+            panic!("an admin changed the roles");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+
+        a.set_next_roles(&room_roles(ROOM_B, &[ROOM_A])).unwrap();
+        let (commit, _) = a.commit_update().unwrap();
+        let (_, shape) = b.process_collect(&commit).unwrap();
+        assert_eq!(
+            shape.roles,
+            crate::authority::RolesChange::Set(room_roles(ROOM_B, &[ROOM_A]))
+        );
+        b.process(&commit).unwrap();
+        assert_eq!(
+            b.authority().unwrap(),
+            (Some(room_roles(ROOM_B, &[ROOM_A])), true)
+        );
+    }
+
+    fn room_device(account: &str, device: &str) -> Session {
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{account}|{device}");
+        Session::new(identity.as_bytes(), &sk, &pk, b"declaration").unwrap()
+    }
+
+    // Q14 through real MLS: an admin's modified client adds two devices of one
+    // account in one Commit. The owner refuses it on receipt and stays where
+    // it was, and the same Commit built through the session never exists.
+    #[test]
+    fn two_devices_of_one_account_in_one_commit_are_refused() {
+        let (mut a, mut b, _c) = roles_room();
+        let d1 = room_device(ROOM_D, "0f000000-0000-4000-8000-000000000006");
+        let d2 = room_device(ROOM_D, "0f000000-0000-4000-8000-000000000007");
+        let (kp1, kp2) = (kp(&d1), kp(&d2));
+
+        b.rules.collect().unwrap();
+        b.gate.collect().unwrap();
+        let group = b.group_mut().unwrap();
+        let output = group
+            .commit_builder()
+            .add_member(MlsMessage::from_bytes(&kp1).unwrap())
+            .unwrap()
+            .add_member(MlsMessage::from_bytes(&kp2).unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        b.disarm().unwrap();
+        let commit = output.commit_message.to_bytes().unwrap();
+
+        let epoch = a.epoch().unwrap();
+        let (entering, _) = a.process_collect(&commit).unwrap();
+        a.approve(entering.iter().map(approval).collect());
+        let Err(refused) = a.process(&commit) else {
+            panic!("two devices of one account were applied");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert_eq!(a.epoch().unwrap(), epoch);
+        assert_eq!(a.roster_len(), 3);
+
+        b.clear_pending_commit().unwrap();
+        b.approve(vec![
+            approval(&key_package_leaf(&kp1).unwrap()),
+            approval(&key_package_leaf(&kp2).unwrap()),
+        ]);
+        let Err(refused) = b.commit_add_members(&[&kp1, &kp2]) else {
+            panic!("an admin built two devices of one account");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert!(!b.has_pending_commit().unwrap());
+    }
+
+    // Q11: an entry this session makes advertises the roles extension; one a
+    // client without it made (a Keeper before the extension) does not, and a
+    // damaged entry is an error rather than either answer.
+    #[test]
+    fn a_pool_entry_reports_whether_its_key_package_supports_roles() {
+        let current = room_member(ROOM_D);
+        let generated = current.key_package(far_future()).unwrap();
+        assert!(key_package_entry_supports_roles(&generated.private).unwrap());
+
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{ROOM_D}|{ROOM_DEVICE}");
+        let custody = KeyPackageCustody::new();
+        let old = Client::builder()
+            .extension_type(LEAF_DECLARATION_EXTENSION.into())
+            .crypto_provider(RustCryptoProvider::default())
+            .identity_provider(BasicIdentityProvider::new())
+            .key_package_repo(custody.clone())
+            .signing_identity(
+                signing_identity(identity.as_bytes(), &pk),
+                sk.into(),
+                CIPHER_SUITE,
+            )
+            .build();
+        old.generate_key_package_message(Default::default(), ExtensionList::new(), None)
+            .unwrap();
+        let (_, entry) = custody.take().unwrap();
+        assert!(!key_package_entry_supports_roles(&entry).unwrap());
+
+        assert!(key_package_entry_supports_roles(&entry[..entry.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn a_leaf_without_the_roles_capability_cannot_join_a_roles_room() {
+        let (mut a, _b, _c) = roles_room();
+        let (sk, pk) = generate_signature_key().unwrap();
+        let identity = format!("dragpass.mls.credential|1|{ROOM_D}|{ROOM_DEVICE}");
+        let old = Client::builder()
+            .extension_type(LEAF_DECLARATION_EXTENSION.into())
+            .crypto_provider(RustCryptoProvider::default())
+            .identity_provider(BasicIdentityProvider::new())
+            .signing_identity(
+                signing_identity(identity.as_bytes(), &pk),
+                sk.into(),
+                CIPHER_SUITE,
+            )
+            .build();
+        let mut leaf_extensions = ExtensionList::new();
+        leaf_extensions.set(Extension::new(
+            LEAF_DECLARATION_EXTENSION.into(),
+            b"declaration".to_vec(),
+        ));
+        let kp = old
+            .generate_key_package_message(Default::default(), leaf_extensions, None)
+            .unwrap()
+            .to_bytes()
+            .unwrap();
+        a.approve(vec![approval(&key_package_leaf(&kp).unwrap())]);
+        let Err(e) = a.commit_add_members(&[&kp]) else {
+            panic!("a leaf without the roles capability was added");
+        };
+        assert!(e.contains(ROLES_UNSUPPORTED), "{e}");
     }
 
     fn leaf_named(s: &mut Session, name: &[u8]) -> Leaf {
@@ -1218,9 +1620,9 @@ mod tests {
         assert_eq!(alice.epoch().unwrap(), epoch + 1);
     }
 
-    // Only Add and Remove are proposals this integration makes. A Commit that
-    // changes the group context (required capabilities, say) is refused by a
-    // receiver whatever else was approved.
+    // A group context change may touch the room roles and nothing else. One
+    // that changes another extension (required capabilities, say) is refused
+    // by a receiver whatever else was approved.
     #[test]
     fn a_group_context_change_is_refused_by_the_receiver() {
         let (mut alice, mut bob, _carol) = three();
@@ -1236,10 +1638,8 @@ mod tests {
         let commit = output.commit_message.to_bytes().unwrap();
 
         let (_, shape) = alice.process_collect(&commit).unwrap();
-        assert_eq!(
-            shape.other,
-            vec![mls_rs_core::group::ProposalType::GROUP_CONTEXT_EXTENSIONS.raw_value()]
-        );
+        assert!(shape.other.is_empty());
+        assert_eq!(shape.roles, crate::authority::RolesChange::Other);
         let Err(refused) = alice.process(&commit) else {
             panic!("a group context change was applied");
         };

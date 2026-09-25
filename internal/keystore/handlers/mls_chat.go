@@ -101,6 +101,18 @@ func (c *mlsChat) verifier(d Deps, statements []proto.KeyRotationStatement) *MLS
 	return NewMLSLeafVerifier(d, c.permit.AccountID, statementsByAccount(statements))
 }
 
+// localVerifier is verifier for an operation this device starts (a create, a
+// Commit build, a Join), with the strict policy applied (mls_strict.go).
+func (c *mlsChat) localVerifier(d Deps, statements []proto.KeyRotationStatement) (*MLSLeafVerifier, proto.BaseResponse, bool) {
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return nil, errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error()), false
+	}
+	v := c.verifier(d, statements)
+	v.requireVerified = strict
+	return v, proto.BaseResponse{}, true
+}
+
 func statementsByAccount(statements []proto.KeyRotationStatement) map[string][]proto.KeyRotationStatement {
 	if len(statements) == 0 {
 		return nil
@@ -210,13 +222,27 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
-	v := c.verifier(d, req.RotationStatements)
+	roles, err := rolesPayload(req.Roles)
+	if err != nil {
+		return chatStateInvalidInput("roles must be one owner and admins, or a DM with none")
+	}
+	if req.Roles != nil && req.Roles.Kind == proto.MLSRolesKindRoom && !roleSetOwnedBy(req.Roles, c.permit.AccountID) {
+		// N11: a new room's creator is its owner, in the authenticated group
+		// context from its first epoch; nothing about another room carries over.
+		return chatStateInvalidInput("a new room's owner is the account that creates it")
+	}
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
+	cipher := mls.NewCipher(c.session, v)
+	cipher.SetCreateRoles(roles)
 	result, err := c.store.CreateGroup(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           chatstate.CommitPlan{AddKeyPackages: kps},
 		RoomName:       name,
 		AppContext:     appContext,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls group create", err)
 	}
@@ -292,9 +318,15 @@ func replaceMembers(
 		if !ok {
 			return nil, chatStateInvalidInput("replace names an account the permit does not list"), false
 		}
-		out = append(out, chatstate.ReplaceMember{
-			AccountID: m.AccountID, NewFingerprint: entry.NewSignatureKeyFP, KeyPackage: kp,
-		})
+		member := chatstate.ReplaceMember{AccountID: m.AccountID, NewFingerprint: entry.NewSignatureKeyFP, KeyPackage: kp}
+		if m.Handover != nil {
+			h, err := chatstate.LeafHandoverFromWire(*m.Handover)
+			if err != nil {
+				return nil, chatStateFailure(d, "mls commit build", err), false
+			}
+			member.Handover = &h
+		}
+		out = append(out, member)
 	}
 	return out, proto.BaseResponse{}, true
 }
@@ -333,8 +365,20 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 			return resp
 		}
 		plan.Rejoin = members
+	case req.RevokeDevices != nil:
+		for _, r := range req.RevokeDevices {
+			plan.RevokeDevices = append(plan.RevokeDevices, chatstate.DeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID})
+		}
 	}
 	plan.UserInitiated = req.UserInitiated
+	roles, err := rolesPayload(req.SetRoles)
+	if err != nil {
+		return chatStateInvalidInput("set_roles must be one owner and admins, or a DM with none")
+	}
+	plan.SetRoles = roles
+	if plan.CommitAAD, err = commitEvidence(req); err != nil {
+		return chatStateFailure(d, "mls commit build", err)
+	}
 	name, resp, ok := roomNameInput(req.RoomNamePlaintextB64)
 	if !ok {
 		return resp
@@ -344,15 +388,24 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !ok {
 		return resp
 	}
-	v := c.verifier(d, req.RotationStatements)
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
+	cipher := mls.NewCipher(c.session, v)
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
 	result, err := c.store.BeginCommit(c.conv, c.wm, chatstate.BeginCommitRequest{
 		ClientCommitID: req.ClientCommitID,
 		Plan:           plan,
 		ExpectedEpoch:  req.ExpectedEpoch,
 		RoomName:       name,
 		AppContext:     appContext,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls commit build", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls commit build", err)
 	}
 	d.Logger.Println("mls commit build successful")
@@ -408,8 +461,14 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		}
 	}
 	v := c.verifier(d, req.RotationStatements)
-	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, mls.NewCipher(c.session, v))
+	cipher := mls.NewCipher(c.session, v)
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
+	result, err := c.store.ConfirmCommit(c.conv, c.wm, outcome, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls commit confirm", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls commit confirm", err)
 	}
 	d.Logger.Println("mls commit confirm successful")
@@ -470,14 +529,20 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return chatStateNotAuthorized(d, "commit attestation")
 	}
 	v := c.verifier(d, req.RotationStatements)
+	cipher := mls.NewCipher(c.session, v)
+	evidence := newStatementEvidence(d, c.permit)
+	cipher.SetEvidence(evidence)
 	result, err := c.store.Receive(c.conv, c.wm, chatstate.ReceiveRequest{
 		Seq:           req.Seq,
 		Message:       commit,
 		Handshake:     true,
 		ProducedEpoch: req.Epoch,
 		CommitMembers: members,
-	}, mls.NewCipher(c.session, v))
+	}, cipher)
 	if err != nil {
+		return chatStateFailure(d, "mls process", err)
+	}
+	if err := evidence.commitPins(); err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
 	d.Logger.Println("mls process successful")
@@ -503,7 +568,10 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateInvalidInput("welcome_b64 must be valid standard Base64")
 	}
-	v := c.verifier(d, req.RotationStatements)
+	v, resp, ok := c.localVerifier(d, req.RotationStatements)
+	if !ok {
+		return resp
+	}
 	if err := c.session.JoinFromPool(c.store, c.conv, c.wm, welcome, v, d.Now()); err != nil {
 		return chatStateFailure(d, "mls join", err)
 	}
@@ -558,11 +626,19 @@ func HandleMLSEncrypt(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if !utf8.Valid(plaintext) {
 		return chatStateInvalidInput("plaintext_b64 must decode to UTF-8 text")
 	}
-	result, err := c.store.Send(c.conv, c.wm, chatstate.SendRequest{
+	send := chatstate.SendRequest{
 		ClientMessageID: req.ClientMessageID,
 		Plaintext:       plaintext,
 		ExpectedEpoch:   req.ExpectedEpoch,
-	}, mls.NewCipher(c.session, c.verifier(d, nil)))
+	}
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	}
+	if strict {
+		send.Admit = sendAdmission(d, c.permit.AccountID, c.session)
+	}
+	result, err := c.store.Send(c.conv, c.wm, send, mls.NewCipher(c.session, c.verifier(d, nil)))
 	if err != nil {
 		return chatStateFailure(d, "mls encrypt", err)
 	}
@@ -791,7 +867,10 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 		PendingAppContextB64:  appContextOutput(status.PendingAppContext),
 		RemovalLatch:          status.RemovalLatch,
 		LeafReplacementLatch:  permitLeafReplacements(status.LeafReplacementLatch),
+		DeviceRevokeLatch:     wireDeviceRefs(status.DeviceRevokeLatch),
+		Roles:                 []proto.MLSRoleEntry{},
 		NeedsRekey:            status.NeedsRekey,
+		SyncBlocked:           syncBlockWire(status.SyncBlock),
 		RekeyCause:            rekeyCauseOf(status),
 		RemovedFromGroup:      status.RemovedFromGroup,
 
@@ -806,8 +885,74 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	}
 	if status.HasGroupState && !status.NeedsRekey {
 		data.MemberTrust = c.memberTrust(d)
+		c.reportAuthority(d, &data)
+	}
+	data.UnverifiedAccountIDs = []string{}
+	strict, err := requireVerifiedPeers(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	}
+	data.RequireVerifiedPeers = strict
+	if strict && status.HasGroupState && !status.NeedsRekey {
+		unverified, ok := c.unverified(d)
+		if !ok {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "the members could not be held to the strict policy")
+		}
+		data.UnverifiedAccountIDs = unverified
 	}
 	return proto.BaseResponse{Success: true, Data: data}
+}
+
+// reportAuthority fills the status's authority, roles and roles_migratable
+// from the group context the session memberTrust loaded. A read that fails
+// leaves authority "" rather than naming rules the group may not be under.
+func (c *mlsChat) reportAuthority(d Deps, data *proto.MLSConversationStatusResponseData) {
+	roles, supported, err := mls.NewCipher(c.session, nil).Authority()
+	if err != nil {
+		d.Logger.Println("mls conversation status: the group's roles were not read")
+		return
+	}
+	data.Authority = chatstate.AuthorityOf(roles)
+	data.RolesMigratable = supported
+	if roles != nil {
+		for _, e := range roles.Entries() {
+			data.Roles = append(data.Roles, proto.MLSRoleEntry{AccountID: e.AccountID, Role: e.Role})
+		}
+	}
+}
+
+func wireDeviceRefs(refs []chatstate.DeviceRef) []proto.MLSDeviceRef {
+	out := make([]proto.MLSDeviceRef, len(refs))
+	for i, r := range refs {
+		out[i] = proto.MLSDeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID}
+	}
+	return out
+}
+
+// unverified is mls_conversation_status's unverified_account_ids. Unlike
+// member_trust it is what a send would be refused for, so a read that fails
+// fails the status rather than reporting nobody.
+func (c *mlsChat) unverified(d Deps) ([]string, bool) {
+	state, err := c.store.LoadGroupState(c.conv, c.wm)
+	if err == nil {
+		err = c.session.Load(state)
+		secure.Zeroize(state)
+	}
+	var leaves []mls.Leaf
+	if err == nil {
+		leaves, err = c.session.Roster()
+	}
+	var out []string
+	if err == nil {
+		out, err = unverifiedMembers(d, c.permit.AccountID, leaves)
+	}
+	if err != nil {
+		return nil, false
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, true
 }
 
 // memberTrust is mls_conversation_status's member_trust. It is a display
@@ -870,4 +1015,14 @@ func permitLeafReplacements(entries []chatstate.LeafReplacement) []proto.ChatSta
 		out[i] = proto.ChatStateLeafReplacement{AccountID: e.AccountID, NewSignatureKeyFP: e.NewFingerprint}
 	}
 	return out
+}
+
+// roleSetOwnedBy reports whether a room's role set names account as owner.
+func roleSetOwnedBy(set *proto.MLSRoleSet, account string) bool {
+	for _, e := range set.Entries {
+		if e.Role == proto.MLSRoleOwner {
+			return e.AccountID == account
+		}
+	}
+	return false
 }

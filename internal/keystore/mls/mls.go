@@ -73,6 +73,11 @@ var ErrUnavailable = errors.New("mls: this build does not include the MLS librar
 // protocol edge answers it with CHAT_MLS_FAILED and never with a storage code.
 var ErrFailed = errors.New("mls operation failed")
 
+// ErrRolesUnsupported — a leaf or KeyPackage does not advertise the room
+// roles extension, which a group carrying it requires of every leaf. The fix
+// is that member's Keeper updating; nothing was built.
+var ErrRolesUnsupported = errors.New("mls: a member does not support the room roles extension")
+
 // ErrGroupMismatch — a Welcome produced a group whose id is not the
 // conversation it was handed in for. Groups this Keeper creates are named by
 // their conversation id, so this is a Welcome for some other conversation.
@@ -203,15 +208,37 @@ type Cipher struct {
 
 	// lastChange is what the last Commit this cipher applied did.
 	lastChange *chatstate.CommitChange
+
+	// createRoles is the roles payload CreateGroup writes into the new
+	// group's context. Nil creates a group without roles.
+	createRoles []byte
+
+	// evidence verifies the signed statements a Commit carries, for every
+	// Commit this cipher applies or builds (chatstate.RemovalEvidence). Nil
+	// verifies none, so only R1, R2 and the roles authorize a Remove.
+	evidence chatstate.RemovalEvidence
 }
 
 var (
 	_ chatstate.AuthorityReceiver = (*Cipher)(nil)
 	_ chatstate.ChangeReporter    = (*Cipher)(nil)
+	_ chatstate.PlanJudge         = (*Cipher)(nil)
 )
 
 // SetCommitAuthority is chatstate.AuthorityReceiver.
 func (c *Cipher) SetCommitAuthority(auth chatstate.CommitAuthority) { c.authority = auth }
+
+// SetEvidence sets the verifier for the statements Commits carry.
+func (c *Cipher) SetEvidence(e chatstate.RemovalEvidence) { c.evidence = e }
+
+// Evidence is chatstate.PlanJudge.
+func (c *Cipher) Evidence() chatstate.RemovalEvidence { return c.evidence }
+
+func (c *Cipher) judgedAuthority() chatstate.CommitAuthority {
+	auth := c.authority
+	auth.Evidence = c.evidence
+	return auth
+}
 
 // LastCommitChange is chatstate.ChangeReporter.
 func (c *Cipher) LastCommitChange() (chatstate.CommitChange, bool) {
@@ -254,8 +281,18 @@ func (c *Cipher) Seal(plaintext, authenticatedData []byte) ([]byte, error) {
 
 func (c *Cipher) State() ([]byte, error) { return c.session.Flush() }
 
-// CreateGroup starts the conversation's group, for chatstate.Store.CreateGroup.
-func (c *Cipher) CreateGroup(groupID []byte) error { return c.session.CreateGroup(groupID) }
+// SetCreateRoles sets the roles payload CreateGroup writes into the group.
+func (c *Cipher) SetCreateRoles(payload []byte) { c.createRoles = payload }
+
+// CreateGroup starts the conversation's group, for chatstate.Store.CreateGroup,
+// with the roles SetCreateRoles set in its context.
+func (c *Cipher) CreateGroup(groupID []byte) error {
+	if err := c.session.setNextRoles(c.createRoles); err != nil {
+		return err
+	}
+	defer func() { _ = c.session.setNextRoles(nil) }()
+	return c.session.CreateGroup(groupID)
+}
 
 // BuildCommit builds a Commit and leaves it pending. mls-rs refuses a second
 // one with MlsError::ExistingPendingCommit, so the "at most one pending" rule
@@ -264,13 +301,35 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 	kinds := 0
 	for _, present := range []bool{
 		len(plan.AddKeyPackages) > 0, len(plan.RemoveAccountIDs) > 0, len(plan.Replace) > 0, len(plan.Rejoin) > 0,
+		len(plan.RevokeDevices) > 0,
 	} {
 		if present {
 			kinds++
 		}
 	}
 	if kinds > 1 {
-		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes, replaces or rejoins, never two of them")
+		return chatstate.BuiltCommit{}, failed("a commit plan adds, removes, revokes, replaces or rejoins, never two of them")
+	}
+	if plan.SetRoles != nil && (len(plan.Replace) > 0 || len(plan.Rejoin) > 0) {
+		return chatstate.BuiltCommit{}, failed("a roles change does not ride on a replace or a rejoin")
+	}
+	// Single-use on the Rust side, and cleared again whatever happens, so a
+	// build that fails before it reaches the library leaves nothing behind
+	// for the next one.
+	if err := c.session.setNextRoles(plan.SetRoles); err != nil {
+		return chatstate.BuiltCommit{}, err
+	}
+	defer func() { _ = c.session.setNextRoles(nil) }()
+	if err := c.session.setNextCommitAAD(plan.CommitAAD); err != nil {
+		return chatstate.BuiltCommit{}, err
+	}
+	defer func() { _ = c.session.setNextCommitAAD(nil) }()
+	if len(plan.RevokeDevices) > 0 {
+		commit, expected, err := c.commitRevokeDevices(plan.RevokeDevices)
+		if err != nil {
+			return chatstate.BuiltCommit{}, err
+		}
+		return chatstate.BuiltCommit{Commit: commit, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Rejoin) > 0 {
 		commit, welcome, expected, err := c.commitRejoinAccounts(plan.Rejoin)
@@ -280,7 +339,7 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 		return chatstate.BuiltCommit{Commit: commit, Welcome: welcome, ExpectedEpoch: expected}, nil
 	}
 	if len(plan.Replace) > 0 {
-		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace)
+		commit, welcome, expected, err := c.commitReplaceAccounts(plan.Replace, plan.UserInitiated, plan.CommitAAD)
 		if err != nil {
 			return chatstate.BuiltCommit{}, err
 		}
@@ -311,7 +370,7 @@ func (c *Cipher) BuildCommit(plan chatstate.CommitPlan) (chatstate.BuiltCommit, 
 // leaf in the confirmed tree is refused rather than skipped: a Commit that
 // removes less than it was asked to would read as the removal having happened.
 //
-// The plan was judged before this (chatstate.requireAuthorizedPlan), so the
+// The plan was judged before this (chatstate.judgeLocalPlan), so the
 // leaves it names are exactly the Removes approved to the Rust rules.
 func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, error) {
 	leaves, err := c.session.Roster()
@@ -339,6 +398,158 @@ func (c *Cipher) commitRemoveAccounts(accountIDs []string) ([]byte, uint64, erro
 		return nil, 0, err
 	}
 	return c.session.CommitRemoveMembers(leafIndices(removed))
+}
+
+// commitRevokeDevices removes exactly the leaf of each (account, device). A
+// device with no leaf in the confirmed tree is refused rather than skipped,
+// for commitRemoveAccounts' reason.
+func (c *Cipher) commitRevokeDevices(refs []chatstate.DeviceRef) ([]byte, uint64, error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return nil, 0, err
+	}
+	removed, err := leavesOfDevices(leaves, refs)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := c.session.approveRemovals(removed); err != nil {
+		return nil, 0, err
+	}
+	return c.session.CommitRemoveMembers(leafIndices(removed))
+}
+
+func leavesOfDevices(leaves []Leaf, refs []chatstate.DeviceRef) ([]Leaf, error) {
+	var out []Leaf
+	for _, ref := range refs {
+		found := false
+		for _, leaf := range leaves {
+			account, device, err := ParseCredentialIdentity(leaf.Identity)
+			if err != nil {
+				return nil, err
+			}
+			if account == ref.AccountID && device == ref.DeviceID {
+				out = append(out, leaf)
+				found = true
+			}
+		}
+		if !found {
+			return nil, failed("a device to revoke has no leaf in the group")
+		}
+	}
+	return out, nil
+}
+
+// PlanChange is chatstate.PlanJudge: the change the plan would make, read
+// off the confirmed tree the same way a receiver reads it off the Commit.
+// A plan naming something the tree does not hold is described as far as it
+// goes; BuildCommit refuses it.
+func (c *Cipher) PlanChange(plan chatstate.CommitPlan) (chatstate.CommitChange, error) {
+	leaves, err := c.session.Roster()
+	if err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	own, err := c.session.OwnLeafIndex()
+	if err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	epoch, err := c.session.Epoch()
+	if err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	rolesBefore, _, err := c.session.groupAuthority()
+	if err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	change := chatstate.CommitChange{Epoch: epoch, AuthenticatedData: plan.CommitAAD}
+	if change.RolesBefore, err = parseRolesOrNil(rolesBefore); err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	type held struct {
+		leaf            Leaf
+		account, device string
+	}
+	tree := make([]held, 0, len(leaves))
+	for _, l := range leaves {
+		account, device, err := ParseCredentialIdentity(l.Identity)
+		if err != nil {
+			return chatstate.CommitChange{}, err
+		}
+		tree = append(tree, held{leaf: l, account: account, device: device})
+		change.Before = append(change.Before, account)
+		if l.Index == 0 {
+			change.CreatorAccountID = account
+		}
+		if l.Index == own {
+			change.CommitterAccountID, change.CommitterDeviceID = account, device
+		}
+	}
+	remove := func(keep func(held) bool) {
+		for _, h := range tree {
+			if keep(h) {
+				change.Removed = append(change.Removed, h.account)
+				change.RemovedLeaves = append(change.RemovedLeaves, chatstate.RemovedLeaf{
+					AccountID: h.account, DeviceID: h.device, Declaration: h.leaf.Declaration,
+				})
+			}
+		}
+	}
+	add := func(kp []byte) error {
+		account, _, err := KeyPackageIdentity(kp)
+		if err != nil {
+			return err
+		}
+		change.Added = append(change.Added, account)
+		return nil
+	}
+	switch {
+	case len(plan.RemoveAccountIDs) > 0:
+		remove(func(h held) bool { return slices.Contains(plan.RemoveAccountIDs, h.account) })
+	case len(plan.RevokeDevices) > 0:
+		remove(func(h held) bool {
+			return slices.Contains(plan.RevokeDevices, chatstate.DeviceRef{AccountID: h.account, DeviceID: h.device})
+		})
+	case len(plan.Rejoin) > 0:
+		for _, m := range plan.Rejoin {
+			remove(func(h held) bool { return h.account == m.AccountID })
+			if err := add(m.KeyPackage); err != nil {
+				return chatstate.CommitChange{}, err
+			}
+		}
+	case len(plan.Replace) > 0:
+		for _, m := range plan.Replace {
+			remove(func(h held) bool {
+				fp, err := crypto.MLSLeafSignatureKeyFingerprint(h.leaf.SignatureKey)
+				return h.account == m.AccountID && (err != nil || fp != m.NewFingerprint)
+			})
+			if err := add(m.KeyPackage); err != nil {
+				return chatstate.CommitChange{}, err
+			}
+		}
+	}
+	for _, kp := range plan.AddKeyPackages {
+		if err := add(kp); err != nil {
+			return chatstate.CommitChange{}, err
+		}
+	}
+	if plan.SetRoles != nil {
+		roles, err := chatstate.ParseRoles(plan.SetRoles)
+		if err != nil {
+			return chatstate.CommitChange{}, failed("the roles to set do not parse")
+		}
+		change.RolesChange, change.RolesAfter = chatstate.RolesSet, &roles
+	}
+	return change, nil
+}
+
+// Authority reads the group's roles and whether every confirmed leaf
+// advertises the roles extension (chatstate.AuthorityReader).
+func (c *Cipher) Authority() (*chatstate.Roles, bool, error) {
+	payload, supported, err := c.session.groupAuthority()
+	if err != nil {
+		return nil, false, err
+	}
+	roles, err := parseRolesOrNil(payload)
+	return roles, supported, err
 }
 
 func leafIndices(leaves []Leaf) []uint32 {
@@ -390,10 +601,50 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 		}
 		kps = append(kps, m.KeyPackage)
 	}
+	// A rejoin re-seats the leaf key the account already holds here. One
+	// under another key would be a succession with no handover, which every
+	// receiver refuses; refusing it here builds nothing they would latch on.
+	entering, err := keyPackageLeaves(kps)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	roles, _, err := c.Authority()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, nil, roles, true, false); err != nil {
+		return nil, nil, 0, err
+	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
 	}
 	return c.session.CommitReplaceMembersVerified(leafIndices(removed), kps, c.verifier)
+}
+
+// keyPackageLeaves reads the leaf each KeyPackage would add.
+func keyPackageLeaves(kps [][]byte) ([]Leaf, error) {
+	out := make([]Leaf, 0, len(kps))
+	for _, kp := range kps {
+		leaf, err := keyPackageLeaf(kp)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, leaf)
+	}
+	return out, nil
+}
+
+// ownAccount is the account of this device's leaf in the confirmed tree.
+func (c *Cipher) ownAccount(leaves []Leaf) (string, error) {
+	own, err := c.session.OwnLeafIndex()
+	if err != nil {
+		return "", err
+	}
+	return committerOf(leaves, own)
 }
 
 // commitReplaceAccounts builds the M4.4 replace: for each account, every leaf
@@ -411,14 +662,30 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 //
 // An account with no leaf under another key is refused rather than turned
 // into a bare Add: there is nothing it replaces.
-func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commit, welcome []byte, expected uint64, err error) {
+//
+// Each account's succession is then held to the rule every receiver applies
+// (chatstate/succession.go): the old leaf's handover, which must verify
+// against the leaf being removed and name the KeyPackage's leaf, or a
+// recovered identity a person on this device asked to seat. The handovers
+// ride in the Commit's one evidence document (commitAAD, which BuildCommit
+// has already set for this build), and the succession is judged over the
+// handovers read back from those bytes, so this build and every receiver
+// judge exactly the same thing.
+func (c *Cipher) commitReplaceAccounts(
+	members []chatstate.ReplaceMember, userInitiated bool, commitAAD []byte,
+) (commit, welcome []byte, expected uint64, err error) {
+	carried, err := chatstate.DecodeHandovers(commitAAD)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	leaves, err := c.session.Roster()
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	var (
-		removed []Leaf
-		kps     [][]byte
+		removed  []Leaf
+		entering []Leaf
+		kps      [][]byte
 	)
 	for _, m := range members {
 		leaf, err := keyPackageLeaf(m.KeyPackage)
@@ -454,7 +721,27 @@ func (c *Cipher) commitReplaceAccounts(members []chatstate.ReplaceMember) (commi
 		if !found {
 			return nil, nil, 0, failed("an account to replace has no other leaf in the group")
 		}
+		if m.Handover != nil {
+			if err := checkHandover(*m.Handover, removed, leaf); err != nil {
+				return nil, nil, 0, err
+			}
+			if !slices.ContainsFunc(carried, m.Handover.Same) {
+				return nil, nil, 0, fmt.Errorf("%w: the commit does not carry it", chatstate.ErrHandoverInvalid)
+			}
+		}
+		entering = append(entering, leaf)
 		kps = append(kps, m.KeyPackage)
+	}
+	committer, err := c.ownAccount(leaves)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	roles, _, err := c.Authority()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := judgeSuccession(removed, entering, committer, carried, roles, true, userInitiated); err != nil {
+		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
 		return nil, nil, 0, err
@@ -493,7 +780,7 @@ func (c *Cipher) ConfirmedLeaves() ([]chatstate.RosterLeaf, error) {
 	}
 	out := make([]chatstate.RosterLeaf, 0, len(leaves))
 	for _, leaf := range leaves {
-		account, _, err := ParseCredentialIdentity(leaf.Identity)
+		account, device, err := ParseCredentialIdentity(leaf.Identity)
 		if err != nil {
 			return nil, err
 		}
@@ -501,7 +788,7 @@ func (c *Cipher) ConfirmedLeaves() ([]chatstate.RosterLeaf, error) {
 		if err != nil {
 			return nil, failed("a leaf in the group has an unreadable signature key")
 		}
-		out = append(out, chatstate.RosterLeaf{AccountID: account, Fingerprint: fingerprint})
+		out = append(out, chatstate.RosterLeaf{AccountID: account, DeviceID: device, Fingerprint: fingerprint})
 	}
 	return out, nil
 }
@@ -511,7 +798,7 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
-	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.judgedAuthority())
 	if err != nil {
 		return 0, false, err
 	}
@@ -536,7 +823,7 @@ func (c *Cipher) ExportPendingSecret(label, context []byte, n int) ([]byte, uint
 // choose. A sender this cannot attribute is a refusal, never an anonymous
 // message.
 func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
-	processed, change, err := c.session.processAuthorized(message, c.verifier, c.authority)
+	processed, change, err := c.session.processAuthorized(message, c.verifier, c.judgedAuthority())
 	if err != nil {
 		return chatstate.Opened{}, err
 	}
@@ -767,6 +1054,20 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 // KeyPackageLeaf reads the leaf a KeyPackage would add, without a group: its
 // identity, its signature key and its declaration payload. The index is 0.
 func KeyPackageLeaf(keyPackage []byte) (Leaf, error) { return keyPackageLeaf(keyPackage) }
+
+// SweepKeyPackagePool drops the owner's pool entries whose KeyPackage does not
+// advertise the room roles extension, and reports how many it dropped and how
+// many remain (Q11). A KeyPackage built by a Keeper before 0.0.55's wave 5
+// lacks it, and such a KeyPackage can never be added to a room that carries
+// roles: mls-rs requires every leaf to support the group context's
+// extensions, so the adder would see CHAT_MLS_ROLES_UNSUPPORTED for a member
+// that has in fact upgraded. An entry whose KeyPackage cannot be read is
+// dropped too; it could not be joined from either. Idempotent, and safe under
+// several Keeper processes (chatstate.DropKeyPackagesUnless). The server still
+// holds the matching KeyPackages; the caller discards those and refills.
+func SweepKeyPackagePool(secrets keychain.SecretStore, ownerAccountID string, now time.Time) (dropped, remaining int, err error) {
+	return chatstate.DropKeyPackagesUnless(secrets, ownerAccountID, now, keyPackageEntrySupportsRoles)
+}
 
 // KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
 // without a group. It is how a caller that asked the server for one member's
@@ -1101,7 +1402,46 @@ func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	if err := s.Join(welcome); err != nil {
 		return err
 	}
+	if err := s.requireCreatorOwnsNewRoom(); err != nil {
+		return err
+	}
 	return recordVerified(v, leaves)
+}
+
+// ErrCreatorNotOwner — a Welcome to a room's first epoch whose roles name as
+// owner someone other than the room's creator (N11). Nothing was joined.
+var ErrCreatorNotOwner = errors.New("mls: the new room's roles do not name its creator as owner")
+
+// requireCreatorOwnsNewRoom holds a room's first epoch to N11: the creator,
+// whose leaf is leaf 0, is the owner. Only the first epoch can be checked this
+// way; later the owner may have changed by a Commit the members judged. A
+// group without roles, and a DM, are not judged here.
+func (s *Session) requireCreatorOwnsNewRoom() error {
+	epoch, err := s.Epoch()
+	if err != nil || epoch != 1 {
+		return err
+	}
+	payload, _, err := s.groupAuthority()
+	if err != nil {
+		return err
+	}
+	roles, err := parseRolesOrNil(payload)
+	if err != nil || roles == nil || roles.Kind != chatstate.RolesKindRoom {
+		return err
+	}
+	roster, err := s.Roster()
+	if err != nil {
+		return err
+	}
+	for _, l := range roster {
+		if l.Index != 0 {
+			continue
+		}
+		if account, _, perr := ParseCredentialIdentity(l.Identity); perr == nil && account == roles.Owner {
+			return nil
+		}
+	}
+	return ErrCreatorNotOwner
 }
 
 // CommitAddMembersVerified verifies the leaves these KeyPackages would add, as
@@ -1139,7 +1479,8 @@ func (s *Session) CommitAddMembersVerified(
 
 // CommitReplaceMembersVerified is CommitAddMembersVerified for a Commit that
 // also removes leafIndices: the leaves the KeyPackages would add are verified
-// as one unit and as entering leaves, and a refused set builds nothing.
+// as one unit and as entering leaves, and a refused set builds nothing. The
+// Commit carries whatever authenticated data setNextCommitAAD set.
 func (s *Session) CommitReplaceMembersVerified(
 	leafIndices []uint32, keyPackages [][]byte, v LeafVerifier,
 ) (commit, welcome []byte, expectedEpoch uint64, err error) {

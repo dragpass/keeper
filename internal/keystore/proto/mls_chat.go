@@ -18,6 +18,7 @@ package proto
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -56,16 +57,45 @@ const (
 	// ChatMLSErrorCodeCommitUnauthorized — a Commit this device was asked to
 	// build carries an Add or a Remove the authority rules do not allow
 	// (0.0.55). Nothing was built. A received Commit the rules refuse is not
-	// this code: it latches the conversation (CHAT_STATE_REKEY_REQUIRED with
-	// rekey_cause unauthorized_commit).
+	// this code: it is CHAT_MLS_ROW_REFUSED.
 	ChatMLSErrorCodeCommitUnauthorized = "CHAT_MLS_COMMIT_UNAUTHORIZED"
+
+	// ChatMLSErrorCodeRowRefused — mls_process (or a superseded
+	// mls_commit_confirm) refused a received Commit the authority rules do
+	// not allow (N3). Nothing was applied. The conversation is not latched:
+	// it stops at that epoch (sync_blocked in the status, MLSSyncBlock in
+	// data), a new message is refused with CHAT_MLS_SYNC_BLOCKED, and another
+	// valid Commit for the same epoch is applied as usual and clears it. A
+	// received Commit refused by the leaf check keeps its own code
+	// (CHAT_MLS_LEAF_UNTRUSTED) and blocks the same way.
+	ChatMLSErrorCodeRowRefused = "CHAT_MLS_ROW_REFUSED"
+
+	// ChatMLSErrorCodeSyncBlocked — a new message was refused because the
+	// conversation is stopped at a received Commit this device refused
+	// (sync_blocked). Nothing was consumed.
+	ChatMLSErrorCodeSyncBlocked = "CHAT_MLS_SYNC_BLOCKED"
 
 	// ChatMLSErrorCodeRejoinUnverified — a rejoin in mls_commit_build carries
 	// a request that is not the account's own signed statement for this
 	// conversation and this KeyPackage's leaf, or one too old (0.0.55).
 	// Nothing was built.
 	ChatMLSErrorCodeRejoinUnverified = "CHAT_MLS_REJOIN_UNVERIFIED"
+
+	// ChatMLSErrorCodePeerUnverified — this device's strict policy
+	// (require_verified_peers) is on and the operation would bring in, or
+	// send to, another account whose key no person here verified: a local
+	// Add or Join of such a leaf, or a send in a conversation that holds one
+	// (0.0.55, design Q8). Carries MLSPeerUnverifiedData naming them. Nothing
+	// was built, joined, consumed or written. A received Commit is never
+	// refused for this.
+	ChatMLSErrorCodePeerUnverified = "CHAT_MLS_PEER_UNVERIFIED"
 )
+
+// MLSPeerUnverifiedData rides on CHAT_MLS_PEER_UNVERIFIED: the accounts, in
+// order, whose pins are not verified (none at all counts).
+type MLSPeerUnverifiedData struct {
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
+}
 
 // Wire-shape constants. The ones that mirror a bound elsewhere are kept in
 // step with it by a test in the handlers package, which can import both.
@@ -265,6 +295,11 @@ type MLSGroupCreateRequest struct {
 	// AppContextB64 is kept with the pending Commit and comes back in
 	// mls_conversation_status (0.0.55); see MLSCommitBuildRequest.
 	AppContextB64 string `json:"app_context_b64,omitempty"`
+
+	// Roles is the group's roles, written into its group context at create
+	// (0.0.55, Q3 phase 2): a room with this account as owner, or a DM.
+	// Omitted, the group is created without roles (legacy_temporary).
+	Roles *MLSRoleSet `json:"roles,omitempty"`
 }
 
 func (r MLSGroupCreateRequest) ChatStateContext() (ChatStatePermit, string, string) {
@@ -286,6 +321,15 @@ func (r MLSGroupCreateRequest) Validate() error {
 	}
 	if err := validateAppContext(r.AppContextB64); err != nil {
 		return err
+	}
+	if r.Roles != nil {
+		if err := r.Roles.Validate("roles"); err != nil {
+			return err
+		}
+		if r.Roles.Kind == MLSRolesKindRoom && !slices.Contains(r.Roles.Entries,
+			MLSRoleEntry{AccountID: r.Permit.AccountID, Role: MLSRoleOwner}) {
+			return newValidationError("roles", "the creator is the room's owner")
+		}
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -345,9 +389,15 @@ type MLSConversationForgetRemovedResponseData struct {
 // device took over, and that device's KeyPackage as the server handed it out.
 // There is no fingerprint field: the only key the Keeper accepts for the
 // account is the one the permit names in pending_leaf_replacements.
+//
+// Handover is the old device's signed approval (0.0.55, design Q1), as the
+// server relayed it. Without one the replace is an account recovery (Q2): it
+// needs user_initiated and a leaf carrying another account key than the one
+// it replaces.
 type MLSReplaceMember struct {
-	AccountID     string `json:"account_id"`
-	KeyPackageB64 string `json:"key_package_b64"`
+	AccountID     string           `json:"account_id"`
+	KeyPackageB64 string           `json:"key_package_b64"`
+	Handover      *MLSLeafHandover `json:"handover,omitempty"`
 }
 
 // validateMLSReplace bounds the list like an Add, allows one entry per account,
@@ -371,6 +421,14 @@ func validateMLSReplace(members []MLSReplaceMember, listed []ChatStateLeafReplac
 			return newValidationError(field, "must not name one account twice")
 		}
 		seen[m.AccountID] = true
+		if m.Handover != nil {
+			if err := m.Handover.Validate("replace.handover"); err != nil {
+				return err
+			}
+			if m.Handover.AccountID != m.AccountID {
+				return newValidationError("replace.handover.account_id", "must be the account being replaced")
+			}
+		}
 		if _, ok := LeafReplacementFor(listed, m.AccountID); !ok {
 			return newValidationError(field, "names an account the permit does not list in pending_leaf_replacements")
 		}
@@ -615,11 +673,28 @@ type MLSCommitBuildRequest struct {
 	Rejoin           []MLSRejoinMember     `json:"rejoin,omitempty"`
 	UpdateSelf       bool                  `json:"update_self,omitempty"`
 
-	// UserInitiated says a person on this device asked for this add or
-	// remove_account_ids (0.0.55). Automation never sends it. An add needs it;
-	// a remove needs it unless the permit names every account as departed.
-	// It is the app's word: 임시, 정책 미충족 (Q3) until room roles live in the
-	// authenticated group context.
+	// RevokeDevices removes exactly the leaf of each (account, device) its
+	// account revoked (0.0.55, Q13). Each needs a matching entry in
+	// DeviceRevocations.
+	RevokeDevices []MLSDeviceRef `json:"revoke_devices,omitempty"`
+
+	// SetRoles is the complete new role list (0.0.55, Q3 phase 2). Alone it
+	// builds a roles-only Commit; it may also ride on remove_account_ids,
+	// revoke_devices or add.
+	SetRoles *MLSRoleSet `json:"set_roles,omitempty"`
+
+	// The signed statements a Remove rests on (0.0.55). The Keeper verifies
+	// them before building and carries them in the Commit.
+	OrgRemovalStatements []MLSOrgRemovalStatement `json:"org_removal_statements,omitempty"`
+	LeaveStatements      []MLSLeaveStatement      `json:"leave_statements,omitempty"`
+	DeviceRevocations    []MLSDeviceRevocation    `json:"device_revocations,omitempty"`
+
+	// UserInitiated says a person on this device asked for this add, remove,
+	// roles change or replace (0.0.55). Automation never sends it. It gates
+	// the app's intent and is never authority on its own: the Keeper judges
+	// every Commit by the group's roles, the signed statements and, for a
+	// replace, the old leaf's handover. A replace needs it when it carries no
+	// handover (an account recovery, design Q2).
 	UserInitiated bool `json:"user_initiated,omitempty"`
 
 	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -680,15 +755,32 @@ func (r MLSCommitBuildRequest) Validate() error {
 			return err
 		}
 	}
+	if r.RevokeDevices != nil {
+		kinds++
+		if err := validateDeviceRefs(r.RevokeDevices, "revoke_devices"); err != nil {
+			return err
+		}
+	}
 	if r.UpdateSelf {
 		kinds++
 	}
-	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil {
-		return newValidationError("user_initiated", "is only for add and remove_account_ids")
+	if r.SetRoles != nil {
+		if err := r.SetRoles.Validate("set_roles"); err != nil {
+			return err
+		}
+		if r.Replace != nil || r.Rejoin != nil || r.UpdateSelf {
+			return newValidationError("set_roles", "rides alone or on add, remove_account_ids or revoke_devices")
+		}
 	}
-	if kinds != 1 {
+	if r.UserInitiated && r.Add == nil && r.RemoveAccountIDs == nil && r.SetRoles == nil && r.Replace == nil {
+		return newValidationError("user_initiated", "is only for add, remove_account_ids, set_roles and replace")
+	}
+	if kinds > 1 || (kinds == 0 && r.SetRoles == nil) {
 		return newValidationError("add",
-			"exactly one of add, remove_account_ids, replace, rejoin and update_self must be given")
+			"exactly one of add, remove_account_ids, revoke_devices, replace, rejoin and update_self must be given, or set_roles alone")
+	}
+	if err := validateStatements(r.OrgRemovalStatements, r.LeaveStatements, r.DeviceRevocations); err != nil {
+		return err
 	}
 	if err := validateRoomNamePlaintext(r.RoomNamePlaintextB64, "room_name_plaintext_b64", false); err != nil {
 		return err
@@ -1196,7 +1288,27 @@ type MLSConversationStatusResponseData struct {
 	PendingNameCiphertextB64 string `json:"pending_name_ciphertext_b64,omitempty"`
 
 	LeafReplacementLatch []ChatStateLeafReplacement `json:"leaf_replacement_latch"`
-	NeedsRekey           bool                       `json:"needs_rekey"`
+
+	// DeviceRevokeLatch is the device leaves a send waits on the removal of
+	// (0.0.55, Q13). [] when none.
+	DeviceRevokeLatch []MLSDeviceRef `json:"device_revoke_latch"`
+
+	// Authority names the rules the group is judged by (0.0.55): roles, dm,
+	// legacy_temporary (a group made before roles, judged by the wave 4
+	// rules that rest partly on the server's word), or "" with no group
+	// state. Roles is a room's owner and admins from its group context, []
+	// otherwise. RolesMigratable reports whether every leaf advertises the
+	// roles extension, so the owner of a legacy room can set its roles.
+	Authority       string         `json:"authority"`
+	Roles           []MLSRoleEntry `json:"roles"`
+	RolesMigratable bool           `json:"roles_migratable"`
+
+	NeedsRekey bool `json:"needs_rekey"`
+
+	// SyncBlocked is the received Commit this conversation is stopped at
+	// (N3), null when none. Not a latch: a valid Commit for its epoch clears
+	// it.
+	SyncBlocked *MLSSyncBlock `json:"sync_blocked"`
 
 	// RekeyCause says why needs_rekey latched (0.0.55): one of the
 	// ChatStateRekeyCause* values, "unknown" for a latch recorded before the
@@ -1219,6 +1331,27 @@ type MLSConversationStatusResponseData struct {
 	// its pin now (0.0.55); see MLSAccountTrust. Absent with needs_rekey, with
 	// no group, and when the pins could not be read.
 	MemberTrust []MLSAccountTrust `json:"member_trust,omitempty"`
+
+	// RequireVerifiedPeers is this device's strict policy (0.0.55, design
+	// Q8), and UnverifiedAccountIDs, under it, every other account in the
+	// confirmed tree whose pin is not verified: what a send would be refused
+	// for now with CHAT_MLS_PEER_UNVERIFIED. Empty, never null, when the
+	// policy is off, when every member is verified, and when there is no
+	// group.
+	RequireVerifiedPeers bool     `json:"require_verified_peers"`
+	UnverifiedAccountIDs []string `json:"unverified_account_ids"`
+}
+
+// MLSSyncBlock is the received Commit a conversation is stopped at: the epoch
+// it would produce, why it was refused (unauthorized_commit or
+// leaf_untrusted), who committed it when that is known, and the SHA-256 of
+// the Commit.
+type MLSSyncBlock struct {
+	Epoch              uint64 `json:"epoch"`
+	Cause              string `json:"cause"`
+	CommitterAccountID string `json:"committer_account_id,omitempty"`
+	CommitterDeviceID  string `json:"committer_device_id,omitempty"`
+	CommitSHA256       string `json:"commit_sha256"`
 }
 
 // ChatStateRekeyLatchedData rides on CHAT_STATE_REKEY_REQUIRED from the

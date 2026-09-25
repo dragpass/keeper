@@ -24,6 +24,7 @@
 
 mod authority;
 mod gate;
+mod roles;
 mod session;
 mod storage;
 
@@ -46,6 +47,9 @@ pub const DPMLS_ERR_FROM_SELF: i32 = -5;
 /// A Commit carried a Remove, or a proposal type, the Go side did not approve
 /// for this operation, and it was refused with nothing applied.
 pub const DPMLS_ERR_UNAUTHORIZED: i32 = -6;
+/// A leaf or KeyPackage does not advertise the room roles extension, which a
+/// group carrying it requires of every leaf. Nothing was built.
+pub const DPMLS_ERR_ROLES_UNSUPPORTED: i32 = -7;
 
 /// A buffer owned by this library until dpmls_buf_free takes it back. cap is
 /// carried because releasing a Vec needs the capacity it was allocated with,
@@ -95,6 +99,8 @@ fn guard<F: FnOnce() -> Result<i32, String>>(f: F) -> i32 {
                 DPMLS_ERR_FROM_SELF
             } else if msg.contains(authority::NOT_AUTHORIZED) {
                 DPMLS_ERR_UNAUTHORIZED
+            } else if msg.contains(session::ROLES_UNSUPPORTED) {
+                DPMLS_ERR_ROLES_UNSUPPORTED
             } else {
                 DPMLS_ERR
             };
@@ -417,6 +423,76 @@ pub unsafe extern "C" fn dpmls_session_approve_removals(
     })
 }
 
+/// Set the room roles payload (roles.rs) the next group create or Commit build
+/// on this session writes into the group context. Empty clears it. The Commit
+/// that carries it is still judged by the rules like any other.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_session_set_next_roles(
+    handle: *mut Session,
+    roles: *const u8,
+    roles_len: usize,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `roles` points to `roles_len`
+        // readable bytes for the duration of this call. The bytes are copied
+        // before the call returns.
+        let (session, buf) = unsafe { (session_of(handle)?, slice(roles, roles_len)?) };
+        session.set_next_roles(buf)?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Set the authenticated data the next Commit build on this session carries.
+/// Empty carries none.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_session_set_next_commit_aad(
+    handle: *mut Session,
+    aad: *const u8,
+    aad_len: usize,
+) -> i32 {
+    guard(|| {
+        // SAFETY: as in dpmls_session_set_next_roles.
+        let (session, buf) = unsafe { (session_of(handle)?, slice(aad, aad_len)?) };
+        session.set_next_commit_aad(buf)?;
+        Ok(DPMLS_OK)
+    })
+}
+
+/// The group's roles: `u8` 0/1 for whether the group context carries the roles
+/// extension, a length-prefixed payload (empty when absent), and `u8` 0/1 for
+/// whether every leaf of the confirmed tree advertises it. Big-endian.
+///
+/// # Safety
+/// `handle` as in `session_of`; `out` must point to a writable DpBuf.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_authority(handle: *mut Session, out: *mut DpBuf) -> i32 {
+    guard(|| {
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let (roles, supported) = unsafe { session_of(handle)? }.authority()?;
+        let payload = roles.clone().unwrap_or_default();
+        let mut framed = vec![u8::from(roles.is_some())];
+        framed.extend_from_slice(
+            &u32::try_from(payload.len())
+                .unwrap_or(u32::MAX)
+                .to_be_bytes(),
+        );
+        framed.extend_from_slice(&payload);
+        framed.push(u8::from(supported));
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, framed)? };
+        Ok(DPMLS_OK)
+    })
+}
+
 /// Read the leaf a KeyPackage would add, without a session. `out` receives it
 /// in the leaf framing of `gate::encode_leaves`, as a list of one.
 ///
@@ -436,6 +512,34 @@ pub unsafe extern "C" fn dpmls_key_package_leaf(
         // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
         // checks it for null and overwrites it without reading it.
         unsafe { put(out, gate::encode_leaves(&[leaf]))? };
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Whether the KeyPackage inside a pool entry advertises the roles extension:
+/// `out` receives 1 or 0 (Q11). The entry carries private keys; nothing of it
+/// is kept or returned.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `out` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_key_package_entry_supports_roles(
+    entry: *const u8,
+    entry_len: usize,
+    out: *mut u8,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        // SAFETY: the caller promises `entry` points to `entry_len` readable
+        // bytes for the duration of this call; the borrow ends before this
+        // block does.
+        let supported =
+            session::key_package_entry_supports_roles(unsafe { slice(entry, entry_len)? })?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u8.
+        unsafe { *out = u8::from(supported) };
         Ok(DPMLS_OK)
     })
 }
@@ -612,7 +716,9 @@ pub unsafe extern "C" fn dpmls_group_commit_remove_members(
 /// Build one Commit that removes the leaves in `leaf_indices` (framed as in
 /// `gate::decode_leaf_indices`) and adds the members in `key_packages` (framed
 /// as in `gate::decode_key_packages`), and hold it pending. `expected_epoch`
-/// receives the confirmed epoch it was built against.
+/// receives the confirmed epoch it was built against. The Commit carries the
+/// authenticated data `dpmls_session_set_next_commit_aad` set, as every other
+/// Commit build does.
 ///
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`; `commit` and

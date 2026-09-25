@@ -374,6 +374,22 @@ func TestChatStateProcessHelper(t *testing.T) {
 		fmt.Printf("resent:%d:%s\n", entry.Position.Generation,
 			base64.StdEncoding.EncodeToString(entry.Ciphertext))
 
+	case "pool-sweep":
+		if !signalReady() {
+			return
+		}
+		if err := waitForFile(os.Getenv(helperRelease)); err != nil {
+			fmt.Printf("error: wait for release: %v\n", err)
+			return
+		}
+		dropped, remaining, err := DropKeyPackagesUnless(mirroredSecretStore{path: os.Getenv(helperKeyring)},
+			testOwner, poolNow, sweepKeepsEven)
+		if err != nil {
+			fmt.Printf("error: sweep: %v\n", err)
+			return
+		}
+		fmt.Printf("swept:%d:%d\n", dropped, remaining)
+
 	default:
 		fmt.Printf("error: unknown helper mode %q\n", mode)
 	}
@@ -1295,4 +1311,88 @@ func waitForFile(path string) error {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for %s", path)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// The KeyPackage pool sweep (Q11) across processes.
+// ────────────────────────────────────────────────────────────────────────
+
+// sweepKeepsEven stands in for the KeyPackage capability check: an entry whose
+// private part starts with an even byte "supports roles".
+func sweepKeepsEven(private []byte) (bool, error) {
+	return len(private) > 0 && private[0]%2 == 0, nil
+}
+
+// Three Keeper processes sweep one pool at the same moment. The pool lock
+// serializes them, so between them they drop each unsupported entry exactly
+// once, the supported ones all survive, and the pool file holds the result
+// of one sweep rather than a lost update.
+func TestKeyPackagePoolSweepIsOnceAcrossProcesses(t *testing.T) {
+	env := newProcessEnv(t)
+	store, err := Open(mirroredSecretStore{path: env.keyringPath}, testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []KeyPackagePoolEntry
+	for tag := byte(1); tag <= 8; tag++ {
+		entries = append(entries, poolEntry(tag, poolNow.Add(time.Hour)))
+	}
+	if err := store.AddKeyPackages(entries, poolNow); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := 0
+	for _, e := range entries {
+		if keep, _ := sweepKeepsEven(e.Private); !keep {
+			unsupported++
+		}
+	}
+	if unsupported == 0 || unsupported == len(entries) {
+		t.Fatalf("fixture has %d of %d unsupported; want a mix", unsupported, len(entries))
+	}
+	store.Close()
+
+	release := helperRelease + "=" + filepath.Join(env.tempDir, "release")
+	type child struct {
+		cmd  *exec.Cmd
+		done <-chan childResult
+	}
+	var children []child
+	for i := range 3 {
+		ready := "sweep-ready-" + strconv.Itoa(i)
+		cmd, done := env.start(t, "pool-sweep", ready, release)
+		env.waitReady(t, ready)
+		children = append(children, child{cmd, done})
+	}
+	if err := os.WriteFile(filepath.Join(env.tempDir, "release"), []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, c := range children {
+		out := waitForChild(t, c.cmd, c.done)
+		var dropped, remaining int
+		if _, err := fmt.Sscanf(strings.TrimSpace(out.output[strings.Index(out.output, "swept:"):]),
+			"swept:%d:%d", &dropped, &remaining); err != nil {
+			t.Fatalf("sweeper output %q: %v", out.output, err)
+		}
+		if remaining != len(entries)-unsupported {
+			t.Fatalf("a sweeper saw %d remaining, want %d", remaining, len(entries)-unsupported)
+		}
+		total += dropped
+	}
+	if total != unsupported {
+		t.Fatalf("the sweepers dropped %d entries between them, want %d", total, unsupported)
+	}
+
+	after, err := Open(mirroredSecretStore{path: env.keyringPath}, testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	for _, e := range entries {
+		keep, _ := sweepKeepsEven(e.Private)
+		_, err := after.LookupKeyPackage([][]byte{e.Ref}, poolNow)
+		if keep != (err == nil) {
+			t.Fatalf("entry %x after the sweep: %v (supported %t)", e.Ref[0], err, keep)
+		}
+	}
 }

@@ -229,4 +229,28 @@ const (
 	// client_commit_id. Response: generation. A pending Commit that carries
 	// an app context is CHAT_STATE_CONFLICT: it can be reposted.
 	MLSCommitAbandon = "mls_commit_abandon"
+
+	// MLSLeaveRequestSign signs this device's request to leave a conversation
+	// (0.0.55, design Q13). permit-gated. Request: permit, org_id,
+	// conversation_id. Response: statement {conversation_id, account_id,
+	// requested_at, signature}, the account key's signature over
+	// dragpass.chat.leave|1|<conversation_id>|<account_id>|<requested_at>.
+	// Any remaining member's Keeper accepts a Remove of this account that
+	// carries it.
+	MLSLeaveRequestSign = "mls_leave_request_sign"
+
+	// OrgMemberRemovalSign signs an org admin's statement that an account was
+	// removed from the organization (0.0.55, design Q5 (b)). Request: org_id,
+	// removed_account_id, admin_account_id (this device's account). Response:
+	// statement {org_id, removed_account_id, admin_account_id, removed_at,
+	// signature} over
+	// dragpass.org.member.removal|1|<org_id>|<removed_account_id>|<admin_account_id>|<removed_at>.
+	OrgMemberRemovalSign = "org_member_removal_sign"
+
+	// MLSDeviceRevokeSign signs this account's revocation of one of its
+	// devices' leaves (0.0.55, design Q13). Request: account_id (this
+	// device's account), device_id. Response: statement {account_id,
+	// device_id, revoked_at, signature} over
+	// dragpass.mls.device.revoke|1|<account_id>|<device_id>|<revoked_at>.
+	MLSDeviceRevokeSign = "mls_device_revoke_sign"
 )

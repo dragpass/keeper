@@ -201,9 +201,21 @@ func openChatStateStore(
 		NextApplicationIndex: permit.WatermarkNextApplication,
 		PendingRemovals:      permit.PendingRemovalAccountIDs,
 
-		PendingLeafReplacements: leafReplacementsOf(permit.PendingLeafReplacements),
+		PendingLeafReplacements:  leafReplacementsOf(permit.PendingLeafReplacements),
+		PendingDeviceRevocations: deviceRefsOf(permit.PendingDeviceRevocations),
 	}
 	return store, watermark, proto.BaseResponse{}, true
+}
+
+func deviceRefsOf(refs []proto.MLSDeviceRef) []chatstate.DeviceRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]chatstate.DeviceRef, len(refs))
+	for i, r := range refs {
+		out[i] = chatstate.DeviceRef{AccountID: r.AccountID, DeviceID: r.DeviceID}
+	}
+	return out
 }
 
 func leafReplacementsOf(entries []proto.ChatStateLeafReplacement) []chatstate.LeafReplacement {
@@ -317,7 +329,16 @@ func chatStateNotAuthorized(d Deps, stage string) proto.BaseResponse {
 
 func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	code, message := proto.ChatStateErrorCodeStorageFailure, "chat state could not be read or written"
+	var unverified *MLSPeerUnverifiedError
+	var blocked *chatstate.SyncBlockedError
 	switch {
+	case errors.As(err, &blocked) && blocked.Block.Cause == chatstate.SyncBlockUnauthorizedCommit:
+		return rowRefusedResponse(d, stage, blocked.Block)
+	case errors.Is(err, chatstate.ErrSyncBlocked):
+		code, message = proto.ChatMLSErrorCodeSyncBlocked,
+			"the conversation is stopped at a commit this device refused; nothing new may be sent"
+	case errors.As(err, &unverified):
+		return peerUnverifiedResponse(d, stage, unverified)
 	case errors.Is(err, mls.ErrLeafUntrusted):
 		return mlsLeafUntrustedResponse(d, stage, err)
 	case errors.Is(err, errAttestationRefused):
@@ -352,6 +373,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, mls.ErrNoKeyPackageForWelcome):
 		code, message = proto.ChatMLSErrorCodeWelcomeUnusable,
 			"this device holds no key package the welcome is addressed to; it has to be invited again"
+	case errors.Is(err, mls.ErrCreatorNotOwner):
+		code, message = proto.ChatMLSErrorCodeFailed,
+			"the new room's roles do not name its creator as owner; nothing was joined"
 	case errors.Is(err, mls.ErrGroupMismatch):
 		code, message = proto.ChatMLSErrorCodeFailed,
 			"the welcome is for a different conversation"
@@ -384,6 +408,15 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrRotationPending):
 		code, message = proto.ChatMLSErrorCodeRotationPending,
 			"a member removal is not yet applied on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrDeviceRevocationPending):
+		code, message = proto.ChatMLSErrorCodeRotationPending,
+			"a revoked device's leaf is not yet removed on this device; new messages cannot be encrypted"
+	case errors.Is(err, chatstate.ErrStatementUnverified):
+		code, message = proto.ChatMLSErrorCodeStatementUnverified,
+			"a signed statement does not verify; nothing was built"
+	case errors.Is(err, mls.ErrRolesUnsupported):
+		code, message = proto.ChatMLSErrorCodeRolesUnsupported,
+			"a member's keeper does not support room roles; nothing was built"
 	case errors.Is(err, chatstate.ErrLeafReplacementPending):
 		code, message = proto.ChatMLSErrorCodeLeafReplacementPending,
 			"a device takeover is not yet applied on this device; new messages cannot be encrypted"
@@ -397,6 +430,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 		}
 		code, message = proto.ChatStateErrorCodeRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
+	case errors.Is(err, chatstate.ErrHandoverInvalid):
+		code, message = proto.ChatMLSErrorCodeHandoverInvalid,
+			"the leaf handover is not the removed leaf's signed approval of this key package's leaf; nothing was built"
 	case errors.Is(err, chatstate.ErrCommitUnauthorized):
 		code, message = proto.ChatMLSErrorCodeCommitUnauthorized,
 			"the commit carries an add or a remove this device is not authorized to make; nothing was built"
@@ -432,6 +468,25 @@ func rekeyLatchedResponse(d Deps, stage string, detail chatstate.RekeyDetail) pr
 		RekeyCommitterDeviceID:  detail.CommitterDeviceID,
 	}
 	return resp
+}
+
+// rowRefusedResponse is CHAT_MLS_ROW_REFUSED with the block it recorded.
+func rowRefusedResponse(d Deps, stage string, b chatstate.SyncBlock) proto.BaseResponse {
+	d.Logger.Printf("chat state %s failed: %s (%s)", stage, proto.ChatMLSErrorCodeRowRefused, b.Cause)
+	resp := errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeRowRefused),
+		"this device refused a commit the server served and stopped at its epoch; nothing was applied")
+	resp.Data = syncBlockWire(&b)
+	return resp
+}
+
+func syncBlockWire(b *chatstate.SyncBlock) *proto.MLSSyncBlock {
+	if b == nil {
+		return nil
+	}
+	return &proto.MLSSyncBlock{
+		Epoch: b.Epoch, Cause: b.Cause, CommitterAccountID: b.CommitterAccountID,
+		CommitterDeviceID: b.CommitterDeviceID, CommitSHA256: b.CommitHash,
+	}
 }
 
 // mlsLeafUntrustedResponse is CHAT_MLS_LEAF_UNTRUSTED. When the refusal was a

@@ -1,4 +1,4 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 // keeper_process_mls_test.go — the Keeper binary, the real MLS library, and a
 // real SIGKILL.
@@ -34,7 +34,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +42,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -74,7 +72,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	binaryPath = filepath.Join(dir, "dragpass-keeper-killseam")
+	binaryPath = filepath.Join(dir, "dragpass-keeper-killseam"+binarySuffix)
 	build := exec.Command("go", "build", "-tags", "mls keeper_killseam", "-o", binaryPath, ".")
 	build.Dir = filepath.Join("..", "..", "..")
 	build.Env = append(os.Environ(), "CGO_ENABLED=1")
@@ -122,6 +120,13 @@ type device struct {
 	account string
 	dir     string
 	commits int
+
+	// binary, when set, is another Keeper build to run on this device, and
+	// v4Permit says it speaks the chat state permit of canonical version 4
+	// (a Keeper before wave 5), which send rewrites every permit into
+	// (mixed_version_mls_test.go).
+	binary   string
+	v4Permit bool
 }
 
 func newDevice(t *testing.T, account string) *device {
@@ -203,7 +208,11 @@ type keeperProc struct {
 // point, "" for none; skip lets that many earlier passes through it go by.
 func (d *device) start(crashAt string, skip int) *keeperProc {
 	d.t.Helper()
-	cmd := exec.Command(binaryPath)
+	bin := binaryPath
+	if d.binary != "" {
+		bin = d.binary
+	}
+	cmd := exec.Command(bin)
 	mark := filepath.Join(d.dir, fmt.Sprintf("crash-mark-%d", time.Now().UnixNano()))
 	cmd.Env = []string{
 		"KEEPER_E2E_MODE=1",
@@ -212,6 +221,7 @@ func (d *device) start(crashAt string, skip int) *keeperProc {
 		"HOME=" + filepath.Join(d.dir, "home"),
 		"PATH=" + os.Getenv("PATH"),
 	}
+	cmd.Env = append(cmd.Env, platformEnv(d.dir)...)
 	if crashAt != "" {
 		cmd.Env = append(cmd.Env,
 			"KEEPER_TEST_CRASH_AT="+crashAt,
@@ -247,6 +257,9 @@ type response struct {
 
 func (p *keeperProc) send(action string, payload any) {
 	p.t.Helper()
+	if p.d.v4Permit {
+		payload = p.d.withV4Permit(payload)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		p.t.Fatal(err)
@@ -333,12 +346,12 @@ func (p *keeperProc) parkAt(action string, payload any) {
 	}
 }
 
-// kill is a SIGKILL and a wait for the process to be gone.
+// kill is a forced kill (forceKill) and a wait for the process to be gone.
 func (p *keeperProc) kill() {
 	if p.cmd.ProcessState != nil {
 		return
 	}
-	_ = p.cmd.Process.Signal(syscall.SIGKILL)
+	_ = forceKill(p.cmd.Process)
 	select {
 	case <-p.done:
 	case <-time.After(10 * time.Second):
@@ -348,13 +361,11 @@ func (p *keeperProc) kill() {
 
 func (p *keeperProc) killAndAssertKilled() {
 	p.t.Helper()
-	if err := p.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if err := forceKill(p.cmd.Process); err != nil {
 		p.t.Fatal(err)
 	}
-	err := <-p.done
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		p.t.Fatalf("the keeper did not die of SIGKILL: %v", err)
+	if err := <-p.done; !diedOfForceKill(err) {
+		p.t.Fatalf("the keeper did not die of the forced kill: %v", err)
 	}
 }
 
@@ -368,6 +379,7 @@ func (d *device) permit() proto.ChatStatePermit {
 		AccountID: d.account, OrgID: hOrg, ConversationID: hConv,
 		PendingRemovalAccountIDs: []string{},
 		PendingLeafReplacements:  []proto.ChatStateLeafReplacement{},
+		PendingDeviceRevocations: []proto.MLSDeviceRef{},
 		IssuedAt:                 now,
 		ExpiresAt:                now + proto.ChatStatePermitTTLSeconds,
 		ServerKeyVersion:         1,

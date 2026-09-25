@@ -135,10 +135,12 @@ func (r ReplacementLatch) equal(o ReplacementLatch) bool {
 		slices.Equal(r.Superseded, o.Superseded)
 }
 
-// RosterLeaf is one leaf of the confirmed tree: whose it is and which key it
-// signs with, as the lowercase hex SHA-256 fingerprint of that key.
+// RosterLeaf is one leaf of the confirmed tree: whose it is, which device of
+// that account its credential names, and which key it signs with, as the
+// lowercase hex SHA-256 fingerprint of that key.
 type RosterLeaf struct {
 	AccountID   string
+	DeviceID    string
 	Fingerprint string
 }
 
@@ -193,15 +195,72 @@ func judgeReplacements(latched []ReplacementLatch, named []LeafReplacement, rost
 	return out, nil
 }
 
-// latches is both latches after one operation.
+// ────────────────────────────────────────────────────────────────────────
+// The device revocation latch (design Q13).
+//
+// An account that revokes one of its devices signs a revocation of that
+// device's leaf, and the remaining members remove the leaf on its strength.
+// Until that has happened here, the revoked device still holds the current
+// epoch's keys, and it may be the one that was lost or stolen. So this is S-1
+// once more, keyed by (account, device): the permit names the revocation, it
+// only ever adds, and only a confirmed tree without that device's leaf lifts
+// it. The permit is the server's word and is only a reason to stop
+// encrypting; the Remove itself rests on the account's signature, never on
+// this list.
+//
+// What this does not do, stated in §6.4.1's words: a server that omits the
+// entry is not detected here.
+// ────────────────────────────────────────────────────────────────────────
+
+// ErrDeviceRevocationPending — this device's confirmed group still holds the
+// leaf of a device its account revoked. Commits and receiving are not
+// refused: a Remove of that leaf is the way out.
+var ErrDeviceRevocationPending = errors.New("chat state is waiting for a revoked device's leaf to be removed before it may encrypt")
+
+// judgeDeviceRevocations is judgeRemovals for the device revocation latch,
+// keyed by (account, device). Sorted.
+func judgeDeviceRevocations(latched, named []DeviceRef, roster RosterReader) ([]DeviceRef, error) {
+	if len(latched) == 0 && len(named) == 0 {
+		return nil, nil
+	}
+	leaves, err := roster.ConfirmedLeaves()
+	if err != nil {
+		return nil, err
+	}
+	var out []DeviceRef
+	for _, ref := range append(slices.Clone(latched), named...) {
+		held := slices.ContainsFunc(leaves, func(l RosterLeaf) bool {
+			return l.AccountID == ref.AccountID && l.DeviceID == ref.DeviceID
+		})
+		if held && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	sortDeviceRefs(out)
+	return out, nil
+}
+
+func sortDeviceRefs(refs []DeviceRef) {
+	slices.SortFunc(refs, func(a, b DeviceRef) int {
+		if c := strings.Compare(a.AccountID, b.AccountID); c != 0 {
+			return c
+		}
+		return strings.Compare(a.DeviceID, b.DeviceID)
+	})
+}
+
+// latches is every latch after one operation.
 type latches struct {
 	removals     []string
 	replacements []ReplacementLatch
+	devices      []DeviceRef
 }
 
-func (l latches) held() bool { return len(l.removals) > 0 || len(l.replacements) > 0 }
+func (l latches) held() bool {
+	return len(l.removals) > 0 || len(l.replacements) > 0 || len(l.devices) > 0
+}
 
-// judgeLatches runs both judgements against one permit and one roster.
+// judgeLatches runs every judgement against one permit and one roster.
 func judgeLatches(rec *Record, wm ServerWatermark, roster RosterReader) (latches, error) {
 	removals, err := judgeRemovals(rec.RemovalLatch, wm.PendingRemovals, roster)
 	if err != nil {
@@ -211,23 +270,29 @@ func judgeLatches(rec *Record, wm ServerWatermark, roster RosterReader) (latches
 	if err != nil {
 		return latches{}, err
 	}
-	return latches{removals: removals, replacements: replacements}, nil
+	devices, err := judgeDeviceRevocations(rec.DeviceRevokeLatch, wm.PendingDeviceRevocations, roster)
+	if err != nil {
+		return latches{}, err
+	}
+	return latches{removals: removals, replacements: replacements, devices: devices}, nil
 }
 
 // storedLatches is what the record already holds, for an operation that
 // removed this device and so has no roster left to judge against.
 func storedLatches(rec *Record) latches {
-	return latches{removals: rec.RemovalLatch, replacements: rec.LeafReplacementLatch}
+	return latches{removals: rec.RemovalLatch, replacements: rec.LeafReplacementLatch, devices: rec.DeviceRevokeLatch}
 }
 
 func (l latches) apply(rec *Record) {
 	rec.RemovalLatch = l.removals
 	rec.LeafReplacementLatch = l.replacements
+	rec.DeviceRevokeLatch = l.devices
 }
 
 func (l latches) sameAs(rec *Record) bool {
 	return slices.Equal(l.removals, rec.RemovalLatch) &&
-		slices.EqualFunc(l.replacements, rec.LeafReplacementLatch, ReplacementLatch.equal)
+		slices.EqualFunc(l.replacements, rec.LeafReplacementLatch, ReplacementLatch.equal) &&
+		slices.Equal(l.devices, rec.DeviceRevokeLatch)
 }
 
 // expected is the latch as the app sees it: which key each account waits for.

@@ -34,8 +34,8 @@
 //
 // The pin state machine is not redefined here: evaluatePeerKeyTrust and
 // verifyRotationChain are the ones the wrap actions use. The device's strict
-// policy (applyPeerKeyPolicy) is not applied — see the Open items of the L2
-// PR; nothing here wraps a key.
+// policy is applied only to operations this device starts (requireVerified,
+// mls_strict.go), never to a received Commit.
 
 package handlers
 
@@ -43,6 +43,7 @@ import (
 	"errors"
 	"sort"
 
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
@@ -62,6 +63,10 @@ type MLSLeafUntrustedError struct {
 func (e *MLSLeafUntrustedError) Error() string { return "mls leaf untrusted: " + e.Reason }
 
 func (e *MLSLeafUntrustedError) Unwrap() error { return mls.ErrLeafUntrusted }
+
+// RefusalCause makes a leaf refusal of a received Commit a sync block rather
+// than a latch (chatstate.RowRefusal).
+func (e *MLSLeafUntrustedError) RefusalCause() string { return chatstate.SyncBlockLeafUntrusted }
 
 func untrusted(reason string) error { return &MLSLeafUntrustedError{Reason: reason} }
 
@@ -83,6 +88,12 @@ type MLSLeafVerifier struct {
 	// account, and reported what every Commit so far has recorded.
 	judged   map[string]keychain.PeerKeyPinState
 	reported map[string]keychain.PeerKeyPinState
+
+	// requireVerified is the strict policy for an operation this device
+	// starts (an Add, a Join): every other account a verification judges
+	// must come out verified (mls_strict.go). Never set for a received
+	// Commit.
+	requireVerified bool
 }
 
 var _ mls.LeafVerifier = (*MLSLeafVerifier)(nil)
@@ -126,6 +137,20 @@ func (v *MLSLeafVerifier) VerifyLeaves(leaves []mls.Leaf) error {
 			return err
 		}
 		judged = append(judged, j)
+	}
+
+	if v.requireVerified {
+		var unverified []string
+		for account, state := range states {
+			if state != keychain.PeerKeyPinStateVerified {
+				unverified = append(unverified, account)
+			}
+		}
+		if len(unverified) > 0 {
+			sort.Strings(unverified)
+			v.d.Logger.Println("mls leaf verify refused an unverified account under the strict policy")
+			return &MLSPeerUnverifiedError{AccountIDs: unverified}
+		}
 	}
 
 	newest, err := v.checkNewest(judged, now)

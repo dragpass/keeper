@@ -135,10 +135,30 @@ type CommitPlan struct {
 	// (R2). The caller has already verified each account's signed request.
 	Rejoin []RejoinMember
 
-	// UserInitiated says a person on this device asked for this Add or
-	// Remove (R4i, authority.go). Automation never sets it. It is the app's
-	// word, not something the Keeper can check.
+	// RevokeDevices takes out exactly the leaf of each (account, device): a
+	// device the account itself revoked (Q13). The signed revocation rides in
+	// CommitAAD.
+	RevokeDevices []DeviceRef
+
+	// SetRoles is a roles payload (roles.go) this Commit writes into the group
+	// context: alone a roles-only Commit, or beside a Remove, a revoke or an
+	// Add. Nil changes nothing.
+	SetRoles []byte
+
+	// CommitAAD is the Commit's authenticated data: the signed statements its
+	// Removes rest on, which every receiver verifies from the Commit itself.
+	CommitAAD []byte
+
+	// UserInitiated says a person on this device asked for this Add, Remove
+	// or roles change (authority.go). Automation never sets it. It gates the
+	// app's intent and is never authority on its own.
 	UserInitiated bool
+}
+
+// DeviceRef names one leaf by the account and device of its credential.
+type DeviceRef struct {
+	AccountID string `json:"account_id"`
+	DeviceID  string `json:"device_id"`
 }
 
 // RejoinMember is one account to re-seat and the KeyPackage its signed rejoin
@@ -151,10 +171,14 @@ type RejoinMember struct {
 // ReplaceMember is one account to replace. NewFingerprint is the one the
 // permit named for the account, never one the caller picked, and the
 // KeyPackage's leaf must sign with exactly that key.
+//
+// Handover is the old device's approval of the succession (succession.go),
+// nil for an account recovery, which then needs UserInitiated.
 type ReplaceMember struct {
 	AccountID      string
 	NewFingerprint string
 	KeyPackage     []byte
+	Handover       *LeafHandover
 }
 
 // ErrReplacementNotListed — a replace plan names an account, or a key for it,
@@ -371,13 +395,13 @@ func (s *Store) BeginCommit(
 		if err := requireListedReplacements(req.Plan, wm); err != nil {
 			return err
 		}
-		if err := requireAuthorizedPlan(req.Plan, rec, wm); err != nil {
-			return err
-		}
 		if len(rec.GroupState) == 0 {
 			return ErrNoGroupState
 		}
 		if err := cipher.Load(rec.GroupState); err != nil {
+			return err
+		}
+		if err := judgeLocalPlan(req.Plan, cipher); err != nil {
 			return err
 		}
 		if req.ExpectedEpoch != 0 {
@@ -495,14 +519,14 @@ func (s *Store) ConfirmCommit(
 					return err
 				}
 			}
-			s.armAuthority(cipher, rec, wm, members)
+			s.armAuthority(cipher, members)
 			// Order matters and is one operation in the library: applying the
 			// winner runs on the state that never moved, and it drops our fork
 			// as it goes. ClearPending first would work too, but only this way
 			// is there no moment where the fork is gone and the winner is not
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
-				return latchIfRefused(s, p, anchor, err, pending.ExpectedEpoch+1)
+				return s.refuseWinner(p, rec, anchor, cipher, err, pending.ExpectedEpoch+1, outcome.WinnerMessage)
 			}
 			if reporter, ok := cipher.(ChangeReporter); ok {
 				if change, ok := reporter.LastCommitChange(); ok {
@@ -563,21 +587,38 @@ func (s *Store) ConfirmCommit(
 	return out, err
 }
 
-// latchIfRefused latches the conversation when err is the authority rules
-// refusing a received Commit (Q4), and passes any other error through. The
-// latch is the anchor's alone: the record is not written, so the Commit is
-// not applied and whatever was pending stays as it was.
-func latchIfRefused(s *Store, p convPaths, anchor Anchor, err error, epoch uint64) error {
-	var refused *UnauthorizedCommitError
-	if !errors.As(err, &refused) {
+// refuseWinner handles a winner this device refuses: its own pending Commit
+// lost the epoch either way, so it is dropped and the confirmed state written
+// back as it was, and the winner is recorded as a sync block (syncblock.go).
+// Any other failure passes through and writes nothing.
+func (s *Store) refuseWinner(
+	p convPaths, rec *Record, anchor Anchor, cipher CommitCipher, err error, epoch uint64, winner []byte,
+) error {
+	var refusal RowRefusal
+	if !errors.As(err, &refusal) {
 		return err
 	}
-	return s.latchRekeyDetail(p.tag, anchor, RekeyDetail{
-		Cause:              RekeyCauseUnauthorizedCommit,
-		Epoch:              epoch,
-		CommitterAccountID: refused.CommitterAccountID,
-		CommitterDeviceID:  refused.CommitterDeviceID,
-	})
+	if cerr := cipher.Load(rec.GroupState); cerr != nil {
+		return cerr
+	}
+	if cerr := cipher.ClearPending(); cerr != nil {
+		return cerr
+	}
+	state, cerr := cipher.State()
+	if cerr != nil {
+		return cerr
+	}
+	loaded := rec.Generation
+	rec.GroupState = state
+	rec.Pending = nil
+	if cerr := s.commit(p, rec, loaded, anchor); cerr != nil {
+		return cerr
+	}
+	anchor, cerr = loadAnchor(s.secrets, p.tag)
+	if cerr != nil {
+		return cerr
+	}
+	return blockIfRefused(s, p, anchor, err, epoch, winner)
 }
 
 // ErrNotLegacyPending — the pending Commit carries the app's description of

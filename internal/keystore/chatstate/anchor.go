@@ -74,6 +74,11 @@ type Anchor struct {
 	RekeyEpoch              uint64 `json:"rekey_epoch,omitempty"`
 	RekeyCommitterAccountID string `json:"rekey_committer_account_id,omitempty"`
 	RekeyCommitterDeviceID  string `json:"rekey_committer_device_id,omitempty"`
+
+	// SyncBlock is a received Commit this device refused and nothing has
+	// superseded yet (syncblock.go). It is not a latch: a valid Commit for
+	// its epoch clears it.
+	SyncBlock *SyncBlock `json:"sync_block,omitempty"`
 }
 
 // RekeyCause says which check latched NeedsRekey. The recovery is the same for
@@ -158,6 +163,11 @@ type ServerWatermark struct {
 	// (design M4.4). It can add to Record.LeafReplacementLatch or change the key
 	// an entry waits for, never lift one.
 	PendingLeafReplacements []LeafReplacement
+
+	// PendingDeviceRevocations rides in the same signed permit on the same
+	// terms: the server's claim of which device leaves their accounts revoked
+	// (design Q13). It can only add to Record.DeviceRevokeLatch.
+	PendingDeviceRevocations []DeviceRef
 }
 
 // HasAccepted reports whether the server has ever taken a position from this

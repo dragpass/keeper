@@ -93,12 +93,28 @@ jobs:
           else
             cargo build --release --manifest-path mls/Cargo.toml
           fi
+      # The malicious-client tests (wave 5c) drive mls/examples/adversary.rs, a
+      # test-only mls-rs client that is never part of a release. It runs as a
+      # separate process, so the host's default target is fine on every OS.
+      - name: build the test-only adversary client
+        run: |
+          cargo build --release --locked --example adversary --manifest-path mls/Cargo.toml
+          bin=mls/target/release/examples/adversary
+          if [ "${{ runner.os }}" = "Windows" ]; then bin="$bin.exe"; fi
+          echo "DRAGPASS_MLS_ADVERSARY=$GITHUB_WORKSPACE/$bin" >> "$GITHUB_ENV"
       - name: go build + test with the library linked
         env:
           CGO_ENABLED: 1
         run: |
           go build -tags mls ./...
-          go test -tags mls ./internal/keystore/mls/ ./internal/keystore/chatstate/ ./internal/keystore/handlers/ -count=1
+          go test -tags mls ./internal/keystore/mls/... ./internal/keystore/chatstate/ ./internal/keystore/handlers/ ./internal/keystore/dispatch/ -count=1
+      # The kill harness runs the Keeper binary built with keeper_killseam,
+      # parks it at a named point and kills it: SIGKILL on unix,
+      # TerminateProcess (os.Process.Kill) on Windows.
+      - name: kill harness (real Keeper processes, forced kill)
+        env:
+          CGO_ENABLED: 1
+        run: go test -tags mls ./internal/keystore/killharness/ -count=1
 
   quality:
     name: format + vet + race

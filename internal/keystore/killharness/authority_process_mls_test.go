@@ -1,4 +1,4 @@
-//go:build mls && cgo && (darwin || linux)
+//go:build mls && cgo
 
 // The Commit authority rules and the fork ring in the Keeper binary, with
 // every permit and every commit attestation signed by the test server key the
@@ -93,6 +93,19 @@ func (g *threeParty) bobRemovesCarol(t *testing.T) proto.MLSCommitResponseData {
 	return built
 }
 
+// blockDetail is the sync block a CHAT_MLS_ROW_REFUSED answer carries (N3).
+func blockDetail(t *testing.T, r response) proto.MLSSyncBlock {
+	t.Helper()
+	if r.Success || r.ErrorCode != proto.ChatMLSErrorCodeRowRefused {
+		t.Fatalf("response = %+v; want %s", r, proto.ChatMLSErrorCodeRowRefused)
+	}
+	var d proto.MLSSyncBlock
+	if err := json.Unmarshal(r.Data, &d); err != nil {
+		t.Fatalf("block detail: %v", err)
+	}
+	return d
+}
+
 func latchDetail(t *testing.T, r response) proto.ChatStateRekeyLatchedData {
 	t.Helper()
 	if r.Success || r.ErrorCode != proto.ChatStateErrorCodeRekeyRequired {
@@ -105,10 +118,11 @@ func latchDetail(t *testing.T, r response) proto.ChatStateRekeyLatchedData {
 	return d
 }
 
-// Q4 through the binary: Alice refuses the same-set Remove under a genuine
-// server signature, latches, and the latch and its detail survive a SIGKILL.
-// A tampered attestation is refused without latching anything.
-func TestKeeperProcessRefusesAnUnauthorizedCommitAndTheLatchSurvivesAKill(t *testing.T) {
+// Q4 and N3 through the binary: Alice refuses the same-set Remove under a
+// genuine server signature and stops at its epoch (not a latch), and the
+// block and its detail survive a forced kill. A tampered attestation is
+// refused without recording anything.
+func TestKeeperProcessRefusesAnUnauthorizedCommitAndTheBlockSurvivesAKill(t *testing.T) {
 	g := newThreeParty(t)
 	built := g.bobRemovesCarol(t)
 	seq := g.nextSeq()
@@ -119,34 +133,35 @@ func TestKeeperProcessRefusesAnUnauthorizedCommitAndTheLatchSurvivesAKill(t *tes
 	a.refused(proto.MLSProcess, tampered, proto.ChatStateErrorCodeNotAuthorized)
 	assertReady(t, a, 1)
 
-	got := latchDetail(t, a.call(proto.MLSProcess, g.alice.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol)))
-	if got.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.RekeyEpoch != 2 ||
-		got.RekeyCommitterAccountID != hBob {
-		t.Fatalf("latch detail = %+v", got)
+	got := blockDetail(t, a.call(proto.MLSProcess, g.alice.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol)))
+	if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.Epoch != 2 || got.CommitterAccountID != hBob {
+		t.Fatalf("block detail = %+v", got)
 	}
 	a.killAndAssertKilled()
 
 	a = g.alice.start("", 0)
 	status := a.status()
-	if !status.NeedsRekey || status.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit ||
-		status.RekeyEpoch != 2 || status.RekeyCommitterAccountID != hBob || status.RekeyCommitterDeviceID != hDevice {
+	if status.NeedsRekey || status.SyncBlocked == nil || status.SyncBlocked.Epoch != 2 ||
+		status.SyncBlocked.CommitterAccountID != hBob || status.SyncBlocked.CommitterDeviceID != hDevice || status.Epoch != 1 {
 		t.Fatalf("status after the kill = %+v", status)
 	}
-	a.refused(proto.MLSEncrypt, g.alice.encryptRequest(messageID(1), 1, "never"), proto.ChatStateErrorCodeRekeyRequired)
-	if anchor := g.alice.anchor(); anchor.RekeyCause != "unauthorized_commit" || anchor.RekeyEpoch != 2 {
+	a.refused(proto.MLSEncrypt, g.alice.encryptRequest(messageID(1), 1, "never"), proto.ChatMLSErrorCodeSyncBlocked)
+	// Where it is kept: the anchor's sync_block, nothing else of it moved.
+	if anchor := g.alice.anchor(); anchor.NeedsRekey || anchor.RekeyCause != "" || anchor.SyncBlock == nil ||
+		anchor.SyncBlock.Epoch != 2 || anchor.Epoch != 1 {
 		t.Fatalf("anchor = %+v", anchor)
 	}
 
 	// Carol, the one removed, refuses her own unauthorized removal too.
 	c := g.carol.start("", 0)
-	if d := latchDetail(t, c.call(proto.MLSProcess, g.carol.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol))); d.RekeyCause != proto.ChatStateRekeyCauseUnauthorizedCommit {
-		t.Fatalf("carol's latch = %+v", d)
+	if d := blockDetail(t, c.call(proto.MLSProcess, g.carol.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol))); d.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit {
+		t.Fatalf("carol's block = %+v", d)
 	}
 }
 
 // Two Keeper processes of Alice's device handed the same unauthorized Commit
-// at once: one writer at a time, both refuse, and the anchor holds one latch
-// with the first detail.
+// at once: one writer at a time, both refuse, and the anchor holds one block
+// with that detail and no latch.
 func TestTwoKeeperProcessesRefuseTheSameUnauthorizedCommitOnce(t *testing.T) {
 	g := newThreeParty(t)
 	built := g.bobRemovesCarol(t)
@@ -160,12 +175,12 @@ func TestTwoKeeperProcessesRefuseTheSameUnauthorizedCommitOnce(t *testing.T) {
 		if err != nil {
 			t.Fatalf("no answer: %v\n%s", err, p.stderr.String())
 		}
-		if r.Success || r.ErrorCode != proto.ChatStateErrorCodeRekeyRequired {
+		if r.Success || r.ErrorCode != proto.ChatMLSErrorCodeRowRefused {
 			t.Fatalf("a process answered %+v", r)
 		}
 	}
-	if anchor := g.alice.anchor(); !anchor.NeedsRekey || anchor.RekeyCause != "unauthorized_commit" ||
-		anchor.RekeyCommitterAccountID != hBob {
+	if anchor := g.alice.anchor(); anchor.NeedsRekey || anchor.SyncBlock == nil ||
+		anchor.SyncBlock.CommitterAccountID != hBob || anchor.Epoch != 1 {
 		t.Fatalf("anchor after two refusals = %+v", anchor)
 	}
 }

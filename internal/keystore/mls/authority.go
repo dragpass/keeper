@@ -12,13 +12,21 @@ import (
 // CommitShape is what the collect pass saw one message do. IsCommit is false
 // for anything that is not a Commit. Removed holds each removed leaf as the
 // tree held it before the Commit; Added holds each Add's leaf with index 0.
-// Other lists every proposal type that is neither.
+// Other lists every proposal type that is neither, a roles-only group context
+// change aside. Epoch is the epoch the Commit applies to, RolesBefore that
+// epoch's roles payload (nil: none), RolesChange and RolesAfter what the
+// Commit does to them, and AuthenticatedData the Commit's own.
 type CommitShape struct {
-	IsCommit  bool
-	Committer uint32
-	Removed   []Leaf
-	Added     []Leaf
-	Other     []uint16
+	IsCommit          bool
+	Committer         uint32
+	Removed           []Leaf
+	Added             []Leaf
+	Other             []uint16
+	Epoch             uint64
+	RolesBefore       []byte
+	RolesChange       chatstate.RolesChangeKind
+	RolesAfter        []byte
+	AuthenticatedData []byte
 }
 
 // leaves reads one gate::encode_leaves list from where the reader stands.
@@ -80,12 +88,25 @@ func commitChangeOf(shape CommitShape, before []Leaf) (chatstate.CommitChange, e
 	if !found {
 		return chatstate.CommitChange{}, failed("the committer is not a leaf of the group")
 	}
-	for _, l := range shape.Removed {
+	for _, l := range before {
 		account, _, err := ParseCredentialIdentity(l.Identity)
 		if err != nil {
 			return chatstate.CommitChange{}, err
 		}
+		change.Before = append(change.Before, account)
+		if l.Index == 0 {
+			change.CreatorAccountID = account
+		}
+	}
+	for _, l := range shape.Removed {
+		account, device, err := ParseCredentialIdentity(l.Identity)
+		if err != nil {
+			return chatstate.CommitChange{}, err
+		}
 		change.Removed = append(change.Removed, account)
+		change.RemovedLeaves = append(change.RemovedLeaves, chatstate.RemovedLeaf{
+			AccountID: account, DeviceID: device, Declaration: l.Declaration,
+		})
 	}
 	for _, l := range shape.Added {
 		account, _, err := ParseCredentialIdentity(l.Identity)
@@ -95,7 +116,32 @@ func commitChangeOf(shape CommitShape, before []Leaf) (chatstate.CommitChange, e
 		change.Added = append(change.Added, account)
 	}
 	change.OtherProposals = len(shape.Other)
+	change.Epoch = shape.Epoch
+	change.AuthenticatedData = shape.AuthenticatedData
+	change.RolesChange = shape.RolesChange
+	var err error
+	if change.RolesBefore, err = parseRolesOrNil(shape.RolesBefore); err != nil {
+		return chatstate.CommitChange{}, err
+	}
+	if shape.RolesChange == chatstate.RolesSet {
+		if change.RolesAfter, err = parseRolesOrNil(shape.RolesAfter); err != nil || change.RolesAfter == nil {
+			return chatstate.CommitChange{}, failed("the commit sets roles that do not parse")
+		}
+	}
 	return change, nil
+}
+
+// parseRolesOrNil parses a roles payload, nil for none. A payload that does
+// not parse is a failure: the group context either holds valid roles or none.
+func parseRolesOrNil(payload []byte) (*chatstate.Roles, error) {
+	if payload == nil {
+		return nil, nil
+	}
+	roles, err := chatstate.ParseRoles(payload)
+	if err != nil {
+		return nil, failed("the group's roles do not parse")
+	}
+	return &roles, nil
 }
 
 // judgeCollected is the authority half of ProcessVerified: nothing for a
@@ -114,6 +160,9 @@ func (s *Session) judgeCollected(shape CommitShape, auth chatstate.CommitAuthori
 		return nil, err
 	}
 	if err := chatstate.JudgeReceived(change, auth); err != nil {
+		return nil, err
+	}
+	if err := judgeReceivedSuccession(shape, change); err != nil {
 		return nil, err
 	}
 	if err := s.approveRemovals(shape.Removed); err != nil {

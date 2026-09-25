@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -37,5 +38,15 @@ func TestHandlePing_BareDelegation(t *testing.T) {
 	}
 	if data.Version == "" {
 		t.Fatalf("expected non-empty version")
+	}
+	// Old and new builds can report the same version string; the contract is
+	// what the extension gates chat on.
+	if data.ChatContract != 5 {
+		t.Fatalf("chat_contract = %d, want 5", data.ChatContract)
+	}
+	want := []string{"permit.v5", "roles.v1", "statements.v1", "handover.v1", "recovery.v1",
+		"pool_sweep.v1", "sync_block.v1", "safety_number.v1"}
+	if !slices.Equal(data.ChatCapabilities, want) {
+		t.Fatalf("chat_capabilities = %v, want %v", data.ChatCapabilities, want)
 	}
 }

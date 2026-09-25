@@ -78,9 +78,13 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote),
 		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort),
 		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus),
+		// the old device's approval of a takeover (design Q1)
+		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign),
 
 		// KeyPackages for the active leaf, gated by the purpose-bound
 		// KeyPackage challenge; their private keys go to the sealed pool.
 		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate),
+		// drops pool entries built before the roles extension (Q11)
+		proto.MLSKeyPackagePoolSweep: wrap(handlers.HandleMLSKeyPackagePoolSweep),
 	}
 }

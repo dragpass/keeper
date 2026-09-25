@@ -30,5 +30,8 @@ func mlsChatActions() map[string]actionHandlerFunc {
 		proto.MLSConversationStatus:        handlers.HandleMLSConversationStatus,
 		proto.MLSRejoinRequestSign:         handlers.HandleMLSRejoinRequestSign,
 		proto.MLSCommitAbandon:             handlers.HandleMLSCommitAbandon,
+		proto.MLSLeaveRequestSign:          handlers.HandleMLSLeaveRequestSign,
+		proto.OrgMemberRemovalSign:         wrap(handlers.HandleOrgMemberRemovalSign),
+		proto.MLSDeviceRevokeSign:          wrap(handlers.HandleMLSDeviceRevokeSign),
 	}
 }

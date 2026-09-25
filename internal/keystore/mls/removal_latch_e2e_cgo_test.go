@@ -46,11 +46,14 @@ func (g groupOf) refusedSend(t testing.TB, wm chatstate.ServerWatermark, why str
 	}
 }
 
+// beginRemove is a Remove a person on alice's device asked for. These groups
+// carry no roles (legacy_temporary), so that is what lets alice build it; the
+// authority rules have their own tests, and these are about the latch.
 func (g groupOf) beginRemove(t testing.TB, wm chatstate.ServerWatermark, accounts ...string) chatstate.BeginCommitResult {
 	t.Helper()
 	out, err := g.aliceStore.BeginCommit(conv, wm, chatstate.BeginCommitRequest{
 		ClientCommitID: nextCommitID(),
-		Plan:           chatstate.CommitPlan{RemoveAccountIDs: accounts},
+		Plan:           chatstate.CommitPlan{RemoveAccountIDs: accounts, UserInitiated: true},
 	}, mls.NewCipher(g.aliceS, trustAll{}))
 	if err != nil {
 		t.Fatalf("a remove commit was refused while latched: %v", err)
@@ -60,11 +63,25 @@ func (g groupOf) beginRemove(t testing.TB, wm chatstate.ServerWatermark, account
 
 func (g groupOf) loseTo(t testing.TB, id string, winner []byte, wm chatstate.ServerWatermark) {
 	t.Helper()
+	cipher := mls.NewCipher(g.aliceS, trustAll{})
+	cipher.SetEvidence(everyRemoval{})
 	if _, err := g.aliceStore.ConfirmCommit(conv, wm, chatstate.CommitOutcome{
 		ClientCommitID: id, Kind: chatstate.CommitSuperseded, WinnerMessage: winner,
-	}, mls.NewCipher(g.aliceS, trustAll{})); err != nil {
+	}, cipher); err != nil {
 		t.Fatalf("settle a lost race: %v", err)
 	}
+}
+
+// everyRemoval stands in for a verified statement behind every Remove, so a
+// winner's Remove is applied and the latch is what is under test.
+type everyRemoval struct{}
+
+func (everyRemoval) Authorized(change chatstate.CommitChange) ([]bool, int, error) {
+	out := make([]bool, len(change.Removed))
+	for i := range out {
+		out[i] = true
+	}
+	return out, 0, nil
 }
 
 // threeMembers is alice, bob and carol, with alice and carol on the same
@@ -169,7 +186,8 @@ func TestS1_LosingToAWinnerThatAlsoRemovesUnlatches(t *testing.T) {
 	g, carolS, carolStore := threeMembers(t)
 	g.refusedSend(t, removalOf(accountB), "a permit named bob")
 
-	winner := carolCommits(t, carolS, carolStore, removalOf(accountB), chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}})
+	winner := carolCommits(t, carolS, carolStore, removalOf(accountB),
+		chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}, UserInitiated: true})
 	pending := g.beginRemove(t, removalOf(accountB), accountB)
 	g.loseTo(t, pending.ClientCommitID, winner, removalOf(accountB))
 

@@ -22,9 +22,14 @@ import (
 // them. The process here dies the moment JoinFromPool returns, before any
 // caller could record anything else. Bob's group then holds Alice's leaf, and
 // a later leaf of Alice's account carrying another account key is refused as
-// a changed key, not taken as a first use.
+// a changed key, not taken as a first use. One active device per account, so
+// that leaf comes in as Carol's replace of Alice's leaf (a recovered identity
+// seated by another member, the one shape that brings in another key of an
+// account in the tree without a handover).
 func TestACrashAfterTheJoinCannotTOFUADifferentAccountKey(t *testing.T) {
 	g := newGroup(t)
+	carol := newAccount(t, accountC)
+	carolS, _ := g.memberOf(t, carol, device1)
 	bob := newAccount(t, accountB)
 	bob.declare(t, device1, proto.MLSLeafReasonEnroll, time.Now().Unix())
 	kps := bob.keyPackagesFor(t, device1, 1)
@@ -37,16 +42,30 @@ func TestACrashAfterTheJoinCannotTOFUADifferentAccountKey(t *testing.T) {
 	if err := bob.session(t).JoinFromPool(bobStore, conv, noWatermark, in.Welcome, bob.verifier(), time.Now()); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-
-	if _, err := mls.Restore(g.aliceStore, conv, noWatermark, g.aliceS); err != nil {
-		t.Fatal(err)
+	carolIn, err := carolS.ProcessVerified(in.Commit, carol.verifier())
+	if err != nil || carolIn.Epoch != 2 {
+		t.Fatalf("carol applies bob's add: %+v, %v", carolIn, err)
 	}
+
 	swapped := newAccount(t, accountA)
 	now := time.Now().Unix()
 	kp := keyPackage(t, forged(t, accountA, device2, func(k ed25519.PublicKey) []byte {
 		return payload(t, swapped.sign(t, declarationFor(accountA, device2, k, now, proto.MLSLeafReasonEnroll)), swapped.pem)
 	}))
-	commit, _, _, err := g.aliceS.CommitAddMemberVerified(kp, trustAll{})
+	roster, err := carolS.Roster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aliceLeaf []mls.Leaf
+	for _, l := range roster {
+		if a, _, _ := mls.ParseCredentialIdentity(l.Identity); a == accountA {
+			aliceLeaf = append(aliceLeaf, l)
+		}
+	}
+	if err := carolS.ApproveRemovalsForTest(aliceLeaf); err != nil {
+		t.Fatal(err)
+	}
+	commit, _, _, err := carolS.CommitReplaceMembersVerified([]uint32{aliceLeaf[0].Index}, [][]byte{kp}, trustAll{})
 	if err != nil {
 		t.Fatal(err)
 	}

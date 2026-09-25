@@ -114,6 +114,9 @@ func (s *Store) Reserve(conversationID string, count int, wm ServerWatermark) (R
 		if err != nil {
 			return err
 		}
+		if anchor.SyncBlock != nil {
+			return ErrSyncBlocked
+		}
 		loaded := rec.Generation
 		first := rec.NextIndex
 		need := first + uint64(count)
@@ -608,6 +611,11 @@ func (s *Store) commit(p convPaths, rec *Record, loadedGeneration uint64, anchor
 		anchor.ReservedBefore = rec.NextIndex
 	}
 	anchor.Epoch = rec.Epoch
+	if anchor.SyncBlock != nil && rec.Epoch >= anchor.SyncBlock.Epoch {
+		// A Commit for the blocked epoch was applied: the row it replaced
+		// no longer stands in the way.
+		anchor.SyncBlock = nil
+	}
 	return saveAnchor(s.secrets, p.tag, anchor)
 }
 

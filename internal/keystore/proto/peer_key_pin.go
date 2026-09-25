@@ -68,11 +68,16 @@ type PeerKeyPinGetResponseData struct {
 // fingerprint A over the phone while the server is now serving key B, promoting
 // B to `verified` would launder exactly the substitution the pin exists to
 // catch.
+//
+// SafetyNumberB64 (0.0.55, design Q10) is the pairwise safety number the
+// human compared or scanned, when that is how they compared. The Keeper then
+// also recomputes it from its own key and public_key and refuses a mismatch.
 type PeerKeyPinVerifyRequest struct {
-	OwnerAccountID string `json:"owner_account_id"`
-	AccountID      string `json:"account_id"`
-	Fingerprint    string `json:"fingerprint"`
-	PublicKey      string `json:"public_key"`
+	OwnerAccountID  string `json:"owner_account_id"`
+	AccountID       string `json:"account_id"`
+	Fingerprint     string `json:"fingerprint"`
+	PublicKey       string `json:"public_key"`
+	SafetyNumberB64 string `json:"safety_number_b64,omitempty"`
 }
 
 func (r PeerKeyPinVerifyRequest) Validate() error {
@@ -84,6 +89,15 @@ func (r PeerKeyPinVerifyRequest) Validate() error {
 	}
 	if err := requireKeyFingerprint(r.Fingerprint, "fingerprint"); err != nil {
 		return err
+	}
+	if r.SafetyNumberB64 != "" {
+		raw, err := requireBase64(r.SafetyNumberB64, "safety_number_b64")
+		if err != nil {
+			return err
+		}
+		if len(raw) != SafetyNumberBytes {
+			return newValidationError("safety_number_b64", "must be 32 bytes")
+		}
 	}
 	return requirePEM(r.PublicKey, "public_key")
 }
@@ -134,4 +148,42 @@ type PeerKeyChangedResponseData struct {
 	// unchanged by the refusal and stays the pinned value until a human
 	// settles the difference.
 	PinnedFingerprint string `json:"pinned_fingerprint"`
+}
+
+// SafetyNumberBytes is the length of the pairwise safety number's value, a
+// SHA-256 digest, and SafetyNumberDigits the length of its decimal rendering
+// (12 groups of 5).
+const (
+	SafetyNumberBytes  = 32
+	SafetyNumberDigits = 60
+)
+
+// PeerKeySafetyNumberRequest names the pair: this owner and one peer, with the
+// peer's public key as the directory serves it.
+type PeerKeySafetyNumberRequest struct {
+	OwnerAccountID string `json:"owner_account_id"`
+	AccountID      string `json:"account_id"`
+	PublicKey      string `json:"public_key"`
+}
+
+func (r PeerKeySafetyNumberRequest) Validate() error {
+	if err := requireMessageUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if r.OwnerAccountID == r.AccountID {
+		return newValidationError("account_id", "must be another account than the owner")
+	}
+	return requirePEM(r.PublicKey, "public_key")
+}
+
+// PeerKeySafetyNumberResponseData is the number both sides compare, as digits
+// and as the bytes a QR code carries, and the two fingerprints it covers.
+type PeerKeySafetyNumberResponseData struct {
+	SafetyNumber    string `json:"safety_number"`
+	SafetyNumberB64 string `json:"safety_number_b64"`
+	OwnFingerprint  string `json:"own_fingerprint"`
+	PeerFingerprint string `json:"peer_fingerprint"`
 }

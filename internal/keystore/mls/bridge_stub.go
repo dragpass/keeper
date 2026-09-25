@@ -25,6 +25,12 @@ func (s *Session) approve(leaves []Leaf) error { return ErrUnavailable }
 
 func (s *Session) approveRemovals(leaves []Leaf) error { return ErrUnavailable }
 
+func (s *Session) setNextRoles(payload []byte) error { return ErrUnavailable }
+
+func (s *Session) setNextCommitAAD(aad []byte) error { return ErrUnavailable }
+
+func (s *Session) groupAuthority() ([]byte, bool, error) { return nil, false, ErrUnavailable }
+
 func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
 	return nil, CommitShape{}, ErrUnavailable
 }
@@ -34,6 +40,8 @@ func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) { return nil, ErrU
 func keyPackageLeaf(keyPackage []byte) (Leaf, error) { return Leaf{}, ErrUnavailable }
 
 func keyPackageNotAfter(keyPackage []byte) (uint64, error) { return 0, ErrUnavailable }
+
+func keyPackageEntrySupportsRoles(entry []byte) (bool, error) { return false, ErrUnavailable }
 
 func WireFormOf(message []byte) (WireForm, error) { return WireFormOther, ErrUnavailable }
 

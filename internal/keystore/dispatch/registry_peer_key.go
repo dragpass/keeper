@@ -1,6 +1,6 @@
 // registry_peer_key.go — peer account key pin action registrations.
 //
-// Mirrors proto/actions_peer_key.go. These eight go through wrap() like most
+// Mirrors proto/actions_peer_key.go. These nine go through wrap() like most
 // actions: none of them is bound into a server signature, so the lenient
 // decode is fine and the strict decoder the message and chat actions need
 // would buy nothing here.
@@ -22,6 +22,8 @@ func peerKeyActions() map[string]actionHandlerFunc {
 		proto.ActionPeerKeyPinGet:    wrap(handlers.HandlePeerKeyPinGet),
 		proto.ActionPeerKeyPinVerify: wrap(handlers.HandlePeerKeyPinVerify),
 		proto.ActionPeerKeyPinForget: wrap(handlers.HandlePeerKeyPinForget),
+		// the pairwise safety number (design Q10)
+		proto.ActionPeerKeySafetyNumber: wrap(handlers.HandlePeerKeySafetyNumber),
 		proto.ActionPeerKeyChainEvaluate: wrapCapped(
 			proto.DEKRewrapMaxRequestBytes, handlers.HandlePeerKeyChainEvaluate,
 		),

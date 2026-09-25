@@ -312,6 +312,7 @@ func (s *Store) ForgetRemovedGroup(conversationID string, wm ServerWatermark) (F
 		rec.Pending = nil
 		rec.RemovalLatch = nil
 		rec.LeafReplacementLatch = nil
+		rec.DeviceRevokeLatch = nil
 		rec.RemovedFromGroup = false
 		rec.OwnLeaf = nil
 		if err := s.commit(p, rec, loaded, anchor); err != nil {
