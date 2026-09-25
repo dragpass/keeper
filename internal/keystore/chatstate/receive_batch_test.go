@@ -11,6 +11,35 @@ type failingAt struct {
 	n int
 }
 
+type expiredEpochAt struct {
+	*fakeInbound
+	n int
+}
+
+func (c *expiredEpochAt) Open(m []byte) (Opened, error) {
+	if c.opens+1 == c.n {
+		c.opens++
+		return Opened{}, ErrEpochUnavailable
+	}
+	return c.fakeInbound.Open(m)
+}
+
+func TestAnExpiredEpochDoesNotRefuseTheRestOfTheDisplayPage(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 0, 0, 0)
+	in := &expiredEpochAt{fakeInbound: senderInbound(), n: 1}
+	got, err := store.ReceiveBatch(testConvA, noWatermark, batchOf(1, 2), nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[0].EpochUnavailable || got[0].Plaintext != nil || got[0].Sender != (Sender{}) {
+		t.Fatalf("expired message = %+v", got[0])
+	}
+	if got[1].EpochUnavailable || string(got[1].Plaintext) != "hi" {
+		t.Fatalf("following message = %+v", got[1])
+	}
+}
+
 func (c *failingAt) Open(m []byte) (Opened, error) {
 	if c.opens+1 == c.n {
 		c.opens++

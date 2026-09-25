@@ -168,7 +168,8 @@ type ReceiveResult struct {
 	// its key. Not an error and not lost history. No plaintext, no position,
 	// no sender, and nothing was opened or written for it. Only ReceiveBatch
 	// reports it.
-	BeforeJoin bool
+	BeforeJoin       bool
+	EpochUnavailable bool
 
 	// Generation is the record's write counter after the confirmation, or the
 	// current one when nothing was written.
@@ -268,6 +269,24 @@ func (s *Store) Receive(
 		return ReceiveResult{}, err
 	}
 	return out, nil
+}
+
+func (s *Store) ConfirmedRemoval(
+	conversationID string, wm ServerWatermark, seq, epoch uint64, commit []byte,
+) ([]string, uint64, bool, error) {
+	var removed []string
+	var generation uint64
+	var found bool
+	err := s.withConversation(conversationID, func(p convPaths) error {
+		rec, _, err := s.loadChecked(p, conversationID, wm)
+		if err != nil {
+			return err
+		}
+		removed, found = rec.confirmedRemoval(seq, epoch, commit)
+		generation = rec.Generation
+		return nil
+	})
+	return removed, generation, found, err
 }
 
 // MaxReceiveBatch bounds one ReceiveBatch: the display page the app asks for.
@@ -399,6 +418,10 @@ func (s *Store) ReceiveBatch(
 				out = append(out, ReceiveResult{Application: true, BeforeJoin: true, Generation: rec.Generation})
 				continue
 			}
+			if errors.Is(err, ErrEpochUnavailable) {
+				out = append(out, ReceiveResult{Application: true, EpochUnavailable: true, Generation: rec.Generation})
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -480,6 +503,7 @@ func (e *forkDetected) Error() string {
 // ErrNotApplication — a message in a display batch was a handshake. Commits
 // go through the handshake path, in epoch order; nothing was written.
 var ErrNotApplication = errors.New("chat state was handed a handshake as an application message")
+var ErrEpochUnavailable = errors.New("chat state no longer retains the message epoch")
 
 // receiveOne is one delivery against a loaded record, in memory. It reports
 // whether it changed the record; the caller writes it. The returned plaintext
@@ -603,7 +627,13 @@ func (s *Store) receiveOne(
 	latch.apply(rec)
 	rec.enterEpoch(opened.Epoch)
 	if req.Handshake {
-		rec.noteConfirmed(req.ProducedEpoch, req.Message)
+		var removed []string
+		if reporter, ok := cipher.(interface{ LastCommitChange() (CommitChange, bool) }); ok {
+			if change, hasChange := reporter.LastCommitChange(); hasChange {
+				removed = change.Removed
+			}
+		}
+		rec.noteConfirmedRemoval(req.Seq, req.ProducedEpoch, req.Message, removed)
 	}
 	rec.markOpened(req.Seq, s.HistoryPolicy)
 	if opened.Removed {

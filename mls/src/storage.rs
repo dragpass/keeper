@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use mls_rs_core::crypto::HpkeSecretKey;
 use mls_rs_core::group::{EpochRecord, GroupState, GroupStateStorage};
@@ -16,13 +17,39 @@ use zeroize::Zeroizing;
 /// only bytes we can ever hold are the ones handed to `write`, and those arrive
 /// as a state plus a set of prior epochs rather than as one serialized object.
 /// Framing them ourselves is what lets `Record.GroupState` stay a single field.
-const MAGIC: &[u8; 8] = b"DPMLSGS1";
+const MAGIC_V1: &[u8; 8] = b"DPMLSGS1";
+const MAGIC: &[u8; 8] = b"DPMLSGS2";
+const MAX_PRIOR_EPOCHS: usize = 16;
+const PRIOR_EPOCH_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+struct StoredEpoch {
+    data: Zeroizing<Vec<u8>>,
+    inserted_at: u64,
+}
 
 #[derive(Default)]
 struct Inner {
     group_id: Vec<u8>,
     state: Option<Zeroizing<Vec<u8>>>,
-    epochs: BTreeMap<u64, Zeroizing<Vec<u8>>>,
+    epochs: BTreeMap<u64, StoredEpoch>,
+    max_epoch_id_seen: Option<u64>,
+}
+
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+impl Inner {
+    fn prune(&mut self, now: u64) {
+        self.epochs
+            .retain(|_, epoch| now.saturating_sub(epoch.inserted_at) < PRIOR_EPOCH_MAX_AGE_SECONDS);
+        while self.epochs.len() > MAX_PRIOR_EPOCHS {
+            self.epochs.pop_first();
+        }
+    }
 }
 
 /// RecordStorage is the seam between mls-rs and Keeper's chat state file.
@@ -46,20 +73,32 @@ impl RecordStorage {
         Self::default()
     }
 
+    pub fn has_prior_epoch(&self, group_id: &[u8], epoch: u64) -> bool {
+        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        if inner.group_id != group_id {
+            return false;
+        }
+        inner.prune(now_seconds());
+        inner.epochs.contains_key(&epoch)
+    }
+
     /// Serialize everything mls-rs has pushed down so far. None means the group
     /// has never been written, which is not the same as an empty group.
     pub fn encode(&self) -> Option<Zeroizing<Vec<u8>>> {
-        let inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        inner.prune(now_seconds());
         let state = inner.state.as_ref()?;
 
         let mut out = Zeroizing::new(Vec::with_capacity(state.len() + 64));
         out.extend_from_slice(MAGIC);
         put_bytes(&mut out, &inner.group_id);
         put_bytes(&mut out, state);
+        out.extend_from_slice(&inner.max_epoch_id_seen.unwrap_or(u64::MAX).to_be_bytes());
         out.extend_from_slice(&(inner.epochs.len() as u32).to_be_bytes());
-        for (id, data) in inner.epochs.iter() {
+        for (id, epoch) in inner.epochs.iter() {
             out.extend_from_slice(&id.to_be_bytes());
-            put_bytes(&mut out, data);
+            out.extend_from_slice(&epoch.inserted_at.to_be_bytes());
+            put_bytes(&mut out, &epoch.data);
         }
         Some(out)
     }
@@ -67,16 +106,29 @@ impl RecordStorage {
     /// Seed the storage from a blob so `Client::load_group` finds a group.
     pub fn decode_into(&self, blob: &[u8]) -> Result<Vec<u8>, &'static str> {
         let mut cur = Cursor::new(blob);
-        if cur.take(MAGIC.len())? != MAGIC {
+        let magic = cur.take(MAGIC.len())?;
+        if magic != MAGIC && magic != MAGIC_V1 {
             return Err("chat state MLS blob has an unknown magic");
         }
         let group_id = cur.take_prefixed()?.to_vec();
         let state = Zeroizing::new(cur.take_prefixed()?.to_vec());
+        let max_epoch_id_seen = if magic == MAGIC {
+            Some(cur.take_u64()?)
+        } else {
+            None
+        };
         let count = cur.take_u32()?;
         let mut epochs = BTreeMap::new();
         for _ in 0..count {
             let id = cur.take_u64()?;
-            epochs.insert(id, Zeroizing::new(cur.take_prefixed()?.to_vec()));
+            let inserted_at = if magic == MAGIC { cur.take_u64()? } else { 0 };
+            epochs.insert(
+                id,
+                StoredEpoch {
+                    data: Zeroizing::new(cur.take_prefixed()?.to_vec()),
+                    inserted_at,
+                },
+            );
         }
         if !cur.done() {
             return Err("chat state MLS blob has trailing bytes");
@@ -86,6 +138,10 @@ impl RecordStorage {
         inner.group_id = group_id.clone();
         inner.state = Some(state);
         inner.epochs = epochs;
+        inner.max_epoch_id_seen = max_epoch_id_seen
+            .filter(|id| *id != u64::MAX)
+            .or_else(|| inner.epochs.keys().next_back().copied());
+        inner.prune(now_seconds());
         Ok(group_id)
     }
 }
@@ -106,11 +162,12 @@ impl GroupStateStorage for RecordStorage {
         group_id: &[u8],
         epoch_id: u64,
     ) -> Result<Option<Zeroizing<Vec<u8>>>, Self::Error> {
-        let inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
         if inner.group_id != group_id {
             return Ok(None);
         }
-        Ok(inner.epochs.get(&epoch_id).cloned())
+        inner.prune(now_seconds());
+        Ok(inner.epochs.get(&epoch_id).map(|entry| entry.data.clone()))
     }
 
     fn write(
@@ -122,9 +179,24 @@ impl GroupStateStorage for RecordStorage {
         let mut inner = self.0.lock().expect("group state storage mutex poisoned");
         inner.group_id = state.id;
         inner.state = Some(state.data);
-        for rec in epoch_inserts.into_iter().chain(epoch_updates) {
-            inner.epochs.insert(rec.id, rec.data);
+        let now = now_seconds();
+        for rec in epoch_inserts {
+            inner.max_epoch_id_seen =
+                Some(inner.max_epoch_id_seen.map_or(rec.id, |id| id.max(rec.id)));
+            inner.epochs.insert(
+                rec.id,
+                StoredEpoch {
+                    data: rec.data,
+                    inserted_at: now,
+                },
+            );
         }
+        for rec in epoch_updates {
+            if let Some(entry) = inner.epochs.get_mut(&rec.id) {
+                entry.data = rec.data;
+            }
+        }
+        inner.prune(now);
         Ok(())
     }
 
@@ -133,7 +205,7 @@ impl GroupStateStorage for RecordStorage {
         if inner.group_id != group_id {
             return Ok(None);
         }
-        Ok(inner.epochs.keys().next_back().copied())
+        Ok(inner.max_epoch_id_seen)
     }
 }
 
@@ -355,6 +427,74 @@ mod tests {
         assert_eq!(loaded.state(b"gid").unwrap().unwrap().to_vec(), b"body");
         assert_eq!(loaded.epoch(b"gid", 1).unwrap().unwrap().to_vec(), b"e1");
         assert_eq!(loaded.max_epoch_id(b"gid").unwrap(), Some(1));
+    }
+
+    #[test]
+    fn retains_only_the_latest_sixteen_prior_epochs() {
+        let mut storage = RecordStorage::new();
+        let epochs = (1..=20)
+            .map(|id| EpochRecord::new(id, Zeroizing::new(vec![id as u8])))
+            .collect();
+        storage
+            .write(state(b"gid", b"body"), epochs, vec![])
+            .unwrap();
+
+        assert!(storage.epoch(b"gid", 4).unwrap().is_none());
+        assert_eq!(storage.epoch(b"gid", 5).unwrap().unwrap().to_vec(), vec![5]);
+        assert_eq!(storage.max_epoch_id(b"gid").unwrap(), Some(20));
+        let blob = storage.encode().unwrap();
+        let loaded = RecordStorage::new();
+        loaded.decode_into(&blob).unwrap();
+        assert!(loaded.epoch(b"gid", 4).unwrap().is_none());
+        assert_eq!(loaded.max_epoch_id(b"gid").unwrap(), Some(20));
+    }
+
+    #[test]
+    fn expired_epochs_are_erased_without_forgetting_the_latest_id() {
+        let mut storage = RecordStorage::new();
+        storage
+            .write(
+                state(b"gid", b"body"),
+                vec![EpochRecord::new(3, Zeroizing::new(b"old".to_vec()))],
+                vec![],
+            )
+            .unwrap();
+        storage
+            .0
+            .lock()
+            .unwrap()
+            .epochs
+            .get_mut(&3)
+            .unwrap()
+            .inserted_at = now_seconds() - PRIOR_EPOCH_MAX_AGE_SECONDS;
+
+        assert!(storage.epoch(b"gid", 3).unwrap().is_none());
+        assert_eq!(storage.max_epoch_id(b"gid").unwrap(), Some(3));
+        assert_eq!(storage.encode().unwrap().as_slice(), {
+            let mut expected = RecordStorage::new();
+            expected.0.lock().unwrap().max_epoch_id_seen = Some(3);
+            expected
+                .write(state(b"gid", b"body"), vec![], vec![])
+                .unwrap();
+            expected.encode().unwrap().as_slice().to_vec()
+        });
+    }
+
+    #[test]
+    fn legacy_blob_does_not_grandfather_secrets_with_unknown_age() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(MAGIC_V1);
+        put_bytes(&mut blob, b"gid");
+        put_bytes(&mut blob, b"body");
+        blob.extend_from_slice(&1u32.to_be_bytes());
+        blob.extend_from_slice(&7u64.to_be_bytes());
+        put_bytes(&mut blob, b"unknown age");
+
+        let loaded = RecordStorage::new();
+        loaded.decode_into(&blob).unwrap();
+        assert_eq!(loaded.state(b"gid").unwrap().unwrap().to_vec(), b"body");
+        assert!(loaded.epoch(b"gid", 7).unwrap().is_none());
+        assert_eq!(loaded.max_epoch_id(b"gid").unwrap(), Some(7));
     }
 
     #[test]

@@ -539,6 +539,17 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		ProducedEpoch: req.Epoch,
 		CommitMembers: members,
 	}, cipher)
+	if errors.Is(err, chatstate.ErrHandshakeApplied) {
+		removed, generation, found, lookupErr := c.store.ConfirmedRemoval(c.conv, c.wm, req.Seq, req.Epoch, commit)
+		if lookupErr != nil {
+			return chatStateFailure(d, "mls process", lookupErr)
+		}
+		if found && len(removed) > 0 {
+			return proto.BaseResponse{Success: true, Data: proto.MLSProcessResponseData{
+				Seq: req.Seq, Epoch: req.Epoch, Generation: generation, RemovedAccountIDs: removed,
+			}}
+		}
+	}
 	if err != nil {
 		return chatStateFailure(d, "mls process", err)
 	}
@@ -743,6 +754,10 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		}
 		if r.BeforeJoin {
 			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateBeforeJoin}
+			continue
+		}
+		if r.EpochUnavailable {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateEpochUnavailable}
 			continue
 		}
 		if r.OwnWithoutCopy {
