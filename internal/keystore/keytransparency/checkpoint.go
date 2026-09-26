@@ -8,20 +8,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	formatlog "github.com/transparency-dev/formats/log"
+	formatnote "github.com/transparency-dev/formats/note"
 	"github.com/transparency-dev/merkle/proof"
 	"github.com/transparency-dev/merkle/rfc6962"
 	"golang.org/x/mod/sumdb/note"
 )
 
 var (
-	ErrInvalidCheckpoint  = errors.New("key transparency checkpoint is invalid")
-	ErrWitnessQuorum      = errors.New("key transparency witness quorum is not met")
-	ErrCheckpointRollback = errors.New("key transparency checkpoint rollback detected")
-	ErrCheckpointFork     = errors.New("key transparency checkpoint fork detected")
-	ErrConsistencyProof   = errors.New("key transparency consistency proof is invalid")
+	ErrInvalidCheckpoint   = errors.New("key transparency checkpoint is invalid")
+	ErrWitnessQuorum       = errors.New("key transparency witness quorum is not met")
+	ErrCheckpointRollback  = errors.New("key transparency checkpoint rollback detected")
+	ErrCheckpointFork      = errors.New("key transparency checkpoint fork detected")
+	ErrConsistencyProof    = errors.New("key transparency consistency proof is invalid")
+	ErrCheckpointFreshness = errors.New("key transparency checkpoint freshness is invalid")
 )
 
 type Trust struct {
@@ -29,6 +32,10 @@ type Trust struct {
 	LogVerifier      note.Verifier
 	WitnessVerifiers []note.Verifier
 	Quorum           int
+	// MaxCheckpointAge is required; callers choose the operational freshness window.
+	MaxCheckpointAge time.Duration
+	// FutureSkew bounds how far ahead a witness timestamp may be from the local clock.
+	FutureSkew time.Duration
 }
 
 type CheckpointEvidence struct {
@@ -51,7 +58,7 @@ type VerifiedCheckpoint struct {
 const commitmentDomain = "dragpass.kt.leaf.v1\x00"
 
 func VerifyAndPersist(store keychain.SecretStore, trust Trust, evidence CheckpointEvidence) (*VerifiedCheckpoint, error) {
-	return verifyAndPersist(store, trust, evidence, nil)
+	return verifyAndPersist(store, trust, evidence, nil, time.Now())
 }
 
 func VerifyAndPersistStatement(
@@ -74,7 +81,7 @@ func VerifyAndPersistStatement(
 	leafHash := rfc6962.DefaultHasher.HashLeaf(commitment[:])
 	return verifyAndPersist(store, trust, evidence, func(anchor CheckpointAnchor) error {
 		return VerifyInclusion(anchor, leafIndex, leafHash, inclusionNodes)
-	})
+	}, time.Now())
 }
 
 func verifyAndPersist(
@@ -82,6 +89,7 @@ func verifyAndPersist(
 	trust Trust,
 	evidence CheckpointEvidence,
 	verifyEntry func(CheckpointAnchor) error,
+	now time.Time,
 ) (*VerifiedCheckpoint, error) {
 	var verified *VerifiedCheckpoint
 	err := keychain.UpdateKeyTransparencyCheckpoint(store, func(stored *keychain.KeyTransparencyCheckpoint) (keychain.KeyTransparencyCheckpoint, error) {
@@ -90,7 +98,7 @@ func verifyAndPersist(
 			previous = CheckpointAnchor{Version: stored.Version, Origin: stored.Origin, Size: stored.Size, Root: bytes.Clone(stored.Root)}
 		}
 		var err error
-		verified, err = VerifyCheckpoint(trust, evidence, previous)
+		verified, err = VerifyCheckpointAt(trust, evidence, previous, now)
 		if err != nil {
 			return keychain.KeyTransparencyCheckpoint{}, err
 		}
@@ -113,7 +121,12 @@ func verifyAndPersist(
 }
 
 func VerifyCheckpoint(trust Trust, evidence CheckpointEvidence, previous CheckpointAnchor) (*VerifiedCheckpoint, error) {
-	if trust.Origin == "" || trust.LogVerifier == nil || trust.Quorum < 1 || trust.Quorum > len(trust.WitnessVerifiers) {
+	return VerifyCheckpointAt(trust, evidence, previous, time.Now())
+}
+
+// VerifyCheckpointAt verifies the signed checkpoint, fresh witness quorum, and monotonic transition.
+func VerifyCheckpointAt(trust Trust, evidence CheckpointEvidence, previous CheckpointAnchor, now time.Time) (*VerifiedCheckpoint, error) {
+	if trust.Origin == "" || trust.LogVerifier == nil || trust.Quorum < 1 || trust.Quorum > len(trust.WitnessVerifiers) || trust.MaxCheckpointAge <= 0 || trust.FutureSkew < 0 || now.IsZero() {
 		return nil, ErrInvalidCheckpoint
 	}
 	verifiers := append([]note.Verifier(nil), trust.WitnessVerifiers...)
@@ -138,6 +151,27 @@ func VerifyCheckpoint(trust Trust, evidence CheckpointEvidence, previous Checkpo
 	}
 	if len(seen) < trust.Quorum {
 		return nil, ErrWitnessQuorum
+	}
+	fresh := make(map[string]struct{}, trust.Quorum)
+	for _, signature := range signed.Sigs {
+		keyHash, ok := witnessNames[signature.Name]
+		if !ok || keyHash != signature.Hash {
+			continue
+		}
+		if _, ok := seen[signature.Name]; !ok {
+			continue
+		}
+		timestamp, err := formatnote.CoSigV1Timestamp(signature)
+		if err != nil {
+			continue
+		}
+		age := now.Sub(timestamp)
+		if age >= -trust.FutureSkew && age <= trust.MaxCheckpointAge {
+			fresh[signature.Name] = struct{}{}
+		}
+	}
+	if len(fresh) < trust.Quorum {
+		return nil, ErrCheckpointFreshness
 	}
 	if previous.Version != 0 {
 		if previous.Origin != trust.Origin {
