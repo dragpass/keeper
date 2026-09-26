@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	formatlog "github.com/transparency-dev/formats/log"
@@ -44,7 +45,10 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	trust := Trust{Origin: "dragpass.test/log", LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers, Quorum: 2}
+	trust := Trust{
+		Origin: "dragpass.test/log", LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
+		Quorum: 2, MaxCheckpointAge: 24 * time.Hour, FutureSkew: 5 * time.Minute,
+	}
 	statement := []byte("signed account key binding")
 	salt := bytes.Repeat([]byte{0x33}, 32)
 	commitmentInput := append([]byte(commitmentDomain), salt...)
@@ -103,6 +107,24 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 	withoutQuorum := makeEvidence(2, rootTwo, witnessSigners[0])
 	if _, err := VerifyCheckpoint(trust, withoutQuorum, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}); !errors.Is(err, ErrWitnessQuorum) {
 		t.Fatalf("quorum error = %v, want ErrWitnessQuorum", err)
+	}
+	if _, err := VerifyCheckpointAt(trust, first, CheckpointAnchor{}, time.Now().Add(25*time.Hour)); !errors.Is(err, ErrCheckpointFreshness) {
+		t.Fatalf("stale checkpoint error = %v, want ErrCheckpointFreshness", err)
+	}
+	if _, err := VerifyCheckpointAt(trust, first, CheckpointAnchor{}, time.Now().Add(-6*time.Minute)); !errors.Is(err, ErrCheckpointFreshness) {
+		t.Fatalf("future checkpoint error = %v, want ErrCheckpointFreshness", err)
+	}
+	missingFreshnessPolicy := trust
+	missingFreshnessPolicy.MaxCheckpointAge = 0
+	if _, err := VerifyCheckpoint(missingFreshnessPolicy, first, CheckpointAnchor{}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("missing freshness policy error = %v, want ErrInvalidCheckpoint", err)
+	}
+	staleStore := keychain.NewMemorySecretStore()
+	if _, err := verifyAndPersist(staleStore, trust, first, nil, time.Now().Add(25*time.Hour)); !errors.Is(err, ErrCheckpointFreshness) {
+		t.Fatalf("persist stale checkpoint error = %v, want ErrCheckpointFreshness", err)
+	}
+	if _, found, err := keychain.GetKeyTransparencyCheckpoint(staleStore); err != nil || found {
+		t.Fatalf("stale checkpoint changed anchor: found=%v err=%v", found, err)
 	}
 	fork := makeEvidence(2, bytes.Repeat([]byte{0x61}, 32), witnessSigners[0], witnessSigners[2])
 	if _, err := VerifyCheckpoint(trust, fork, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}); !errors.Is(err, ErrCheckpointFork) {
