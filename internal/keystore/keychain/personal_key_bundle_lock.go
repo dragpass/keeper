@@ -31,6 +31,10 @@ func withPersonalKeyBundleLock(store SecretStore, fn func() error) error {
 	return fn()
 }
 
+func WithKeychainProcessLock(store SecretStore, fn func() error) error {
+	return withPersonalKeyBundleLock(store, fn)
+}
+
 func usesPlatformKeyring(store SecretStore) bool {
 	_, ok := store.(platformKeyringBackedStore)
 	return ok
