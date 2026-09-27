@@ -16,6 +16,14 @@ const (
 	// refused the recovery. It removes the staged pair only when its public
 	// key is the one named, so the keyring returns to its pre-prepare bytes.
 	ActionAuthRecoveryAbort = "auth_recovery_abort"
+	// AuthLoginPending* sign in with an account key a signup or recovery
+	// staged, for a device whose page was lost after the server accepted the
+	// key and before save_session_code promoted it. The challenge is signed
+	// only for the staged key the server-signed binding names, after the
+	// password opens the server's password-wrapped DEK. Neither writes;
+	// promotion stays in save_session_code.
+	ActionAuthLoginPendingSignAlias     = "auth_login_pending_sign_alias"
+	ActionAuthLoginPendingSignChallenge = "auth_login_pending_sign_challenge"
 
 	// Device key related actions
 	ActionGetDeviceKey    = "getdevicekey"

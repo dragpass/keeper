@@ -81,30 +81,11 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 	defer deviceKeyBuf.Destroy()
 
-	// decode encrypted_dek: salt(16) || iv(12) || ciphertext_with_tag
-	raw, err := base64.StdEncoding.DecodeString(encryptedDEKB64)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode encrypted_dek_b64: "+err.Error())
-	}
-	if len(raw) < dekSaltLength+12+16 { // salt + iv + min GCM tag
-		return errs.CodeResponse(errs.ErrCodeValidation, "encrypted_dek too short")
-	}
-	salt := raw[:dekSaltLength]
-	iv := raw[dekSaltLength : dekSaltLength+12]
-	ciphertext := raw[dekSaltLength+12:]
-
-	// derive KEK from password + decrypt DEK
-	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	defer secure.Zeroize(kek)
-
-	dek, err := aesGCMOpen(kek, iv, ciphertext)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed (wrong password?): "+err.Error())
+	dek, response := openPasswordWrappedDEK(encryptedDEKB64, pwBuf)
+	if !response.Success {
+		return response
 	}
 	defer secure.Zeroize(dek)
-	if len(dek) != 32 {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "unwrapped dek must be 32 bytes")
-	}
 
 	// rewrap with deviceKey
 	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
@@ -119,6 +100,34 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	return proto.BaseResponse{Success: true, Data: proto.DEKRotateToDeviceKeyResponseData{
 		DeviceWrappedDEKB64: devWrapped,
 	}}
+}
+
+// openPasswordWrappedDEK unwraps the server's password-wrapped DEK
+// (salt(16) || iv(12) || ciphertext_with_tag). The caller zeroizes the DEK.
+func openPasswordWrappedDEK(encryptedDEKB64 string, pwBuf *memguard.LockedBuffer) ([]byte, proto.BaseResponse) {
+	raw, err := base64.StdEncoding.DecodeString(encryptedDEKB64)
+	if err != nil {
+		return nil, errs.CodeResponse(errs.ErrCodeValidation, "failed to decode encrypted_dek_b64: "+err.Error())
+	}
+	if len(raw) < dekSaltLength+12+16 { // salt + iv + min GCM tag
+		return nil, errs.CodeResponse(errs.ErrCodeValidation, "encrypted_dek too short")
+	}
+	salt := raw[:dekSaltLength]
+	iv := raw[dekSaltLength : dekSaltLength+12]
+	ciphertext := raw[dekSaltLength+12:]
+
+	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
+	defer secure.Zeroize(kek)
+
+	dek, err := aesGCMOpen(kek, iv, ciphertext)
+	if err != nil {
+		return nil, errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed (wrong password?): "+err.Error())
+	}
+	if len(dek) != 32 {
+		secure.Zeroize(dek)
+		return nil, errs.CodeResponse(errs.ErrCodeCryptoFailure, "unwrapped dek must be 32 bytes")
+	}
+	return dek, proto.BaseResponse{Success: true}
 }
 
 // HandleDEKRotateToNewPassword — Master password change.

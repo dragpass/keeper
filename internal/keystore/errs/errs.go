@@ -47,6 +47,11 @@ const (
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"
 
+	// ErrCodePasswordInvalid: the password does not open the server's
+	// password-wrapped DEK. Returned where a crypto_failure would not say
+	// whether the password or a server signature was at fault.
+	ErrCodePasswordInvalid ErrorCode = "password_invalid"
+
 	// ErrCodePeerKeyChanged: a wrap named a peer account whose public key no
 	// longer matches the pinned fingerprint, and no valid rotation chain
 	// explains the change (account key trust v1, D3 `changed`). Nothing was
