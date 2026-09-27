@@ -1570,7 +1570,7 @@ like `voluntary`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`key_transparency_status`|_empty_|`{ configured, trust_error?, independent_witnesses, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. `independent_witnesses` echoes the trust file's declaration and is `false` unless the file says otherwise. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
+|`key_transparency_status`|_empty_|`{ configured, trust_error?, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. The status makes no claim about witness independence: a verified proof is a server-side record, and clients label it that way. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1584,9 +1584,11 @@ downstream.
 
 **Key Transparency (unreleased).** `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` points to a
 local JSON trust file containing the fixed log origin, log verifier, three
-witness verifiers, a 2-of-3 quorum, maximum checkpoint age, future clock skew,
-and an optional `independent_witnesses` declaration (default `false`). The file
-is not fetched from Ariadne. The file decides the gate:
+witness verifiers, a 2-of-3 quorum, maximum checkpoint age, and future clock
+skew. Unknown keys make the file invalid. That includes `independent_witnesses`:
+a trust file cannot declare its witnesses independent, because the Keeper has no
+way to check who runs them. The file is not fetched from Ariadne. The file
+decides the gate:
 
 |Trust file|Key changes|`key_transparency_status`|
 |---|---|---|
@@ -1595,9 +1597,8 @@ is not fetched from Ariadne. The file decides the gate:
 |present but unreadable or invalid|Refused, fail closed: `key_transparency_trust_invalid` (peer key actions) or `CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID` (MLS). There is no fallback to the pre-transparency rules, so corrupting the file cannot switch verification off. The process keeps running and logs the reason.|`configured: false`, `trust_error: "invalid"`|
 
 A verified proof shows that the server's log and the configured witnesses
-recorded the key. Unless the witnesses are run by operators independent of the
-log, that is a server-side record, not an independent verification; the Keeper
-cannot check operator independence and only echoes the declaration. The
+recorded the key. Until an independent witness exists, that is a server-side
+record, not an independent verification. The
 `key_transparency_status` action reports the persisted checkpoint but does not
 refresh it.
 
@@ -1611,7 +1612,7 @@ validated fields and requires byte-for-byte equality before checking the leaf
 commitment, RFC 6962 inclusion proof, log signature, fresh witness quorum, and
 monotonic consistency against its locally persisted checkpoint. Evidence is
 not included in the existing chat-state permit signature canonical; its
-authority comes from the independent log and witness signatures. A mismatch,
+authority comes from the log and witness signatures. A mismatch,
 missing proof, stale quorum, rollback, or fork fails closed before a pin or MLS
 state change is persisted. This does not verify first-observation TOFU and does
 not by itself provide independent client gossip or protect against a quorum

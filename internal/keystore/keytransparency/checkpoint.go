@@ -38,11 +38,6 @@ type Trust struct {
 	MaxCheckpointAge time.Duration
 	// FutureSkew bounds how far ahead a witness timestamp may be from the local clock.
 	FutureSkew time.Duration
-	// IndependentWitnesses is the trust file author's declaration that the
-	// witnesses are run by operators independent of the log. The Keeper cannot
-	// check it; without it, a verified proof only shows what the server's own
-	// log and witnesses recorded.
-	IndependentWitnesses bool
 }
 
 type CheckpointEvidence struct {

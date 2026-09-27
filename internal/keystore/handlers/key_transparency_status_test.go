@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,22 +60,32 @@ func statusOf(t *testing.T, deps Deps) proto.KeyTransparencyStatusResponse {
 
 func TestHandleKeyTransparencyStatusReportsTheGate(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	if s := statusOf(t, deps); s.Configured || s.TrustError != "" || s.IndependentWitnesses || s.Anchored {
+	if s := statusOf(t, deps); s.Configured || s.TrustError != "" || s.Anchored {
 		t.Fatalf("absent status = %+v, want unconfigured", s)
 	}
 
 	deps.KeyTransparency = keytransparency.Gate{Trust: testTrust(t)}
-	if s := statusOf(t, deps); !s.Configured || s.TrustError != "" || s.IndependentWitnesses {
-		t.Fatalf("valid status = %+v, want configured and not independent", s)
-	}
-	deps.KeyTransparency.Trust.IndependentWitnesses = true
-	if s := statusOf(t, deps); !s.IndependentWitnesses {
-		t.Fatalf("declared status = %+v, want independent witnesses", s)
+	if s := statusOf(t, deps); !s.Configured || s.TrustError != "" {
+		t.Fatalf("valid status = %+v, want configured", s)
 	}
 
 	deps.KeyTransparency = invalidGate()
 	if s := statusOf(t, deps); s.Configured || s.TrustError != proto.KeyTransparencyTrustErrorInvalid {
 		t.Fatalf("invalid status = %+v, want trust_error=invalid", s)
+	}
+}
+
+// The status carries no witness-independence field at all, so no client can
+// read one and label a server-side record as independent verification.
+func TestKeyTransparencyStatusHasNoIndependenceClaim(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	deps.KeyTransparency = keytransparency.Gate{Trust: testTrust(t)}
+	encoded, err := json.Marshal(statusOf(t, deps))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "independent") {
+		t.Fatalf("status = %s, want no independence field", encoded)
 	}
 }
 

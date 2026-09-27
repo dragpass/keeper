@@ -64,13 +64,21 @@ func TestLoadGateFromEnvWithValidTrustFileRequiresTransparency(t *testing.T) {
 	if gate.Trust.Quorum != 2 || len(gate.Trust.WitnessVerifiers) != 3 {
 		t.Fatalf("trust = %+v, want 2-of-3", gate.Trust)
 	}
-	if gate.Trust.IndependentWitnesses {
-		t.Fatal("independence must be declared, never assumed")
-	}
+}
 
-	t.Setenv(TrustConfigEnv, writeTrustFile(t, func(c map[string]any) { c["independent_witnesses"] = true }))
-	if gate := LoadGateFromEnv(); gate.Trust == nil || !gate.Trust.IndependentWitnesses {
-		t.Fatalf("gate = %+v, want declared independent witnesses", gate)
+// Witness independence is not something a trust file can claim: the Keeper
+// cannot check who runs the witnesses, and a flag that nothing verifies would
+// let a label read "independent" on the server's own log. Until a real
+// independent witness exists the key is not part of the schema, so a file
+// carrying it, either value, is invalid and fails closed like any other
+// unknown field.
+func TestLoadGateFromEnvRejectsSelfDeclaredWitnessIndependence(t *testing.T) {
+	for _, declared := range []bool{true, false} {
+		t.Setenv(TrustConfigEnv, writeTrustFile(t, func(c map[string]any) { c["independent_witnesses"] = declared }))
+		gate := LoadGateFromEnv()
+		if gate.Trust != nil || !errors.Is(gate.ConfigErr, ErrTrustInvalid) || !gate.Required() {
+			t.Fatalf("independent_witnesses=%v: gate = %+v, want fail-closed invalid trust", declared, gate)
+		}
 	}
 }
 
