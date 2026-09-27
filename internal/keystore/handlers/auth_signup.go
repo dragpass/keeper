@@ -127,6 +127,16 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	// While a recovery is staged the active key is not the account's key any
+	// more (the server may already hold the staged one), so a reissue would
+	// hand the server the wrong private key under the new RK24.
+	if staged, err := keychain.HasPendingRecoveryKeypair(d.Store); err != nil || staged {
+		secure.WipeString(&req.RecoveryKey)
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read the recovery state")
+		}
+		return errs.CodeResponse(errs.ErrCodeValidation, "a recovery is not complete on this device")
+	}
 	recoveryKey := []byte(req.RecoveryKey)
 	secure.WipeString(&req.RecoveryKey)
 	defer secure.Zeroize(recoveryKey)

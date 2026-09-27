@@ -420,3 +420,18 @@ func TestDEKRewrapWithOldKeyToSelfRefusesTheUnrotatedKey(t *testing.T) {
 		t.Fatal("rewrap wrapped a grant back to the key being recovered")
 	}
 }
+
+// A reissue wraps the active key under a new RK24. While a recovery is staged
+// the active key may not be the account's key any more, so it is refused.
+func TestRecoveryKeyReissueRefusedWhileARecoveryIsStaged(t *testing.T) {
+	stage := newRecoveryStage(t, true)
+	stage.prepare(t)
+	before := stage.store.Snapshot()
+	response := HandleAuthRecoveryReissuePrepare(stage.deps, proto.AuthRecoveryReissuePrepareRequest{
+		Alias: stageAlias, RecoveryKey: stageNewRecovery,
+	})
+	if response.Success {
+		t.Fatal("a reissue wrapped the pre-recovery key while the recovery was staged")
+	}
+	assertSnapshot(t, stage.store, before, "a refused reissue")
+}
