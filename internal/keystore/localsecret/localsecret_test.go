@@ -107,3 +107,34 @@ func TestDerivedKeysAreSeparated(t *testing.T) {
 		t.Fatal("App pairing key must not be the root secret")
 	}
 }
+
+func TestRotateReplacesTheSecretAndReloadSeesIt(t *testing.T) {
+	t.Setenv(DirEnvVar, filepath.Join(t.TempDir(), "keeper"))
+	if _, err := Rotate(); err == nil {
+		t.Fatal("rotated a secret that was never created")
+	}
+	old, err := LoadOrCreate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := Rotate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Equal(rotated) || bytes.Equal(old.AppPairingKey(), rotated.AppPairingKey()) {
+		t.Fatal("rotation kept the old secret")
+	}
+	reloaded, err := old.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Equal(rotated) {
+		t.Fatal("a running owner reloading its secret did not see the rotation")
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(os.Getenv(DirEnvVar), fileName))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("rotated secret mode = %v, %v", info, err)
+		}
+	}
+}

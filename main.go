@@ -143,10 +143,17 @@ func main() {
 		if err := service.Manage(os.Args[2], executable); err != nil {
 			log.Fatal(err)
 		}
+		if os.Args[2] == "install" {
+			// The service serves only a paired App, so installing it opens
+			// the pairing page right away.
+			if err := pairApp(defaultAppOrigin, true, os.Stdout); err != nil {
+				log.Printf("The service is installed but the pairing page could not be prepared: %v. Run `dragpass-keeper app pair`.", err)
+			}
+		}
 		return
 	}
-	if len(os.Args) >= 3 && os.Args[1] == "app" && os.Args[2] == "pair" {
-		if err := printAppPairingLink(os.Args[3:]); err != nil {
+	if len(os.Args) >= 3 && os.Args[1] == "app" {
+		if err := runAppCommand(os.Args[2:], os.Stdout); err != nil {
 			log.Fatal(err)
 		}
 		return

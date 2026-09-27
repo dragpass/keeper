@@ -82,6 +82,7 @@ type Server struct {
 	origins    map[string]struct{}
 	host       string
 	now        func() time.Time
+	secret     localsecret.Secret
 	appKey     []byte
 	proxy      *proxyReceiver
 	mu         sync.Mutex
@@ -134,6 +135,7 @@ func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Serve
 		app:        app,
 		origins:    allowed,
 		now:        time.Now,
+		secret:     secret,
 		appKey:     secret.AppPairingKey(),
 		proxy:      &proxyReceiver{key: secret.NativeProxyKey(), instance: instance, seen: make(map[string]time.Time)},
 		sessions:   make(map[string]session),
@@ -218,6 +220,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
+	if r.URL.Path != "/v1/health" {
+		if err := s.refreshSecret(); err != nil {
+			http.Error(w, "local secret unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -235,7 +243,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			"hash":             version.BinaryHash,
 			"protocol_version": nativeProxyProtocolVersion,
 			"instance":         s.proxy.instance,
-			"proof":            base64.RawURLEncoding.EncodeToString(healthProof(s.proxy.key, challenge, s.proxy.instance)),
+			"proof":            base64.RawURLEncoding.EncodeToString(healthProof(s.proxy.currentKey(), challenge, s.proxy.instance)),
 		})
 	case origin == NativeExtensionOrigin && r.Method == http.MethodPost && r.URL.Path == "/v1/native-proxy/message":
 		s.serveNativeProxyMessage(w, r)
@@ -424,7 +432,7 @@ func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	message, requestNonce, err := s.proxy.open(body, s.now())
+	message, requestNonce, proxyKey, err := s.proxy.open(body, s.now())
 	if errors.Is(err, errStaleProxyInstance) {
 		http.Error(w, "owner changed", http.StatusConflict)
 		return
@@ -438,7 +446,7 @@ func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	sealed, err := sealProxyResponse(s.proxy.key, s.proxy.instance, requestNonce, response)
+	sealed, err := sealProxyResponse(proxyKey, s.proxy.instance, requestNonce, response)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -494,9 +502,10 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 	s.mu.Lock()
 	expires, issued := s.challenges[input.Challenge]
 	delete(s.challenges, input.Challenge)
+	appKey := s.appKey
 	s.mu.Unlock()
 	if !issued || !now.Before(expires) ||
-		!equalMAC(mac(s.appKey, appOpenLabel, origin, input.Challenge, input.ClientNonce), input.Proof) {
+		!equalMAC(mac(appKey, appOpenLabel, origin, input.Challenge, input.ClientNonce), input.Proof) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -525,7 +534,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 	expiresAt := sessionExpires.Unix()
 	s.sessions[token] = session{
 		csrf: csrf, expires: sessionExpires, nonces: make(map[string]time.Time),
-		key:    appSessionKey(s.appKey, origin, input.Challenge, input.ClientNonce, token, csrf, expiresAt),
+		key:    appSessionKey(appKey, origin, input.Challenge, input.ClientNonce, token, csrf, expiresAt),
 		origin: origin, sealed: make(map[string]struct{}),
 	}
 	s.mu.Unlock()
@@ -533,8 +542,32 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 		"session":     token,
 		"csrf":        csrf,
 		"expires_at":  expiresAt,
-		"owner_proof": macB64(s.appKey, appOwnerLabel, origin, input.Challenge, input.ClientNonce, token, csrf, strconv.FormatInt(expiresAt, 10)),
+		"owner_proof": macB64(appKey, appOwnerLabel, origin, input.Challenge, input.ClientNonce, token, csrf, strconv.FormatInt(expiresAt, 10)),
 	})
+}
+
+// refreshSecret reloads the local secret so `dragpass-keeper app
+// rotate-secret` takes effect in a running owner: a changed secret drops every
+// App session and pending challenge, and the old pairing key opens nothing.
+func (s *Server) refreshSecret() error {
+	s.mu.Lock()
+	current := s.secret
+	s.mu.Unlock()
+	latest, err := current.Reload()
+	if err != nil {
+		return err
+	}
+	if latest.Equal(current) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secret = latest
+	s.appKey = latest.AppPairingKey()
+	s.sessions = make(map[string]session)
+	s.challenges = make(map[string]time.Time)
+	s.proxy.rekey(latest.NativeProxyKey())
+	return nil
 }
 
 func constantTimeEqual(provided, expected string) bool {

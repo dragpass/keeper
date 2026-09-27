@@ -387,6 +387,33 @@ func TestNativeMessagingProxyReprovesAfterOwnerRestart(t *testing.T) {
 	}
 }
 
+// After `app rotate-secret` the owner answers only the new proxy key. A proxy
+// that the owner refuses reads the key again and carries on.
+func TestNativeMessagingProxyFollowsARotatedSecret(t *testing.T) {
+	secret := testSecret(t)
+	address := startTestOwner(t, newTestServerWithSecret(t, secret))
+	_, _, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), time.Second)
+	if err != nil || proxy == nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if _, err := localsecret.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proxy.Forward([]byte(`{"action":"ping"}`)); err == nil {
+		t.Fatal("the owner answered a proxy still sealing with the rotated-out key")
+	}
+	proxy.reload = func() ([]byte, error) {
+		latest, err := secret.Reload()
+		if err != nil {
+			return nil, err
+		}
+		return latest.NativeProxyKey(), nil
+	}
+	if response, err := proxy.Forward([]byte(`{"action":"ping"}`)); err != nil || !response.Success {
+		t.Fatalf("forward after rotation: response=%+v error=%v", response, err)
+	}
+}
+
 // A listener that cannot prove the local secret is another user's Keeper or a
 // port squatter. The Native Messaging host must not send it anything and runs
 // on its own stdio instead, as it did before the shared owner existed.

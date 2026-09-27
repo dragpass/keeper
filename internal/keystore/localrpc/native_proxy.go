@@ -40,7 +40,17 @@ const (
 var errOwnerUnproven = errors.New("local listener did not prove the Keeper local secret")
 
 func AcquireNativeOwner(address string, secret localsecret.Secret) (NativeRole, net.Listener, *NativeProxy, error) {
-	return acquireNativeOwnerAt(address, secret.NativeProxyKey(), nativeOwnerWait)
+	role, listener, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), nativeOwnerWait)
+	if proxy != nil {
+		proxy.reload = func() ([]byte, error) {
+			latest, err := secret.Reload()
+			if err != nil {
+				return nil, err
+			}
+			return latest.NativeProxyKey(), nil
+		}
+	}
+	return role, listener, proxy, err
 }
 
 func AcquireAppServiceOwner(ctx context.Context, address string) (net.Listener, error) {
@@ -99,6 +109,9 @@ type NativeProxy struct {
 	key      []byte
 	instance string
 	now      func() time.Time
+	// reload reads the proxy key again after the owner refused a request,
+	// which is what a rotated secret looks like from here. Nil in tests.
+	reload func() ([]byte, error)
 }
 
 // prove runs the health challenge and records the owner instance the sealed
@@ -145,6 +158,9 @@ func (p *NativeProxy) Forward(message []byte) (proto.BaseResponse, error) {
 		return proto.BaseResponse{}, errors.New("native message size is invalid")
 	}
 	result, err := p.forwardOnce(message)
+	if errors.Is(err, errProxyForbidden) && p.reloadKey() {
+		err = errStaleProxyInstance
+	}
 	if errors.Is(err, errStaleProxyInstance) {
 		if proveErr := p.prove(); proveErr != nil {
 			return proto.BaseResponse{}, errors.New("local Keeper owner could not be proven again")
@@ -152,6 +168,20 @@ func (p *NativeProxy) Forward(message []byte) (proto.BaseResponse, error) {
 		result, err = p.forwardOnce(message)
 	}
 	return result, err
+}
+
+// reloadKey reports whether the key on disk differs from the one in use, and
+// switches to it. A refused request was never run, so retrying is safe.
+func (p *NativeProxy) reloadKey() bool {
+	if p.reload == nil {
+		return false
+	}
+	key, err := p.reload()
+	if err != nil || bytes.Equal(key, p.key) {
+		return false
+	}
+	p.key = key
+	return true
 }
 
 func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
@@ -173,6 +203,9 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusConflict {
 		return proto.BaseResponse{}, errStaleProxyInstance
+	}
+	if response.StatusCode == http.StatusForbidden {
+		return proto.BaseResponse{}, errProxyForbidden
 	}
 	if response.StatusCode != http.StatusOK {
 		return proto.BaseResponse{}, fmt.Errorf("local Keeper owner rejected the request (%d)", response.StatusCode)

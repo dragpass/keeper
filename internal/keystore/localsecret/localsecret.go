@@ -27,6 +27,7 @@ const (
 
 type Secret struct {
 	root []byte
+	dir  string
 }
 
 // AppPairingKey is the only value the App receives. Deriving it keeps a
@@ -34,6 +35,18 @@ type Secret struct {
 func (s Secret) AppPairingKey() []byte { return s.derive("dragpass-keeper-app-pairing-v1") }
 
 func (s Secret) NativeProxyKey() []byte { return s.derive("dragpass-keeper-native-proxy-v1") }
+
+// Equal reports whether two loaded secrets hold the same root.
+func (s Secret) Equal(other Secret) bool { return hmac.Equal(s.root, other.root) }
+
+// Reload reads the secret again from the directory it was loaded from, so a
+// running owner notices a rotation without a restart.
+func (s Secret) Reload() (Secret, error) {
+	if s.dir == "" {
+		return Secret{}, errors.New("Keeper local secret was not loaded from a directory")
+	}
+	return loadFrom(s.dir)
+}
 
 func (s Secret) derive(label string) []byte {
 	mac := hmac.New(sha256.New, s.root)
@@ -59,6 +72,10 @@ func Load() (Secret, error) {
 	if err != nil {
 		return Secret{}, err
 	}
+	return loadFrom(dir)
+}
+
+func loadFrom(dir string) (Secret, error) {
 	if err := checkPrivate(dir, true); err != nil {
 		return Secret{}, err
 	}
@@ -74,7 +91,7 @@ func Load() (Secret, error) {
 	if err != nil || len(root) != secretBytes {
 		return Secret{}, errors.New("Keeper local secret is malformed")
 	}
-	return Secret{root: root}, nil
+	return Secret{root: root, dir: dir}, nil
 }
 
 // LoadOrCreate returns the secret, creating it on first use. The value is
@@ -95,25 +112,58 @@ func LoadOrCreate() (Secret, error) {
 	if secret, err := Load(); err == nil {
 		return secret, nil
 	}
+	temp, err := writeNewRoot(dir)
+	if err != nil {
+		return Secret{}, err
+	}
+	defer os.Remove(temp)
+	if err := os.Link(temp, filepath.Join(dir, fileName)); err != nil && !errors.Is(err, os.ErrExist) {
+		return Secret{}, fmt.Errorf("publish Keeper local secret: %w", err)
+	}
+	return Load()
+}
+
+// Rotate replaces the secret with a new one. Every App pairing and native
+// proxy key derived from the old one stops working: running owners reload the
+// file and drop their sessions, and the App has to be paired again.
+func Rotate() (Secret, error) {
+	dir, err := Dir()
+	if err != nil {
+		return Secret{}, err
+	}
+	if _, err := Load(); err != nil {
+		return Secret{}, fmt.Errorf("rotate Keeper local secret: %w", err)
+	}
+	temp, err := writeNewRoot(dir)
+	if err != nil {
+		return Secret{}, err
+	}
+	defer os.Remove(temp)
+	if err := os.Rename(temp, filepath.Join(dir, fileName)); err != nil {
+		return Secret{}, fmt.Errorf("replace Keeper local secret: %w", err)
+	}
+	return Load()
+}
+
+// writeNewRoot writes a fresh root to an owner-only temporary file in dir and
+// returns its path, for the caller to publish atomically.
+func writeNewRoot(dir string) (string, error) {
 	root := make([]byte, secretBytes)
 	if _, err := rand.Read(root); err != nil {
-		return Secret{}, fmt.Errorf("generate Keeper local secret: %w", err)
+		return "", fmt.Errorf("generate Keeper local secret: %w", err)
 	}
 	temp, err := os.CreateTemp(dir, ".local-rpc-*.tmp")
 	if err != nil {
-		return Secret{}, fmt.Errorf("create Keeper local secret: %w", err)
+		return "", fmt.Errorf("create Keeper local secret: %w", err)
 	}
-	defer os.Remove(temp.Name())
 	_, writeErr := temp.WriteString(base64.RawURLEncoding.EncodeToString(root) + "\n")
 	chmodErr := temp.Chmod(0o600)
 	closeErr := temp.Close()
 	if writeErr != nil || chmodErr != nil || closeErr != nil {
-		return Secret{}, errors.New("write Keeper local secret")
+		os.Remove(temp.Name())
+		return "", errors.New("write Keeper local secret")
 	}
-	if err := os.Link(temp.Name(), filepath.Join(dir, fileName)); err != nil && !errors.Is(err, os.ErrExist) {
-		return Secret{}, fmt.Errorf("publish Keeper local secret: %w", err)
-	}
-	return Load()
+	return temp.Name(), nil
 }
 
 // IsZero reports a Secret that was never loaded; channels refuse to start

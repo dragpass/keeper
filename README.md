@@ -39,16 +39,19 @@ per-user configuration.
 
 The service listens on `127.0.0.1:47623`, a port every account on the machine
 can reach, so it only serves an app that has been paired with your account's
-Keeper. After installing the service, run the following in your own session
-and open the printed link in the browser where you use DragPass:
+Keeper. `service install` opens the pairing page in your default browser. To
+pair again, or to pair another browser, run in your own session:
 
 ```bash
-dragpass-keeper app pair
+dragpass-keeper app pair            # opens the pairing page
+dragpass-keeper app pair --no-open  # prints the link instead
 ```
 
 The link carries a pairing key in its `#fragment`, which the browser does not
 send to any server. Anyone who can read your files can pair an app, so treat
-the link like a password and do not share it.
+the link like a password and do not share it. If a link may have leaked, run
+`dragpass-keeper app rotate-secret`: every browser paired before is unpaired,
+and the new pairing page opens.
 
 ### macOS
 

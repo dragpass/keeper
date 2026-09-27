@@ -238,3 +238,40 @@ func TestAppSessionFailsAgainstAnotherUsersKeeperMidSession(t *testing.T) {
 		t.Fatal("the App opened a session with another user's Keeper")
 	}
 }
+
+// `dragpass-keeper app rotate-secret` must unpair a browser even while the
+// owner that paired it keeps running.
+func TestRotateSecretUnpairsARunningOwner(t *testing.T) {
+	dir, address := t.TempDir(), freeLoopbackAddress(t)
+	owner := startAppService(t, dir, address)
+	client := &testAppClient{address: address, origin: testOrigin, pairingKey: pairingKeyOf(t, dir)}
+	if err := client.open(); err != nil {
+		t.Fatalf("open session: %v\n%s", err, owner.stderr.String())
+	}
+
+	rotate := exec.Command(builtKeeper(t), "app", "rotate-secret", "--no-open")
+	rotate.Env = []string{
+		localsecret.DirEnvVar + "=" + filepath.Join(dir, "local"),
+		"HOME=" + filepath.Join(dir, "home"),
+		"PATH=" + os.Getenv("PATH"),
+		"SystemRoot=" + os.Getenv("SystemRoot"),
+	}
+	out, err := rotate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rotate-secret: %v\n%s", err, out)
+	}
+
+	if response, err := client.status(); err == nil {
+		t.Fatalf("a session opened before the rotation still works: %+v", response)
+	}
+	if err := client.open(); err == nil {
+		t.Fatal("the old pairing key opened a session after the rotation")
+	}
+	client.pairingKey = pairingKeyOf(t, dir)
+	if err := client.open(); err != nil {
+		t.Fatalf("the new pairing key does not open a session: %v\n%s", err, owner.stderr.String())
+	}
+	if response, err := client.status(); err != nil || !response.Success {
+		t.Fatalf("status after re-pairing: %+v, %v", response, err)
+	}
+}

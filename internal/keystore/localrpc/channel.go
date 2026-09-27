@@ -45,6 +45,7 @@ const (
 var (
 	errStaleProxyInstance = errors.New("native proxy request addressed another owner instance")
 	errProxyRejected      = errors.New("native proxy request rejected")
+	errProxyForbidden     = errors.New("local Keeper owner refused the sealed request")
 )
 
 type sealedEnvelope struct {
@@ -194,22 +195,38 @@ type proxyReceiver struct {
 	seen     map[string]time.Time
 }
 
-func (p *proxyReceiver) open(body []byte, now time.Time) ([]byte, string, error) {
+func (p *proxyReceiver) currentKey() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.key
+}
+
+// rekey switches to a rotated secret; nonces sealed under the old key are
+// useless now, so the replay cache starts over.
+func (p *proxyReceiver) rekey(key []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.key = key
+	p.seen = make(map[string]time.Time)
+}
+
+func (p *proxyReceiver) open(body []byte, now time.Time) ([]byte, string, []byte, error) {
 	var envelope sealedEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil ||
 		envelope.Instance == "" || envelope.Nonce == "" || envelope.Sealed == "" {
-		return nil, "", errProxyRejected
+		return nil, "", nil, errProxyRejected
 	}
 	if envelope.Instance != p.instance {
-		return nil, "", errStaleProxyInstance
+		return nil, "", nil, errStaleProxyInstance
 	}
 	if skew := now.Sub(time.Unix(envelope.Timestamp, 0)); skew > proxyClockSkew || skew < -proxyClockSkew {
-		return nil, "", errProxyRejected
+		return nil, "", nil, errProxyRejected
 	}
 	aad := []byte(proxyRequestLabel + "\n" + envelope.Instance + "\n" + strconv.FormatInt(envelope.Timestamp, 10))
-	plain, err := openEnvelope(p.key, envelope, aad)
+	key := p.currentKey()
+	plain, err := openEnvelope(key, envelope, aad)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -219,8 +236,8 @@ func (p *proxyReceiver) open(body []byte, now time.Time) ([]byte, string, error)
 		}
 	}
 	if _, replay := p.seen[envelope.Nonce]; replay || len(p.seen) >= maxProxyNonces {
-		return nil, "", errProxyRejected
+		return nil, "", nil, errProxyRejected
 	}
 	p.seen[envelope.Nonce] = now
-	return plain, envelope.Nonce, nil
+	return plain, envelope.Nonce, key, nil
 }
