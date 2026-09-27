@@ -75,7 +75,7 @@ func TestKeyTransparencyGateAtTheProcessBoundary(t *testing.T) {
 
 			var status proto.KeyTransparencyStatusResponse
 			a.must(proto.ActionKeyTransparencyStatus, proto.KeyTransparencyStatusRequest{}, &status)
-			if status.Configured != tc.configured || status.TrustError != tc.trustError || status.IndependentWitnesses {
+			if status.Configured != tc.configured || status.TrustError != tc.trustError {
 				t.Fatalf("status = %+v", status)
 			}
 

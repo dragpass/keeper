@@ -22,7 +22,6 @@ type trustConfig struct {
 	Quorum                  int      `json:"quorum"`
 	MaxCheckpointAgeSeconds int64    `json:"max_checkpoint_age_seconds"`
 	FutureSkewSeconds       int64    `json:"future_skew_seconds"`
-	IndependentWitnesses    bool     `json:"independent_witnesses,omitempty"`
 }
 
 // Gate is what the Keeper enforces for account-key rotations and entering MLS
@@ -88,7 +87,6 @@ func loadTrustFile(path string) (*Trust, error) {
 	return &Trust{
 		Origin: config.Origin, LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
 		Quorum: 2, MaxCheckpointAge: time.Duration(config.MaxCheckpointAgeSeconds) * time.Second,
-		FutureSkew:           time.Duration(config.FutureSkewSeconds) * time.Second,
-		IndependentWitnesses: config.IndependentWitnesses,
+		FutureSkew: time.Duration(config.FutureSkewSeconds) * time.Second,
 	}, nil
 }
