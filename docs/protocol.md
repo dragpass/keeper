@@ -1956,3 +1956,54 @@ builds that don't emit it continue to work against newer Extensions.
 - `internal/keystore/proto/validation.go` — request validation helpers.
 - `internal/keystore/errs/errs.go` — `ErrorCode` enum + `CodeForError` mapping.
 - `internal/keystore/handlers/refresh_server_keys.go` — `SystemServerKeyEntry` shape.
+
+## Local App RPC and the shared owner
+
+Keeper can serve the DragPass app without the Chrome extension. One Keeper
+process per machine owns `127.0.0.1:47623` (`tcp4`, loopback only): either the
+per-user service (`--app-service`) or the first Chrome-launched host. Every
+request must carry an allowed `Origin`, `Host` equal to the listener address,
+`X-DragPass-Local-RPC: 1`, and `Sec-Fetch-Site` of `same-site` or
+`cross-site`. Browsers enforce those; a local process can forge them, so they
+are not the authentication.
+
+**Local secret.** `<UserConfigDir>/dragpass-keeper/local-rpc/local-rpc.key`
+(directory `0700`, file `0600`, owner-checked on POSIX;
+`DRAGPASS_KEEPER_LOCAL_DIR` overrides the directory). Two keys are derived with
+HMAC-SHA256: the app pairing key and the native proxy key. The loopback port is
+shared by every OS user, so only a caller holding one of these keys can drive
+the owner.
+
+**App sessions.** `dragpass-keeper app pair` prints
+`https://app.dragpass.io/#keeper-pair=<pairing key>`. The app stores the key
+and opens a session in two steps:
+
+|Route|Request|Response|
+|---|---|---|
+|`POST /v1/session/challenge`|`{}`|`{ challenge, expires_at }` (one-time, 30 s, at most 64 pending)|
+|`POST /v1/session`|`{ challenge, client_nonce, proof }`, `proof = HMAC(pairing key, "dragpass-keeper-app-open-v1\n" + origin + "\n" + challenge + "\n" + client_nonce)`|`{ session, csrf, expires_at, owner_proof }`, `owner_proof = HMAC(pairing key, "dragpass-keeper-app-owner-v1\n" + origin + "\n" + challenge + "\n" + client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`|
+
+The challenge is consumed whether or not the proof verifies. The app must check
+`owner_proof` before it sends a password or recovery key. Later requests use
+`Authorization: Bearer <session>` and `X-DragPass-CSRF`. The session routes are
+typed (`/v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
+`/v1/auth/signup/*`); there is no generic action route.
+
+**Native Messaging proxy (protocol 2).** A Chrome-launched host that cannot
+bind the port proves the owner with
+`GET /v1/native-proxy/health?challenge=<b64url, 16+ bytes>`; the owner answers
+with its random `instance` and `proof = HMAC(HMAC(proxy key, "health"),
+"dragpass-keeper-native-proxy-health-v2\n" + challenge + "\n" + instance)`.
+Each message is AES-256-GCM sealed (key `HMAC(proxy key, "aead")`) as
+`{ instance, ts, nonce, ct }` with AAD
+`"dragpass-keeper-native-proxy-request-v2\n" + instance + "\n" + ts`; the owner
+refuses a timestamp outside ±60 s, a repeated nonce, or another instance (409,
+refused before running, so the host re-proves and retries once). Responses are
+sealed with AAD `"dragpass-keeper-native-proxy-response-v2\n" + instance + "\n"
++ request nonce`. A listener that cannot prove the secret (another account's
+Keeper, a protocol 1 owner, a port squatter) receives nothing: the host serves
+its own stdio instead. With `KEEPER_E2E_MODE=1` and no
+`DRAGPASS_KEEPER_LOCAL_DIR`, Keeper never joins the shared address.
+
+The development app origin is accepted only when
+`DRAGPASS_KEEPER_DEV_APP_ORIGIN` names it.

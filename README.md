@@ -35,6 +35,21 @@ Transparency trust file, set `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` before
 running the install command. The service stores its validated path in the
 per-user configuration.
 
+### Pairing the app
+
+The service listens on `127.0.0.1:47623`, a port every account on the machine
+can reach, so it only serves an app that has been paired with your account's
+Keeper. After installing the service, run the following in your own session
+and open the printed link in the browser where you use DragPass:
+
+```bash
+dragpass-keeper app pair
+```
+
+The link carries a pairing key in its `#fragment`, which the browser does not
+send to any server. Anyone who can read your files can pair an app, so treat
+the link like a password and do not share it.
+
 ### macOS
 
 After installing the package or Homebrew cask, enable the per-user LaunchAgent:
