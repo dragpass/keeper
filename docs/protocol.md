@@ -109,7 +109,7 @@ types are in `internal/keystore/proto/`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`ping`|_empty_|`{ version, hash, path, chat_contract, chat_capabilities }`|Liveness + version. Used by Extension health check. `chat_contract` (integer, 5 for the wave 5 chat contract) and `chat_capabilities` (strings: `permit.v5`, `roles.v1`, `statements.v1`, `handover.v1`, `recovery.v1`, `pool_sweep.v1`, `sync_block.v1`, `safety_number.v1`) name the chat request contract this build speaks. Two builds can report the same version string, and the MLS actions drop unknown request fields, so a caller states the contract range it supports and the capabilities it requires, and refuses a build outside that range (older or newer) or missing one. They are a compatibility signal only: they prove nothing, and every request is validated and every signature verified on its own.|
+|`ping`|_empty_|`{ version, hash, path, chat_contract, chat_capabilities }`|Liveness + version. Used by Extension health check. `chat_contract` (integer, 5 for the wave 5 chat contract) and `chat_capabilities` (strings: `permit.v5`, `roles.v1`, `statements.v1`, `handover.v1`, `recovery.v1`, `pool_sweep.v1`, `sync_block.v1`, `safety_number.v1`, `removed_accounts.v1`, `app_runtime.v1` (chat runtime lease and the App's `/v1/chat/*` routes)) name the chat request contract this build speaks. Two builds can report the same version string, and the MLS actions drop unknown request fields, so a caller states the contract range it supports and the capabilities it requires, and refuses a build outside that range (older or newer) or missing one. They are a compatibility signal only: they prove nothing, and every request is validated and every signature verified on its own.|
 
 The current production backend is macOS Cocoa. Keeper exposes no approval or
 confirmation action. Native UI is limited to recovery-key display through
@@ -2047,6 +2047,12 @@ route-specific request shape; unknown fields are 400.
 
 Every other session route keeps the 8 KiB request cap.
 
+The server writes an answer within 8 s. `/v1/chat/*`,
+`/v1/peer-key/chain-evaluate`, `/v1/archive/archive_key_split` and
+`/v1/archive/archive_quorum_combine_and_rewrap` get 60 s instead (a room
+create verifying 32 KeyPackages, a 200-message display batch, a call queued
+behind an Extension request); the read deadline is unchanged.
+
 **Chat runtime lease.** The App and the Extension share one owner, but each
 runs its own chat orchestration (outbox, pending Commit retry,
 reconciliation), so only one may drive chat at a time. The lease is
@@ -2078,6 +2084,10 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
   `data.holder: "app"`, before its handler runs. An Extension that does not
   know the code fails closed. A gated frame that is admitted keeps the App
   from claiming for 120 s.
+- `ping` (and `/v1/chat/capability`) lists `app_runtime.v1` in
+  `chat_capabilities` when the build has this lease and the `/v1/chat/*`
+  routes, so the App can require it; the Extension ignores capabilities it
+  does not know.
 - Admission and that stamp happen under one mutex, so a claim and a gated
   Extension frame at the same instant never both succeed. The check runs
   inside the request lock, next to the handler it admits.

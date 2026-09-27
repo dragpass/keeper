@@ -88,6 +88,11 @@ type Server struct {
 	// onAction observes every action an App route runs. Nil outside tests;
 	// it lets a test see inside a route Keeper composes itself.
 	onAction func(action string, payload []byte, response proto.BaseResponse)
+	// writeTimeout is the server-wide write deadline; longWriteTimeout
+	// replaces it per request on routes whose answer can take longer
+	// (longWriteRoute).
+	writeTimeout     time.Duration
+	longWriteTimeout time.Duration
 }
 
 type session struct {
@@ -140,6 +145,9 @@ func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Serve
 		proxy:      &proxyReceiver{key: secret.NativeProxyKey(), instance: instance, seen: make(map[string]time.Time)},
 		sessions:   make(map[string]session),
 		challenges: make(map[string]time.Time),
+
+		writeTimeout:     8 * time.Second,
+		longWriteTimeout: 60 * time.Second,
 	}, nil
 }
 
@@ -165,7 +173,7 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener) error
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       8 * time.Second,
-		WriteTimeout:      8 * time.Second,
+		WriteTimeout:      s.writeTimeout,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8 * 1024,
 	}
@@ -203,6 +211,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("X-DragPass-Local-RPC") != "1" || !isAppFetch(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
+	}
+	if r.Method == http.MethodPost && longWriteRoute(r.URL.Path) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.longWriteTimeout))
 	}
 	if r.Method == http.MethodPost {
 		if r.Header.Get("Content-Type") != "application/json" {

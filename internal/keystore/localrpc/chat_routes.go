@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore"
@@ -16,6 +17,22 @@ import (
 // errSessionGone means the session was closed between opening the request
 // and acting on it; the App sees the same 401 it gets for an unknown session.
 var errSessionGone = errors.New("local session is gone")
+
+// longWriteRoute names the routes whose answer can take far longer than the
+// default write deadline: a room create verifying 32 KeyPackages and their
+// transparency evidence, a 200-message display batch, a chat call queued
+// behind an Extension request on the request lock, and the big wrap
+// fan-outs. The Extension's Native Messaging wrappers allow 30 s for them.
+func longWriteRoute(path string) bool {
+	if _, ok := appRoutes[path]; !ok {
+		return false
+	}
+	switch path {
+	case "/v1/peer-key/chain-evaluate", "/v1/archive/archive_key_split", "/v1/archive/archive_quorum_combine_and_rewrap":
+		return true
+	}
+	return strings.HasPrefix(path, "/v1/chat/")
+}
 
 // chatActionRoute exposes one chat action at /v1/chat/<action> with the
 // action's own request type and the cap its handler enforces, so the route
