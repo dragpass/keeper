@@ -103,8 +103,9 @@ type ChatRuntimeClaim struct {
 }
 
 // ClaimChatRuntime grants, renews or rebinds the lease for holderID on
-// session. The lease never outlives sessionExpires.
-func (a *App) ClaimChatRuntime(holderID, session string, sessionExpires time.Time) ChatRuntimeClaim {
+// session. The lease never outlives the session: sessionRemaining is how long
+// the session has left by its own clock.
+func (a *App) ClaimChatRuntime(holderID, session string, sessionRemaining time.Duration) ChatRuntimeClaim {
 	l := &a.chatRuntime
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -116,10 +117,7 @@ func (a *App) ClaimChatRuntime(holderID, session string, sessionExpires time.Tim
 	case !live && !l.extensionAt.IsZero() && now.Sub(l.extensionAt) < ChatRuntimeExtensionWindow:
 		return ChatRuntimeClaim{BusyHolder: ChatRuntimeHolderExtension}
 	}
-	expires := now.Add(ChatRuntimeLeaseTTL)
-	if sessionExpires.Before(expires) {
-		expires = sessionExpires
-	}
+	expires := now.Add(min(ChatRuntimeLeaseTTL, sessionRemaining))
 	l.holder, l.session, l.expires = holderID, session, expires
 	return ChatRuntimeClaim{Granted: true, ExpiresAt: expires}
 }

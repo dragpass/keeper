@@ -85,6 +85,9 @@ type Server struct {
 	mu         sync.Mutex
 	sessions   map[string]session
 	challenges map[string]time.Time
+	// onAction observes every action an App route runs. Nil outside tests;
+	// it lets a test see inside a route Keeper composes itself.
+	onAction func(action string, payload []byte, response proto.BaseResponse)
 }
 
 type session struct {
@@ -223,6 +226,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	route, isAppRoute := appRoutes[r.URL.Path]
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -282,8 +286,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionSaveSessionCode, func() any {
 			return &proto.SaveSessionCodeRequest{}
 		})
-	case r.Method == http.MethodPost && appRoutes[r.URL.Path].action != "":
-		s.serveAppRoute(w, r, appRoutes[r.URL.Path])
+	case r.Method == http.MethodPost && isAppRoute:
+		s.serveAppRoute(w, r, route)
 	default:
 		http.NotFound(w, r)
 	}
@@ -319,7 +323,7 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	response, err := s.handle(action, payload)
+	response, err := s.handle(request.token, action, payload)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
@@ -349,7 +353,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 	s.mu.Lock()
 	current, ok := s.sessions[token]
 	if !ok || !now.Before(current.expires) {
-		delete(s.sessions, token)
+		s.deleteSessionLocked(token)
 		s.mu.Unlock()
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return appRequest{}, false
@@ -420,7 +424,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	response, err := s.handle("request_key_status", nil)
+	response, err := s.handle(request.token, "request_key_status", nil)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -526,7 +530,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 	s.mu.Lock()
 	for key, value := range s.sessions {
 		if !now.Before(value.expires) {
-			delete(s.sessions, key)
+			s.deleteSessionLocked(key)
 		}
 	}
 	if len(s.sessions) >= 64 {
@@ -568,6 +572,7 @@ func (s *Server) refreshSecret() error {
 	s.secret = latest
 	s.appKey = latest.AppPairingKey()
 	s.sessions = make(map[string]session)
+	s.app.DropAllChatRuntimeSessions()
 	s.challenges = make(map[string]time.Time)
 	s.proxy.rekey(latest.NativeProxyKey())
 	return nil
@@ -580,9 +585,15 @@ func constantTimeEqual(provided, expected string) bool {
 func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 	token := bearerToken(r)
 	s.mu.Lock()
-	delete(s.sessions, token)
+	s.deleteSessionLocked(token)
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteSessionLocked ends a session and the chat runtime lease bound to it.
+func (s *Server) deleteSessionLocked(token string) {
+	delete(s.sessions, token)
+	s.app.DropChatRuntimeSession(token)
 }
 
 func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
@@ -609,7 +620,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	current, ok := s.sessions[token]
 	if !ok || !s.now().Before(current.expires) {
-		delete(s.sessions, token)
+		s.deleteSessionLocked(token)
 		s.mu.Unlock()
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -637,7 +648,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		input.Nonce, input.BodySHA256, input.AccountID, input.TokenID, input.DeviceID,
 	}, "\n")
 	body, _ := json.Marshal(map[string]string{"canonical_request": canonical})
-	response, err := s.handle("sign_request", body)
+	response, err := s.handle(token, "sign_request", body)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -689,20 +700,29 @@ func validUUID(value string) bool {
 	return value == strings.ToLower(value) && uuidPattern.MatchString(value)
 }
 
-func (s *Server) handle(action string, payload []byte) (proto.BaseResponse, error) {
-	request := map[string]any{"action": action}
+// handle runs one action as the App caller bound to session ("" for Keeper's
+// own reads, which no lease-gated action accepts). The payload travels as the
+// exact bytes given.
+func (s *Server) handle(session, action string, payload []byte) (proto.BaseResponse, error) {
+	request := struct {
+		Action  string          `json:"action"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+	}{Action: action}
 	if len(payload) > 0 {
-		var decoded any
-		if err := json.Unmarshal(payload, &decoded); err != nil {
-			return proto.BaseResponse{}, err
+		if !json.Valid(payload) {
+			return proto.BaseResponse{}, errors.New("payload is not JSON")
 		}
-		request["payload"] = decoded
+		request.Payload = payload
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return proto.BaseResponse{}, err
 	}
-	return s.app.HandleRequest(encoded), nil
+	response := s.app.HandleAppRequest(session, encoded)
+	if s.onAction != nil {
+		s.onAction(action, payload, response)
+	}
+	return response, nil
 }
 
 func randomToken() (string, error) {

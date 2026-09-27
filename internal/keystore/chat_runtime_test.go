@@ -68,7 +68,7 @@ const (
 // runs, so a refusal is visible as zero store calls.
 const gatedFrame = `{"action":"mls_leaf_abort","request_id":"r-1","payload":{}}`
 
-func farSession(clock *leaseClock) time.Time { return clock.Now().Add(10 * time.Minute) }
+func farSession(*leaseClock) time.Duration { return 10 * time.Minute }
 
 func busyHolder(t *testing.T, response proto.BaseResponse) string {
 	t.Helper()
@@ -139,7 +139,7 @@ func TestChatRuntimeAppLeaseRefusesExtensionGatedActionsAndRunsNothing(t *testin
 			t.Fatalf("%s ran although it was refused", action)
 		}
 	}
-	for _, action := range []string{"ping", "mls_leaf_status", "mls_conversation_status", "mls_room_name_open", "get_public_key"} {
+	for _, action := range []string{"ping", "mls_leaf_status", "mls_conversation_status", "mls_room_name_open", "getpublickey"} {
 		if response := app.HandleRequest([]byte(`{"action":"` + action + `"}`)); response.ErrorCode == ErrCodeChatRuntimeBusy {
 			t.Fatalf("ungated %s was refused: %+v", action, response)
 		}
@@ -209,9 +209,8 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 
 	// A lease never outlives the session it is bound to.
 	app2, clock2, _ := newLeaseApp(t)
-	sessionEnds := clock2.Now().Add(20 * time.Second)
-	claim := app2.ClaimChatRuntime(holderA, sessionA, sessionEnds)
-	if !claim.Granted || !claim.ExpiresAt.Equal(sessionEnds) {
+	claim := app2.ClaimChatRuntime(holderA, sessionA, 20*time.Second)
+	if !claim.Granted || !claim.ExpiresAt.Equal(clock2.Now().Add(20*time.Second)) {
 		t.Fatalf("lease past its session: %+v", claim)
 	}
 	clock2.advance(20 * time.Second)

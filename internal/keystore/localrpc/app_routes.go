@@ -22,11 +22,32 @@ type appRoute struct {
 	bind func(s *Server, input any) (any, error)
 	// plainLimit caps the opened request. Zero means maxRequestBytes.
 	plainLimit int
+	// run replaces the single action for a route Keeper composes itself
+	// (several actions, or none). It gets the decoded input and the opened
+	// request, whose session a lease-aware route needs.
+	run func(s *Server, request appRequest, input any) (proto.BaseResponse, error)
 }
 
 var errAppRouteRefused = errors.New("request refused by the App route")
 
-var appRoutes = map[string]appRoute{
+// appRoutes is every fixed App route. The table is split by domain; a path
+// registered twice is a programming error caught at start-up.
+var appRoutes = mergeAppRoutes(authAndGroupRoutes, chatRoutes(), peerKeyRoutes, archiveRoutes)
+
+func mergeAppRoutes(tables ...map[string]appRoute) map[string]appRoute {
+	merged := map[string]appRoute{}
+	for _, table := range tables {
+		for path, route := range table {
+			if _, dup := merged[path]; dup {
+				panic("localrpc: App route registered twice: " + path)
+			}
+			merged[path] = route
+		}
+	}
+	return merged
+}
+
+var authAndGroupRoutes = map[string]appRoute{
 	"/v1/auth/recovery/begin": {
 		action: proto.ActionAuthRecoveryBegin,
 		input:  func() any { return &proto.AuthRecoveryBeginRequest{} },
@@ -178,7 +199,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 // same action the App could call, so the route holds no keychain access of
 // its own.
 func (s *Server) ownPublicKey() (string, error) {
-	response, err := s.handle(proto.ActionGetPublicKey, nil)
+	response, err := s.handle("", proto.ActionGetPublicKey, nil)
 	if err != nil || !response.Success {
 		return "", errAppRouteRefused
 	}
@@ -210,21 +231,29 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	payload := any(input)
-	if route.bind != nil {
-		bound, err := route.bind(s, input)
-		if err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
+	var response proto.BaseResponse
+	var err error
+	switch {
+	case route.run != nil:
+		response, err = route.run(s, request, input)
+	case route.bind != nil:
+		var bound any
+		if bound, err = route.bind(s, input); err == nil {
+			var encoded []byte
+			if encoded, err = json.Marshal(bound); err == nil {
+				response, err = s.handle(request.token, route.action, encoded)
+			}
 		}
-		payload = bound
+	default:
+		// The action gets the bytes the App sent, not a re-encoding: the
+		// chat handlers decode strictly (duplicate keys, missing keys) and a
+		// round trip through the route type would hide both.
+		response, err = s.handle(request.token, route.action, request.plain)
 	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+	if errors.Is(err, errSessionGone) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	response, err := s.handle(route.action, encoded)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
