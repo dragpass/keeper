@@ -116,3 +116,15 @@ type AuthRecoveryPrepareResponseData struct {
 	// the app-first recovery can post it to the server's complete call.
 	RotationStatement KeyRotationStatement `json:"rotation_statement"`
 }
+
+type AuthRecoveryAbortRequest struct {
+	NewPublicKey string `json:"new_public_key"`
+}
+
+func (r AuthRecoveryAbortRequest) Validate() error {
+	return requirePEM(r.NewPublicKey, "new_public_key")
+}
+
+type AuthRecoveryAbortResponseData struct {
+	Discarded bool `json:"discarded"`
+}

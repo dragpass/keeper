@@ -66,7 +66,8 @@ func signRecoveryChallenge(d Deps, challengeToken, recoveryHandle string) proto.
 
 // HandleGenerateKeypairWithRecoveryWrap generates a new RSA keypair and
 // immediately wraps the private key with the supplied wrap_key (AES-GCM 32B).
-// The new keypair is saved as active in the Keychain.
+// The new keypair is staged; save_session_code makes it active once the
+// server's session code opens with it.
 //
 // The private key plaintext never leaves the Keeper. The Extension only
 // receives the wrapped result.
@@ -148,25 +149,15 @@ func generateKeypairWithRecoveryWrapKey(
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "rotation statement failed: "+err.Error())
 	}
 
-	// save the new keypair as active in the Keychain
-	if err := keychain.SavePrivateKey(d.Store, string(privKeyBuf.Bytes())); err != nil {
-		d.Logger.Printf("recovery wrap error: private key save failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "private key save failed: "+err.Error())
-	}
-	if err := keychain.SavePublicKey(d.Store, keyPair.PublicKey); err != nil {
-		d.Logger.Printf("recovery wrap error: public key save failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "public key save failed: "+err.Error())
+	// Staged, not active: the active keypair and session code stay as they
+	// are until save_session_code sees the server accept this key. A recovery
+	// the server refuses or never receives changes nothing a login needs.
+	if err := keychain.StagePendingRecoveryKeypair(d.Store, string(privKeyBuf.Bytes()), keyPair.PublicKey); err != nil {
+		d.Logger.Printf("recovery wrap error: staging the new keypair failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "staging the recovery keypair failed: "+err.Error())
 	}
 
-	// delete stale session code from the old identity
-	if err := keychain.DeleteSessionCode(d.Store); err != nil {
-		d.Logger.Printf("warning: failed to delete existing session code: %v", err)
-	}
-	// clean up orphaned pending keypair
-	_ = keychain.DeletePendingPrivateKey(d.Store)
-	_ = keychain.DeletePendingPublicKey(d.Store)
-
-	d.Logger.Println("recovery keypair generated, wrapped, saved, and declared")
+	d.Logger.Println("recovery keypair generated, wrapped, staged, and declared")
 	return proto.BaseResponse{Success: true, Data: proto.GenerateKeypairWithRecoveryWrapResponseData{
 		PublicKey:         keyPair.PublicKey,
 		WrappedKeeper:     wrappedB64,

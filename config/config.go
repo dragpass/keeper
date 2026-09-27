@@ -14,6 +14,11 @@ const (
 	SessionCode                     = "session_code"
 	PendingDragPassKeeperPrivateKey = "pending_keeper_private_key"
 	PendingDragPassKeeperPublicKey  = "pending_keeper_public_key"
+	// A recovery stages its new account keypair here, apart from the signup
+	// pending slots, until the server accepts it. save_session_code promotes
+	// it only when the server's session code opens with it.
+	PendingRecoveryKeeperPrivateKey = "pending_recovery_keeper_private_key"
+	PendingRecoveryKeeperPublicKey  = "pending_recovery_keeper_public_key"
 
 	// Server public keys are stored by version with an explicit active pointer.
 	DragPassServerPublicKeyVersionedPrefix = "server_public_key_v"
