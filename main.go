@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/localrpc"
+	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proc"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/service"
@@ -142,6 +144,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) >= 3 && os.Args[1] == "app" && os.Args[2] == "pair" {
+		if err := printAppPairingLink(os.Args[3:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	appService := flag.Bool("app-service", false, "run the local App RPC service")
 	trustFile := flag.String("key-transparency-trust-file", "", "load Key Transparency trust configuration from this file")
 	flag.Parse()
@@ -160,23 +168,43 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var listener net.Listener
-	proxyMode := false
+	var secret localsecret.Secret
 	if *appService {
 		var err error
+		secret, err = localsecret.LoadOrCreate()
+		if err != nil {
+			log.Fatalf("Local Keeper service could not load its local secret: %v", err)
+		}
 		listener, err = localrpc.AcquireAppServiceOwner(ctx)
 		if err != nil {
 			log.Fatalf("Local Keeper service could not claim its address: %v", err)
 		}
 	} else {
-		var err error
-		listener, proxyMode, err = localrpc.AcquireNativeOwner()
-		if err != nil {
-			log.Fatal("Local Keeper owner could not be established; refusing to start a second Keeper process")
+		role := localrpc.RoleStandalone
+		var proxy *localrpc.NativeProxy
+		var loaded localsecret.Secret
+		err := errors.New("e2e mode without an isolated local secret directory")
+		if localRPCEnabled(os.Getenv) {
+			loaded, err = localsecret.LoadOrCreate()
 		}
-	}
-	if proxyMode {
-		runNativeProxyMessageLoop()
-		return
+		if err != nil {
+			// Without the secret neither local channel can be authenticated, so
+			// this host serves its own stdio only, as before the shared owner.
+			log.Printf("Keeper local secret unavailable, running standalone: %v", err)
+		} else {
+			secret = loaded
+			role, listener, proxy, err = localrpc.AcquireNativeOwner(secret)
+			if err != nil {
+				log.Fatal("Local Keeper owner could not be established")
+			}
+		}
+		if role == localrpc.RoleProxy {
+			runNativeProxyMessageLoop(proxy)
+			return
+		}
+		if role == localrpc.RoleStandalone {
+			log.Printf("Keeper local address is held by an owner that could not be proven; running standalone")
+		}
 	}
 	if err := proc.DisableCoreDumps(); err != nil {
 		log.Printf("Warning: Failed to disable core dumps: %v", err)
@@ -206,20 +234,18 @@ func main() {
 			logger.Printf("Critical Panic Recovered: %v", r)
 		}
 	}()
-	service, err := localrpc.New(app, []string{
-		"https://app.dragpass.io",
-		"http://localhost:5174",
-		localrpc.NativeExtensionOrigin,
-	})
-	if err != nil {
-		log.Fatalf("Critical: Failed to configure App RPC: %v", err)
-	}
-	go func() {
-		if err := service.ServeListener(ctx, listener); err != nil {
-			logger.Printf("App RPC stopped: %v", err)
+	if listener != nil {
+		service, err := localrpc.New(app, localrpc.AppOrigins(os.Getenv), secret)
+		if err != nil {
+			log.Fatalf("Critical: Failed to configure App RPC: %v", err)
 		}
-	}()
-	logger.Printf("Keeper App RPC listening on %s", localrpc.DefaultAddress)
+		go func() {
+			if err := service.ServeListener(ctx, listener); err != nil {
+				logger.Printf("App RPC stopped: %v", err)
+			}
+		}()
+		logger.Printf("Keeper App RPC listening on %s", localrpc.DefaultAddress)
+	}
 	if *appService {
 		<-ctx.Done()
 		return
@@ -229,7 +255,14 @@ func main() {
 	stop()
 }
 
-func runNativeProxyMessageLoop() {
+// localRPCEnabled keeps an e2e Keeper (mock keyring) off the shared loopback
+// address unless the test isolated the local secret: otherwise it could proxy
+// its traffic to a developer's real Keeper and real Keychain.
+func localRPCEnabled(getenv func(string) string) bool {
+	return getenv(e2eEnvVar) != "1" || getenv(localsecret.DirEnvVar) != ""
+}
+
+func runNativeProxyMessageLoop(proxy *localrpc.NativeProxy) {
 	msgr := dispatch.NewMessenger(os.Stdin, os.Stdout, nil)
 	for {
 		message, err := msgr.ReadMessage()
@@ -240,7 +273,7 @@ func runNativeProxyMessageLoop() {
 			log.Printf("Native Messaging proxy could not read a request: %v", err)
 			return
 		}
-		response, err := localrpc.ForwardNativeMessage(message)
+		response, err := proxy.Forward(message)
 		if err != nil {
 			response = proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
 		}

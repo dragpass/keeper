@@ -17,14 +17,30 @@ import (
 	"github.com/dragpass/keeper/internal/keystore"
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 const testOrigin = "https://app.dragpass.io"
 
+func testSecret(t *testing.T) localsecret.Secret {
+	t.Helper()
+	t.Setenv(localsecret.DirEnvVar, t.TempDir())
+	secret, err := localsecret.LoadOrCreate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	server, err := New(keystore.NewApp(keystore.Deps{Store: keystore.NewMemorySecretStore()}), []string{testOrigin, NativeExtensionOrigin})
+	return newTestServerWithSecret(t, testSecret(t))
+}
+
+func newTestServerWithSecret(t *testing.T, secret localsecret.Secret) *Server {
+	t.Helper()
+	server, err := New(keystore.NewApp(keystore.Deps{Store: keystore.NewMemorySecretStore()}), []string{testOrigin, NativeExtensionOrigin}, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,18 +74,51 @@ func localRequestFromOrigin(server *Server, method, path, body, session, csrf, o
 	return recorder
 }
 
+func requestAppChallenge(t *testing.T, server *Server) string {
+	t.Helper()
+	response := localRequest(server, http.MethodPost, "/v1/session/challenge", "{}", "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("session challenge: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Challenge == "" {
+		t.Fatalf("session challenge body=%s err=%v", response.Body.String(), err)
+	}
+	return result.Challenge
+}
+
+func appOpenBody(key []byte, origin, challenge, clientNonce string) string {
+	body, _ := json.Marshal(map[string]string{
+		"challenge":    challenge,
+		"client_nonce": clientNonce,
+		"proof":        macB64(key, appOpenLabel, origin, challenge, clientNonce),
+	})
+	return string(body)
+}
+
+const testClientNonce = "Y2xpZW50LW5vbmNlLTE2Ynl0ZXM"
+
 func openTestSession(t *testing.T, server *Server) (string, string) {
 	t.Helper()
-	response := localRequest(server, http.MethodPost, "/v1/session", "{}", "", "")
+	challenge := requestAppChallenge(t, server)
+	response := localRequest(server, http.MethodPost, "/v1/session", appOpenBody(server.appKey, testOrigin, challenge, testClientNonce), "", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("open session: status=%d body=%s", response.Code, response.Body.String())
 	}
 	var result struct {
-		Session string `json:"session"`
-		CSRF    string `json:"csrf"`
+		Session    string `json:"session"`
+		CSRF       string `json:"csrf"`
+		ExpiresAt  int64  `json:"expires_at"`
+		OwnerProof string `json:"owner_proof"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
+	}
+	expected := mac(server.appKey, appOwnerLabel, testOrigin, challenge, testClientNonce, result.Session, result.CSRF, fmt.Sprint(result.ExpiresAt))
+	if !equalMAC(expected, result.OwnerProof) {
+		t.Fatalf("owner proof does not verify: %+v", result)
 	}
 	return result.Session, result.CSRF
 }
@@ -83,7 +132,7 @@ func TestLocalRPCRequiresExactOriginHostAndLoopback(t *testing.T) {
 		"missing origin":   func(r *http.Request) { r.Header.Del("Origin") },
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "http://"+server.host+"/v1/session", bytes.NewBufferString("{}"))
+			request := httptest.NewRequest(http.MethodPost, "http://"+server.host+"/v1/session/challenge", bytes.NewBufferString("{}"))
 			request.Host = server.host
 			request.RemoteAddr = "127.0.0.1:54321"
 			request.Header.Set("Origin", testOrigin)
@@ -157,48 +206,111 @@ func TestLocalRPCHealthReturnsOnlyBuildMetadata(t *testing.T) {
 	}
 }
 
-func TestNativeMessagingProxyRoutesOnlyExtensionRequestsToSharedKeeper(t *testing.T) {
+func proxyHealth(t *testing.T, server *Server, challenge string) *httptest.ResponseRecorder {
+	t.Helper()
+	path := "/v1/native-proxy/health"
+	if challenge != "" {
+		path += "?challenge=" + challenge
+	}
+	return localRequestFromOrigin(server, http.MethodGet, path, "", "", "", NativeExtensionOrigin)
+}
+
+func sealedPing(t *testing.T, key []byte, instance string, now time.Time) (string, string) {
+	t.Helper()
+	body, nonce, err := sealProxyRequest(key, instance, now, []byte(`{"action":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body), nonce
+}
+
+func TestNativeMessagingProxyHealthProvesOwnerInstance(t *testing.T) {
 	server := newTestServer(t)
-	health := localRequestFromOrigin(server, http.MethodGet, "/v1/native-proxy/health", "", "", "", NativeExtensionOrigin)
+	if got := proxyHealth(t, server, "").Code; got != http.StatusBadRequest {
+		t.Fatalf("health without challenge=%d, want 400", got)
+	}
+	const challenge = "cHJveHktY2hhbGxlbmdlLTE2Yg"
+	health := proxyHealth(t, server, challenge)
 	if health.Code != http.StatusOK {
 		t.Fatalf("proxy health status=%d body=%s", health.Code, health.Body.String())
 	}
 	var metadata struct {
-		ProtocolVersion int `json:"protocol_version"`
+		ProtocolVersion int    `json:"protocol_version"`
+		Instance        string `json:"instance"`
+		Proof           string `json:"proof"`
 	}
 	if err := json.Unmarshal(health.Body.Bytes(), &metadata); err != nil || metadata.ProtocolVersion != nativeProxyProtocolVersion {
 		t.Fatalf("proxy health protocol=%d error=%v", metadata.ProtocolVersion, err)
 	}
-
-	response := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", `{"action":"ping"}`, "", "", NativeExtensionOrigin)
-	if response.Code != http.StatusOK {
-		t.Fatalf("proxy message status=%d body=%s", response.Code, response.Body.String())
+	if !equalMAC(healthProof(server.proxy.key, challenge, metadata.Instance), metadata.Proof) {
+		t.Fatal("owner health proof does not verify")
 	}
-	var result proto.BaseResponse
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if !result.Success {
-		t.Fatalf("shared Keeper rejected ping: %+v", result)
+	if equalMAC(healthProof(testSecret(t).NativeProxyKey(), challenge, metadata.Instance), metadata.Proof) {
+		t.Fatal("health proof verifies under an unrelated secret")
 	}
 
-	appOrigin := localRequestFromOrigin(server, http.MethodGet, "/v1/native-proxy/health", "", "", "", testOrigin)
+	appOrigin := localRequestFromOrigin(server, http.MethodGet, "/v1/native-proxy/health?challenge="+challenge, "", "", "", testOrigin)
 	if appOrigin.Code != http.StatusNotFound {
 		t.Fatalf("App origin accessed extension proxy route: status=%d", appOrigin.Code)
 	}
 }
 
+// Before this fix any local process that set the extension Origin could run
+// every Keeper action here in plain JSON.
+func TestNativeMessagingProxyRefusesUnsealedAndForeignRequests(t *testing.T) {
+	server := newTestServer(t)
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", `{"action":"ping"}`, "", "", NativeExtensionOrigin).Code; got != http.StatusForbidden {
+		t.Fatalf("plain JSON action=%d, want 403", got)
+	}
+	foreign, _ := sealedPing(t, testSecret(t).NativeProxyKey(), server.proxy.instance, server.now())
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", foreign, "", "", NativeExtensionOrigin).Code; got != http.StatusForbidden {
+		t.Fatalf("request sealed with another user's key=%d, want 403", got)
+	}
+	stale, _ := sealedPing(t, server.proxy.key, server.proxy.instance, server.now().Add(-2*time.Minute))
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", stale, "", "", NativeExtensionOrigin).Code; got != http.StatusForbidden {
+		t.Fatalf("stale request=%d, want 403", got)
+	}
+	otherInstance, _ := sealedPing(t, server.proxy.key, "previous-owner", server.now())
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", otherInstance, "", "", NativeExtensionOrigin).Code; got != http.StatusConflict {
+		t.Fatalf("request for another owner instance=%d, want 409", got)
+	}
+}
+
+func TestNativeMessagingProxySealedRoundTripRejectsReplay(t *testing.T) {
+	server := newTestServer(t)
+	body, nonce := sealedPing(t, server.proxy.key, server.proxy.instance, server.now())
+	response := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", body, "", "", NativeExtensionOrigin)
+	if response.Code != http.StatusOK {
+		t.Fatalf("sealed ping status=%d body=%s", response.Code, response.Body.String())
+	}
+	plain, err := openProxyResponse(server.proxy.key, server.proxy.instance, nonce, response.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result proto.BaseResponse
+	if err := json.Unmarshal(plain, &result); err != nil || !result.Success {
+		t.Fatalf("shared Keeper rejected ping: %s err=%v", plain, err)
+	}
+	if strings.Contains(response.Body.String(), "success") {
+		t.Fatalf("response travelled unsealed: %s", response.Body.String())
+	}
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", body, "", "", NativeExtensionOrigin).Code; got != http.StatusForbidden {
+		t.Fatalf("replayed request=%d, want 403", got)
+	}
+}
+
 func TestNativeMessagingProxyRejectsOversizedBody(t *testing.T) {
 	server := newTestServer(t)
-	body := strings.Repeat("x", int(maxNativeMessageBytes)+1)
+	body := strings.Repeat("x", int(maxNativeMessageBytes)*2)
 	response := localRequestFromOrigin(server, http.MethodPost, "/v1/native-proxy/message", body, "", "", NativeExtensionOrigin)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("oversized proxy body status=%d, want 400", response.Code)
 	}
 }
 
-func TestNativeMessagingProxyProbesAndForwardsToExistingOwner(t *testing.T) {
-	server := newTestServer(t)
+func startTestOwner(t *testing.T, server *Server) string {
+	t.Helper()
+	server.now = time.Now
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -206,27 +318,61 @@ func TestNativeMessagingProxyProbesAndForwardsToExistingOwner(t *testing.T) {
 	server.host = listener.Addr().String()
 	httpServer := &httptest.Server{Config: &http.Server{Handler: server.Handler()}, Listener: listener}
 	httpServer.Start()
-	defer httpServer.Close()
-	address := server.host
+	t.Cleanup(httpServer.Close)
+	return server.host
+}
 
-	available, err := probeNativeProxyAt(address)
-	if err != nil || !available {
-		t.Fatalf("probe owner: available=%t error=%v", available, err)
-	}
-	listener, proxyMode, err := acquireNativeOwnerAt(address, time.Second)
-	if err != nil || !proxyMode || listener != nil {
+func TestNativeMessagingProxyProbesAndForwardsToExistingOwner(t *testing.T) {
+	secret := testSecret(t)
+	address := startTestOwner(t, newTestServerWithSecret(t, secret))
+
+	role, listener, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), time.Second)
+	if err != nil || role != RoleProxy || listener != nil || proxy == nil {
 		if listener != nil {
 			_ = listener.Close()
 		}
-		t.Fatalf("acquire existing owner: proxy=%t listener=%v error=%v", proxyMode, listener, err)
+		t.Fatalf("acquire existing owner: role=%v listener=%v error=%v", role, listener, err)
+	}
+	response, err := proxy.Forward([]byte(`{"action":"ping"}`))
+	if err != nil || !response.Success {
+		t.Fatalf("forwarded ping: response=%+v error=%v", response, err)
+	}
+}
+
+func TestNativeMessagingProxyReprovesAfterOwnerRestart(t *testing.T) {
+	secret := testSecret(t)
+	first := newTestServerWithSecret(t, secret)
+	address := startTestOwner(t, first)
+	_, _, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), time.Second)
+	if err != nil || proxy == nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	first.proxy.instance = "restarted-owner"
+	if response, err := proxy.Forward([]byte(`{"action":"ping"}`)); err != nil || !response.Success {
+		t.Fatalf("forward after owner restart: response=%+v error=%v", response, err)
+	}
+}
+
+// A listener that cannot prove the local secret is another user's Keeper or a
+// port squatter. The Native Messaging host must not send it anything and runs
+// on its own stdio instead, as it did before the shared owner existed.
+func TestNativeMessagingHostRunsStandaloneForUnprovenOwner(t *testing.T) {
+	foreign := startTestOwner(t, newTestServerWithSecret(t, testSecret(t)))
+	role, listener, proxy, err := acquireNativeOwnerAt(foreign, testSecret(t).NativeProxyKey(), time.Second)
+	if err != nil || role != RoleStandalone || listener != nil || proxy != nil {
+		t.Fatalf("foreign owner: role=%v listener=%v proxy=%v error=%v", role, listener, proxy, err)
 	}
 
-	response, err := forwardNativeMessageTo(address, []byte(`{"action":"ping"}`))
+	incompatible, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !response.Success {
-		t.Fatalf("forwarded ping failed: %+v", response)
+	notFound := &httptest.Server{Config: &http.Server{Handler: http.NotFoundHandler()}, Listener: incompatible}
+	notFound.Start()
+	defer notFound.Close()
+	role, listener, proxy, err = acquireNativeOwnerAt(incompatible.Addr().String(), testSecret(t).NativeProxyKey(), 150*time.Millisecond)
+	if err != nil || role != RoleStandalone || listener != nil || proxy != nil {
+		t.Fatalf("incompatible listener: role=%v listener=%v proxy=%v error=%v", role, listener, proxy, err)
 	}
 }
 
@@ -239,18 +385,20 @@ func TestNativeMessagingOwnerClaimsFreeAddressBeforeInitialization(t *testing.T)
 	if err := reservation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	listener, proxyMode, err := acquireNativeOwnerAt(address, time.Second)
+	role, listener, proxy, err := acquireNativeOwnerAt(address, testSecret(t).NativeProxyKey(), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	if proxyMode || listener == nil || listener.Addr().String() != address {
-		t.Fatalf("free address ownership: proxy=%t listener=%v", proxyMode, listener)
+	if role != RoleOwner || proxy != nil || listener.Addr().String() != address {
+		t.Fatalf("free address ownership: role=%v listener=%v", role, listener)
 	}
 }
 
 func TestNativeMessagingOwnerWaitsForListenerStartupThenForwards(t *testing.T) {
-	server := newTestServer(t)
+	secret := testSecret(t)
+	server := newTestServerWithSecret(t, secret)
+	server.now = time.Now
 	httpServer := &httptest.Server{Config: &http.Server{Handler: server.Handler()}}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -270,14 +418,14 @@ func TestNativeMessagingOwnerWaitsForListenerStartupThenForwards(t *testing.T) {
 		httpServer.Close()
 	})
 
-	owner, proxyMode, err := acquireNativeOwnerAt(address, 2*time.Second)
-	if err != nil || !proxyMode || owner != nil {
+	role, owner, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), 2*time.Second)
+	if err != nil || role != RoleProxy || owner != nil {
 		if owner != nil {
 			_ = owner.Close()
 		}
-		t.Fatalf("startup race result: proxy=%t listener=%v error=%v", proxyMode, owner, err)
+		t.Fatalf("startup race result: role=%v listener=%v error=%v", role, owner, err)
 	}
-	response, err := forwardNativeMessageTo(address, []byte(`{"action":"ping"}`))
+	response, err := proxy.Forward([]byte(`{"action":"ping"}`))
 	if err != nil || !response.Success {
 		t.Fatalf("forward after owner startup: response=%+v error=%v", response, err)
 	}
@@ -315,20 +463,49 @@ func TestAppServiceWaitsForNativeMessagingOwnerToReleaseAddress(t *testing.T) {
 	}
 }
 
-func TestNativeMessagingProxyFailsClosedForIncompatibleListener(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+func TestAppSessionRequiresPairingProof(t *testing.T) {
+	server := newTestServer(t)
+	if got := localRequest(server, http.MethodPost, "/v1/session", "{}", "", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("session without proof=%d, want 401", got)
 	}
-	address := listener.Addr().String()
-	httpServer := &httptest.Server{Config: &http.Server{Handler: http.NotFoundHandler()}, Listener: listener}
-	httpServer.Start()
-	defer httpServer.Close()
-	if listener, proxyMode, err := acquireNativeOwnerAt(address, 150*time.Millisecond); err == nil || proxyMode || listener != nil {
-		if listener != nil {
-			_ = listener.Close()
+	challenge := requestAppChallenge(t, server)
+	otherKey := testSecret(t).AppPairingKey()
+	if got := localRequest(server, http.MethodPost, "/v1/session", appOpenBody(otherKey, testOrigin, challenge, testClientNonce), "", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("session proved with another user's key=%d, want 401", got)
+	}
+	// The failed attempt consumed the challenge: a proof over it cannot be
+	// replayed, even a correct one.
+	if got := localRequest(server, http.MethodPost, "/v1/session", appOpenBody(server.appKey, testOrigin, challenge, testClientNonce), "", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("session reused a consumed challenge=%d, want 401", got)
+	}
+	unknown := "dW5rbm93bi1jaGFsbGVuZ2UtMTZi"
+	if got := localRequest(server, http.MethodPost, "/v1/session", appOpenBody(server.appKey, testOrigin, unknown, testClientNonce), "", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("session over a challenge this owner never issued=%d, want 401", got)
+	}
+	challenge = requestAppChallenge(t, server)
+	server.now = func() time.Time { return time.Unix(1_800_000_031, 0) }
+	if got := localRequest(server, http.MethodPost, "/v1/session", appOpenBody(server.appKey, testOrigin, challenge, testClientNonce), "", "").Code; got != http.StatusUnauthorized {
+		t.Fatalf("session over an expired challenge=%d, want 401", got)
+	}
+	server.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	openTestSession(t, server)
+}
+
+func TestAppOriginsIncludeDevOriginOnlyOnOptIn(t *testing.T) {
+	env := map[string]string{}
+	getenv := func(key string) string { return env[key] }
+	for _, origin := range AppOrigins(getenv) {
+		if strings.HasPrefix(origin, "http://") {
+			t.Fatalf("production origins include %s", origin)
 		}
-		t.Fatalf("incompatible listener result: proxy=%t listener=%v error=%v", proxyMode, listener, err)
+	}
+	env[DevAppOriginEnvVar] = "http://localhost:5174"
+	found := false
+	for _, origin := range AppOrigins(getenv) {
+		found = found || origin == "http://localhost:5174"
+	}
+	if !found {
+		t.Fatal("dev origin missing after opt-in")
 	}
 }
 

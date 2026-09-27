@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
+	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/version"
 )
@@ -30,18 +32,37 @@ import (
 const maxRequestBytes = 8 * 1024
 const maxSessionNonces = 4096
 const maxNativeMessageBytes = dispatch.MaxMessageSize
-const nativeProxyProtocolVersion = 1
+
+// Version 2 seals every proxied message to a proven owner instance. A v1
+// listener cannot answer the health challenge, so a v2 host runs standalone.
+const nativeProxyProtocolVersion = 2
 
 const DefaultAddress = "127.0.0.1:47623"
 const NativeExtensionOrigin = "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk"
 
+// DevAppOriginEnvVar opts one development App origin in. Production binaries
+// trust only the deployed App, so a page any local program serves on a dev
+// port cannot drive Keeper.
+const DevAppOriginEnvVar = "DRAGPASS_KEEPER_DEV_APP_ORIGIN"
+
+func AppOrigins(getenv func(string) string) []string {
+	origins := []string{"https://app.dragpass.io", NativeExtensionOrigin}
+	if dev := strings.TrimSpace(getenv(DevAppOriginEnvVar)); dev != "" {
+		origins = append(origins, dev)
+	}
+	return origins
+}
+
 type Server struct {
-	app      *keystore.App
-	origins  map[string]struct{}
-	host     string
-	now      func() time.Time
-	mu       sync.Mutex
-	sessions map[string]session
+	app        *keystore.App
+	origins    map[string]struct{}
+	host       string
+	now        func() time.Time
+	appKey     []byte
+	proxy      *proxyReceiver
+	mu         sync.Mutex
+	sessions   map[string]session
+	challenges map[string]time.Time
 }
 
 type session struct {
@@ -62,7 +83,10 @@ type requestSignature struct {
 	DeviceID   string `json:"device_id"`
 }
 
-func New(app *keystore.App, origins []string) (*Server, error) {
+func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Server, error) {
+	if secret.IsZero() {
+		return nil, errors.New("local RPC requires the Keeper local secret")
+	}
 	allowed := make(map[string]struct{}, len(origins))
 	for _, origin := range origins {
 		parsed, err := url.Parse(origin)
@@ -74,7 +98,19 @@ func New(app *keystore.App, origins []string) (*Server, error) {
 	if len(allowed) == 0 {
 		return nil, errors.New("at least one local RPC origin is required")
 	}
-	return &Server{app: app, origins: allowed, now: time.Now, sessions: make(map[string]session)}, nil
+	instance, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
+	return &Server{
+		app:        app,
+		origins:    allowed,
+		now:        time.Now,
+		appKey:     secret.AppPairingKey(),
+		proxy:      &proxyReceiver{key: secret.NativeProxyKey(), instance: instance, seen: make(map[string]time.Time)},
+		sessions:   make(map[string]session),
+		challenges: make(map[string]time.Time),
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -145,7 +181,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		maxBytes := int64(maxRequestBytes)
 		if r.URL.Path == "/v1/native-proxy/message" {
-			maxBytes = int64(maxNativeMessageBytes)
+			maxBytes = sealedLimit()
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBytes))
 		if err != nil {
@@ -161,28 +197,24 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			"hash":    version.BinaryHash,
 		})
 	case origin == NativeExtensionOrigin && r.Method == http.MethodGet && r.URL.Path == "/v1/native-proxy/health":
+		challenge := r.URL.Query().Get("challenge")
+		if !validNonce(challenge, 16) {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"version":          version.Version,
 			"hash":             version.BinaryHash,
 			"protocol_version": nativeProxyProtocolVersion,
+			"instance":         s.proxy.instance,
+			"proof":            base64.RawURLEncoding.EncodeToString(healthProof(s.proxy.key, challenge, s.proxy.instance)),
 		})
 	case origin == NativeExtensionOrigin && r.Method == http.MethodPost && r.URL.Path == "/v1/native-proxy/message":
-		defer r.Body.Close()
-		request, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-		response, err := json.Marshal(s.app.HandleRequest(request))
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(response)
+		s.serveNativeProxyMessage(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/session/challenge":
+		s.issueChallenge(w)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/session":
-		s.openSession(w)
+		s.openSession(w, r, origin)
 	case r.Method == http.MethodDelete && r.URL.Path == "/v1/session":
 		s.closeSession(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/status":
@@ -238,7 +270,7 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 	}
 	s.mu.Lock()
 	current := s.sessions[bearerToken(r)]
-	validCSRF := r.Header.Get("X-DragPass-CSRF") == current.csrf
+	validCSRF := constantTimeEqual(r.Header.Get("X-DragPass-CSRF"), current.csrf)
 	s.mu.Unlock()
 	if !validCSRF {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -281,7 +313,89 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s *Server) openSession(w http.ResponseWriter) {
+func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	message, requestNonce, err := s.proxy.open(body, s.now())
+	if errors.Is(err, errStaleProxyInstance) {
+		http.Error(w, "owner changed", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	response, err := json.Marshal(s.app.HandleRequest(message))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	sealed, err := sealProxyResponse(s.proxy.key, s.proxy.instance, requestNonce, response)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(sealed)
+}
+
+// issueChallenge hands out a one-time value the App must prove over. A proof
+// over the owner's own challenge cannot be captured by a port squatter and
+// replayed to the real owner later.
+func (s *Server) issueChallenge(w http.ResponseWriter) {
+	challenge, err := randomToken()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	now := s.now()
+	s.mu.Lock()
+	for value, expires := range s.challenges {
+		if !now.Before(expires) {
+			delete(s.challenges, value)
+		}
+	}
+	if len(s.challenges) >= maxAppChallenges {
+		s.mu.Unlock()
+		http.Error(w, "too many pending sessions", http.StatusTooManyRequests)
+		return
+	}
+	expires := now.Add(appChallengeTTL)
+	s.challenges[challenge] = expires
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"challenge": challenge, "expires_at": expires.Unix()})
+}
+
+type openSessionRequest struct {
+	Challenge   string `json:"challenge"`
+	ClientNonce string `json:"client_nonce"`
+	Proof       string `json:"proof"`
+}
+
+func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin string) {
+	defer r.Body.Close()
+	var input openSessionRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || !validNonce(input.ClientNonce, 16) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	now := s.now()
+	s.mu.Lock()
+	expires, issued := s.challenges[input.Challenge]
+	delete(s.challenges, input.Challenge)
+	s.mu.Unlock()
+	if !issued || !now.Before(expires) ||
+		!equalMAC(mac(s.appKey, appOpenLabel, origin, input.Challenge, input.ClientNonce), input.Proof) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	token, err := randomToken()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -292,10 +406,10 @@ func (s *Server) openSession(w http.ResponseWriter) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	expires := s.now().Add(10 * time.Minute)
+	sessionExpires := now.Add(10 * time.Minute)
 	s.mu.Lock()
 	for key, value := range s.sessions {
-		if !s.now().Before(value.expires) {
+		if !now.Before(value.expires) {
 			delete(s.sessions, key)
 		}
 	}
@@ -304,9 +418,19 @@ func (s *Server) openSession(w http.ResponseWriter) {
 		http.Error(w, "too many sessions", http.StatusTooManyRequests)
 		return
 	}
-	s.sessions[token] = session{csrf: csrf, expires: expires, nonces: make(map[string]time.Time)}
+	s.sessions[token] = session{csrf: csrf, expires: sessionExpires, nonces: make(map[string]time.Time)}
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"session": token, "csrf": csrf, "expires_at": expires.Unix()})
+	expiresAt := sessionExpires.Unix()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session":     token,
+		"csrf":        csrf,
+		"expires_at":  expiresAt,
+		"owner_proof": macB64(s.appKey, appOwnerLabel, origin, input.Challenge, input.ClientNonce, token, csrf, strconv.FormatInt(expiresAt, 10)),
+	})
+}
+
+func constantTimeEqual(provided, expected string) bool {
+	return expected != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
 func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +465,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if r.Header.Get("X-DragPass-CSRF") != current.csrf {
+	if !constantTimeEqual(r.Header.Get("X-DragPass-CSRF"), current.csrf) {
 		s.mu.Unlock()
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
