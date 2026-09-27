@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/proto"
 	formatlog "github.com/transparency-dev/formats/log"
 	formatnote "github.com/transparency-dev/formats/note"
 	"github.com/transparency-dev/merkle/proof"
@@ -25,6 +26,7 @@ var (
 	ErrCheckpointFork      = errors.New("key transparency checkpoint fork detected")
 	ErrConsistencyProof    = errors.New("key transparency consistency proof is invalid")
 	ErrCheckpointFreshness = errors.New("key transparency checkpoint freshness is invalid")
+	ErrTrustInvalid        = errors.New("key transparency trust file is present but unusable")
 )
 
 type Trust struct {
@@ -42,6 +44,8 @@ type CheckpointEvidence struct {
 	Checkpoint       []byte
 	ConsistencyProof [][]byte
 }
+
+type StatementEvidence = proto.KeyTransparencyEvidence
 
 type CheckpointAnchor struct {
 	Version int    `json:"version"`
@@ -82,6 +86,53 @@ func VerifyAndPersistStatement(
 	return verifyAndPersist(store, trust, evidence, func(anchor CheckpointAnchor) error {
 		return VerifyInclusion(anchor, leafIndex, leafHash, inclusionNodes)
 	}, time.Now())
+}
+
+func VerifyAndPersistEvidence(
+	store keychain.SecretStore,
+	trust Trust,
+	evidence StatementEvidence,
+	expectedStatement []byte,
+) (*VerifiedCheckpoint, error) {
+	statement, err := base64.StdEncoding.DecodeString(evidence.StatementB64)
+	if err != nil || !bytes.Equal(statement, expectedStatement) {
+		return nil, ErrInvalidCheckpoint
+	}
+	salt, err := base64.StdEncoding.DecodeString(evidence.SaltB64)
+	if err != nil {
+		return nil, ErrInvalidCheckpoint
+	}
+	checkpoint, err := base64.StdEncoding.DecodeString(evidence.CheckpointB64)
+	if err != nil || len(checkpoint) == 0 || len(checkpoint) > 64*1024 {
+		return nil, ErrInvalidCheckpoint
+	}
+	inclusion, err := decodeProofNodes(evidence.InclusionProofB64)
+	if err != nil {
+		return nil, ErrInvalidCheckpoint
+	}
+	consistency, err := decodeProofNodes(evidence.ConsistencyProofB64)
+	if err != nil {
+		return nil, ErrInvalidCheckpoint
+	}
+	return VerifyAndPersistStatement(store, trust, CheckpointEvidence{
+		Checkpoint:       checkpoint,
+		ConsistencyProof: consistency,
+	}, statement, salt, evidence.LeafIndex, inclusion)
+}
+
+func decodeProofNodes(encoded []string) ([][]byte, error) {
+	if len(encoded) > 64 {
+		return nil, ErrInvalidCheckpoint
+	}
+	nodes := make([][]byte, len(encoded))
+	for i, node := range encoded {
+		decoded, err := base64.StdEncoding.DecodeString(node)
+		if err != nil || len(decoded) != sha256.Size {
+			return nil, ErrInvalidCheckpoint
+		}
+		nodes[i] = decoded
+	}
+	return nodes, nil
 }
 
 func verifyAndPersist(

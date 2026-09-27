@@ -26,6 +26,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -78,6 +79,7 @@ type Deps struct {
 	// MessageChallenges holds the process-local secure-message display
 	// challenges. Lives and dies with the process; never persisted.
 	MessageChallenges *handlers.MessageChallengeStore
+	KeyTransparency   keytransparency.Gate
 }
 
 // App is the single wiring container for the Keeper process. Handlers
@@ -93,6 +95,7 @@ type App struct {
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	Clipboard           clipboard.Clipboard
 	MessageChallenges   *handlers.MessageChallengeStore
+	KeyTransparency     keytransparency.Gate
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
@@ -120,6 +123,7 @@ func NewApp(deps Deps) *App {
 		RecoveryKeySessions: deps.RecoveryKeySessions,
 		Clipboard:           deps.Clipboard,
 		MessageChallenges:   deps.MessageChallenges,
+		KeyTransparency:     deps.KeyTransparency,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}

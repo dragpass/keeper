@@ -434,6 +434,9 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 |Code|Trigger|
 |---|---|
 |`CHAT_MLS_LEAF_UNTRUSTED`|A leaf that would enter the group is not vouched for by its account: no declaration, a malformed one, a signature that does not verify, a declaration for another account, device or key, a superseded declaration (on a leaf already in a Welcome's tree, only once the 7-day grace period since the newer one was first seen has passed; 0.0.48), or an account whose key the pin reports as `changed`. Nothing was applied and nothing was recorded. When the cause is a changed account key, `data` carries `{ observed_fingerprint, pinned_fingerprint }` as `peer_key_changed` does, so the UI can offer design §5.5's three paths. There is no "ignore and continue".|
+|`CHAT_MLS_KEY_TRANSPARENCY_UNVERIFIED`|A trust file is loaded and an entering leaf, or an account-key rotation it rests on, has no matching log proof, or the proof, the log signature or the 2-of-3 witness quorum does not verify, or the checkpoint is stale. Nothing was applied. See "Key Transparency".|
+|`CHAT_MLS_KEY_TRANSPARENCY_FORK`|The proof's checkpoint is inconsistent with, or older than, the one this Keeper persisted. Nothing was applied.|
+|`CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID`|A trust file is configured but could not be read or parsed. Every entering leaf is refused until it is fixed; there is no fallback to TOFU.|
 |`CHAT_MLS_CAPABILITY_REQUIRED`|This Keeper was built without the MLS library.|
 
 ### Recovery (Phase 2)
@@ -1567,6 +1570,7 @@ like `voluntary`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
+|`key_transparency_status`|_empty_|`{ configured, trust_error?, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. The status makes no claim about witness independence: a verified proof is a server-side record, and clients label it that way. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1577,6 +1581,42 @@ All four take lowercase hyphenated UUIDs and reject the nil UUID. `fingerprint`
 must be 64 lowercase hex characters; uppercase is rejected rather than folded,
 since two spellings of one fingerprint would compare unequal somewhere
 downstream.
+
+**Key Transparency (unreleased).** `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` points to a
+local JSON trust file containing the fixed log origin, log verifier, three
+witness verifiers, a 2-of-3 quorum, maximum checkpoint age, and future clock
+skew. Unknown keys make the file invalid. That includes `independent_witnesses`:
+a trust file cannot declare its witnesses independent, because the Keeper has no
+way to check who runs them. The file is not fetched from Ariadne. The file
+decides the gate:
+
+|Trust file|Key changes|`key_transparency_status`|
+|---|---|---|
+|unset or empty variable|The pre-transparency rules: first observation is TOFU, a pinned key moves only on a valid signed rotation chain. No log proof is asked for.|`configured: false`|
+|present and valid|Every pinned account-key rotation and every entering MLS leaf needs a matching log proof, as below.|`configured: true`|
+|present but unreadable or invalid|Refused, fail closed: `key_transparency_trust_invalid` (peer key actions) or `CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID` (MLS). There is no fallback to the pre-transparency rules, so corrupting the file cannot switch verification off. The process keeps running and logs the reason.|`configured: false`, `trust_error: "invalid"`|
+
+A verified proof shows that the server's log and the configured witnesses
+recorded the key. Until an independent witness exists, that is a server-side
+record, not an independent verification. The
+`key_transparency_status` action reports the persisted checkpoint but does not
+refresh it.
+
+Account rotation evidence is attached to each `rotation_statements` item as
+`transparency_evidence`. MLS state permits carry
+`key_transparency_evidence`, a bounded list of the same evidence structure:
+`statement_b64`, `salt_b64`, `checkpoint_b64`, `leaf_index`,
+`inclusion_proof_b64`, and `consistency_proof_b64`. The Keeper reconstructs the
+canonical account-rotation or MLS-leaf statement from the operation's own
+validated fields and requires byte-for-byte equality before checking the leaf
+commitment, RFC 6962 inclusion proof, log signature, fresh witness quorum, and
+monotonic consistency against its locally persisted checkpoint. Evidence is
+not included in the existing chat-state permit signature canonical; its
+authority comes from the log and witness signatures. A mismatch,
+missing proof, stale quorum, rollback, or fork fails closed before a pin or MLS
+state change is persisted. This does not verify first-observation TOFU and does
+not by itself provide independent client gossip or protect against a quorum
+that colludes with the log.
 
 **Storage.** `peer-pin:<owner>:<peer>` holds the record (~230 bytes);
 `peer-pin-index:<owner>:<n>` holds up to 48 peer ids per chunk, because
@@ -1672,7 +1712,7 @@ which is discarding the protection.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`peer_key_chain_evaluate`|`owner_account_id`, `account_id`, `public_key` (PEM the server is serving now), `rotation_statements?`|`{ state, fingerprint, advanced, pinned_fingerprint? }`|Run the trust state machine for one peer and report the verdict, wrapping nothing. `state` is one of the four; `fingerprint` is what the Keeper computed from the PEM, never a value the caller sent; `advanced` reports whether the stored pin moved. Same caps as the wrap actions: 32 statements, 512 KiB per request, checked before the decode.|
+|`peer_key_chain_evaluate`|`owner_account_id`, `account_id`, `public_key` (PEM the server is serving now), `rotation_statements?` (each may carry `transparency_evidence`)|`{ state, fingerprint, advanced, pinned_fingerprint? }`|Run the trust state machine for one peer and report the verdict, wrapping nothing. `state` is one of the four; `fingerprint` is what the Keeper computed from the PEM, never a value the caller sent; `advanced` reports whether the stored pin moved. When a pinned key changes, each rotation statement must include an exact matching signed-log proof and a fresh 2-of-3 witness checkpoint. The checkpoint is monotonically persisted before the pin can advance. Missing trust configuration or invalid, stale, or forked evidence refuses the change. Initial TOFU is not a rotation proof. Same caps as the wrap actions: 32 statements, 512 KiB per request, checked before the decode.|
 
 It runs **the same** state machine the wrap path runs, on the same inputs, and
 persists the pin the same way: a valid chain advances the pin to `rotated`,

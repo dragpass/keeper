@@ -14,6 +14,8 @@
 package proto
 
 const (
+	ActionKeyTransparencyStatus = "key_transparency_status"
+
 	// PeerKeyPinList: every pin this owner holds on this device.
 	//
 	//   Inputs: owner_account_id

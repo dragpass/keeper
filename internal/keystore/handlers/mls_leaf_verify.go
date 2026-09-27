@@ -58,6 +58,7 @@ type MLSLeafUntrustedError struct {
 	Reason              string
 	ObservedFingerprint string
 	PinnedFingerprint   string
+	KeyTransparencyCode string
 }
 
 func (e *MLSLeafUntrustedError) Error() string { return "mls leaf untrusted: " + e.Reason }
@@ -79,7 +80,8 @@ type MLSLeafVerifier struct {
 	// statements carries the rotation chains the caller has for an account
 	// whose pinned key differs from the one its leaf carries (§12.2's
 	// rotation_statements). A leaf extension has no room for them.
-	statements map[string][]proto.KeyRotationStatement
+	statements           map[string][]proto.KeyRotationStatement
+	transparencyEvidence []proto.KeyTransparencyEvidence
 
 	pins   map[string]keychain.PeerKeyPin
 	newest map[string]keychain.MLSLeafNewest
@@ -100,8 +102,13 @@ var _ mls.LeafVerifier = (*MLSLeafVerifier)(nil)
 
 func NewMLSLeafVerifier(
 	d Deps, ownerAccountID string, statements map[string][]proto.KeyRotationStatement,
+	evidence ...[]proto.KeyTransparencyEvidence,
 ) *MLSLeafVerifier {
-	return &MLSLeafVerifier{d: d, owner: ownerAccountID, statements: statements}
+	v := &MLSLeafVerifier{d: d, owner: ownerAccountID, statements: statements}
+	if len(evidence) > 0 {
+		v.transparencyEvidence = evidence[0]
+	}
+	return v
 }
 
 // judgedLeaf is what one leaf contributed once steps 1–7 passed.
@@ -207,6 +214,11 @@ func (v *MLSLeafVerifier) judge(
 		if err != nil {
 			return judgedLeaf{}, err
 		}
+		if existing != nil && existing.Fingerprint != observed {
+			if err := verifyRotationTransparency(v.d, v.statements[accountID]); err != nil {
+				return judgedLeaf{}, err
+			}
+		}
 		outcome := evaluatePeerKeyTrust(existing, accountID, observed, v.statements[accountID], now)
 		if !outcome.Allowed {
 			return judgedLeaf{}, &MLSLeafUntrustedError{
@@ -223,6 +235,14 @@ func (v *MLSLeafVerifier) judge(
 	decl := ext.Declaration
 	if err := VerifyLeafDeclaration(decl, accountKey); err != nil {
 		return judgedLeaf{}, untrusted(err.Error())
+	}
+	if leaf.Entering {
+		if err := verifyMLSLeafTransparency(v.d, v.transparencyEvidence, decl, ext.AccountPublicKey); err != nil {
+			return judgedLeaf{}, &MLSLeafUntrustedError{
+				Reason:              "key transparency proof could not be verified",
+				KeyTransparencyCode: keyTransparencyErrorCode(err),
+			}
+		}
 	}
 
 	// 6.

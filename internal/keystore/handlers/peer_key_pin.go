@@ -87,6 +87,11 @@ func enforcePeerKeyPins(
 			d.Logger.Printf("peer key pin error: failed to read pin: %v", err)
 			return nil, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read peer key pin: "+err.Error()), false
 		}
+		if existing != nil && existing.Fingerprint != check.observed {
+			if err := verifyRotationTransparency(d, check.statements); err != nil {
+				return nil, keyTransparencyRefusal(d, err), false
+			}
+		}
 		outcome := evaluatePeerKeyTrust(existing, check.accountID, check.observed, check.statements, now)
 		outcome = applyPeerKeyPolicy(outcome, policy.RequireVerifiedPeers)
 		if !outcome.Allowed {

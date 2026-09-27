@@ -15,6 +15,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
@@ -45,6 +46,7 @@ type Deps struct {
 	// so App owns its lifetime and parallel tests do not share entries. A nil
 	// store fails closed: no challenge can be minted and none can be consumed.
 	MessageChallenges *MessageChallengeStore
+	KeyTransparency   keytransparency.Gate
 }
 
 func (d Deps) Now() time.Time {

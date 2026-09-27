@@ -64,7 +64,13 @@ const (
 	// superseded declaration, or an account whose key the pin reports as
 	// changed (design §5.3, §13). Nothing was applied and nothing was
 	// recorded. There is no "ignore and continue".
-	ChatMLSErrorCodeLeafUntrusted = "CHAT_MLS_LEAF_UNTRUSTED"
+	ChatMLSErrorCodeLeafUntrusted             = "CHAT_MLS_LEAF_UNTRUSTED"
+	ChatMLSErrorCodeKeyTransparencyUnverified = "CHAT_MLS_KEY_TRANSPARENCY_UNVERIFIED"
+	ChatMLSErrorCodeKeyTransparencyFork       = "CHAT_MLS_KEY_TRANSPARENCY_FORK"
+	// ChatMLSErrorCodeKeyTransparencyTrustInvalid — a trust file is
+	// configured but could not be read or parsed. Every entering leaf is
+	// refused until it is fixed; there is no fallback to TOFU.
+	ChatMLSErrorCodeKeyTransparencyTrustInvalid = "CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID"
 
 	// ChatMLSErrorCodeCapabilityRequired — this Keeper binary was built
 	// without the MLS library (design §13).
@@ -185,10 +191,11 @@ type ChatStatePermit struct {
 	// encrypting: the Remove itself rests on the account's own signature.
 	PendingDeviceRevocations []MLSDeviceRef `json:"pending_device_revocations"`
 
-	IssuedAt         int64  `json:"issued_at"`
-	ExpiresAt        int64  `json:"expires_at"` // issued_at + 300
-	ServerKeyVersion uint   `json:"server_key_version"`
-	Signature        string `json:"signature"` // Base64, RSA-PSS SHA-256 over the canonical
+	IssuedAt                int64                     `json:"issued_at"`
+	ExpiresAt               int64                     `json:"expires_at"` // issued_at + 300
+	ServerKeyVersion        uint                      `json:"server_key_version"`
+	Signature               string                    `json:"signature"` // Base64, RSA-PSS SHA-256 over the canonical
+	KeyTransparencyEvidence []KeyTransparencyEvidence `json:"key_transparency_evidence,omitempty"`
 }
 
 func (p ChatStatePermit) Validate() error {
@@ -221,6 +228,14 @@ func (p ChatStatePermit) Validate() error {
 	}
 	if _, err := requireBase64(p.Signature, "permit.signature"); err != nil {
 		return err
+	}
+	if len(p.KeyTransparencyEvidence) > 64 {
+		return newValidationError("permit.key_transparency_evidence", "contains too many proofs")
+	}
+	for _, evidence := range p.KeyTransparencyEvidence {
+		if len(evidence.StatementB64) > 90*1024 || len(evidence.SaltB64) > 128 || len(evidence.CheckpointB64) > 90*1024 || len(evidence.InclusionProofB64) > 64 || len(evidence.ConsistencyProofB64) > 64 {
+			return newValidationError("permit.key_transparency_evidence", "proof exceeds the size limit")
+		}
 	}
 	return nil
 }
