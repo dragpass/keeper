@@ -63,26 +63,30 @@ func GetPendingSignupDeviceWrappedDEK(store SecretStore) (string, error) {
 // and changes nothing.
 func PromotePendingSignupDEK(store SecretStore, keypairPromoted bool) error {
 	return withPersonalKeyBundleLock(store, func() error {
-		pending, err := store.Get(config.Service, config.PendingSignupPersonalDEK)
-		if errors.Is(err, ErrSecretNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if keypairPromoted {
-			if err := recoverPersonalKeyBundleLocked(store); err != nil {
-				return err
-			}
-			if err := savePersonalDeviceWrappedDEKLocked(store, pending); err != nil {
-				return err
-			}
-		}
-		if err := store.Delete(config.Service, config.PendingSignupPersonalDEK); err != nil && !errors.Is(err, ErrSecretNotFound) {
-			return err
-		}
-		return nil
+		return promotePendingSignupDEKLocked(store, keypairPromoted)
 	})
+}
+
+func promotePendingSignupDEKLocked(store SecretStore, keypairPromoted bool) error {
+	pending, err := store.Get(config.Service, config.PendingSignupPersonalDEK)
+	if errors.Is(err, ErrSecretNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if keypairPromoted {
+		if err := recoverPersonalKeyBundleLocked(store); err != nil {
+			return err
+		}
+		if err := savePersonalDeviceWrappedDEKLocked(store, pending); err != nil {
+			return err
+		}
+	}
+	if err := store.Delete(config.Service, config.PendingSignupPersonalDEK); err != nil && !errors.Is(err, ErrSecretNotFound) {
+		return err
+	}
+	return nil
 }
 
 func DeletePendingSignupDeviceWrappedDEK(store SecretStore) error {

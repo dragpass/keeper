@@ -12,6 +12,10 @@ const (
 	ActionAuthRecoveryReissuePrepare = "auth_recovery_reissue_prepare"
 	ActionAuthRecoveryBegin          = "auth_recovery_begin"
 	ActionAuthRecoveryPrepare        = "auth_recovery_prepare"
+	// AuthRecoveryAbort drops the keypair a prepare staged, once the server
+	// refused the recovery. It removes the staged pair only when its public
+	// key is the one named, so the keyring returns to its pre-prepare bytes.
+	ActionAuthRecoveryAbort = "auth_recovery_abort"
 
 	// Device key related actions
 	ActionGetDeviceKey    = "getdevicekey"

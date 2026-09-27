@@ -9,7 +9,8 @@ import (
 
 func groupActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionDEKRewrapWithOldKey: wrap(handlers.HandleDEKRewrapWithOldKey),
+		proto.ActionDEKRewrapWithOldKey:       wrap(handlers.HandleDEKRewrapWithOldKey),
+		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf),
 
 		// Group DEK opaque handle
 		proto.ActionGroupSessionOpen:   wrap(handlers.HandleGroupSessionOpen),

@@ -15,6 +15,15 @@ const (
 	// (unwrap+wrap+put) to 1 (rewrap+put).
 	ActionDEKRewrapWithOldKey = "dek_rewrap_with_old_key"
 
+	// DEKRewrapWithOldKeyToSelf: the recovery rewrap with no caller-chosen
+	// target. The Keeper wraps to its own active account key, and only after
+	// save_session_code promoted the recovered keypair; a caller cannot use
+	// the recovered old key to wrap grants to a key of its choosing.
+	//   Inputs: challenge_token + signature + recovery_handle +
+	//           encrypted_group_dek
+	//   Output: new_encrypted_group_dek
+	ActionDEKRewrapWithOldKeyToSelf = "dek_rewrap_with_old_key_to_self"
+
 	// Group DEK opaque handle.
 	//
 	// GroupSessionOpen:   takes wrapped_group_dek and (with the active

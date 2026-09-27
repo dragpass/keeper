@@ -38,6 +38,28 @@ func (r DEKRewrapWithOldKeyRequest) Validate() error {
 	return requirePEM(r.NewPublicKey, "new_public_key")
 }
 
+type DEKRewrapWithOldKeyToSelfRequest struct {
+	ChallengeToken    string `json:"challenge_token"`
+	Signature         string `json:"signature"`
+	RecoveryHandle    string `json:"recovery_handle"`
+	EncryptedGroupDEK string `json:"encrypted_group_dek"`
+	ServerKeyVersion  uint   `json:"server_key_version,omitempty"`
+}
+
+func (r DEKRewrapWithOldKeyToSelfRequest) Validate() error {
+	if err := requireString(r.ChallengeToken, "challenge_token"); err != nil {
+		return err
+	}
+	if err := requireString(r.Signature, "signature"); err != nil {
+		return err
+	}
+	if err := requireHandle(r.RecoveryHandle, "recovery_handle"); err != nil {
+		return err
+	}
+	_, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek")
+	return err
+}
+
 type DEKRewrapWithOldKeyResponseData struct {
 	// NewEncryptedGroupDEK is the Base64 of the raw Group DEK
 	// RSA-OAEP-SHA256-wrapped with the new RSA public key. Stored as-is
