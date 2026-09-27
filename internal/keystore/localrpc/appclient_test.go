@@ -23,6 +23,7 @@ type testAppClient struct {
 	pairingKey []byte
 	session    string
 	csrf       string
+	sessionKey []byte
 }
 
 func (c *testAppClient) do(method, path string, body []byte, withSession bool) (*http.Response, error) {
@@ -93,28 +94,34 @@ func (c *testAppClient) open() error {
 		return errors.New("owner proof does not verify")
 	}
 	c.session, c.csrf = opened.Session, opened.CSRF
+	c.sessionKey = appSessionKey(c.pairingKey, c.origin, challenge.Challenge, clientNonce, opened.Session, opened.CSRF, opened.ExpiresAt)
 	return nil
 }
 
-// call sends one authenticated App request and returns the Keeper envelope.
+// call seals one App request to the owner that proved itself and accepts only
+// an answer sealed back to this request.
 func (c *testAppClient) call(path string, body any) (proto.BaseResponse, error) {
 	var envelope proto.BaseResponse
-	if body == nil {
-		response, err := c.do(http.MethodGet, path, nil, true)
-		if err != nil {
-			return envelope, err
-		}
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			return envelope, fmt.Errorf("%s: status %d", path, response.StatusCode)
-		}
-		err = json.NewDecoder(response.Body).Decode(&envelope)
+	plain, err := json.Marshal(body)
+	if err != nil {
 		return envelope, err
 	}
-	err := c.postJSON(path, body, true, &envelope)
+	sealed, err := sealEnvelope(c.sessionKey, appRequestAAD(c.origin, c.session, path), plain)
+	if err != nil {
+		return envelope, err
+	}
+	var answer sealedEnvelope
+	if err := c.postJSON(path, sealed, true, &answer); err != nil {
+		return envelope, err
+	}
+	opened, err := openEnvelope(c.sessionKey, answer, appResponseAAD(c.origin, c.session, path, sealed.Nonce))
+	if err != nil {
+		return envelope, errors.New("the answer was not sealed by the owner this session proved")
+	}
+	err = json.Unmarshal(opened, &envelope)
 	return envelope, err
 }
 
 func (c *testAppClient) status() (proto.BaseResponse, error) {
-	return c.call("/v1/status", nil)
+	return c.call("/v1/status", map[string]string{})
 }

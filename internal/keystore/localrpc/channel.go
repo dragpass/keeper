@@ -20,6 +20,9 @@ import (
 //
 //   - App sessions open only after a challenge-response proof with the pairing
 //     key, and the owner proves itself back before the App sends a password.
+//     Every request in the session is then AES-GCM sealed under a key derived
+//     from the pairing key and that session's transcript, so a process that
+//     takes the port after the owner exits reads nothing and cannot answer.
 //   - Native Messaging proxy traffic is AES-GCM sealed to one proven owner
 //     instance, so a process that grabbed the port learns nothing and cannot
 //     replay a request to the next owner.
@@ -31,6 +34,9 @@ const (
 	maxAppChallenges   = 64
 	appOpenLabel       = "dragpass-keeper-app-open-v1"
 	appOwnerLabel      = "dragpass-keeper-app-owner-v1"
+	appSessionKeyLabel = "dragpass-keeper-app-session-key-v1"
+	appRequestLabel    = "dragpass-keeper-app-request-v1"
+	appResponseLabel   = "dragpass-keeper-app-response-v1"
 	proxyHealthLabel   = "dragpass-keeper-native-proxy-health-v2"
 	proxyRequestLabel  = "dragpass-keeper-native-proxy-request-v2"
 	proxyResponseLabel = "dragpass-keeper-native-proxy-response-v2"
@@ -79,6 +85,35 @@ func newAEAD(proxyKey []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// appSessionKey is known only to the owner that opened the session and the App
+// that checked its owner proof: both need the pairing key and the transcript.
+func appSessionKey(appKey []byte, origin, challenge, clientNonce, session, csrf string, expiresAt int64) []byte {
+	return mac(appKey, appSessionKeyLabel, origin, challenge, clientNonce, session, csrf, strconv.FormatInt(expiresAt, 10))
+}
+
+func appRequestAAD(origin, session, path string) []byte {
+	return []byte(appRequestLabel + "\n" + origin + "\n" + session + "\n" + path)
+}
+
+func appResponseAAD(origin, session, path, requestNonce string) []byte {
+	return []byte(appResponseLabel + "\n" + origin + "\n" + session + "\n" + path + "\n" + requestNonce)
+}
+
+func sealEnvelope(key []byte, aad, plain []byte) (sealedEnvelope, error) {
+	aead, err := newAEAD(key)
+	if err != nil {
+		return sealedEnvelope{}, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return sealedEnvelope{}, err
+	}
+	return sealedEnvelope{
+		Nonce:  base64.RawURLEncoding.EncodeToString(nonce),
+		Sealed: base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nonce, plain, aad)),
+	}, nil
 }
 
 func healthProof(proxyKey []byte, challenge, instance string) []byte {

@@ -54,6 +54,29 @@ func localRequest(server *Server, method, path, body, session, csrf string) *htt
 }
 
 func localRequestFromOrigin(server *Server, method, path, body, session, csrf, origin string) *httptest.ResponseRecorder {
+	return sessionRequest(server, method, path, body, session, csrf, origin, true)
+}
+
+// localRawRequest sends body as is, even inside a session.
+func localRawRequest(server *Server, method, path, body, session, csrf string) *httptest.ResponseRecorder {
+	return sessionRequest(server, method, path, body, session, csrf, testOrigin, false)
+}
+
+// sessionRequest seals a session request's body the way the App does and, on
+// a 200, replaces the sealed answer with the plaintext it carries.
+func sessionRequest(server *Server, method, path, body, session, csrf, origin string, seal bool) *httptest.ResponseRecorder {
+	server.mu.Lock()
+	current, open := server.sessions[session]
+	server.mu.Unlock()
+	requestNonce := ""
+	if seal && open && method == http.MethodPost {
+		envelope, err := sealEnvelope(current.key, appRequestAAD(current.origin, session, path), []byte(body))
+		if err != nil {
+			panic(err)
+		}
+		raw, _ := json.Marshal(envelope)
+		body, requestNonce = string(raw), envelope.Nonce
+	}
 	request := httptest.NewRequest(method, "http://"+server.host+path, bytes.NewBufferString(body))
 	request.Host = server.host
 	request.RemoteAddr = "127.0.0.1:54321"
@@ -71,6 +94,17 @@ func localRequestFromOrigin(server *Server, method, path, body, session, csrf, o
 	}
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
+	if requestNonce != "" && recorder.Code == http.StatusOK {
+		var envelope sealedEnvelope
+		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+			panic(fmt.Sprintf("session answer is not sealed: %s", recorder.Body.String()))
+		}
+		plain, err := openEnvelope(current.key, envelope, appResponseAAD(current.origin, session, path, requestNonce))
+		if err != nil {
+			panic(fmt.Sprintf("session answer does not open: %v", err))
+		}
+		recorder.Body = bytes.NewBuffer(plain)
+	}
 	return recorder
 }
 
@@ -167,7 +201,7 @@ func TestLocalRPCPreflightGrantsOnlyConfiguredOrigin(t *testing.T) {
 func TestLocalRPCSessionCSRFExpiryAndRevocation(t *testing.T) {
 	server := newTestServer(t)
 	session, csrf := openTestSession(t, server)
-	if got := localRequest(server, http.MethodGet, "/v1/status", "", session, "").Code; got != http.StatusOK {
+	if got := localRequest(server, http.MethodPost, "/v1/status", "{}", session, csrf).Code; got != http.StatusOK {
 		t.Fatalf("status request=%d, want 200", got)
 	}
 	if got := localRequest(server, http.MethodPost, "/v1/request-signature", `{}`, session, "wrong").Code; got != http.StatusForbidden {
@@ -179,13 +213,13 @@ func TestLocalRPCSessionCSRFExpiryAndRevocation(t *testing.T) {
 	if got := localRequest(server, http.MethodDelete, "/v1/session", "", session, "").Code; got != http.StatusNoContent {
 		t.Fatalf("revoke=%d, want 204", got)
 	}
-	if got := localRequest(server, http.MethodGet, "/v1/status", "", session, "").Code; got != http.StatusUnauthorized {
+	if got := localRequest(server, http.MethodPost, "/v1/status", "{}", session, csrf).Code; got != http.StatusUnauthorized {
 		t.Fatalf("revoked session=%d, want 401", got)
 	}
 
 	session, _ = openTestSession(t, server)
 	server.now = func() time.Time { return time.Unix(1_800_000_601, 0) }
-	if got := localRequest(server, http.MethodGet, "/v1/status", "", session, "").Code; got != http.StatusUnauthorized {
+	if got := localRequest(server, http.MethodPost, "/v1/status", "{}", session, csrf).Code; got != http.StatusUnauthorized {
 		t.Fatalf("expired session=%d, want 401", got)
 	}
 }
@@ -793,5 +827,72 @@ func TestAppSessionProofVectorsMatchTheApp(t *testing.T) {
 	}
 	if got := macB64(key, appOwnerLabel, "https://app.dragpass.io", "owner-challenge", "client-nonce", "local-session", "csrf-token", "1900000000"); got != "RipQFJrpaNfrivmVrPFcyykiAHzxQE83rEC_hi0kdbM" {
 		t.Fatalf("owner proof vector = %s", got)
+	}
+}
+
+func TestAppSessionRequestsMustBeSealedToTheSession(t *testing.T) {
+	server := newTestServer(t)
+	session, csrf := openTestSession(t, server)
+	if got := localRawRequest(server, http.MethodPost, "/v1/auth/login/sign-alias", `{"alias":"alice"}`, session, csrf).Code; got != http.StatusForbidden {
+		t.Fatalf("plaintext request in a session=%d, want 403", got)
+	}
+
+	server.mu.Lock()
+	current := server.sessions[session]
+	server.mu.Unlock()
+	sealFor := func(key []byte, path string) string {
+		envelope, err := sealEnvelope(key, appRequestAAD(testOrigin, session, path), []byte(`{"alias":"alice"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(envelope)
+		return string(raw)
+	}
+	if got := localRawRequest(server, http.MethodPost, "/v1/auth/login/sign-alias", sealFor(testSecret(t).AppPairingKey(), "/v1/auth/login/sign-alias"), session, csrf).Code; got != http.StatusForbidden {
+		t.Fatalf("request sealed under another key=%d, want 403", got)
+	}
+	moved := sealFor(current.key, "/v1/auth/signup/prepare")
+	if got := localRawRequest(server, http.MethodPost, "/v1/auth/login/sign-alias", moved, session, csrf).Code; got != http.StatusForbidden {
+		t.Fatalf("request sealed for another route=%d, want 403", got)
+	}
+	once := sealFor(current.key, "/v1/auth/login/sign-alias")
+	first := localRawRequest(server, http.MethodPost, "/v1/auth/login/sign-alias", once, session, csrf)
+	if first.Code != http.StatusOK {
+		t.Fatalf("sealed request=%d body=%s", first.Code, first.Body.String())
+	}
+	if strings.Contains(first.Body.String(), "success") {
+		t.Fatalf("the answer travelled in the clear: %s", first.Body.String())
+	}
+	if got := localRawRequest(server, http.MethodPost, "/v1/auth/login/sign-alias", once, session, csrf).Code; got != http.StatusConflict {
+		t.Fatalf("replayed envelope=%d, want 409", got)
+	}
+	if got := localRequestFromOrigin(server, http.MethodPost, "/v1/status", "{}", session, csrf, NativeExtensionOrigin).Code; got != http.StatusForbidden {
+		t.Fatalf("session used from another origin=%d, want 403", got)
+	}
+}
+
+// The App derives the session key and seals in TypeScript (dragpass
+// app/src/shared/keeper/local-keeper-client.test.ts pins the same vectors).
+func TestAppSessionSealVectorsMatchTheApp(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	sessionKey := appSessionKey(key, "https://app.dragpass.io", "owner-challenge", "client-nonce", "local-session", "csrf-token", 1900000000)
+	if got := base64.RawURLEncoding.EncodeToString(sessionKey); got != "AW5ZsIFkocjYd7b_hBCKil-yovRAMhV_Q7FEZfZc0R4" {
+		t.Fatalf("session key vector = %s", got)
+	}
+	aead, err := newAEAD(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	sealed := aead.Seal(nil, nonce, []byte(`{"alias":"alice"}`), appRequestAAD("https://app.dragpass.io", "local-session", "/v1/auth/login/sign-alias"))
+	if got := base64.RawURLEncoding.EncodeToString(sealed); got != "Egv5bAq_p6mEkX08FjZPUgDcWfZXU3gJ-wt6GDHisSrI" {
+		t.Fatalf("request seal vector = %s", got)
+	}
+	answer := aead.Seal(nil, nonce, []byte(`{"success":true}`), appResponseAAD("https://app.dragpass.io", "local-session", "/v1/auth/login/sign-alias", "AAAAAAAAAAAAAAAA"))
+	if got := base64.RawURLEncoding.EncodeToString(answer); got != "EgvrdQC9sfjNkSYkDSBPDagAz5FH6baw344aGVN01DY" {
+		t.Fatalf("response seal vector = %s", got)
 	}
 }

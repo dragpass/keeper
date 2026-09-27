@@ -30,6 +30,10 @@ import (
 )
 
 const maxRequestBytes = 8 * 1024
+
+// sealedAppLimit bounds a sealed App request: base64 growth plus framing. The
+// plaintext inside is held to maxRequestBytes once opened.
+const sealedAppLimit = int64(maxRequestBytes)*4/3 + 512
 const maxSessionNonces = 4096
 const maxNativeMessageBytes = dispatch.MaxMessageSize
 
@@ -89,6 +93,10 @@ type session struct {
 	csrf    string
 	expires time.Time
 	nonces  map[string]time.Time
+	// key seals every request and response of this session (channel.go).
+	key    []byte
+	origin string
+	sealed map[string]struct{}
 }
 
 type requestSignature struct {
@@ -199,7 +207,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 			return
 		}
-		maxBytes := int64(maxRequestBytes)
+		maxBytes := sealedAppLimit
 		if r.URL.Path == "/v1/native-proxy/message" {
 			maxBytes = sealedLimit()
 		}
@@ -237,15 +245,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.openSession(w, r, origin)
 	case r.Method == http.MethodDelete && r.URL.Path == "/v1/session":
 		s.closeSession(w, r)
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/status":
-		if !s.authorized(w, r) {
-			return
-		}
-		s.dispatch(w, "request_key_status", nil)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/status":
+		s.serveStatus(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/request-signature":
-		if !s.authorized(w, r) {
-			return
-		}
 		s.signRequest(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/sign-alias":
 		s.dispatchAppAuthAction(w, r, proto.ActionSignAliasWithTimestamp, func() any {
@@ -285,20 +287,12 @@ func (s *Server) dispatchAppAuthActionWithoutResult(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, action string, newPayload func() any, suppressResult bool) {
-	if !s.authorized(w, r) {
+	request, ok := s.openAppRequest(w, r)
+	if !ok {
 		return
 	}
-	s.mu.Lock()
-	current := s.sessions[bearerToken(r)]
-	validCSRF := constantTimeEqual(r.Header.Get("X-DragPass-CSRF"), current.csrf)
-	s.mu.Unlock()
-	if !validCSRF {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	defer r.Body.Close()
 	input := newPayload()
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(bytes.NewReader(request.plain))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(input); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -314,23 +308,113 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	request := map[string]any{"action": action}
-	var decoded any
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	request["payload"] = decoded
-	encoded, err := json.Marshal(request)
+	response, err := s.handle(action, payload)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	response := s.app.HandleRequest(encoded)
 	if suppressResult && response.Success {
 		response.Data = map[string]bool{"stored": true}
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeSealed(w, request, response)
+}
+
+// appRequest is one opened, authenticated App request.
+type appRequest struct {
+	session session
+	token   string
+	path    string
+	nonce   string
+	plain   []byte
+}
+
+// openAppRequest authenticates the session, opens the sealed body and refuses
+// a replayed envelope. Every answer that is not a sealed 200 is a failure the
+// App cannot mistake for the owner's result.
+func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequest, bool) {
+	defer r.Body.Close()
+	token := bearerToken(r)
+	now := s.now()
+	s.mu.Lock()
+	current, ok := s.sessions[token]
+	if !ok || !now.Before(current.expires) {
+		delete(s.sessions, token)
+		s.mu.Unlock()
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return appRequest{}, false
+	}
+	validCSRF := constantTimeEqual(r.Header.Get("X-DragPass-CSRF"), current.csrf)
+	s.mu.Unlock()
+	if !validCSRF || r.Header.Get("Origin") != current.origin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return appRequest{}, false
+	}
+	var envelope sealedEnvelope
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil || envelope.Nonce == "" || envelope.Sealed == "" ||
+		envelope.Instance != "" || envelope.Timestamp != 0 {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return appRequest{}, false
+	}
+	plain, err := openEnvelope(current.key, envelope, appRequestAAD(current.origin, token, r.URL.Path))
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return appRequest{}, false
+	}
+	if len(plain) > maxRequestBytes {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return appRequest{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok = s.sessions[token]
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return appRequest{}, false
+	}
+	if _, replay := current.sealed[envelope.Nonce]; replay {
+		http.Error(w, "replayed request", http.StatusConflict)
+		return appRequest{}, false
+	}
+	if len(current.sealed) >= maxSessionNonces {
+		http.Error(w, "session request limit reached", http.StatusTooManyRequests)
+		return appRequest{}, false
+	}
+	current.sealed[envelope.Nonce] = struct{}{}
+	return appRequest{session: current, token: token, path: r.URL.Path, nonce: envelope.Nonce, plain: plain}, true
+}
+
+// writeSealed answers under the session key, bound to the request it answers.
+func (s *Server) writeSealed(w http.ResponseWriter, request appRequest, response proto.BaseResponse) {
+	plain, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	sealed, err := sealEnvelope(request.session.key, appResponseAAD(request.session.origin, request.token, request.path, request.nonce), plain)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, sealed)
+}
+
+func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
+	request, ok := s.openAppRequest(w, r)
+	if !ok {
+		return
+	}
+	if !bytes.Equal(bytes.TrimSpace(request.plain), []byte("{}")) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	response, err := s.handle("request_key_status", nil)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.writeSealed(w, request, response)
 }
 
 func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request) {
@@ -438,9 +522,13 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 		http.Error(w, "too many sessions", http.StatusTooManyRequests)
 		return
 	}
-	s.sessions[token] = session{csrf: csrf, expires: sessionExpires, nonces: make(map[string]time.Time)}
-	s.mu.Unlock()
 	expiresAt := sessionExpires.Unix()
+	s.sessions[token] = session{
+		csrf: csrf, expires: sessionExpires, nonces: make(map[string]time.Time),
+		key:    appSessionKey(s.appKey, origin, input.Challenge, input.ClientNonce, token, csrf, expiresAt),
+		origin: origin, sealed: make(map[string]struct{}),
+	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session":     token,
 		"csrf":        csrf,
@@ -461,39 +549,13 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) authorized(w http.ResponseWriter, r *http.Request) bool {
-	token := bearerToken(r)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, ok := s.sessions[token]
-	if !ok || !s.now().Before(current.expires) {
-		delete(s.sessions, token)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	s.sessions[token] = current
-	return true
-}
-
 func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
-	token := bearerToken(r)
-	s.mu.Lock()
-	current, ok := s.sessions[token]
-	if !ok || !s.now().Before(current.expires) {
-		delete(s.sessions, token)
-		s.mu.Unlock()
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	request, ok := s.openAppRequest(w, r)
+	if !ok {
 		return
 	}
-	if !constantTimeEqual(r.Header.Get("X-DragPass-CSRF"), current.csrf) {
-		s.mu.Unlock()
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	s.mu.Unlock()
-	defer r.Body.Close()
 	var input requestSignature
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(bytes.NewReader(request.plain))
 	if err := decoder.Decode(&input); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
@@ -507,8 +569,9 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	token := request.token
 	s.mu.Lock()
-	current, ok = s.sessions[token]
+	current, ok := s.sessions[token]
 	if !ok || !s.now().Before(current.expires) {
 		delete(s.sessions, token)
 		s.mu.Unlock()
@@ -538,7 +601,12 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		input.Nonce, input.BodySHA256, input.AccountID, input.TokenID, input.DeviceID,
 	}, "\n")
 	body, _ := json.Marshal(map[string]string{"canonical_request": canonical})
-	s.dispatch(w, "sign_request", body)
+	response, err := s.handle("sign_request", body)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.writeSealed(w, request, response)
 }
 
 func validateRequestSignature(input requestSignature, now time.Time) error {
@@ -585,25 +653,20 @@ func validUUID(value string) bool {
 	return value == strings.ToLower(value) && uuidPattern.MatchString(value)
 }
 
-func (s *Server) dispatch(w http.ResponseWriter, action string, payload []byte) {
+func (s *Server) handle(action string, payload []byte) (proto.BaseResponse, error) {
 	request := map[string]any{"action": action}
 	if len(payload) > 0 {
 		var decoded any
 		if err := json.Unmarshal(payload, &decoded); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return proto.BaseResponse{}, err
 		}
 		request["payload"] = decoded
 	}
-	encoded, _ := json.Marshal(request)
-	response, err := json.Marshal(s.app.HandleRequest(encoded))
+	encoded, err := json.Marshal(request)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return proto.BaseResponse{}, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(response)
+	return s.app.HandleRequest(encoded), nil
 }
 
 func randomToken() (string, error) {
