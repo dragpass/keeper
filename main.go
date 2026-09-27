@@ -1,16 +1,27 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
 	"io"
 	"log"
+	"net"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/awnumar/memguard"
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
+	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
+	"github.com/dragpass/keeper/internal/keystore/localrpc"
+	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proc"
+	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/service"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/zalando/go-keyring"
 )
@@ -23,8 +34,6 @@ import (
 //
 // Must never be enabled in production. Fixtures inject the env var explicitly.
 const e2eEnvVar = "KEEPER_E2E_MODE"
-
-var processApp *keystore.App
 
 // Items stored in the keystore:
 // - Server public key (saved on init)
@@ -66,7 +75,8 @@ var processApp *keystore.App
 //     injecting MemoryLogger, and a future swap to a structured logger
 //     (zerolog, etc.) changes only one place.
 
-func init() {
+func newProcessApp() *keystore.App {
+	var app *keystore.App
 	// An unusable trust file does not stop the process: the extension would
 	// only see a dead host. The Keeper keeps running and refuses every key
 	// change with key_transparency_trust_invalid instead.
@@ -91,12 +101,12 @@ func init() {
 		} else {
 			deps.Clipboard = clipboard.NewMemoryClipboard()
 		}
-		processApp = keystore.NewApp(deps)
-		processApp.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
+		app = keystore.NewApp(deps)
+		app.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
 		if sink == clipboard.SinkOS {
-			processApp.Logger.Println("KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard (recording opt-in; clipboard_get_last_hash unavailable)")
+			app.Logger.Println("KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard (recording opt-in; clipboard_get_last_hash unavailable)")
 		} else {
-			processApp.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
+			app.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
 		}
 
 		// Optional: if KEEPER_E2E_KEYRING_FILE is set, load the file into
@@ -105,47 +115,120 @@ func init() {
 		// comments for details.
 		if filePath := os.Getenv("KEEPER_E2E_KEYRING_FILE"); filePath != "" {
 			if err := keystore.LoadE2EKeyringFile(filePath); err != nil {
-				processApp.Logger.Printf("KEEPER_E2E_KEYRING_FILE load failed (continuing): %v", err)
+				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE load failed (continuing): %v", err)
 			} else {
-				processApp.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
+				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
 			}
 		}
 	}
 	if os.Getenv(e2eEnvVar) != "1" {
-		processApp = keystore.NewApp(deps)
+		app = keystore.NewApp(deps)
 	}
 	if err := deps.KeyTransparency.ConfigErr; err != nil {
-		processApp.Logger.Printf("key transparency is required but unusable; key changes are refused: %v", err)
+		app.Logger.Printf("key transparency is required but unusable; key changes are refused: %v", err)
 	}
 
-	if err := keychain.EnsureServerPublicKey(processApp.Store, processApp.Logger); err != nil {
+	if err := keychain.EnsureServerPublicKey(app.Store, app.Logger); err != nil {
 		log.Fatalf("Critical: Failed to ensure server public key: %v", err)
 	}
+	return app
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "service" {
+		executable, err := os.Executable()
+		if err != nil {
+			log.Fatal("Could not locate the Keeper executable")
+		}
+		if err := service.Manage(os.Args[2], executable); err != nil {
+			log.Fatal(err)
+		}
+		if os.Args[2] == "install" {
+			// The service serves only a paired App, so installing it opens
+			// the pairing page right away.
+			if err := pairApp(defaultAppOrigin, true, os.Stdout); err != nil {
+				log.Printf("The service is installed but the pairing page could not be prepared: %v. Run `dragpass-keeper app pair`.", err)
+			}
+		}
+		return
+	}
+	if len(os.Args) >= 3 && os.Args[1] == "app" {
+		if err := runAppCommand(os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	appService := flag.Bool("app-service", false, "run the local App RPC service")
+	trustFile := flag.String("key-transparency-trust-file", "", "load Key Transparency trust configuration from this file")
+	flag.Parse()
+	if *trustFile != "" {
+		if err := os.Setenv(keytransparency.TrustConfigEnv, *trustFile); err != nil {
+			log.Fatal("Could not configure Key Transparency trust file")
+		}
+	}
+
 	// Protect all memguard-managed memory; purge on exit
 	memguard.CatchInterrupt()
 	defer memguard.Purge()
 
 	// Stdout is sent to the Chrome extension, so we log to Stderr
 	log.SetOutput(os.Stderr)
-
-	app := processApp
-	logger := app.Logger
-
-	// Process hardening — disable core dumps. Closes the surface where
-	// plaintext could be exposed in a disk core file. Failure is not fatal.
-	if err := proc.DisableCoreDumps(); err != nil {
-		logger.Printf("Warning: Failed to disable core dumps: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var listener net.Listener
+	var secret localsecret.Secret
+	address, err := localrpc.Address(os.Getenv(e2eEnvVar) == "1" && os.Getenv(localsecret.DirEnvVar) != "", os.Getenv)
+	if err != nil {
+		log.Fatal(err)
 	}
+	if *appService {
+		if !localRPCEnabled(os.Getenv) {
+			log.Fatal("An e2e Keeper runs the App service only with an isolated local secret directory")
+		}
+		secret, err = localsecret.LoadOrCreate()
+		if err != nil {
+			log.Fatalf("Local Keeper service could not load its local secret: %v", err)
+		}
+		listener, err = localrpc.AcquireAppServiceOwner(ctx, address)
+		if err != nil {
+			log.Fatalf("Local Keeper service could not claim its address: %v", err)
+		}
+	} else {
+		role := localrpc.RoleStandalone
+		var proxy *localrpc.NativeProxy
+		var loaded localsecret.Secret
+		err := errors.New("e2e mode without an isolated local secret directory")
+		if localRPCEnabled(os.Getenv) {
+			loaded, err = localsecret.LoadOrCreate()
+		}
+		if err != nil {
+			// Without the secret neither local channel can be authenticated, so
+			// this host serves its own stdio only, as before the shared owner.
+			log.Printf("Keeper local secret unavailable, running standalone: %v", err)
+		} else {
+			secret = loaded
+			role, listener, proxy, err = localrpc.AcquireNativeOwner(address, secret)
+			if err != nil {
+				log.Fatal("Local Keeper owner could not be established")
+			}
+		}
+		if role == localrpc.RoleProxy {
+			runNativeProxyMessageLoop(proxy)
+			return
+		}
+		if role == localrpc.RoleStandalone {
+			log.Printf("Keeper local address is held by an owner that could not be proven; running standalone")
+		}
+	}
+	if err := proc.DisableCoreDumps(); err != nil {
+		log.Printf("Warning: Failed to disable core dumps: %v", err)
+	}
+
+	app := newProcessApp()
+	logger := app.Logger
 
 	if err := keystore.LoadBinaryInfo(); err != nil {
 		logger.Printf("Warning: Failed to calculate binary info: %v", err)
-	}
-
-	if err := keychain.EnsureServerPublicKey(app.Store, app.Logger); err != nil {
-		log.Fatalf("Critical: Failed to ensure server public key: %v", err)
 	}
 
 	// Group DEK opaque handle reaper. Sweeps every 1 minute and destroys
@@ -158,15 +241,61 @@ func main() {
 	app.RecoverySessions.StartReaper(sessions.RecoverySessionReaperInterval)
 	app.RecoveryKeySessions.StartReaper(sessions.RecoveryKeySessionReaperInterval)
 
-	logger.Println("DragPass extension helper started")
+	logger.Println("DragPass Keeper started")
 	logMLSLibrary(app)
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Printf("Critical Panic Recovered: %v", r)
 		}
 	}()
+	if listener != nil {
+		service, err := localrpc.New(app, localrpc.AppOrigins(os.Getenv), secret)
+		if err != nil {
+			log.Fatalf("Critical: Failed to configure App RPC: %v", err)
+		}
+		go func() {
+			if err := service.ServeListener(ctx, listener); err != nil {
+				logger.Printf("App RPC stopped: %v", err)
+			}
+		}()
+		logger.Printf("Keeper App RPC listening on %s", address)
+	}
+	if *appService {
+		<-ctx.Done()
+		return
+	}
 
 	runMessageLoop(app)
+	stop()
+}
+
+// localRPCEnabled keeps an e2e Keeper (mock keyring) off the shared loopback
+// address unless the test isolated the local secret: otherwise it could proxy
+// its traffic to a developer's real Keeper and real Keychain.
+func localRPCEnabled(getenv func(string) string) bool {
+	return getenv(e2eEnvVar) != "1" || getenv(localsecret.DirEnvVar) != ""
+}
+
+func runNativeProxyMessageLoop(proxy *localrpc.NativeProxy) {
+	msgr := dispatch.NewMessenger(os.Stdin, os.Stdout, nil)
+	for {
+		message, err := msgr.ReadMessage()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			log.Printf("Native Messaging proxy could not read a request: %v", err)
+			return
+		}
+		response, err := proxy.Forward(message)
+		if err != nil {
+			response = proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+		}
+		if err := msgr.SendResponse(response); err != nil {
+			log.Printf("Native Messaging proxy could not write a response: %v", err)
+			return
+		}
+	}
 }
 
 func runMessageLoop(app *keystore.App) {

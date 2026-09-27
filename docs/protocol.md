@@ -1970,3 +1970,94 @@ builds that don't emit it continue to work against newer Extensions.
 - `internal/keystore/proto/validation.go` — request validation helpers.
 - `internal/keystore/errs/errs.go` — `ErrorCode` enum + `CodeForError` mapping.
 - `internal/keystore/handlers/refresh_server_keys.go` — `SystemServerKeyEntry` shape.
+
+## Local App RPC and the shared owner
+
+Keeper can serve the DragPass app without the Chrome extension. One Keeper
+process per machine owns `127.0.0.1:47623` (`tcp4`, loopback only): either the
+per-user service (`--app-service`) or the first Chrome-launched host. Every
+request must carry an allowed `Origin`, `Host` equal to the listener address,
+`X-DragPass-Local-RPC: 1`, and `Sec-Fetch-Site` of `same-site` or
+`cross-site`. Browsers enforce those; a local process can forge them, so they
+are not the authentication.
+
+**Local secret.** `<UserConfigDir>/dragpass-keeper/local-rpc/local-rpc.key`
+(directory `0700`, file `0600`, owner-checked on POSIX;
+`DRAGPASS_KEEPER_LOCAL_DIR` overrides the directory). Two keys are derived with
+HMAC-SHA256: the app pairing key and the native proxy key. The loopback port is
+shared by every OS user, so only a caller holding one of these keys can drive
+the owner.
+
+**Pairing.** The pairing link is
+`https://app.dragpass.io/#keeper-pair=<pairing key>`; the key rides in the
+fragment, which the browser does not send to a server.
+
+|Command|What it does|
+|---|---|
+|`dragpass-keeper service install`|Installs the per-user service, then opens the pairing link in the default browser.|
+|`dragpass-keeper app pair [--no-open] [--origin URL]`|Opens the pairing link again (re-pairing, another browser). `--no-open` prints it instead.|
+|`dragpass-keeper app rotate-secret [--no-open] [--origin URL]`|Replaces the local secret and opens the new pairing link. Every browser paired before is unpaired. A running owner reloads the secret on its next request, drops every App session and pending challenge, and answers only the new keys; a native proxy host the owner refuses reads the key again and re-proves.|
+
+The link is never passed to `open` / `xdg-open` / `rundll32` as an argument,
+since other OS users can read process arguments. Keeper writes an owner-only
+`pair.html` next to the secret that redirects to the link and opens that file.
+When the browser cannot be opened, nothing secret is printed (an installer may
+log the output); run `app pair --no-open` in your own terminal.
+
+**App sessions.** The app stores the pairing key and opens a session in two
+steps:
+
+|Route|Request|Response|
+|---|---|---|
+|`POST /v1/session/challenge`|`{}`|`{ challenge, expires_at }` (one-time, 30 s, at most 64 pending)|
+|`POST /v1/session`|`{ challenge, client_nonce, proof }`, `proof = HMAC(pairing key, "dragpass-keeper-app-open-v1\n" + origin + "\n" + challenge + "\n" + client_nonce)`|`{ session, csrf, expires_at, owner_proof }`, `owner_proof = HMAC(pairing key, "dragpass-keeper-app-owner-v1\n" + origin + "\n" + challenge + "\n" + client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`|
+
+The challenge is consumed whether or not the proof verifies. The app must check
+`owner_proof` before it sends a password or recovery key. The session routes
+are typed (`POST /v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
+`/v1/auth/signup/*`, `/v1/auth/recovery-key/reissue-prepare`); there is no
+generic action route. `auth_signup_prepare` checks every precondition (a
+registered device, password, recovery key) before it writes anything, and
+keeps the new device-wrapped DEK in a pending slot that `save_session_code`
+promotes together with the signup's pending keypair; a refused or abandoned
+signup leaves the personal DEK untouched.
+
+**Every session request is sealed to the owner that proved itself.** Both
+sides derive `session key = HMAC(pairing key,
+"dragpass-keeper-app-session-key-v1\n" + origin + "\n" + challenge + "\n" +
+client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`. A session
+request carries `Authorization: Bearer <session>`, `X-DragPass-CSRF`, and the
+body `{ nonce, ct }`: the JSON request AES-256-GCM sealed (key
+`HMAC(session key, "aead")`, 12-byte nonce) with AAD
+`"dragpass-keeper-app-request-v1\n" + origin + "\n" + session + "\n" + path`.
+A 200 answer is `{ nonce, ct }` sealed with AAD
+`"dragpass-keeper-app-response-v1\n" + origin + "\n" + session + "\n" + path +
+"\n" + request nonce`. The owner refuses a plaintext body, another key, another
+route or origin (403) and a repeated envelope nonce (409); the app accepts only
+an answer that opens. A process that takes the port after the owner exits
+(another OS user, a squatter) cannot read a request, cannot answer one, and
+cannot open a new session; the app sees a failure and has to open a session
+again, which needs the pairing key. `DELETE /v1/session` carries no body.
+
+**Native Messaging proxy (protocol 2).** A Chrome-launched host that cannot
+bind the port proves the owner with
+`GET /v1/native-proxy/health?challenge=<b64url, 16+ bytes>`; the owner answers
+with its random `instance` and `proof = HMAC(HMAC(proxy key, "health"),
+"dragpass-keeper-native-proxy-health-v2\n" + challenge + "\n" + instance)`.
+Each message is AES-256-GCM sealed (key `HMAC(proxy key, "aead")`) as
+`{ instance, ts, nonce, ct }` with AAD
+`"dragpass-keeper-native-proxy-request-v2\n" + instance + "\n" + ts`; the owner
+refuses a timestamp outside ±60 s, a repeated nonce, or another instance (409,
+refused before running, so the host re-proves and retries once). Responses are
+sealed with AAD `"dragpass-keeper-native-proxy-response-v2\n" + instance + "\n"
++ request nonce`. A listener that cannot prove the secret (another account's
+Keeper, a protocol 1 owner, a port squatter) receives nothing: the host serves
+its own stdio instead. With `KEEPER_E2E_MODE=1` and no
+`DRAGPASS_KEEPER_LOCAL_DIR`, Keeper never joins the shared address and
+`--app-service` refuses to start. An isolated e2e Keeper (both set) may move to
+another `127.0.0.1` port with `DRAGPASS_KEEPER_LOCAL_ADDRESS`, so real-process
+tests never touch a Keeper the developer runs; the app itself only uses
+`127.0.0.1:47623`.
+
+The development app origin is accepted only when
+`DRAGPASS_KEEPER_DEV_APP_ORIGIN` names it.

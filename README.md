@@ -27,6 +27,78 @@ Download the latest release from the [Releases page](https://github.com/dragpass
   - Requires glibc 2.31 or newer: Ubuntu 20.04, Debian 11, or any later release.
 - **Windows**: `dragpass-keeper.exe` (x64 installer)
 
+## App service
+
+Keeper runs in the logged-in user's session so the DragPass app does not depend
+on Chrome Native Messaging to reach it. If your deployment uses a Key
+Transparency trust file, set `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` before
+running the install command. The service stores its validated path in the
+per-user configuration.
+
+### Pairing the app
+
+The service listens on `127.0.0.1:47623`, a port every account on the machine
+can reach, so it only serves an app that has been paired with your account's
+Keeper. `service install` opens the pairing page in your default browser. To
+pair again, or to pair another browser, run in your own session:
+
+```bash
+dragpass-keeper app pair            # opens the pairing page
+dragpass-keeper app pair --no-open  # prints the link instead
+```
+
+The link carries a pairing key in its `#fragment`, which the browser does not
+send to any server. Anyone who can read your files can pair an app, so treat
+the link like a password and do not share it. If a link may have leaked, run
+`dragpass-keeper app rotate-secret`: every browser paired before is unpaired,
+and the new pairing page opens.
+
+### macOS
+
+After installing the package or Homebrew cask, enable the per-user LaunchAgent:
+
+```bash
+dragpass-keeper service install
+```
+
+For the `.pkg` installer, use its installed path:
+
+```bash
+'/Library/Application Support/DragPass/dragpass-keeper' service install
+```
+
+It starts now and at later logins, and is kept running for that user. Remove
+the LaunchAgent with `dragpass-keeper service uninstall` (or the same installed
+path for `.pkg`) before removing the Homebrew cask. This does not remove Keeper
+or its Keychain data.
+
+### Linux
+
+Install the per-user systemd unit from the active desktop session:
+
+```bash
+/opt/dragpass/dragpass-keeper service install
+```
+
+Remove it with `/opt/dragpass/dragpass-keeper service uninstall`. The user
+systemd manager and Secret Service must be available in that session.
+
+### Windows
+
+Run the following in the signed-in user's PowerShell session after installing
+Keeper:
+
+```powershell
+& "$env:ProgramFiles\DragPass\dragpass-keeper.exe" service install
+```
+
+This creates and starts the current user's logon task. Remove it before
+uninstalling Keeper with:
+
+```powershell
+& "$env:ProgramFiles\DragPass\dragpass-keeper.exe" service uninstall
+```
+
 ## Verifying Downloads
 
 Every release publishes `SHA256SUMS`, `dragpass-keeper.spdx.json`, and GitHub

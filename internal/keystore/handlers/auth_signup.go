@@ -24,11 +24,15 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	if response := ensureSignupDeviceKey(d); !response.Success {
+	// Every check runs before any write. A refused signup (a registered
+	// device, a bad password or recovery key) leaves the keyring as it was;
+	// the new keypair and DEK are written to pending slots only, and
+	// save_session_code promotes them once the server accepted the signup.
+	if response := signupAllowed(d); !response.Success {
+		secure.WipeString(&req.Password)
+		secure.WipeString(&req.RecoveryKey)
 		return response
 	}
-
-	var passwordBuffer *memguard.LockedBuffer
 	if req.Password == "" {
 		return errs.CodeResponse(errs.ErrCodeValidation, "password is required in the app")
 	}
@@ -36,14 +40,9 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		secure.WipeString(&req.Password)
 		return errs.CodeResponse(errs.ErrCodeValidation, "password must be at least 12 characters")
 	}
-	passwordBuffer = memguard.NewBufferFromBytes([]byte(req.Password))
+	passwordBuffer := memguard.NewBufferFromBytes([]byte(req.Password))
 	secure.WipeString(&req.Password)
 	defer passwordBuffer.Destroy()
-
-	dekData, response := generateAndWrapDual(d, passwordBuffer)
-	if !response.Success {
-		return response
-	}
 
 	recoveryKeyBytes := []byte(req.RecoveryKey)
 	secure.WipeString(&req.RecoveryKey)
@@ -53,6 +52,14 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid recovery key")
 	}
 	defer secure.Zeroize(wrapKey)
+
+	if response := ensureSignupDeviceKey(d); !response.Success {
+		return response
+	}
+	dekData, response := generateAndWrapDual(d, passwordBuffer, keychain.SavePendingSignupDeviceWrappedDEK)
+	if !response.Success {
+		return response
+	}
 
 	signResponse := signAliasWithWrapKey(d, req.Alias, wrapKey)
 	if !signResponse.Success {
@@ -72,6 +79,20 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		Signature:             signData.Signature,
 		PublicKey:             signData.PublicKey,
 	}}
+}
+
+// signupAllowed is the registered-device check signAliasWithWrapKey also
+// makes, run before anything is written.
+func signupAllowed(d Deps) proto.BaseResponse {
+	_, keyErr := keychain.GetPrivateKey(d.Store)
+	_, sessionErr := keychain.GetSessionCode(d.Store)
+	switch {
+	case keyErr == nil && sessionErr == nil:
+		return errs.CodeResponse(errs.ErrCodeValidation, "device already registered. this device has already been registered for signup")
+	case keyErr == nil:
+		return errs.CodeResponse(errs.ErrCodeInternal, "keypair exists without session. please contact support or use account recovery")
+	}
+	return proto.BaseResponse{Success: true}
 }
 
 func ensureSignupDeviceKey(d Deps) proto.BaseResponse {

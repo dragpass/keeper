@@ -35,6 +35,10 @@ func HandleSaveSessionCode(d Deps, req proto.SaveSessionCodeRequest) proto.BaseR
 	} else {
 		d.Logger.Println("no pending keypair found (login on another device flow)")
 	}
+	if err := keychain.PromotePendingSignupDEK(d.Store, promoted); err != nil {
+		d.Logger.Printf("session code save error: failed to promote pending signup DEK: %v", err)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to promote pending signup DEK")
+	}
 
 	// Get the Helper's private key from keystore into protected memory
 	privKeyBuf, err := getPrivateKeySecure(d.Store)
