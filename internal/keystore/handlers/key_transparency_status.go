@@ -9,7 +9,14 @@ import (
 )
 
 func HandleKeyTransparencyStatus(d Deps, _ proto.KeyTransparencyStatusRequest) proto.BaseResponse {
-	result := proto.KeyTransparencyStatusResponse{Configured: d.KeyTransparencyTrust != nil}
+	gate := d.KeyTransparency
+	result := proto.KeyTransparencyStatusResponse{
+		Configured:           gate.Trust != nil,
+		IndependentWitnesses: gate.Trust != nil && gate.Trust.IndependentWitnesses,
+	}
+	if gate.ConfigErr != nil {
+		result.TrustError = proto.KeyTransparencyTrustErrorInvalid
+	}
 	anchor, found, err := keychain.GetKeyTransparencyCheckpoint(d.Store)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "key transparency status is unavailable")

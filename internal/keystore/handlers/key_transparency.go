@@ -9,16 +9,22 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func requireKeyTransparency(d Deps) bool {
-	return d.RequireKeyTransparency || d.KeyTransparencyTrust != nil
+// usableTrust returns the trust to verify against when the gate requires
+// transparency, or the configuration error that refuses the change instead.
+func usableTrust(d Deps) (*keytransparency.Trust, error) {
+	if d.KeyTransparency.ConfigErr != nil {
+		return nil, d.KeyTransparency.ConfigErr
+	}
+	return d.KeyTransparency.Trust, nil
 }
 
 func verifyRotationTransparency(d Deps, statements []proto.KeyRotationStatement) error {
-	if len(statements) == 0 || !requireKeyTransparency(d) {
+	if len(statements) == 0 || !d.KeyTransparency.Required() {
 		return nil
 	}
-	if d.KeyTransparencyTrust == nil {
-		return keytransparency.ErrTrustUnavailable
+	trust, err := usableTrust(d)
+	if err != nil {
+		return err
 	}
 	for _, statement := range statements {
 		if statement.TransparencyEvidence == nil {
@@ -28,7 +34,7 @@ func verifyRotationTransparency(d Deps, statements []proto.KeyRotationStatement)
 		if err != nil {
 			return keytransparency.ErrInvalidCheckpoint
 		}
-		if _, err := keytransparency.VerifyAndPersistEvidence(d.Store, *d.KeyTransparencyTrust, *statement.TransparencyEvidence, canonical); err != nil {
+		if _, err := keytransparency.VerifyAndPersistEvidence(d.Store, *trust, *statement.TransparencyEvidence, canonical); err != nil {
 			return err
 		}
 	}
@@ -36,11 +42,12 @@ func verifyRotationTransparency(d Deps, statements []proto.KeyRotationStatement)
 }
 
 func verifyMLSLeafTransparency(d Deps, evidence []proto.KeyTransparencyEvidence, declaration proto.MLSLeafDeclaration, accountPublicKey string) error {
-	if !requireKeyTransparency(d) {
+	if !d.KeyTransparency.Required() {
 		return nil
 	}
-	if d.KeyTransparencyTrust == nil {
-		return keytransparency.ErrTrustUnavailable
+	trust, err := usableTrust(d)
+	if err != nil {
+		return err
 	}
 	canonical, err := keytransparency.EncodeMLSLeafBindingStatement(declaration, accountPublicKey)
 	if err != nil {
@@ -51,7 +58,7 @@ func verifyMLSLeafTransparency(d Deps, evidence []proto.KeyTransparencyEvidence,
 		if decodeErr != nil || !bytes.Equal(statement, canonical) {
 			continue
 		}
-		_, err := keytransparency.VerifyAndPersistEvidence(d.Store, *d.KeyTransparencyTrust, candidate, canonical)
+		_, err := keytransparency.VerifyAndPersistEvidence(d.Store, *trust, candidate, canonical)
 		return err
 	}
 	return keytransparency.ErrInvalidCheckpoint
@@ -60,12 +67,28 @@ func verifyMLSLeafTransparency(d Deps, evidence []proto.KeyTransparencyEvidence,
 func keyTransparencyRefusal(d Deps, err error) proto.BaseResponse {
 	code := keyTransparencyErrorCode(err)
 	d.Logger.Printf("key transparency verification refused a key change (%s)", code)
-	return proto.BaseResponse{Success: false, Error: "key transparency proof could not be verified", ErrorCode: code}
+	return proto.BaseResponse{Success: false, Error: keyTransparencyRefusalMessage(code), ErrorCode: code}
 }
 
+const (
+	keyTransparencyCodeUnverified   = "key_transparency_unverified"
+	keyTransparencyCodeFork         = "key_transparency_fork"
+	keyTransparencyCodeTrustInvalid = "key_transparency_trust_invalid"
+)
+
 func keyTransparencyErrorCode(err error) string {
-	if errors.Is(err, keytransparency.ErrCheckpointFork) || errors.Is(err, keytransparency.ErrCheckpointRollback) || errors.Is(err, keytransparency.ErrConsistencyProof) {
-		return "key_transparency_fork"
+	if errors.Is(err, keytransparency.ErrTrustInvalid) {
+		return keyTransparencyCodeTrustInvalid
 	}
-	return "key_transparency_unverified"
+	if errors.Is(err, keytransparency.ErrCheckpointFork) || errors.Is(err, keytransparency.ErrCheckpointRollback) || errors.Is(err, keytransparency.ErrConsistencyProof) {
+		return keyTransparencyCodeFork
+	}
+	return keyTransparencyCodeUnverified
+}
+
+func keyTransparencyRefusalMessage(code string) string {
+	if code == keyTransparencyCodeTrustInvalid {
+		return "key transparency trust file is present but unusable; key changes are refused"
+	}
+	return "key transparency proof could not be verified"
 }

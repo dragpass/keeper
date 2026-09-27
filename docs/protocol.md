@@ -434,6 +434,9 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 |Code|Trigger|
 |---|---|
 |`CHAT_MLS_LEAF_UNTRUSTED`|A leaf that would enter the group is not vouched for by its account: no declaration, a malformed one, a signature that does not verify, a declaration for another account, device or key, a superseded declaration (on a leaf already in a Welcome's tree, only once the 7-day grace period since the newer one was first seen has passed; 0.0.48), or an account whose key the pin reports as `changed`. Nothing was applied and nothing was recorded. When the cause is a changed account key, `data` carries `{ observed_fingerprint, pinned_fingerprint }` as `peer_key_changed` does, so the UI can offer design §5.5's three paths. There is no "ignore and continue".|
+|`CHAT_MLS_KEY_TRANSPARENCY_UNVERIFIED`|A trust file is loaded and an entering leaf, or an account-key rotation it rests on, has no matching log proof, or the proof, the log signature or the 2-of-3 witness quorum does not verify, or the checkpoint is stale. Nothing was applied. See "Key Transparency".|
+|`CHAT_MLS_KEY_TRANSPARENCY_FORK`|The proof's checkpoint is inconsistent with, or older than, the one this Keeper persisted. Nothing was applied.|
+|`CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID`|A trust file is configured but could not be read or parsed. Every entering leaf is refused until it is fixed; there is no fallback to TOFU.|
 |`CHAT_MLS_CAPABILITY_REQUIRED`|This Keeper was built without the MLS library.|
 
 ### Recovery (Phase 2)
@@ -1567,7 +1570,7 @@ like `voluntary`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`key_transparency_status`|_empty_|`{ configured, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
+|`key_transparency_status`|_empty_|`{ configured, trust_error?, independent_witnesses, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. `independent_witnesses` echoes the trust file's declaration and is `false` unless the file says otherwise. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1579,12 +1582,22 @@ must be 64 lowercase hex characters; uppercase is rejected rather than folded,
 since two spellings of one fingerprint would compare unequal somewhere
 downstream.
 
-**Key Transparency (0.0.56).** `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` points to a
+**Key Transparency (unreleased).** `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` points to a
 local JSON trust file containing the fixed log origin, log verifier, three
-independent witness verifiers, a 2-of-3 quorum, maximum checkpoint age, and
-future clock skew. The file is not fetched from Ariadne. If it is unset, the
-Keeper reports `configured: false` and refuses pinned account-key rotations
-and MLS leaf acceptance. Invalid configuration prevents startup. The
+witness verifiers, a 2-of-3 quorum, maximum checkpoint age, future clock skew,
+and an optional `independent_witnesses` declaration (default `false`). The file
+is not fetched from Ariadne. The file decides the gate:
+
+|Trust file|Key changes|`key_transparency_status`|
+|---|---|---|
+|unset or empty variable|The pre-transparency rules: first observation is TOFU, a pinned key moves only on a valid signed rotation chain. No log proof is asked for.|`configured: false`|
+|present and valid|Every pinned account-key rotation and every entering MLS leaf needs a matching log proof, as below.|`configured: true`|
+|present but unreadable or invalid|Refused, fail closed: `key_transparency_trust_invalid` (peer key actions) or `CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID` (MLS). There is no fallback to the pre-transparency rules, so corrupting the file cannot switch verification off. The process keeps running and logs the reason.|`configured: false`, `trust_error: "invalid"`|
+
+A verified proof shows that the server's log and the configured witnesses
+recorded the key. Unless the witnesses are run by operators independent of the
+log, that is a server-side record, not an independent verification; the Keeper
+cannot check operator independence and only echoes the declaration. The
 `key_transparency_status` action reports the persisted checkpoint but does not
 refresh it.
 

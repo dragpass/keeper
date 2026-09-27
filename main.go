@@ -67,12 +67,10 @@ var processApp *keystore.App
 //     (zerolog, etc.) changes only one place.
 
 func init() {
-	deps := keystore.Deps{RequireKeyTransparency: true}
-	transparencyTrust, err := keytransparency.LoadTrustFromEnv()
-	if err != nil {
-		log.Fatalf("Critical: Failed to load key transparency trust: %v", err)
-	}
-	deps.KeyTransparencyTrust = transparencyTrust
+	// An unusable trust file does not stop the process: the extension would
+	// only see a dead host. The Keeper keeps running and refuses every key
+	// change with key_transparency_trust_invalid instead.
+	deps := keystore.Deps{KeyTransparency: keytransparency.LoadGateFromEnv()}
 	// e2e mode: use an in-memory mock instead of the Keychain. Must be
 	// called before EnsureServerPublicKey (so that the server pubkey is
 	// saved into the mock).
@@ -115,6 +113,9 @@ func init() {
 	}
 	if os.Getenv(e2eEnvVar) != "1" {
 		processApp = keystore.NewApp(deps)
+	}
+	if err := deps.KeyTransparency.ConfigErr; err != nil {
+		processApp.Logger.Printf("key transparency is required but unusable; key changes are refused: %v", err)
 	}
 
 	if err := keychain.EnsureServerPublicKey(processApp.Store, processApp.Logger); err != nil {

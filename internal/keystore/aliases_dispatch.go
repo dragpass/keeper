@@ -15,18 +15,17 @@ func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
 
 func (a *App) HandlersDeps() handlers.Deps {
 	return handlers.Deps{
-		Logger:                 a.Logger,
-		Store:                  a.Store,
-		Clock:                  a.Clock,
-		Rand:                   a.Rand,
-		ServerKeyVerifier:      a.ServerKeyVerifier,
-		GroupSessions:          a.GroupSessions,
-		RecoverySessions:       a.RecoverySessions,
-		RecoveryKeySessions:    a.RecoveryKeySessions,
-		Clipboard:              a.Clipboard,
-		MessageChallenges:      a.MessageChallenges,
-		KeyTransparencyTrust:   a.KeyTransparencyTrust,
-		RequireKeyTransparency: a.RequireKeyTransparency,
+		Logger:              a.Logger,
+		Store:               a.Store,
+		Clock:               a.Clock,
+		Rand:                a.Rand,
+		ServerKeyVerifier:   a.ServerKeyVerifier,
+		GroupSessions:       a.GroupSessions,
+		RecoverySessions:    a.RecoverySessions,
+		RecoveryKeySessions: a.RecoveryKeySessions,
+		Clipboard:           a.Clipboard,
+		MessageChallenges:   a.MessageChallenges,
+		KeyTransparency:     a.KeyTransparency,
 	}
 }
 

@@ -127,6 +127,8 @@ type device struct {
 	// (mixed_version_mls_test.go).
 	binary   string
 	v4Permit bool
+	// env is added to the Keeper's environment on every start.
+	env []string
 }
 
 func newDevice(t *testing.T, account string) *device {
@@ -222,6 +224,7 @@ func (d *device) start(crashAt string, skip int) *keeperProc {
 		"PATH=" + os.Getenv("PATH"),
 	}
 	cmd.Env = append(cmd.Env, platformEnv(d.dir)...)
+	cmd.Env = append(cmd.Env, d.env...)
 	if crashAt != "" {
 		cmd.Env = append(cmd.Env,
 			"KEEPER_TEST_CRASH_AT="+crashAt,

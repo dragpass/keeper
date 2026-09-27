@@ -67,6 +67,10 @@ const (
 	ChatMLSErrorCodeLeafUntrusted             = "CHAT_MLS_LEAF_UNTRUSTED"
 	ChatMLSErrorCodeKeyTransparencyUnverified = "CHAT_MLS_KEY_TRANSPARENCY_UNVERIFIED"
 	ChatMLSErrorCodeKeyTransparencyFork       = "CHAT_MLS_KEY_TRANSPARENCY_FORK"
+	// ChatMLSErrorCodeKeyTransparencyTrustInvalid — a trust file is
+	// configured but could not be read or parsed. Every entering leaf is
+	// refused until it is fixed; there is no fallback to TOFU.
+	ChatMLSErrorCodeKeyTransparencyTrustInvalid = "CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID"
 
 	// ChatMLSErrorCodeCapabilityRequired — this Keeper binary was built
 	// without the MLS library (design §13).
