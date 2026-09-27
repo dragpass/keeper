@@ -21,6 +21,7 @@ package keystore
 import (
 	"crypto/rand"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +97,8 @@ type App struct {
 	Clipboard           clipboard.Clipboard
 	MessageChallenges   *handlers.MessageChallengeStore
 	KeyTransparency     keytransparency.Gate
+
+	requestMu sync.Mutex
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in

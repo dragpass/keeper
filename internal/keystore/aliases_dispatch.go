@@ -8,8 +8,13 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-// HandleRequest dispatches one native messaging request.
+// HandleRequest dispatches one native messaging request. Requests run one at
+// a time: the handlers were written for the serial Native Messaging loop, and
+// a local RPC owner now takes requests from its stdio, the App and proxied
+// hosts at once.
 func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
+	a.requestMu.Lock()
+	defer a.requestMu.Unlock()
 	return dispatch.HandleRequest(a.Logger, a.HandlersDeps(), msg)
 }
 
