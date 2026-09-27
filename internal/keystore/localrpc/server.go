@@ -262,6 +262,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAppAuthAction(w, r, proto.ActionSignChallengeToken, func() any {
 			return &proto.SignChallengeTokenRequest{}
 		})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/pending/sign-alias":
+		s.dispatchAppAuthAction(w, r, proto.ActionAuthLoginPendingSignAlias, func() any {
+			return &proto.AuthLoginPendingSignAliasRequest{}
+		})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/pending/sign-challenge":
+		s.dispatchAppAuthAction(w, r, proto.ActionAuthLoginPendingSignChallenge, func() any {
+			return &proto.AuthLoginPendingSignChallengeRequest{}
+		})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/restore-device-master":
 		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionDEKRotateToDeviceKey, func() any {
 			return &proto.DEKRotateToDeviceKeyRequest{}
