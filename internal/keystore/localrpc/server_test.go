@@ -780,3 +780,18 @@ func TestLocalRPCConcurrentReplayHasOneSigner(t *testing.T) {
 		t.Fatalf("concurrent replay statuses=%v, want one 200 and one 409", counts)
 	}
 }
+
+// The App computes these proofs in TypeScript (dragpass
+// app/src/shared/keeper/local-keeper-client.test.ts pins the same vectors).
+func TestAppSessionProofVectorsMatchTheApp(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	if got := macB64(key, appOpenLabel, "https://app.dragpass.io", "owner-challenge", "client-nonce"); got != "qg6VblYr2SCWztw8ULsJZTQIymzOQSbWqlvtR5gCUfc" {
+		t.Fatalf("open proof vector = %s", got)
+	}
+	if got := macB64(key, appOwnerLabel, "https://app.dragpass.io", "owner-challenge", "client-nonce", "local-session", "csrf-token", "1900000000"); got != "RipQFJrpaNfrivmVrPFcyykiAHzxQE83rEC_hi0kdbM" {
+		t.Fatalf("owner proof vector = %s", got)
+	}
+}
