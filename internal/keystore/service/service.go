@@ -44,7 +44,7 @@ func configuredTrustFile() (string, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return "", errors.New("Key Transparency trust file is not a readable regular file")
 	}
-	if _, err := keytransparency.LoadTrustFromEnv(); err != nil {
+	if err := keytransparency.LoadGateFromEnv().ConfigErr; err != nil {
 		return "", errors.New("Key Transparency trust file is invalid")
 	}
 	return absolutePath, nil

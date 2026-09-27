@@ -502,12 +502,15 @@ func mlsLeafUntrustedResponse(d Deps, stage string, err error) proto.BaseRespons
 	var detail *MLSLeafUntrustedError
 	if errors.As(err, &detail) && detail.KeyTransparencyCode != "" {
 		code := proto.ChatMLSErrorCodeKeyTransparencyUnverified
-		if detail.KeyTransparencyCode == "key_transparency_fork" {
+		switch detail.KeyTransparencyCode {
+		case keyTransparencyCodeFork:
 			code = proto.ChatMLSErrorCodeKeyTransparencyFork
+		case keyTransparencyCodeTrustInvalid:
+			code = proto.ChatMLSErrorCodeKeyTransparencyTrustInvalid
 		}
 		return proto.BaseResponse{
 			Success:   false,
-			Error:     "key transparency proof could not be verified",
+			Error:     keyTransparencyRefusalMessage(detail.KeyTransparencyCode),
 			ErrorCode: code,
 		}
 	}

@@ -26,7 +26,7 @@ var (
 	ErrCheckpointFork      = errors.New("key transparency checkpoint fork detected")
 	ErrConsistencyProof    = errors.New("key transparency consistency proof is invalid")
 	ErrCheckpointFreshness = errors.New("key transparency checkpoint freshness is invalid")
-	ErrTrustUnavailable    = errors.New("key transparency trust is not configured")
+	ErrTrustInvalid        = errors.New("key transparency trust file is present but unusable")
 )
 
 type Trust struct {
@@ -38,6 +38,11 @@ type Trust struct {
 	MaxCheckpointAge time.Duration
 	// FutureSkew bounds how far ahead a witness timestamp may be from the local clock.
 	FutureSkew time.Duration
+	// IndependentWitnesses is the trust file author's declaration that the
+	// witnesses are run by operators independent of the log. The Keeper cannot
+	// check it; without it, a verified proof only shows what the server's own
+	// log and witnesses recorded.
+	IndependentWitnesses bool
 }
 
 type CheckpointEvidence struct {

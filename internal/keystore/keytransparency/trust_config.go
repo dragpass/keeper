@@ -22,13 +22,34 @@ type trustConfig struct {
 	Quorum                  int      `json:"quorum"`
 	MaxCheckpointAgeSeconds int64    `json:"max_checkpoint_age_seconds"`
 	FutureSkewSeconds       int64    `json:"future_skew_seconds"`
+	IndependentWitnesses    bool     `json:"independent_witnesses,omitempty"`
 }
 
-func LoadTrustFromEnv() (*Trust, error) {
+// Gate is what the Keeper enforces for account-key rotations and entering MLS
+// leaves. No trust file keeps the pre-transparency TOFU and pin rules. A trust
+// file that is present but unusable must not quietly fall back to those rules:
+// an attacker who can corrupt or delete the file's contents would otherwise
+// turn verification off, so ConfigErr keeps every key change refused.
+type Gate struct {
+	Trust     *Trust
+	ConfigErr error
+}
+
+func (g Gate) Required() bool { return g.Trust != nil || g.ConfigErr != nil }
+
+func LoadGateFromEnv() Gate {
 	path := strings.TrimSpace(os.Getenv(TrustConfigEnv))
 	if path == "" {
-		return nil, nil
+		return Gate{}
 	}
+	trust, err := loadTrustFile(path)
+	if err != nil {
+		return Gate{ConfigErr: fmt.Errorf("%w: %v", ErrTrustInvalid, err)}
+	}
+	return Gate{Trust: trust}
+}
+
+func loadTrustFile(path string) (*Trust, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open key transparency trust file: %w", err)
@@ -67,6 +88,7 @@ func LoadTrustFromEnv() (*Trust, error) {
 	return &Trust{
 		Origin: config.Origin, LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
 		Quorum: 2, MaxCheckpointAge: time.Duration(config.MaxCheckpointAgeSeconds) * time.Second,
-		FutureSkew: time.Duration(config.FutureSkewSeconds) * time.Second,
+		FutureSkew:           time.Duration(config.FutureSkewSeconds) * time.Second,
+		IndependentWitnesses: config.IndependentWitnesses,
 	}, nil
 }

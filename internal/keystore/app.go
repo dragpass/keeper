@@ -78,26 +78,24 @@ type Deps struct {
 	Clipboard clipboard.Clipboard
 	// MessageChallenges holds the process-local secure-message display
 	// challenges. Lives and dies with the process; never persisted.
-	MessageChallenges      *handlers.MessageChallengeStore
-	KeyTransparencyTrust   *keytransparency.Trust
-	RequireKeyTransparency bool
+	MessageChallenges *handlers.MessageChallengeStore
+	KeyTransparency   keytransparency.Gate
 }
 
 // App is the single wiring container for the Keeper process. Handlers
 // access dependencies through App rather than global state.
 type App struct {
-	Store                  SecretStore
-	Clock                  Clock
-	Rand                   io.Reader
-	Logger                 Logger
-	ServerKeyVerifier      ServerKeyVerifier
-	GroupSessions          *sessions.GroupSessionStore
-	RecoverySessions       *sessions.RecoverySessionStore
-	RecoveryKeySessions    *sessions.RecoveryKeySessionStore
-	Clipboard              clipboard.Clipboard
-	MessageChallenges      *handlers.MessageChallengeStore
-	KeyTransparencyTrust   *keytransparency.Trust
-	RequireKeyTransparency bool
+	Store               SecretStore
+	Clock               Clock
+	Rand                io.Reader
+	Logger              Logger
+	ServerKeyVerifier   ServerKeyVerifier
+	GroupSessions       *sessions.GroupSessionStore
+	RecoverySessions    *sessions.RecoverySessionStore
+	RecoveryKeySessions *sessions.RecoveryKeySessionStore
+	Clipboard           clipboard.Clipboard
+	MessageChallenges   *handlers.MessageChallengeStore
+	KeyTransparency     keytransparency.Gate
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
@@ -115,18 +113,17 @@ type App struct {
 //	})
 func NewApp(deps Deps) *App {
 	app := &App{
-		Store:                  deps.Store,
-		Clock:                  deps.Clock,
-		Rand:                   deps.Rand,
-		Logger:                 deps.Logger,
-		ServerKeyVerifier:      deps.ServerKeyVerifier,
-		GroupSessions:          deps.GroupSessions,
-		RecoverySessions:       deps.RecoverySessions,
-		RecoveryKeySessions:    deps.RecoveryKeySessions,
-		Clipboard:              deps.Clipboard,
-		MessageChallenges:      deps.MessageChallenges,
-		KeyTransparencyTrust:   deps.KeyTransparencyTrust,
-		RequireKeyTransparency: deps.RequireKeyTransparency,
+		Store:               deps.Store,
+		Clock:               deps.Clock,
+		Rand:                deps.Rand,
+		Logger:              deps.Logger,
+		ServerKeyVerifier:   deps.ServerKeyVerifier,
+		GroupSessions:       deps.GroupSessions,
+		RecoverySessions:    deps.RecoverySessions,
+		RecoveryKeySessions: deps.RecoveryKeySessions,
+		Clipboard:           deps.Clipboard,
+		MessageChallenges:   deps.MessageChallenges,
+		KeyTransparency:     deps.KeyTransparency,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}

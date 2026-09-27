@@ -45,9 +45,8 @@ type Deps struct {
 	// group_decrypt_with_aad_for_app_display). Injected like the session stores
 	// so App owns its lifetime and parallel tests do not share entries. A nil
 	// store fails closed: no challenge can be minted and none can be consumed.
-	MessageChallenges      *MessageChallengeStore
-	KeyTransparencyTrust   *keytransparency.Trust
-	RequireKeyTransparency bool
+	MessageChallenges *MessageChallengeStore
+	KeyTransparency   keytransparency.Gate
 }
 
 func (d Deps) Now() time.Time {
