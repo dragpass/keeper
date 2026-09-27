@@ -31,9 +31,6 @@ import (
 
 const maxRequestBytes = 8 * 1024
 
-// sealedAppLimit bounds a sealed App request: base64 growth plus framing. The
-// plaintext inside is held to maxRequestBytes once opened.
-const sealedAppLimit = int64(maxRequestBytes)*4/3 + 512
 const maxSessionNonces = 4096
 const maxNativeMessageBytes = dispatch.MaxMessageSize
 
@@ -209,7 +206,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 			return
 		}
-		maxBytes := sealedAppLimit
+		maxBytes := appSealedLimit(r.URL.Path)
 		if r.URL.Path == "/v1/native-proxy/message" {
 			maxBytes = sealedLimit()
 		}
@@ -285,6 +282,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionSaveSessionCode, func() any {
 			return &proto.SaveSessionCodeRequest{}
 		})
+	case r.Method == http.MethodPost && appRoutes[r.URL.Path].action != "":
+		s.serveAppRoute(w, r, appRoutes[r.URL.Path])
 	default:
 		http.NotFound(w, r)
 	}
@@ -374,7 +373,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return appRequest{}, false
 	}
-	if len(plain) > maxRequestBytes {
+	if len(plain) > appPlainLimit(r.URL.Path) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return appRequest{}, false
 	}
