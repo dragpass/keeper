@@ -195,6 +195,7 @@ func activateKeypair(store SecretStore, privateKey, publicKey, sessionCode strin
 	if err := SavePrivateKey(store, privateKey); err != nil {
 		return err
 	}
+	crashAt(CrashSessionCodeAfterPrivateKey)
 	if err := SavePublicKey(store, publicKey); err != nil {
 		return err
 	}
