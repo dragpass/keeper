@@ -254,8 +254,10 @@ func remarshal(from, into any) error {
 }
 
 // peerKeyRoutes is the key-trust panel. The requests are the actions' own;
-// what they let the App do (verify, forget, turn strict mode off) is what the
+// what they let the App do (verify, turn strict mode off) is what the
 // Extension's panel does, under the App-origin limit of threat model §4.12.
+// peer_key_pin_forget is left out: forgetting a pin re-TOFUs a changed key,
+// and the key-trust UI no longer offers it (MLS hardening policy Q9 (a)).
 var peerKeyRoutes = map[string]appRoute{
 	"/v1/peer-key/pin-list": {
 		action: proto.ActionPeerKeyPinList,
@@ -268,10 +270,6 @@ var peerKeyRoutes = map[string]appRoute{
 	"/v1/peer-key/safety-number": {
 		action: proto.ActionPeerKeySafetyNumber,
 		input:  func() any { return &proto.PeerKeySafetyNumberRequest{} },
-	},
-	"/v1/peer-key/pin-forget": {
-		action: proto.ActionPeerKeyPinForget,
-		input:  func() any { return &proto.PeerKeyPinForgetRequest{} },
 	},
 	"/v1/peer-key/chain-evaluate": {
 		action:     proto.ActionPeerKeyChainEvaluate,

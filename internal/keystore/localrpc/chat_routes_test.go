@@ -153,7 +153,6 @@ var pinnedAppRoutes = []string{
 	"/v1/key-transparency/status",
 	"/v1/peer-key/chain-evaluate",
 	"/v1/peer-key/pin",
-	"/v1/peer-key/pin-forget",
 	"/v1/peer-key/pin-list",
 	"/v1/peer-key/pin-verify",
 	"/v1/peer-key/policy-get",
@@ -528,7 +527,6 @@ func TestPeerKeyRoutesPassTheirTypedRequests(t *testing.T) {
 	}
 	for path, request := range map[string]any{
 		"/v1/peer-key/pin-list":       map[string]string{"owner_account_id": routeOwner},
-		"/v1/peer-key/pin-forget":     map[string]string{"owner_account_id": routeOwner, "account_id": routePeer},
 		"/v1/peer-key/pin-verify":     map[string]string{"owner_account_id": routeOwner, "account_id": routePeer, "fingerprint": "x", "public_key": peer.PublicKey},
 		"/v1/peer-key/chain-evaluate": map[string]string{"owner_account_id": routeOwner, "account_id": routePeer, "public_key": peer.PublicKey},
 	} {
@@ -539,6 +537,11 @@ func TestPeerKeyRoutesPassTheirTypedRequests(t *testing.T) {
 		if code, _, _ := callRoute(t, server, session, csrf, path, withExtra); code != http.StatusBadRequest {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
+	}
+	// Forgetting a pin re-TOFUs a changed key; the key-trust UI dropped it
+	// (MLS hardening policy Q9 (a)) and the App origin cannot reach it.
+	if got := localRequest(server, http.MethodPost, "/v1/peer-key/pin-forget", `{"owner_account_id":"`+routeOwner+`","account_id":"`+routePeer+`"}`, session, csrf).Code; got != http.StatusNotFound {
+		t.Fatalf("pin-forget = %d, want 404", got)
 	}
 	chain := make([]map[string]any, 40)
 	for i := range chain {

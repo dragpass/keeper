@@ -2120,9 +2120,11 @@ plaintext answers are the existing chat display carve-out
 **Key-trust routes.** Each passes the action's own request:
 `/v1/peer-key/pin-list` (`peer_key_pin_list`), `/v1/peer-key/pin-verify`
 (`peer_key_pin_verify`), `/v1/peer-key/safety-number`
-(`peer_key_safety_number`), `/v1/peer-key/pin-forget` (`peer_key_pin_forget`),
+(`peer_key_safety_number`),
 `/v1/peer-key/chain-evaluate` (`peer_key_chain_evaluate`, 512 KiB),
-`/v1/peer-key/policy-get`, `/v1/peer-key/policy-set`.
+`/v1/peer-key/policy-get`, `/v1/peer-key/policy-set`. There is no
+forget route: `peer_key_pin_forget` re-TOFUs a changed key, so it stays
+Native Messaging only.
 
 **Archive routes.** `/v1/archive/<action>` for `archive_key_generate`,
 `archive_key_status`, `account_archive_key_generate`,
