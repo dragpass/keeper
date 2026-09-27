@@ -70,6 +70,7 @@ var resetIdentitySlots = []resetIdentitySlot{
 	{config.PendingDragPassKeeperPublicKey, slotPresent(keychain.GetPendingPublicKey), keychain.DeletePendingPublicKey},
 	{config.SessionCode, slotPresent(keychain.GetSessionCode), keychain.DeleteSessionCode},
 	{config.PendingPersonalKeyBundle, slotPresent(keychain.GetPendingPersonalKeyBundle), keychain.DeletePendingPersonalKeyBundle},
+	{config.PendingSignupPersonalDEK, slotPresent(keychain.GetPendingSignupDeviceWrappedDEK), keychain.DeletePendingSignupDeviceWrappedDEK},
 	{config.PersonalDeviceWrappedDEK, slotPresent(keychain.GetPersonalDeviceWrappedDEK), keychain.DeletePersonalDeviceWrappedDEK},
 	{config.DeviceKey, slotPresent(keychain.GetDeviceKey), keychain.DeleteDeviceKey},
 	// The leaf key's declaration is signed by the account key this reset

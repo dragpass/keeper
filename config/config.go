@@ -1,10 +1,14 @@
 package config
 
 const (
-	Service                         = "com.dragpass.keeper"
-	DeviceKey                       = "device_key"
-	PersonalDeviceWrappedDEK        = "personal_device_wrapped_dek"
-	PendingPersonalKeyBundle        = "pending_personal_key_bundle"
+	Service                  = "com.dragpass.keeper"
+	DeviceKey                = "device_key"
+	PersonalDeviceWrappedDEK = "personal_device_wrapped_dek"
+	PendingPersonalKeyBundle = "pending_personal_key_bundle"
+	// PendingSignupPersonalDEK holds the device-wrapped DEK an App signup
+	// prepared. It becomes the personal DEK only when save_session_code
+	// promotes the signup's pending keypair.
+	PendingSignupPersonalDEK        = "pending_signup_personal_device_wrapped_dek"
 	DragPassKeeperPrivateKey        = "keeper_private_key"
 	DragPassKeeperPublicKey         = "keeper_public_key"
 	SessionCode                     = "session_code"

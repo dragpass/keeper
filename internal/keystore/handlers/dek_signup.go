@@ -30,7 +30,7 @@ func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualReques
 	secure.WipeString(&req.Password)
 	defer pwBuf.Destroy()
 
-	data, response := generateAndWrapDual(d, pwBuf)
+	data, response := generateAndWrapDual(d, pwBuf, keychain.SavePersonalDeviceWrappedDEK)
 	if !response.Success {
 		return response
 	}
@@ -38,7 +38,9 @@ func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualReques
 	return proto.BaseResponse{Success: true, Data: data}
 }
 
-func generateAndWrapDual(d Deps, password *memguard.LockedBuffer) (proto.DEKGenerateAndWrapDualResponseData, proto.BaseResponse) {
+// generateAndWrapDual makes one DEK and wraps it for the password and the
+// device; save decides where the device-wrapped copy goes.
+func generateAndWrapDual(d Deps, password *memguard.LockedBuffer, save func(keychain.SecretStore, string) error) (proto.DEKGenerateAndWrapDualResponseData, proto.BaseResponse) {
 	var empty proto.DEKGenerateAndWrapDualResponseData
 
 	// fetch deviceKey internally — never accept it via the IPC payload
@@ -77,7 +79,7 @@ func generateAndWrapDual(d Deps, password *memguard.LockedBuffer) (proto.DEKGene
 	if err != nil {
 		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
 	}
-	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, devWrapped); err != nil {
+	if err := save(d.Store, devWrapped); err != nil {
 		return empty, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 
