@@ -1840,6 +1840,8 @@ message. Codes are stable enums; messages are not.
 |`peer_key_changed`|A wrap named a peer whose public key no longer matches the pinned fingerprint and no valid rotation chain explains it. Nothing was wrapped; the pin was left as it was. **Carries `data: { observed_fingerprint, pinned_fingerprint }`** — the only failure response that does.|Stop the whole flow (invite / rotation / backfill / DM), never just the one member, and show both fingerprints from the payload for a human to compare. No retry and no bypass: the user either compares the fingerprints and confirms through `peer_key_pin_verify`, or removes that member. (0.0.55, design Q9) Forgetting the peer is not a way out of `changed`: `peer_key_pin_forget` would let the next observation take the new key as a first use, which is the unexplained change this code exists to stop.|
 |`peer_key_unverified`|Strict mode is on (`peer_key_policy_set`) and the peer's pin is not `verified` — a first observation, a `tofu` pin, or a `rotated` one. A policy refusal rather than a detected substitution, so it carries no `data`: there are no two fingerprints to weigh up, only one nobody has checked. Nothing was wrapped and the pin was left as it was.|Stop the flow and point the user at the out-of-band check for that member (`peer_key_pin_verify`), or at turning the policy off. In use from 0.0.32; in the enum since 0.0.31 so both sides could be written against one spelling.|
 |`peer_key_owner_mismatch`|The request carried an `owner_account_id` that is not the one this device recorded the first time it was given one (0.0.33). The owner half of a pin's keyring name originally comes from the server, so a server that reports a different account id would push every lookup into an empty namespace where every peer reads as a first observation and TOFU waves the wrap through. Nothing was wrapped, no pin was read or written, and no pin list was returned. Carries no `data`: neither id goes back, since the recorded one is what a caller probing for the namespace would want.|Stop the flow. This is either a server reporting the wrong account or a device genuinely changing hands; the only way forward is `peer_key_owner_reset` from the extension options page, which the user has to choose deliberately. Never call it automatically in response to this code.|
+|`chat_runtime_busy`|A gated chat action (or a lease claim) met the chat runtime held elsewhere: `data.holder` is `app` (an App lease is live) or `extension` (an Extension gated action ran in the last 120 s). Nothing ran.|Stop driving chat here; the other surface owns it. An older Extension treats it as an unknown failure and fails closed.|
+|`chat_runtime_lease_required`|An App route ran a gated chat action without its session holding the chat runtime lease. Nothing ran.|Claim `/v1/chat/runtime/claim`, then retry.|
 
 The `error` string is sanitized but **may include field names** (e.g.
 `wrap_key_b64: must be 32 bytes`). It never includes secret values. Mapping
@@ -2018,7 +2020,8 @@ The challenge is consumed whether or not the proof verifies. The app must check
 `owner_proof` before it sends a password or recovery key. The session routes
 are typed (`POST /v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
 `/v1/auth/signup/*`, `/v1/auth/recovery-key/reissue-prepare`, and the recovery
-and group DEK routes below); there is no generic action route. `auth_signup_prepare` checks every precondition (a
+and group DEK, chat, key-trust and archive routes below); there is no generic
+action route. `auth_signup_prepare` checks every precondition (a
 registered device, password, recovery key) before it writes anything, and
 keeps the new device-wrapped DEK in a pending slot that `save_session_code`
 promotes together with the signup's pending keypair; a refused or abandoned
@@ -2043,6 +2046,88 @@ route-specific request shape; unknown fields are 400.
 |`/v1/group-dek/rewrap-for-many`|`dek_unwrap_and_rewrap_for_many`|Only `recipients[]`; the unenforced `recipient_public_keys[]` does not exist here. A recipient without `account_id` must be this Keeper's active key or carry `org_archive: true` (at most one, no chain), the same pin exemption as Native Messaging. 512 KiB cap.|
 
 Every other session route keeps the 8 KiB request cap.
+
+**Chat runtime lease.** The App and the Extension share one owner, but each
+runs its own chat orchestration (outbox, pending Commit retry,
+reconciliation), so only one may drive chat at a time. The lease is
+process-local and lives in `keystore.App`; it is gone when the owner exits.
+
+|Route|Request|Answer|
+|---|---|---|
+|`/v1/chat/runtime/claim`|`{ holder_id }` (base64url, 22..64 chars, one per App tab)|`{ expires_at, ttl_seconds }`; or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`|
+|`/v1/chat/runtime/release`|`{ holder_id }`|`{ released }`|
+
+- TTL 60 s, never past the session it was claimed on. A claim with the same
+  holder renews; the same holder from another session moves the lease to that
+  session (the App reopened its session). Another holder is refused while the
+  lease is live.
+- The lease ends with its session: `DELETE /v1/session`, session expiry, and
+  `app rotate-secret` (which drops every session).
+- Gated actions (every action that writes chat state, MLS group state, leaf
+  slots or the KeyPackage pool, and the display decrypt): `mls_group_create`,
+  `mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+  `mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
+  `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
+  `mls_commit_abandon`, all five `chat_state_*`, `mls_leaf_declare`,
+  `mls_leaf_promote`, `mls_leaf_abort`, `mls_key_package_generate`,
+  `mls_key_package_pool_sweep`.
+- An App route running a gated action needs its session to hold the live
+  lease, else `chat_runtime_lease_required`.
+- A Native Messaging frame (stdio, or proxied by another host) running a gated
+  action while an App lease is live is refused with `chat_runtime_busy`,
+  `data.holder: "app"`, before its handler runs. An Extension that does not
+  know the code fails closed. A gated frame that is admitted keeps the App
+  from claiming for 120 s.
+- Admission and that stamp happen under one mutex, so a claim and a gated
+  Extension frame at the same instant never both succeed. The check runs
+  inside the request lock, next to the handler it admits.
+
+**Chat routes.** `/v1/chat/<action>` takes the action's own request (strict
+decode: unknown fields and a second JSON value are 400) and passes the exact
+bytes to the action, whose own strict decoder still refuses duplicate and
+missing keys. The cap is the one the handler enforces: 1 MiB for
+`mls_group_create`, `mls_commit_build`, `mls_commit_confirm`, `mls_process`,
+`mls_join`; 3 MiB for `mls_decrypt_batch_for_app_display`; 32 KiB for the
+rest. The action list is exactly: `mls_group_create`,
+`mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+`mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
+`mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
+`mls_room_name_seal`, `mls_room_name_open`, `mls_conversation_status`,
+`mls_rejoin_request_sign`, `mls_commit_abandon`, `mls_leave_request_sign`,
+`chat_state_read_outbox`, `chat_state_purge`, `mls_leaf_status`,
+`mls_leaf_declare`, `mls_leaf_promote`, `mls_leaf_abort`,
+`mls_leaf_handover_sign`, `mls_key_package_generate`,
+`mls_key_package_pool_sweep`, `org_member_removal_sign`,
+`mls_device_revoke_sign`. Any other `/v1/chat/*` path is 404. The only
+plaintext answers are the existing chat display carve-out
+(`mls_decrypt_batch_for_app_display`, `mls_room_name_open`).
+
+|Route|Request|Answer|
+|---|---|---|
+|`/v1/chat/capability`|`{}`|`ping`'s `{ version, hash, chat_contract, chat_capabilities }` without `path`. Not gated.|
+|`/v1/chat/room_row_name_seal`|`{ org_id, conversation_id, plaintext_b64 }` (lowercase non-nil UUIDs, 1..256 UTF-8 bytes)|`{ iv_b64, ciphertext_b64 }`. Keeper generates a Group DEK to its own key, seals with AAD `dragpass.room\|1\|<org_id>\|<conversation_id>\|1`, and closes the handle; no handle or AAD input exists, so this is not a general encrypt. Not gated.|
+
+**Key-trust routes.** Each passes the action's own request:
+`/v1/peer-key/pin-list` (`peer_key_pin_list`), `/v1/peer-key/pin-verify`
+(`peer_key_pin_verify`), `/v1/peer-key/safety-number`
+(`peer_key_safety_number`), `/v1/peer-key/pin-forget` (`peer_key_pin_forget`),
+`/v1/peer-key/chain-evaluate` (`peer_key_chain_evaluate`, 512 KiB),
+`/v1/peer-key/policy-get`, `/v1/peer-key/policy-set`.
+
+**Archive routes.** `/v1/archive/<action>` for `archive_key_generate`,
+`archive_key_status`, `account_archive_key_generate`,
+`account_archive_key_status`, `archive_key_rotate_begin`,
+`archive_key_rotate_commit`, `archive_key_rotate_abort`,
+`archive_session_begin`, `archive_session_end` (all `{}`),
+`archive_key_split` (512 KiB), `archive_share_rewrap`,
+`archive_quorum_combine_and_rewrap` (512 KiB), each with the action's request,
+and `archive_unwrap_and_rewrap` with its own shape:
+`{ wrapped_for_archive_b64, to_staged_archive_key: true }` wraps to the staged
+key of the rotation in progress, which Keeper reads itself (400 when nothing is
+staged), and `{ wrapped_for_archive_b64, recipient_public_key }` keeps the
+Extension's caller-chosen recipient for break-glass re-grant and ownership
+handoff. Exactly one of the two. The split, share rewrap and quorum combine
+recipients are caller-chosen on the Extension path too and stay so.
 
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,
