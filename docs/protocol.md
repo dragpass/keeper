@@ -2014,7 +2014,12 @@ steps:
 The challenge is consumed whether or not the proof verifies. The app must check
 `owner_proof` before it sends a password or recovery key. The session routes
 are typed (`POST /v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
-`/v1/auth/signup/*`); there is no generic action route.
+`/v1/auth/signup/*`, `/v1/auth/recovery-key/reissue-prepare`); there is no
+generic action route. `auth_signup_prepare` checks every precondition (a
+registered device, password, recovery key) before it writes anything, and
+keeps the new device-wrapped DEK in a pending slot that `save_session_code`
+promotes together with the signup's pending keypair; a refused or abandoned
+signup leaves the personal DEK untouched.
 
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,

@@ -277,6 +277,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAppAuthAction(w, r, proto.ActionAuthSignupPrepare, func() any {
 			return &proto.AuthSignupPrepareRequest{}
 		})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/recovery-key/reissue-prepare":
+		s.dispatchAppAuthAction(w, r, proto.ActionAuthRecoveryReissuePrepare, func() any {
+			return &proto.AuthRecoveryReissuePrepareRequest{}
+		})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/signup/save-session-code":
 		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionSaveSessionCode, func() any {
 			return &proto.SaveSessionCodeRequest{}

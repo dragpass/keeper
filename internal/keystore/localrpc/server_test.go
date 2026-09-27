@@ -923,3 +923,44 @@ func TestAppSessionSealVectorsMatchTheApp(t *testing.T) {
 		t.Fatalf("response seal vector = %s", got)
 	}
 }
+
+// The App re-issues a lost RK24 (the old one is never shown again): Keeper
+// derives the new verifier seed and rewraps the active key, and the answer
+// carries neither the recovery key nor the private key.
+func TestLocalRPCReissuesTheRecoveryKeyThroughATypedRoute(t *testing.T) {
+	server := newTestServer(t)
+	pair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keychain.SavePrivateKey(server.app.Store, pair.PrivateKey); err != nil {
+		t.Fatal(err)
+	}
+	session, csrf := openTestSession(t, server)
+	recoveryKey := "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
+	response := localRequest(server, http.MethodPost, "/v1/auth/recovery-key/reissue-prepare",
+		`{"alias":"alice","recovery_key":"`+recoveryKey+`"}`, session, csrf)
+	if response.Code != http.StatusOK {
+		t.Fatalf("reissue status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Seed    string `json:"recovery_auth_seed"`
+			Wrapped string `json:"recovery_wrapped_keeper"`
+			Version int    `json:"recovery_key_version"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || !result.Success ||
+		result.Data.Seed == "" || result.Data.Wrapped == "" || result.Data.Version == 0 {
+		t.Fatalf("reissue answer = %s (%v)", response.Body.String(), err)
+	}
+	if strings.Contains(response.Body.String(), recoveryKey) || strings.Contains(response.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("reissue answer leaks a secret: %s", response.Body.String())
+	}
+	unknown := localRequest(server, http.MethodPost, "/v1/auth/recovery-key/reissue-prepare",
+		`{"alias":"alice","recovery_key":"`+recoveryKey+`","action":"group_dek_export"}`, session, csrf)
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field status=%d, want 400", unknown.Code)
+	}
+}
