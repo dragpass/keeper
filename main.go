@@ -170,13 +170,19 @@ func main() {
 	defer stop()
 	var listener net.Listener
 	var secret localsecret.Secret
+	address, err := localrpc.Address(os.Getenv(e2eEnvVar) == "1" && os.Getenv(localsecret.DirEnvVar) != "", os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if *appService {
-		var err error
+		if !localRPCEnabled(os.Getenv) {
+			log.Fatal("An e2e Keeper runs the App service only with an isolated local secret directory")
+		}
 		secret, err = localsecret.LoadOrCreate()
 		if err != nil {
 			log.Fatalf("Local Keeper service could not load its local secret: %v", err)
 		}
-		listener, err = localrpc.AcquireAppServiceOwner(ctx)
+		listener, err = localrpc.AcquireAppServiceOwner(ctx, address)
 		if err != nil {
 			log.Fatalf("Local Keeper service could not claim its address: %v", err)
 		}
@@ -194,7 +200,7 @@ func main() {
 			log.Printf("Keeper local secret unavailable, running standalone: %v", err)
 		} else {
 			secret = loaded
-			role, listener, proxy, err = localrpc.AcquireNativeOwner(secret)
+			role, listener, proxy, err = localrpc.AcquireNativeOwner(address, secret)
 			if err != nil {
 				log.Fatal("Local Keeper owner could not be established")
 			}
@@ -245,7 +251,7 @@ func main() {
 				logger.Printf("App RPC stopped: %v", err)
 			}
 		}()
-		logger.Printf("Keeper App RPC listening on %s", localrpc.DefaultAddress)
+		logger.Printf("Keeper App RPC listening on %s", address)
 	}
 	if *appService {
 		<-ctx.Done()

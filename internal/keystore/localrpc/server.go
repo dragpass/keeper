@@ -38,6 +38,26 @@ const maxNativeMessageBytes = dispatch.MaxMessageSize
 const nativeProxyProtocolVersion = 2
 
 const DefaultAddress = "127.0.0.1:47623"
+
+// AddressEnvVar moves an isolated test Keeper to another loopback port so a
+// real-process test never touches a Keeper the developer is running. The App
+// only ever talks to DefaultAddress.
+const AddressEnvVar = "DRAGPASS_KEEPER_LOCAL_ADDRESS"
+
+// Address is DefaultAddress unless an isolated test asked for another
+// 127.0.0.1 port.
+func Address(isolated bool, getenv func(string) string) (string, error) {
+	override := strings.TrimSpace(getenv(AddressEnvVar))
+	if override == "" {
+		return DefaultAddress, nil
+	}
+	host, port, err := net.SplitHostPort(override)
+	if !isolated || err != nil || host != "127.0.0.1" || port == "" || port == "0" {
+		return "", fmt.Errorf("%s must be a 127.0.0.1 port and needs an isolated e2e Keeper", AddressEnvVar)
+	}
+	return override, nil
+}
+
 const NativeExtensionOrigin = "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk"
 
 // DevAppOriginEnvVar opts one development App origin in. Production binaries

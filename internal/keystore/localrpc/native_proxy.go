@@ -39,12 +39,12 @@ const (
 
 var errOwnerUnproven = errors.New("local listener did not prove the Keeper local secret")
 
-func AcquireNativeOwner(secret localsecret.Secret) (NativeRole, net.Listener, *NativeProxy, error) {
-	return acquireNativeOwnerAt(DefaultAddress, secret.NativeProxyKey(), nativeOwnerWait)
+func AcquireNativeOwner(address string, secret localsecret.Secret) (NativeRole, net.Listener, *NativeProxy, error) {
+	return acquireNativeOwnerAt(address, secret.NativeProxyKey(), nativeOwnerWait)
 }
 
-func AcquireAppServiceOwner(ctx context.Context) (net.Listener, error) {
-	return acquireAppServiceOwnerAt(ctx, DefaultAddress, 30*time.Second)
+func AcquireAppServiceOwner(ctx context.Context, address string) (net.Listener, error) {
+	return acquireAppServiceOwnerAt(ctx, address, 30*time.Second)
 }
 
 func acquireAppServiceOwnerAt(ctx context.Context, address string, wait time.Duration) (net.Listener, error) {
