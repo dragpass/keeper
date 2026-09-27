@@ -12,10 +12,23 @@ import (
 // a time: the handlers were written for the serial Native Messaging loop, and
 // a local RPC owner now takes requests from its stdio, the App and proxied
 // hosts at once.
+//
+// HandleRequest is the Extension's entry: its stdio loop and the frames other
+// Native Messaging hosts proxy here. HandleAppRequest is the App's, bound to
+// its local RPC session. The chat runtime lease (chat_runtime.go) tells them
+// apart; the lease check runs inside requestMu, next to the handler it admits.
 func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
+	return a.handleAs(chatRuntimeCaller{}, msg)
+}
+
+func (a *App) HandleAppRequest(session string, msg []byte) proto.BaseResponse {
+	return a.handleAs(chatRuntimeCaller{app: true, session: session}, msg)
+}
+
+func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse {
 	a.requestMu.Lock()
 	defer a.requestMu.Unlock()
-	return dispatch.HandleRequest(a.Logger, a.HandlersDeps(), msg)
+	return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
 }
 
 func (a *App) HandlersDeps() handlers.Deps {
