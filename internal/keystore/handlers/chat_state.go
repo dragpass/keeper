@@ -500,6 +500,17 @@ func mlsLeafUntrustedResponse(d Deps, stage string, err error) proto.BaseRespons
 		"a leaf entering the group is not vouched for by its account; nothing was applied",
 	)
 	var detail *MLSLeafUntrustedError
+	if errors.As(err, &detail) && detail.KeyTransparencyCode != "" {
+		code := proto.ChatMLSErrorCodeKeyTransparencyUnverified
+		if detail.KeyTransparencyCode == "key_transparency_fork" {
+			code = proto.ChatMLSErrorCodeKeyTransparencyFork
+		}
+		return proto.BaseResponse{
+			Success:   false,
+			Error:     "key transparency proof could not be verified",
+			ErrorCode: code,
+		}
+	}
 	if errors.As(err, &detail) && detail.ObservedFingerprint != "" {
 		resp.Data = proto.PeerKeyChangedResponseData{
 			ObservedFingerprint: detail.ObservedFingerprint,

@@ -18,10 +18,11 @@ import (
 
 func peerKeyActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionPeerKeyPinList:   wrap(handlers.HandlePeerKeyPinList),
-		proto.ActionPeerKeyPinGet:    wrap(handlers.HandlePeerKeyPinGet),
-		proto.ActionPeerKeyPinVerify: wrap(handlers.HandlePeerKeyPinVerify),
-		proto.ActionPeerKeyPinForget: wrap(handlers.HandlePeerKeyPinForget),
+		proto.ActionKeyTransparencyStatus: wrap(handlers.HandleKeyTransparencyStatus),
+		proto.ActionPeerKeyPinList:        wrap(handlers.HandlePeerKeyPinList),
+		proto.ActionPeerKeyPinGet:         wrap(handlers.HandlePeerKeyPinGet),
+		proto.ActionPeerKeyPinVerify:      wrap(handlers.HandlePeerKeyPinVerify),
+		proto.ActionPeerKeyPinForget:      wrap(handlers.HandlePeerKeyPinForget),
 		// the pairwise safety number (design Q10)
 		proto.ActionPeerKeySafetyNumber: wrap(handlers.HandlePeerKeySafetyNumber),
 		proto.ActionPeerKeyChainEvaluate: wrapCapped(

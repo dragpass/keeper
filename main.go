@@ -9,6 +9,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proc"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/zalando/go-keyring"
@@ -66,7 +67,12 @@ var processApp *keystore.App
 //     (zerolog, etc.) changes only one place.
 
 func init() {
-	deps := keystore.Deps{}
+	deps := keystore.Deps{RequireKeyTransparency: true}
+	transparencyTrust, err := keytransparency.LoadTrustFromEnv()
+	if err != nil {
+		log.Fatalf("Critical: Failed to load key transparency trust: %v", err)
+	}
+	deps.KeyTransparencyTrust = transparencyTrust
 	// e2e mode: use an in-memory mock instead of the Keychain. Must be
 	// called before EnsureServerPublicKey (so that the server pubkey is
 	// saved into the mock).

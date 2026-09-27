@@ -1567,6 +1567,7 @@ like `voluntary`.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
+|`key_transparency_status`|_empty_|`{ configured, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1577,6 +1578,31 @@ All four take lowercase hyphenated UUIDs and reject the nil UUID. `fingerprint`
 must be 64 lowercase hex characters; uppercase is rejected rather than folded,
 since two spellings of one fingerprint would compare unequal somewhere
 downstream.
+
+**Key Transparency (0.0.56).** `DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE` points to a
+local JSON trust file containing the fixed log origin, log verifier, three
+independent witness verifiers, a 2-of-3 quorum, maximum checkpoint age, and
+future clock skew. The file is not fetched from Ariadne. If it is unset, the
+Keeper reports `configured: false` and refuses pinned account-key rotations
+and MLS leaf acceptance. Invalid configuration prevents startup. The
+`key_transparency_status` action reports the persisted checkpoint but does not
+refresh it.
+
+Account rotation evidence is attached to each `rotation_statements` item as
+`transparency_evidence`. MLS state permits carry
+`key_transparency_evidence`, a bounded list of the same evidence structure:
+`statement_b64`, `salt_b64`, `checkpoint_b64`, `leaf_index`,
+`inclusion_proof_b64`, and `consistency_proof_b64`. The Keeper reconstructs the
+canonical account-rotation or MLS-leaf statement from the operation's own
+validated fields and requires byte-for-byte equality before checking the leaf
+commitment, RFC 6962 inclusion proof, log signature, fresh witness quorum, and
+monotonic consistency against its locally persisted checkpoint. Evidence is
+not included in the existing chat-state permit signature canonical; its
+authority comes from the independent log and witness signatures. A mismatch,
+missing proof, stale quorum, rollback, or fork fails closed before a pin or MLS
+state change is persisted. This does not verify first-observation TOFU and does
+not by itself provide independent client gossip or protect against a quorum
+that colludes with the log.
 
 **Storage.** `peer-pin:<owner>:<peer>` holds the record (~230 bytes);
 `peer-pin-index:<owner>:<n>` holds up to 48 peer ids per chunk, because
@@ -1672,7 +1698,7 @@ which is discarding the protection.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`peer_key_chain_evaluate`|`owner_account_id`, `account_id`, `public_key` (PEM the server is serving now), `rotation_statements?`|`{ state, fingerprint, advanced, pinned_fingerprint? }`|Run the trust state machine for one peer and report the verdict, wrapping nothing. `state` is one of the four; `fingerprint` is what the Keeper computed from the PEM, never a value the caller sent; `advanced` reports whether the stored pin moved. Same caps as the wrap actions: 32 statements, 512 KiB per request, checked before the decode.|
+|`peer_key_chain_evaluate`|`owner_account_id`, `account_id`, `public_key` (PEM the server is serving now), `rotation_statements?` (each may carry `transparency_evidence`)|`{ state, fingerprint, advanced, pinned_fingerprint? }`|Run the trust state machine for one peer and report the verdict, wrapping nothing. `state` is one of the four; `fingerprint` is what the Keeper computed from the PEM, never a value the caller sent; `advanced` reports whether the stored pin moved. When a pinned key changes, each rotation statement must include an exact matching signed-log proof and a fresh 2-of-3 witness checkpoint. The checkpoint is monotonically persisted before the pin can advance. Missing trust configuration or invalid, stale, or forked evidence refuses the change. Initial TOFU is not a rotation proof. Same caps as the wrap actions: 32 statements, 512 KiB per request, checked before the decode.|
 
 It runs **the same** state machine the wrap path runs, on the same inputs, and
 persists the pin the same way: a valid chain advances the pin to `rotated`,

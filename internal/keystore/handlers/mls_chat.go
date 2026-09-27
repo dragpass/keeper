@@ -98,7 +98,7 @@ func mlsSessionFailure(d Deps, err error) proto.BaseResponse {
 }
 
 func (c *mlsChat) verifier(d Deps, statements []proto.KeyRotationStatement) *MLSLeafVerifier {
-	return NewMLSLeafVerifier(d, c.permit.AccountID, statementsByAccount(statements))
+	return NewMLSLeafVerifier(d, c.permit.AccountID, statementsByAccount(statements), c.permit.KeyTransparencyEvidence)
 }
 
 // localVerifier is verifier for an operation this device starts (a create, a

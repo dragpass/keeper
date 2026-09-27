@@ -70,6 +70,11 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 		d.Logger.Printf("peer key chain evaluate error: failed to read pin: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read peer key pin: "+err.Error())
 	}
+	if existing != nil && existing.Fingerprint != observed {
+		if err := verifyRotationTransparency(d, req.RotationStatements); err != nil {
+			return keyTransparencyRefusal(d, err)
+		}
+	}
 
 	// The same call the wrap path makes, with the same arguments.
 	//

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"testing"
@@ -82,14 +83,19 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 	}
 	first := makeEvidence(1, leafA, witnessSigners[0], witnessSigners[1])
 	store := keychain.NewMemorySecretStore()
-	verified, err := VerifyAndPersistStatement(store, trust, first, statement, salt, 0, nil)
+	evidence := StatementEvidence{
+		StatementB64:  base64.StdEncoding.EncodeToString(statement),
+		SaltB64:       base64.StdEncoding.EncodeToString(salt),
+		CheckpointB64: base64.StdEncoding.EncodeToString(first.Checkpoint),
+	}
+	verified, err := VerifyAndPersistEvidence(store, trust, evidence, statement)
 	if err != nil {
 		t.Fatalf("verify initial checkpoint: %v", err)
 	}
 	if verified.Checkpoint.Size != 1 {
 		t.Fatalf("initial size = %d, want 1", verified.Checkpoint.Size)
 	}
-	if _, err := VerifyAndPersistStatement(store, trust, first, []byte("different statement"), salt, 0, nil); !errors.Is(err, ErrInvalidCheckpoint) {
+	if _, err := VerifyAndPersistEvidence(store, trust, evidence, []byte("different statement")); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("wrong statement error = %v, want ErrInvalidCheckpoint", err)
 	}
 	second := makeEvidence(2, rootTwo, witnessSigners[0], witnessSigners[2])

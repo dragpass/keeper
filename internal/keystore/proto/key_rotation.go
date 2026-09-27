@@ -63,15 +63,16 @@ const (
 // column shape, so the fingerprints are recomputable from the statement alone
 // after the account has already moved on.
 type KeyRotationStatement struct {
-	AccountID      string `json:"account_id"`
-	OldFingerprint string `json:"old_fingerprint"`
-	NewFingerprint string `json:"new_fingerprint"`
-	RotatedAt      int64  `json:"rotated_at"`
-	Reason         string `json:"reason"`
-	OldPublicKey   string `json:"old_public_key"`
-	NewPublicKey   string `json:"new_public_key"`
-	OldSignature   string `json:"old_signature"`
-	NewSignature   string `json:"new_signature"`
+	AccountID            string                   `json:"account_id"`
+	OldFingerprint       string                   `json:"old_fingerprint"`
+	NewFingerprint       string                   `json:"new_fingerprint"`
+	RotatedAt            int64                    `json:"rotated_at"`
+	Reason               string                   `json:"reason"`
+	OldPublicKey         string                   `json:"old_public_key"`
+	NewPublicKey         string                   `json:"new_public_key"`
+	OldSignature         string                   `json:"old_signature"`
+	NewSignature         string                   `json:"new_signature"`
+	TransparencyEvidence *KeyTransparencyEvidence `json:"transparency_evidence,omitempty"`
 }
 
 // Canonical renders the seven-item string both signatures cover.
