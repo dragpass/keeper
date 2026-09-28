@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -81,22 +80,6 @@ func builtMLSKeeper(t *testing.T) string {
 		t.Fatal(mlsKeeperErr)
 	}
 	return mlsKeeperBinary
-}
-
-// reservedAddress is a free port in 47651-47659, the range these tests may
-// take, so an isolated Keeper never lands on one another stack is using.
-func reservedAddress(t *testing.T) string {
-	t.Helper()
-	for port := 47651; port <= 47659; port++ {
-		address := "127.0.0.1:" + strconv.Itoa(port)
-		listener, err := net.Listen("tcp4", address)
-		if err == nil {
-			listener.Close()
-			return address
-		}
-	}
-	t.Fatal("no free port in 47651-47659")
-	return ""
 }
 
 // rvServer is the test's stand-in for ariadne's signing key.
