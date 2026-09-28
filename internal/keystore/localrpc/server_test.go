@@ -65,6 +65,18 @@ func localRawRequest(server *Server, method, path, body, session, csrf string) *
 // sessionRequest seals a session request's body the way the App does and, on
 // a 200, replaces the sealed answer with the plaintext it carries.
 func sessionRequest(server *Server, method, path, body, session, csrf, origin string, seal bool) *httptest.ResponseRecorder {
+	epoch, _ := sessionEpochs.Load(session)
+	value, _ := epoch.(string)
+	return sessionRequestWithEpoch(server, method, path, body, session, csrf, origin, seal, value)
+}
+
+// sessionEpochs is the chat runtime epoch claimLease was granted per session,
+// sent on every later request of that session the way the App does.
+var sessionEpochs sync.Map
+
+// sessionRequestWithEpoch sends epoch as the chat runtime epoch header ("" for
+// none).
+func sessionRequestWithEpoch(server *Server, method, path, body, session, csrf, origin string, seal bool, epoch string) *httptest.ResponseRecorder {
 	server.mu.Lock()
 	current, open := server.sessions[session]
 	server.mu.Unlock()
@@ -88,6 +100,9 @@ func sessionRequest(server *Server, method, path, body, session, csrf, origin st
 	}
 	if csrf != "" {
 		request.Header.Set("X-DragPass-CSRF", csrf)
+	}
+	if epoch != "" {
+		request.Header.Set(chatRuntimeEpochHeader, epoch)
 	}
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
@@ -761,7 +776,7 @@ func TestLocalRPCSignsStructuredRequestOnce(t *testing.T) {
 		t.Fatalf("request key generation failed: %+v", response)
 	}
 	session, csrf := openTestSession(t, server)
-	body := fmt.Sprintf(`{"method":"POST","path":"/api/v1/chat/messages","query":"","timestamp":"%d","nonce":"AAAAAAAAAAAAAAAAAAAAAA","body_sha256":"%064d","account_id":"11111111-1111-4111-8111-111111111111","token_id":"22222222-2222-4222-8222-222222222222","device_id":"device-12345678"}`, server.now().Unix(), 0)
+	body := fmt.Sprintf(`{"method":"POST","path":"/api/v1/account/devices","query":"","timestamp":"%d","nonce":"AAAAAAAAAAAAAAAAAAAAAA","body_sha256":"%064d","account_id":"11111111-1111-4111-8111-111111111111","token_id":"22222222-2222-4222-8222-222222222222","device_id":"device-12345678"}`, server.now().Unix(), 0)
 	first := localRequest(server, http.MethodPost, "/v1/request-signature", body, session, csrf)
 	if first.Code != http.StatusOK {
 		t.Fatalf("sign request: status=%d body=%s", first.Code, first.Body.String())
@@ -821,7 +836,7 @@ func TestLocalRPCConcurrentReplayHasOneSigner(t *testing.T) {
 		t.Fatalf("request key generation failed: %+v", response)
 	}
 	session, csrf := openTestSession(t, server)
-	body := fmt.Sprintf(`{"method":"POST","path":"/api/v1/chat/messages","query":"","timestamp":"%d","nonce":"AAAAAAAAAAAAAAAAAAAAAA","body_sha256":"%064d","account_id":"11111111-1111-4111-8111-111111111111","token_id":"22222222-2222-4222-8222-222222222222","device_id":"device-12345678"}`, server.now().Unix(), 0)
+	body := fmt.Sprintf(`{"method":"POST","path":"/api/v1/account/devices","query":"","timestamp":"%d","nonce":"AAAAAAAAAAAAAAAAAAAAAA","body_sha256":"%064d","account_id":"11111111-1111-4111-8111-111111111111","token_id":"22222222-2222-4222-8222-222222222222","device_id":"device-12345678"}`, server.now().Unix(), 0)
 	var wait sync.WaitGroup
 	statuses := make(chan int, 2)
 	for range 2 {

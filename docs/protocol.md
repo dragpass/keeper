@@ -1841,7 +1841,8 @@ message. Codes are stable enums; messages are not.
 |`peer_key_unverified`|Strict mode is on (`peer_key_policy_set`) and the peer's pin is not `verified` — a first observation, a `tofu` pin, or a `rotated` one. A policy refusal rather than a detected substitution, so it carries no `data`: there are no two fingerprints to weigh up, only one nobody has checked. Nothing was wrapped and the pin was left as it was.|Stop the flow and point the user at the out-of-band check for that member (`peer_key_pin_verify`), or at turning the policy off. In use from 0.0.32; in the enum since 0.0.31 so both sides could be written against one spelling.|
 |`peer_key_owner_mismatch`|The request carried an `owner_account_id` that is not the one this device recorded the first time it was given one (0.0.33). The owner half of a pin's keyring name originally comes from the server, so a server that reports a different account id would push every lookup into an empty namespace where every peer reads as a first observation and TOFU waves the wrap through. Nothing was wrapped, no pin was read or written, and no pin list was returned. Carries no `data`: neither id goes back, since the recorded one is what a caller probing for the namespace would want.|Stop the flow. This is either a server reporting the wrong account or a device genuinely changing hands; the only way forward is `peer_key_owner_reset` from the extension options page, which the user has to choose deliberately. Never call it automatically in response to this code.|
 |`chat_runtime_busy`|A gated chat action (or a lease claim) met the chat runtime held elsewhere: `data.holder` is `app` (an App lease is live) or `extension` (an Extension gated action ran in the last 120 s). Nothing ran.|Stop driving chat here; the other surface owns it. An older Extension treats it as an unknown failure and fails closed.|
-|`chat_runtime_lease_required`|An App route ran a gated chat action without its session holding the chat runtime lease. Nothing ran.|Claim `/v1/chat/runtime/claim`, then retry.|
+|`chat_runtime_lease_required`|An App route ran a gated chat action (or asked for a chat write signature) without its session holding the chat runtime lease, or without presenting an epoch. Nothing ran.|Claim `/v1/chat/runtime/claim` (sending the epoch the runtime holds), then retry.|
+|`chat_runtime_revoked`|(0.0.56) An App call presented a chat runtime epoch that a revocation replaced: `chat_state_purge` (Extension logout, or the App's own) or `reset_device_identity` ran since the epoch was granted. `data: { reason: "purged" \| "reset" }`. Nothing ran.|Stop that chat runtime, drop every operation it has in flight without retrying it, clear the App's chat records and tell the user chat was reset on this device. Never reclaim with the old epoch: that is refused the same way. A new runtime claims without an epoch.|
 
 The `error` string is sanitized but **may include field names** (e.g.
 `wrap_key_b64: must be 32 bytes`). It never includes secret values. Mapping
@@ -2060,7 +2061,7 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
 
 |Route|Request|Answer|
 |---|---|---|
-|`/v1/chat/runtime/claim`|`{ holder_id }` (base64url, 22..64 chars, one per App tab)|`{ expires_at, ttl_seconds }`; or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`|
+|`/v1/chat/runtime/claim`|`{ holder_id, epoch? }` (`holder_id` base64url, 22..64 chars, one per App tab; `epoch` the one this runtime already holds, omitted by a new runtime)|`{ expires_at, ttl_seconds, epoch }`; or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`; or `chat_runtime_revoked` when the sent `epoch` is stale|
 |`/v1/chat/runtime/release`|`{ holder_id }`|`{ released }`|
 
 - TTL 60 s, never past the session it was claimed on. A claim with the same
@@ -2076,14 +2077,46 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
   `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
   `mls_commit_abandon`, all five `chat_state_*`, `mls_leaf_declare`,
   `mls_leaf_promote`, `mls_leaf_abort`, `mls_key_package_generate`,
-  `mls_key_package_pool_sweep`.
-- An App route running a gated action needs its session to hold the live
-  lease, else `chat_runtime_lease_required`.
+  `mls_key_package_pool_sweep`, and (0.0.56) `reset_device_identity`, which
+  has no App route.
+- **Epoch (0.0.56).** A claim answers the lease `epoch`, an opaque token of at
+  most 64 characters (`<id>.<generation>`). It moves only on a revocation
+  (`chat_state_purge`, `reset_device_identity`, from either caller); renewals,
+  re-claims, a lapsed lease and a Keeper restart keep it. It is persisted in
+  the Keychain slot `chat-runtime-epoch` (not cleared by the reset), and its
+  random `id` is made when that slot is first written, so a restart never
+  hands an old epoch back.
+- An App gated call carries the epoch in the `X-DragPass-Chat-Runtime-Epoch`
+  header of the sealed request (the body stays the action's own request; a
+  malformed value is 400). Keeper checks, under the request lock every handler
+  runs under: no epoch, `chat_runtime_lease_required`; a stale epoch,
+  `chat_runtime_revoked`; no live lease for this session,
+  `chat_runtime_lease_required`. The check and the handler's write are one
+  step with respect to a revocation.
 - A Native Messaging frame (stdio, or proxied by another host) running a gated
   action while an App lease is live is refused with `chat_runtime_busy`,
   `data.holder: "app"`, before its handler runs. An Extension that does not
   know the code fails closed. A gated frame that is admitted keeps the App
-  from claiming for 120 s.
+  from claiming for 120 s. The exceptions are `chat_state_purge` and
+  `reset_device_identity`: logout and reset win. They are never refused busy;
+  at admission they move the epoch, drop the lease and stamp Extension
+  activity, then run. An App handler already admitted finishes first; none of
+  the old runtime's calls is admitted after.
+- **Chat writes to the server.** The App gets every chat write signed by
+  `/v1/request-signature` with the epoch header, right before its fetch. A
+  chat write is a non-`GET` whose path is `/api/v1/conversations`, starts with
+  `/api/v1/conversations/` or `/api/v1/chat/`, except
+  `POST /api/v1/conversations/<id>/state-permit`. Keeper signs one only after
+  the same three checks, answering the refusal as a sealed envelope; every
+  other path is signed as before. Accepted limit: a chat write signed before a
+  revocation and sent after it still lands. Keeper signs timestamps within
+  60 s of its clock and ariadne accepts 5 minutes of skew, so the window ends
+  at most about 6 minutes after signing, and it only binds where ariadne
+  requires the signature (`DEVICE_SIGNATURE_MODE`).
+- The fence is per owner process. A Native Messaging host running standalone
+  (the owner could not be proven) keeps its own lease, and the App cannot
+  reach that Keeper either. A failed write of the moved epoch is logged; the
+  in-memory epoch still moves and the purge still runs.
 - `ping` (and `/v1/chat/capability`) lists `app_runtime.v1` in
   `chat_capabilities` when the build has this lease and the `/v1/chat/*`
   routes, so the App can require it; the Extension ignores capabilities it

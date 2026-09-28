@@ -125,7 +125,7 @@ func TestProxiedExtensionFrameIsRefusedWhileTheAppHoldsTheLease(t *testing.T) {
 		t.Fatalf("ping through the proxy: %+v\n%s", ping, host.stderr.String())
 	}
 
-	claim, err := client.call("/v1/chat/runtime/claim", map[string]string{"holder_id": routeHolder})
+	claim, err := client.claim(routeHolder)
 	if err != nil || !claim.Success {
 		t.Fatalf("claim: %+v %v\n%s", claim, err, owner.stderr.String())
 	}

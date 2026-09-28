@@ -21,8 +21,17 @@ func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
 	return a.handleAs(chatRuntimeCaller{}, msg)
 }
 
-func (a *App) HandleAppRequest(session string, msg []byte) proto.BaseResponse {
-	return a.handleAs(chatRuntimeCaller{app: true, session: session}, msg)
+// HandleAppRequest runs one App request; epoch is the chat runtime epoch the
+// App was granted ("" when it holds none).
+func (a *App) HandleAppRequest(session, epoch string, msg []byte) proto.BaseResponse {
+	return a.handleAs(chatRuntimeCaller{app: true, session: session, epoch: epoch}, msg)
+}
+
+// HandleAppChatWrite runs msg only for the session holding a live lease at
+// the current epoch, whatever the action: it signs a chat write the App is
+// about to send to the server, so a revoked runtime cannot post one.
+func (a *App) HandleAppChatWrite(session, epoch string, msg []byte) proto.BaseResponse {
+	return a.handleAs(chatRuntimeCaller{app: true, session: session, epoch: epoch, chatWrite: true}, msg)
 }
 
 func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse {

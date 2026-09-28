@@ -241,14 +241,14 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 		if bound, err = route.bind(s, input); err == nil {
 			var encoded []byte
 			if encoded, err = json.Marshal(bound); err == nil {
-				response, err = s.handle(request.token, route.action, encoded)
+				response, err = s.handleRequest(request, route.action, encoded)
 			}
 		}
 	default:
 		// The action gets the bytes the App sent, not a re-encoding: the
 		// chat handlers decode strictly (duplicate keys, missing keys) and a
 		// round trip through the route type would hide both.
-		response, err = s.handle(request.token, route.action, request.plain)
+		response, err = s.handleRequest(request, route.action, request.plain)
 	}
 	if errors.Is(err, errSessionGone) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

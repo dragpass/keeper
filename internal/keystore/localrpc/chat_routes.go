@@ -56,7 +56,7 @@ func chatRoutes() map[string]appRoute {
 			run:   runChatCapability,
 		},
 		"/v1/chat/runtime/claim": {
-			input: func() any { return &chatRuntimeHolder{} },
+			input: func() any { return &chatRuntimeClaimInput{} },
 			run:   runChatRuntimeClaim,
 		},
 		"/v1/chat/runtime/release": {
@@ -137,11 +137,18 @@ var holderIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
 
 func (h *chatRuntimeHolder) valid() bool { return holderIDPattern.MatchString(h.HolderID) }
 
+// chatRuntimeClaimInput carries the epoch a running runtime already holds, so
+// a re-claim after a revocation is refused instead of handing it a new one.
+type chatRuntimeClaimInput struct {
+	chatRuntimeHolder
+	Epoch string `json:"epoch,omitempty"`
+}
+
 // runChatRuntimeClaim binds the lease to the calling session under s.mu, so a
 // session deleted at the same moment cannot leave a lease behind it.
 func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
-	holder := input.(*chatRuntimeHolder)
-	if !holder.valid() {
+	holder := input.(*chatRuntimeClaimInput)
+	if !holder.valid() || (holder.Epoch != "" && !chatRuntimeEpochPattern.MatchString(holder.Epoch)) {
 		return proto.BaseResponse{}, errAppRouteRefused
 	}
 	s.mu.Lock()
@@ -151,8 +158,11 @@ func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseRe
 		s.mu.Unlock()
 		return proto.BaseResponse{}, errSessionGone
 	}
-	claim := s.app.ClaimChatRuntime(holder.HolderID, request.token, current.expires.Sub(now))
+	claim := s.app.ClaimChatRuntime(holder.HolderID, request.token, current.expires.Sub(now), holder.Epoch)
 	s.mu.Unlock()
+	if claim.Revoked != "" {
+		return keystore.ChatRuntimeRevokedResponse(claim.Revoked), nil
+	}
 	if !claim.Granted {
 		return proto.BaseResponse{
 			Error:     "the chat runtime is held elsewhere on this device",
@@ -160,9 +170,10 @@ func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseRe
 			Data:      map[string]string{"holder": claim.BusyHolder},
 		}, nil
 	}
-	return proto.BaseResponse{Success: true, Data: map[string]int64{
+	return proto.BaseResponse{Success: true, Data: map[string]any{
 		"expires_at":  claim.ExpiresAt.Unix(),
 		"ttl_seconds": int64(claim.ExpiresAt.Sub(s.app.Clock()).Seconds()),
+		"epoch":       claim.Epoch,
 	}}, nil
 }
 

@@ -83,27 +83,27 @@ func busyHolder(t *testing.T, response proto.BaseResponse) string {
 func TestChatRuntimeClaimRenewRebindAndRelease(t *testing.T) {
 	app, clock, _ := newLeaseApp(t)
 
-	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock))
+	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "")
 	if !claim.Granted || !claim.ExpiresAt.Equal(clock.Now().Add(ChatRuntimeLeaseTTL)) {
 		t.Fatalf("first claim: %+v", claim)
 	}
 	clock.advance(30 * time.Second)
-	renewed := app.ClaimChatRuntime(holderA, sessionA, farSession(clock))
+	renewed := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "")
 	if !renewed.Granted || !renewed.ExpiresAt.Equal(clock.Now().Add(ChatRuntimeLeaseTTL)) {
 		t.Fatalf("renew: %+v", renewed)
 	}
-	if other := app.ClaimChatRuntime(holderB, sessionB, farSession(clock)); other.Granted || other.BusyHolder != ChatRuntimeHolderApp {
+	if other := app.ClaimChatRuntime(holderB, sessionB, farSession(clock), ""); other.Granted || other.BusyHolder != ChatRuntimeHolderApp {
 		t.Fatalf("another holder took a live lease: %+v", other)
 	}
 
 	// The same holder from a reopened session moves the lease to that session.
-	if rebound := app.ClaimChatRuntime(holderA, sessionA2, farSession(clock)); !rebound.Granted {
+	if rebound := app.ClaimChatRuntime(holderA, sessionA2, farSession(clock), ""); !rebound.Granted {
 		t.Fatalf("rebind: %+v", rebound)
 	}
-	if response := app.HandleAppRequest(sessionA, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
+	if response := app.HandleAppRequest(sessionA, claim.Epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("the old session still holds the lease: %+v", response)
 	}
-	if response := app.HandleAppRequest(sessionA2, []byte(gatedFrame)); !response.Success {
+	if response := app.HandleAppRequest(sessionA2, claim.Epoch, []byte(gatedFrame)); !response.Success {
 		t.Fatalf("the rebound session cannot run a gated action: %+v", response)
 	}
 
@@ -116,18 +116,18 @@ func TestChatRuntimeClaimRenewRebindAndRelease(t *testing.T) {
 	if app.ReleaseChatRuntime(holderA) {
 		t.Fatal("a released lease was released twice")
 	}
-	if claim := app.ClaimChatRuntime(holderB, sessionB, farSession(clock)); !claim.Granted {
+	if claim := app.ClaimChatRuntime(holderB, sessionB, farSession(clock), ""); !claim.Granted {
 		t.Fatalf("claim after release: %+v", claim)
 	}
 }
 
 func TestChatRuntimeAppLeaseRefusesExtensionGatedActionsAndRunsNothing(t *testing.T) {
 	app, clock, store := newLeaseApp(t)
-	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock)); !claim.Granted {
+	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), ""); !claim.Granted {
 		t.Fatal(claim)
 	}
 	for _, action := range []string{
-		"mls_group_create", "mls_encrypt", "mls_decrypt_batch_for_app_display", "chat_state_purge",
+		"mls_group_create", "mls_encrypt", "mls_decrypt_batch_for_app_display",
 		"chat_state_reserve_send", "mls_leaf_declare", "mls_key_package_generate", "mls_leaf_abort",
 	} {
 		before := store.calls.Load()
@@ -149,24 +149,24 @@ func TestChatRuntimeAppLeaseRefusesExtensionGatedActionsAndRunsNothing(t *testin
 func TestChatRuntimeAppCallerNeedsTheLeaseForGatedActions(t *testing.T) {
 	app, clock, store := newLeaseApp(t)
 	before := store.calls.Load()
-	response := app.HandleAppRequest(sessionA, []byte(gatedFrame))
+	response := app.HandleAppRequest(sessionA, "", []byte(gatedFrame))
 	if response.Success || response.ErrorCode != ErrCodeChatRuntimeLeaseRequired || response.RequestID != "r-1" {
 		t.Fatalf("gated action without a lease: %+v", response)
 	}
 	if store.calls.Load() != before {
 		t.Fatal("a refused App request ran")
 	}
-	if response := app.HandleAppRequest(sessionA, []byte(`{"action":"ping"}`)); !response.Success {
+	if response := app.HandleAppRequest(sessionA, "", []byte(`{"action":"ping"}`)); !response.Success {
 		t.Fatalf("ping needs no lease: %+v", response)
 	}
-	if response := app.HandleAppRequest("", []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
+	if response := app.HandleAppRequest("", "", []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("a caller with no session ran a gated action: %+v", response)
 	}
-	app.ClaimChatRuntime(holderA, sessionA, farSession(clock))
-	if response := app.HandleAppRequest(sessionA, []byte(gatedFrame)); !response.Success {
+	epoch := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "").Epoch
+	if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
 		t.Fatalf("gated action with the lease: %+v", response)
 	}
-	if response := app.HandleAppRequest(sessionB, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
+	if response := app.HandleAppRequest(sessionB, epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("another session used the lease: %+v", response)
 	}
 }
@@ -176,31 +176,31 @@ func TestChatRuntimeExtensionActivityBlocksAnAppClaimForItsWindow(t *testing.T) 
 	if response := app.HandleRequest([]byte(gatedFrame)); !response.Success {
 		t.Fatalf("Extension gated action with no lease: %+v", response)
 	}
-	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock))
+	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "")
 	if claim.Granted || claim.BusyHolder != ChatRuntimeHolderExtension {
 		t.Fatalf("claim right after Extension activity: %+v", claim)
 	}
 	// Ungated Extension traffic does not extend the window.
 	clock.advance(ChatRuntimeExtensionWindow - time.Second)
 	app.HandleRequest([]byte(`{"action":"ping"}`))
-	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock)); claim.Granted {
+	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), ""); claim.Granted {
 		t.Fatalf("claim inside the window: %+v", claim)
 	}
 	clock.advance(time.Second)
-	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock)); !claim.Granted {
+	if claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), ""); !claim.Granted {
 		t.Fatalf("claim after the window: %+v", claim)
 	}
 }
 
 func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 	app, clock, _ := newLeaseApp(t)
-	app.ClaimChatRuntime(holderA, sessionA, farSession(clock))
+	epoch := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "").Epoch
 	clock.advance(ChatRuntimeLeaseTTL - time.Second)
 	if response := app.HandleRequest([]byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeBusy {
 		t.Fatalf("Extension ran before the lease expired: %+v", response)
 	}
 	clock.advance(time.Second)
-	if response := app.HandleAppRequest(sessionA, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
+	if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("an expired lease still admits the App: %+v", response)
 	}
 	if response := app.HandleRequest([]byte(gatedFrame)); !response.Success {
@@ -209,7 +209,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 
 	// A lease never outlives the session it is bound to.
 	app2, clock2, _ := newLeaseApp(t)
-	claim := app2.ClaimChatRuntime(holderA, sessionA, 20*time.Second)
+	claim := app2.ClaimChatRuntime(holderA, sessionA, 20*time.Second, "")
 	if !claim.Granted || !claim.ExpiresAt.Equal(clock2.Now().Add(20*time.Second)) {
 		t.Fatalf("lease past its session: %+v", claim)
 	}
@@ -220,7 +220,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 
 	// Deleting the session drops the lease at once.
 	app3, clock3, _ := newLeaseApp(t)
-	app3.ClaimChatRuntime(holderA, sessionA, farSession(clock3))
+	app3.ClaimChatRuntime(holderA, sessionA, farSession(clock3), "")
 	app3.DropChatRuntimeSession(sessionB)
 	if response := app3.HandleRequest([]byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeBusy {
 		t.Fatal("dropping another session dropped the lease")
@@ -229,9 +229,9 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 	if response := app3.HandleRequest([]byte(gatedFrame)); !response.Success {
 		t.Fatalf("the lease survived its session: %+v", response)
 	}
-	app3.ClaimChatRuntime(holderB, sessionB, farSession(clock3))
+	epoch3 := app3.ClaimChatRuntime(holderB, sessionB, farSession(clock3), "").Epoch
 	app3.DropAllChatRuntimeSessions()
-	if response := app3.HandleAppRequest(sessionB, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
+	if response := app3.HandleAppRequest(sessionB, epoch3, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("the lease survived dropping every session: %+v", response)
 	}
 }
@@ -247,7 +247,7 @@ func TestChatRuntimeGatedActionListIsPinned(t *testing.T) {
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",
 		"mls_key_package_generate", "mls_key_package_pool_sweep",
 		"mls_leaf_abort", "mls_leaf_declare", "mls_leaf_promote",
-		"mls_mark_sent", "mls_process",
+		"mls_mark_sent", "mls_process", "reset_device_identity",
 	}
 	got := ChatRuntimeGatedActions()
 	if len(got) != len(want) {
@@ -272,7 +272,7 @@ func TestChatRuntimeConcurrentClaimsHaveOneWinner(t *testing.T) {
 			go func(i int, holder string) {
 				defer done.Done()
 				start.Wait()
-				if app.ClaimChatRuntime(holder, sessionA+string(rune('0'+i)), farSession(clock)).Granted {
+				if app.ClaimChatRuntime(holder, sessionA+string(rune('0'+i)), farSession(clock), "").Granted {
 					granted.Add(1)
 				}
 			}(i, holder)
@@ -297,7 +297,7 @@ func TestChatRuntimeClaimAndExtensionCallsNeverBothSucceed(t *testing.T) {
 		go func() {
 			defer done.Done()
 			start.Wait()
-			claimed.Store(app.ClaimChatRuntime(holderA, sessionA, farSession(clock)).Granted)
+			claimed.Store(app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "").Granted)
 		}()
 		for range 4 {
 			done.Add(1)

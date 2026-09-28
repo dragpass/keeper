@@ -90,6 +90,9 @@ func claimLease(t *testing.T, server *Server, session, csrf, holder string) rout
 	if code != http.StatusOK {
 		t.Errorf("claim: %d %s", code, body)
 	}
+	if epoch := epochOf(result.Data); result.Success && epoch != "" {
+		sessionEpochs.Store(session, epoch)
+	}
 	return result
 }
 
