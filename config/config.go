@@ -14,6 +14,9 @@ const (
 	SessionCode                     = "session_code"
 	PendingDragPassKeeperPrivateKey = "pending_keeper_private_key"
 	PendingDragPassKeeperPublicKey  = "pending_keeper_public_key"
+	// PendingSignupPrepareInput binds the staged signup keypair to a slow hash
+	// of the prepare input that staged it, so only that input can retry.
+	PendingSignupPrepareInput = "pending_signup_prepare_input"
 	// A recovery stages its new account keypair here, apart from the signup
 	// pending slots, until the server accepts it. save_session_code promotes
 	// it only when the server's session code opens with it.

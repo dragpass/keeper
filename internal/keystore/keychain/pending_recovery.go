@@ -151,6 +151,7 @@ func AcceptSessionCode(store SecretStore, open SessionCodeOpener) (SessionCodeAc
 				}
 				_ = DeletePendingPrivateKey(store)
 				_ = DeletePendingPublicKey(store)
+				_ = DeletePendingSignupPrepareInput(store)
 				accepted, sessionCode = SessionCodeAcceptedSignup, code
 				return nil
 			}
@@ -195,8 +196,40 @@ func activateKeypair(store SecretStore, privateKey, publicKey, sessionCode strin
 	if err := SavePrivateKey(store, privateKey); err != nil {
 		return err
 	}
+	crashAt(CrashSessionCodeAfterPrivateKey)
 	if err := SavePublicKey(store, publicKey); err != nil {
 		return err
 	}
 	return SaveSessionCode(store, sessionCode)
+}
+
+// StagedAccountKeypair is an account keypair a recovery or a signup staged
+// and save_session_code has not promoted.
+type StagedAccountKeypair struct {
+	Stage      SessionCodeAcceptance
+	PrivateKey string
+	PublicKey  string
+}
+
+// StagedAccountKeypairs reads the staged keypairs, the recovery one first:
+// on one device a recovery is always the later of the two, since signup
+// refuses a registered device. It only reads.
+func StagedAccountKeypairs(store SecretStore) ([]StagedAccountKeypair, error) {
+	var staged []StagedAccountKeypair
+	err := withPersonalKeyBundleLock(store, func() error {
+		slots := []struct {
+			stage                   SessionCodeAcceptance
+			privateSlot, publicSlot string
+		}{
+			{SessionCodeAcceptedRecovery, config.PendingRecoveryKeeperPrivateKey, config.PendingRecoveryKeeperPublicKey},
+			{SessionCodeAcceptedSignup, config.PendingDragPassKeeperPrivateKey, config.PendingDragPassKeeperPublicKey},
+		}
+		for _, slot := range slots {
+			if privateKey, publicKey, ok := readPair(store, slot.privateSlot, slot.publicSlot); ok {
+				staged = append(staged, StagedAccountKeypair{Stage: slot.stage, PrivateKey: privateKey, PublicKey: publicKey})
+			}
+		}
+		return nil
+	})
+	return staged, err
 }

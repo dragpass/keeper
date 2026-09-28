@@ -23,6 +23,20 @@ type AuthSignupPrepareResponseData struct {
 	PublicKey             string `json:"publickey"`
 }
 
+// AuthSignupAbortRequest names the staged signup public key (PEM, as the
+// prepare returned it) to drop after the server refused the signup.
+type AuthSignupAbortRequest struct {
+	PublicKey string `json:"publickey"`
+}
+
+func (r AuthSignupAbortRequest) Validate() error {
+	return requireString(r.PublicKey, "publickey")
+}
+
+type AuthSignupAbortResponseData struct {
+	Discarded bool `json:"discarded"`
+}
+
 type AuthRecoveryReissuePrepareRequest struct {
 	Alias       string `json:"alias"`
 	RecoveryKey string `json:"recovery_key"`

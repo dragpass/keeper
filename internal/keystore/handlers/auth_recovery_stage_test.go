@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
@@ -430,8 +431,6 @@ func TestRecoveryKeyReissueRefusedWhileARecoveryIsStaged(t *testing.T) {
 	response := HandleAuthRecoveryReissuePrepare(stage.deps, proto.AuthRecoveryReissuePrepareRequest{
 		Alias: stageAlias, RecoveryKey: stageNewRecovery,
 	})
-	if response.Success {
-		t.Fatal("a reissue wrapped the pre-recovery key while the recovery was staged")
-	}
+	assertRefused(t, response, errs.ErrCodeAccountKeyStaged, "a reissue while the recovery is staged")
 	assertSnapshot(t, stage.store, before, "a refused reissue")
 }

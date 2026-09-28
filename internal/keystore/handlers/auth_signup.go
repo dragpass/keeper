@@ -25,9 +25,12 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		return errs.Response(err)
 	}
 	// Every check runs before any write. A refused signup (a registered
-	// device, a bad password or recovery key) leaves the keyring as it was;
-	// the new keypair and DEK are written to pending slots only, and
-	// save_session_code promotes them once the server accepted the signup.
+	// device, a bad password or recovery key, another signup already staged)
+	// leaves the keyring as it was; the new keypair and DEK are written to
+	// pending slots only, and save_session_code promotes them once the server
+	// accepted the signup.
+	signupStageMu.Lock()
+	defer signupStageMu.Unlock()
 	if response := signupAllowed(d); !response.Success {
 		secure.WipeString(&req.Password)
 		secure.WipeString(&req.RecoveryKey)
@@ -52,6 +55,25 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid recovery key")
 	}
 	defer secure.Zeroize(wrapKey)
+	normalizedRecoveryKey, err := recoverykey.Normalize(recoveryKeyBytes)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeValidation, "invalid recovery key")
+	}
+	defer secure.Zeroize(normalizedRecoveryKey)
+
+	stagedPrivate, stagedPublic, staged, err := keychain.StagedSignupKeypair(d.Store)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read the staged signup")
+	}
+	if staged {
+		// The server may already hold the staged key, so only the input that
+		// staged it may be answered again; anything else must not replace it.
+		if !signupInputMatches(d, stagedPublic, req.Alias, normalizedRecoveryKey, passwordBuffer) {
+			secure.WipeString(&stagedPrivate)
+			return errs.CodeResponse(errs.ErrCodeSignupPending, "a signup is already staged on this device")
+		}
+		return answerStagedSignup(d, req.Alias, stagedPrivate, stagedPublic, passwordBuffer, recoveryAuthSeed, wrapKey)
+	}
 
 	if response := ensureSignupDeviceKey(d); !response.Success {
 		return response
@@ -68,6 +90,15 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	signData := signResponse.Data.(proto.SignAliasResponseData)
 	if signData.WrappedKeeper == "" {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "recovery-wrapped private key missing")
+	}
+	// Written last: a prepare that stops before this leaves a staged key no
+	// retry can match, which the App aborts or signs in with.
+	record, err := newSignupInputRecord(d, signData.PublicKey, req.Alias, normalizedRecoveryKey, passwordBuffer)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "failed to record the signup input")
+	}
+	if err := keychain.SavePendingSignupPrepareInput(d.Store, record); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to record the signup input")
 	}
 
 	return proto.BaseResponse{Success: true, Data: proto.AuthSignupPrepareResponseData{
@@ -135,7 +166,16 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read the recovery state")
 		}
-		return errs.CodeResponse(errs.ErrCodeValidation, "a recovery is not complete on this device")
+		return errs.CodeResponse(errs.ErrCodeAccountKeyStaged, "a recovery is not complete on this device")
+	}
+	// A signup the server accepted but save_session_code never promoted: the
+	// sign-in promotes it, and only then is there an active key to wrap.
+	if _, _, staged, err := keychain.StagedSignupKeypair(d.Store); err != nil || staged {
+		secure.WipeString(&req.RecoveryKey)
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read the signup state")
+		}
+		return errs.CodeResponse(errs.ErrCodeAccountKeyStaged, "a signup is not complete on this device")
 	}
 	recoveryKey := []byte(req.RecoveryKey)
 	secure.WipeString(&req.RecoveryKey)
