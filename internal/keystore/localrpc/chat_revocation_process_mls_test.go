@@ -64,6 +64,7 @@ func builtMLSKeeper(t *testing.T) string {
 			mlsKeeperErr = err
 			return
 		}
+		extraBuildDirs = append(extraBuildDirs, dir)
 		name := "dragpass-keeper-mls"
 		if runtime.GOOS == "windows" {
 			name += ".exe"
