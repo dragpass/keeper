@@ -10,7 +10,8 @@ import (
 
 // Until the server accepts the signup (save_session_code), the new DEK is
 // pending: a prepare that is never completed leaves the active DEK alone, a
-// retried prepare replaces only the pending one, and completion promotes it.
+// retried prepare with the same input answers for the staged DEK instead of
+// replacing it, and completion promotes it.
 func TestAuthSignupPrepareKeepsTheNewDEKPendingUntilTheSessionCodeIsSaved(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x44}, 32))
@@ -27,9 +28,9 @@ func TestAuthSignupPrepareKeepsTheNewDEKPendingUntilTheSessionCodeIsSaved(t *tes
 		t.Fatalf("active DEK before completion = %q, %v", active, err)
 	}
 	pending, err := keychain.GetPendingSignupDeviceWrappedDEK(store)
-	want := second.Data.(proto.AuthSignupPrepareResponseData).DeviceWrappedDEKB64
-	if err != nil || pending != want {
-		t.Fatalf("pending DEK = %q, %v; want the retried prepare's", pending, err)
+	want := first.Data.(proto.AuthSignupPrepareResponseData).DeviceWrappedDEKB64
+	if err != nil || pending != want || second.Data.(proto.AuthSignupPrepareResponseData).DeviceWrappedDEKB64 != want {
+		t.Fatalf("pending DEK = %q, %v; want the first prepare's, answered again by the retry", pending, err)
 	}
 
 	promoted, err := keychain.PromotePendingKeypair(store)

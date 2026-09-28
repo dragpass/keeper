@@ -52,6 +52,17 @@ const (
 	// whether the password or a server signature was at fault.
 	ErrCodePasswordInvalid ErrorCode = "password_invalid"
 
+	// ErrCodeSignupPending: a signup key is staged on this device and the
+	// prepare input is not the one that staged it (Q8). Nothing was written.
+	// The App signs in with the staged key, or aborts it once the server
+	// refused the signup.
+	ErrCodeSignupPending ErrorCode = "signup_pending"
+
+	// ErrCodeAccountKeyStaged: the operation needs the active account key, but
+	// the account key the server may hold is still staged. Signing in promotes
+	// it; nothing was written.
+	ErrCodeAccountKeyStaged ErrorCode = "account_key_staged"
+
 	// ErrCodePeerKeyChanged: a wrap named a peer account whose public key no
 	// longer matches the pinned fingerprint, and no valid rotation chain
 	// explains the change (account key trust v1, D3 `changed`). Nothing was

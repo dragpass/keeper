@@ -35,6 +35,10 @@ var appRoutes = map[string]appRoute{
 		action: proto.ActionAuthRecoveryPrepare,
 		input:  func() any { return &proto.AuthRecoveryPrepareRequest{} },
 	},
+	"/v1/auth/signup/abort": {
+		action: proto.ActionAuthSignupAbort,
+		input:  func() any { return &proto.AuthSignupAbortRequest{} },
+	},
 	"/v1/auth/recovery/abort": {
 		action: proto.ActionAuthRecoveryAbort,
 		input:  func() any { return &proto.AuthRecoveryAbortRequest{} },

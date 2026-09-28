@@ -17,6 +17,10 @@ func (r SaveSessionCodeRequest) Validate() error {
 
 type SaveSessionCodeResponseData struct {
 	SessionCode string `json:"session_code"`
+	// Promoted names the keypair the session code opened with: "signup" or
+	// "recovery" when this save made a staged key active, "active" when the
+	// key was already active (a login, or a repeated save).
+	Promoted string `json:"promoted"`
 }
 
 type GetSessionCodeResponseData struct {

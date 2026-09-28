@@ -122,15 +122,22 @@ func TestAppPendingLoginRoutesSignWithTheStagedKeyThenPromote(t *testing.T) {
 
 	encrypted := wrapTo(t, signup.PublicKey, []byte("reissued-session"))
 	save := map[string]any{"encrypted_session_code": encrypted, "signature": serverSig(encrypted), "server_key_version": 1}
-	if code, result, body := callRoute(t, server, session, csrf, "/v1/auth/signup/save-session-code", save); code != http.StatusOK || !result.Success || strings.Contains(body, "reissued-session") {
+	code, result, body = callRoute(t, server, session, csrf, "/v1/auth/signup/save-session-code", save)
+	if code != http.StatusOK || !result.Success || strings.Contains(body, "reissued-session") {
 		t.Fatalf("save session code: %d %s", code, body)
+	}
+	// The App learns which stage became active, never the session code.
+	var saved map[string]any
+	_ = json.Unmarshal(result.Data, &saved)
+	if !reflect.DeepEqual(saved, map[string]any{"stored": true, "promoted": "signup"}) {
+		t.Fatalf("save session code answered %s", result.Data)
 	}
 	if active, _ := keychain.GetPublicKey(store); active != signup.PublicKey {
 		t.Fatal("the staged key was not promoted")
 	}
 	promoted := store.Snapshot()
-	if code, result, _ := callRoute(t, server, session, csrf, "/v1/auth/signup/save-session-code", save); code != http.StatusOK || !result.Success {
-		t.Fatal("a repeated save failed")
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/auth/signup/save-session-code", save); code != http.StatusOK || !result.Success || !strings.Contains(string(result.Data), `"promoted":"active"`) {
+		t.Fatal("a repeated save failed or did not report the already active key")
 	}
 	if !reflect.DeepEqual(store.Snapshot(), promoted) {
 		t.Fatal("a repeated save changed the keyring")
@@ -142,5 +149,40 @@ func TestAppPendingLoginRoutesSignWithTheStagedKeyThenPromote(t *testing.T) {
 	if code, result, _ := callRoute(t, server, session, csrf, "/v1/auth/login/sign-alias",
 		map[string]string{"alias": alias}); code != http.StatusOK || !result.Success {
 		t.Fatal("the normal sign-in does not work after promotion")
+	}
+}
+
+// Q8 over the App route: while a signup is staged another input is refused
+// and the keyring keeps its bytes; the abort route drops it by public key.
+func TestAppSignupRoutesRefuseAnotherInputWhileStagedAndAbort(t *testing.T) {
+	server := newTestServer(t)
+	store := server.app.Store.(*keychain.MemorySecretStore)
+	session, csrf := openTestSession(t, server)
+	input := map[string]string{"alias": "alice", "password": "correct horse battery staple", "recovery_key": "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"}
+	code, prepared, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", input)
+	if code != http.StatusOK || !prepared.Success {
+		t.Fatalf("signup prepare: %d %s", code, body)
+	}
+	var signup proto.AuthSignupPrepareResponseData
+	_ = json.Unmarshal(prepared.Data, &signup)
+	staged := store.Snapshot()
+
+	other := map[string]string{"alias": "alice", "password": "correct horse battery staple", "recovery_key": "ZZZZ-EFGH-JKLM-NPQR-STUV-WXYZ"}
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", other); code != http.StatusOK || result.Success || result.ErrorCode != "signup_pending" {
+		t.Fatalf("another input while staged: %d %s", code, body)
+	}
+	if !reflect.DeepEqual(store.Snapshot(), staged) {
+		t.Fatal("a refused prepare changed the keyring")
+	}
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/auth/recovery-key/reissue-prepare",
+		map[string]string{"alias": "alice", "recovery_key": "ZZZZ-EFGH-JKLM-NPQR-STUV-WXYZ"}); code != http.StatusOK || result.ErrorCode != "account_key_staged" {
+		t.Fatalf("reissue while staged: %d %s", code, body)
+	}
+	code, aborted, body := callRoute(t, server, session, csrf, "/v1/auth/signup/abort", map[string]string{"publickey": signup.PublicKey})
+	if code != http.StatusOK || !aborted.Success || !strings.Contains(string(aborted.Data), `"discarded":true`) {
+		t.Fatalf("abort: %d %s", code, body)
+	}
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", other); code != http.StatusOK || !result.Success {
+		t.Fatalf("a new signup after the abort: %d %s", code, body)
 	}
 }

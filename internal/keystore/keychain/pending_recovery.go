@@ -151,6 +151,7 @@ func AcceptSessionCode(store SecretStore, open SessionCodeOpener) (SessionCodeAc
 				}
 				_ = DeletePendingPrivateKey(store)
 				_ = DeletePendingPublicKey(store)
+				_ = DeletePendingSignupPrepareInput(store)
 				accepted, sessionCode = SessionCodeAcceptedSignup, code
 				return nil
 			}

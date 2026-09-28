@@ -333,7 +333,14 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 		return
 	}
 	if suppressResult && response.Success {
-		response.Data = map[string]bool{"stored": true}
+		// Which stage a save promoted is not secret, and the App needs it to
+		// tell a recovery (grants to re-share) from a signup; the session
+		// code itself stays in Keeper.
+		if saved, ok := response.Data.(proto.SaveSessionCodeResponseData); ok {
+			response.Data = map[string]any{"stored": true, "promoted": saved.Promoted}
+		} else {
+			response.Data = map[string]bool{"stored": true}
+		}
 	}
 	s.writeSealed(w, request, response)
 }

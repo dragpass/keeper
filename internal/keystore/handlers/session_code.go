@@ -68,7 +68,7 @@ func HandleSaveSessionCode(d Deps, req proto.SaveSessionCodeRequest) proto.BaseR
 	}
 
 	d.Logger.Println("session code decryption and save successful")
-	return proto.BaseResponse{Success: true, Data: proto.SaveSessionCodeResponseData{SessionCode: sessionCode}}
+	return proto.BaseResponse{Success: true, Data: proto.SaveSessionCodeResponseData{SessionCode: sessionCode, Promoted: string(accepted)}}
 }
 
 // HandleGetSessionCode handles session code retrieval requests.
