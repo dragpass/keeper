@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/zalando/go-keyring"
@@ -83,6 +84,11 @@ func loadFromFileIntoMock(path string) error {
 // provider has no full-dump API, so we keep our own snapshot map.
 var snapshot = map[string]string{}
 
+// mirrorMu serialises the mirror: one Keeper serves concurrent HTTP requests
+// (the App signs several at once), and every read reloads the file into
+// snapshot. Without it the process dies of a concurrent map write.
+var mirrorMu sync.Mutex
+
 func dumpToFile(path string) error {
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -93,6 +99,10 @@ func dumpToFile(path string) error {
 
 // krSet is keyring.Set + (file mirror when in e2e mode).
 func krSet(service, user, value string) error {
+	if e2eFilePath() != "" {
+		mirrorMu.Lock()
+		defer mirrorMu.Unlock()
+	}
 	if err := keyring.Set(service, user, value); err != nil {
 		return err
 	}
@@ -108,6 +118,8 @@ func krSet(service, user, value string) error {
 // krGet, in e2e mode, syncs file → mock first, then calls keyring.Get.
 func krGet(service, user string) (string, error) {
 	if path := e2eFilePath(); path != "" {
+		mirrorMu.Lock()
+		defer mirrorMu.Unlock()
 		// Pick up entries written by another process. Best-effort even on
 		// failure.
 		if err := loadFromFileIntoMock(path); err == nil {
@@ -122,6 +134,10 @@ func krGet(service, user string) (string, error) {
 
 // krDelete is keyring.Delete + (file mirror when in e2e mode).
 func krDelete(service, user string) error {
+	if e2eFilePath() != "" {
+		mirrorMu.Lock()
+		defer mirrorMu.Unlock()
+	}
 	err := keyring.Delete(service, user)
 	if path := e2eFilePath(); path != "" {
 		delete(snapshot, e2eKey(service, user))
@@ -141,6 +157,8 @@ func KrDelete(service, user string) error { return krDelete(service, user) }
 // Loads the file into the mock keyring and also fills the snapshot map.
 // path is treated as read-only — every write dumps back to the same path.
 func LoadE2EKeyringFile(path string) error {
+	mirrorMu.Lock()
+	defer mirrorMu.Unlock()
 	if err := loadFromFileIntoMock(path); err != nil {
 		return err
 	}
