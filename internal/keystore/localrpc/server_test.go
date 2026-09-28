@@ -250,7 +250,7 @@ func TestLocalRPCHealthReturnsOnlyBuildMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, hasHash := result["hash"].(string)
-	if len(result) != 2 || result["version"] != "0.0.55" || !hasHash {
+	if len(result) != 2 || result["version"] != "0.0.56" || !hasHash {
 		t.Fatalf("unexpected health response: %#v", result)
 	}
 }
