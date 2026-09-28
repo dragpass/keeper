@@ -113,7 +113,7 @@ func (s *Store) Reserve(conversationID string, count int, wm ServerWatermark) (R
 	}
 	var out Reservation
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
 		if err != nil {
 			return err
 		}
@@ -158,7 +158,7 @@ func (s *Store) CommitOutbox(
 		created bool
 	)
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
 		if err != nil {
 			return err
 		}
@@ -221,7 +221,7 @@ func (s *Store) MarkReceived(
 		generation uint64
 	)
 	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadChecked(p, conversationID, wm)
+		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
 		if err != nil {
 			return err
 		}
@@ -544,6 +544,24 @@ func (s *Store) loadLocal(p convPaths, conversationID string) (*Record, Anchor, 
 		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseRollback)
 	}
 	return rec, anchor, nil
+}
+
+// loadCheckedStatic is loadChecked for the actions that send on the account's
+// static chain: an untouched record still judges the account's watermark as
+// its own, as before MLS.
+func (s *Store) loadCheckedStatic(
+	p convPaths, conversationID string, wm ServerWatermark,
+) (*Record, Anchor, error) {
+	rec, anchor, err := s.loadLocal(p, conversationID)
+	if err != nil {
+		return nil, anchor, err
+	}
+	rec.staticChain = true
+	checked, anchor, err := s.judgeWatermark(p, rec, anchor, wm)
+	if checked != nil {
+		checked.staticChain = false
+	}
+	return checked, anchor, err
 }
 
 // judgeWatermark is loadChecked's second half.
