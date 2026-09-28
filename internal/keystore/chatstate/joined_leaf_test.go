@@ -147,3 +147,24 @@ func TestAnAnchorHoldingAnotherLeafsClaimIsReplacedByThisLeafs(t *testing.T) {
 		t.Fatal("this leaf's stored claim stopped protecting its chain")
 	}
 }
+
+// A device with no group here yet (a recovered identity, a device that took
+// the account over, a new device before its Welcome) asks for the
+// conversation's status. The permit carries the account's watermark, which is
+// another device's chain: nothing on this device has sent anything. The status
+// answers without a latch, and the Welcome that seats it later still joins.
+func TestAStatusBeforeTheFirstJoinIgnoresTheAccountsWatermark(t *testing.T) {
+	store, _ := newTestStore(t)
+	other := ServerWatermark{Epoch: 6, LeafIndex: 1, NextApplicationIndex: 5}
+	status, err := store.Status(testConvA, other, &fakeInbound{})
+	if err != nil || status.NeedsRekey {
+		t.Fatalf("status before the first join = %+v, %v; want no latch", status, err)
+	}
+	anchor := anchorForTest(t, store, testConvA)
+	if anchor.NeedsRekey || anchor.hasWatermark() {
+		t.Fatalf("another chain's watermark reached the anchor: %+v", anchor)
+	}
+	if _, err := store.SaveJoinedGroupState(testConvA, other, fakeState(7, 2, 0), 7, 2, nil); err != nil {
+		t.Fatalf("join after the status = %v", err)
+	}
+}

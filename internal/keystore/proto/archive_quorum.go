@@ -125,10 +125,28 @@ type RewrappedShareInput struct {
 //	                 (the org_owner_archive grant's encrypted_group_dek).
 //	RecipientPublicKeys: target members' Keeper public keys — the re-grant
 //	                 recipients.
+//	Recipients / OwnerAccountID (0.0.56): the pin-carrying shape of the
+//	                 same list, as on dek_unwrap_and_rewrap_for_many; exactly
+//	                 one of the two shapes per call.
 type ArchiveQuorumCombineAndRewrapRequest struct {
 	RewrappedShares     []RewrappedShareInput `json:"rewrapped_shares"`
 	WrappedOldDEKB64    string                `json:"wrapped_old_dek_b64"`
-	RecipientPublicKeys []string              `json:"recipient_public_keys"`
+	RecipientPublicKeys []string              `json:"recipient_public_keys,omitempty"`
+	Recipients          []DEKRewrapRecipient  `json:"recipients,omitempty"`
+	OwnerAccountID      string                `json:"owner_account_id,omitempty"`
+}
+
+// RecipientList reads both shapes as one list; a flat entry carries no
+// account id and so is exempt from the pin.
+func (r ArchiveQuorumCombineAndRewrapRequest) RecipientList() []DEKRewrapRecipient {
+	if len(r.Recipients) > 0 {
+		return r.Recipients
+	}
+	out := make([]DEKRewrapRecipient, len(r.RecipientPublicKeys))
+	for i, key := range r.RecipientPublicKeys {
+		out[i] = DEKRewrapRecipient{PublicKey: key}
+	}
+	return out
 }
 
 func (r ArchiveQuorumCombineAndRewrapRequest) Validate() error {
@@ -145,6 +163,15 @@ func (r ArchiveQuorumCombineAndRewrapRequest) Validate() error {
 	}
 	if _, err := requireBase64(r.WrappedOldDEKB64, "wrapped_old_dek_b64"); err != nil {
 		return err
+	}
+	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if len(r.Recipients) > 0 {
+		if len(r.RecipientPublicKeys) > 0 {
+			return newValidationError("recipients", "must not be sent together with recipient_public_keys")
+		}
+		return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
 	}
 	if len(r.RecipientPublicKeys) == 0 {
 		return newValidationError("recipient_public_keys", "must not be empty")

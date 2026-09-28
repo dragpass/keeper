@@ -28,12 +28,17 @@ var (
 	keeperBinary    string
 	keeperBuildErr  error
 	keeperBuildDir  string
+	// extraBuildDirs holds other Keeper builds (the MLS one) for TestMain to
+	// remove.
+	extraBuildDirs []string
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if keeperBuildDir != "" {
-		os.RemoveAll(keeperBuildDir)
+	for _, dir := range append(extraBuildDirs, keeperBuildDir) {
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
 	}
 	os.Exit(code)
 }

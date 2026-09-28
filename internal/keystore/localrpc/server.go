@@ -85,6 +85,14 @@ type Server struct {
 	mu         sync.Mutex
 	sessions   map[string]session
 	challenges map[string]time.Time
+	// onAction observes every action an App route runs. Nil outside tests;
+	// it lets a test see inside a route Keeper composes itself.
+	onAction func(action string, payload []byte, response proto.BaseResponse)
+	// writeTimeout is the server-wide write deadline; longWriteTimeout
+	// replaces it per request on routes whose answer can take longer
+	// (longWriteRoute).
+	writeTimeout     time.Duration
+	longWriteTimeout time.Duration
 }
 
 type session struct {
@@ -137,6 +145,9 @@ func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Serve
 		proxy:      &proxyReceiver{key: secret.NativeProxyKey(), instance: instance, seen: make(map[string]time.Time)},
 		sessions:   make(map[string]session),
 		challenges: make(map[string]time.Time),
+
+		writeTimeout:     8 * time.Second,
+		longWriteTimeout: 60 * time.Second,
 	}, nil
 }
 
@@ -162,7 +173,7 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener) error
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       8 * time.Second,
-		WriteTimeout:      8 * time.Second,
+		WriteTimeout:      s.writeTimeout,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8 * 1024,
 	}
@@ -188,7 +199,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-DragPass-Local-RPC, X-DragPass-CSRF, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-DragPass-Local-RPC, X-DragPass-CSRF, Authorization, "+chatRuntimeEpochHeader)
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodOptions {
 		if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
@@ -200,6 +211,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("X-DragPass-Local-RPC") != "1" || !isAppFetch(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
+	}
+	if r.Method == http.MethodPost && longWriteRoute(r.URL.Path) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.longWriteTimeout))
 	}
 	if r.Method == http.MethodPost {
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -223,6 +237,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	route, isAppRoute := appRoutes[r.URL.Path]
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -290,8 +305,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionSaveSessionCode, func() any {
 			return &proto.SaveSessionCodeRequest{}
 		})
-	case r.Method == http.MethodPost && appRoutes[r.URL.Path].action != "":
-		s.serveAppRoute(w, r, appRoutes[r.URL.Path])
+	case r.Method == http.MethodPost && isAppRoute:
+		s.serveAppRoute(w, r, route)
 	default:
 		http.NotFound(w, r)
 	}
@@ -327,7 +342,7 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	response, err := s.handle(action, payload)
+	response, err := s.handle(request.token, action, payload)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
@@ -345,14 +360,25 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 	s.writeSealed(w, request, response)
 }
 
-// appRequest is one opened, authenticated App request.
+// appRequest is one opened, authenticated App request. epoch is the chat
+// runtime epoch the App presented ("" for none).
 type appRequest struct {
 	session session
 	token   string
 	path    string
 	nonce   string
 	plain   []byte
+	epoch   string
 }
+
+// chatRuntimeEpochHeader carries the epoch the App's chat runtime was granted
+// at claim. It sits outside the sealed body so every route keeps its action's
+// own request shape. It is a fencing token, not a credential: the session
+// already authenticates the caller, and the value only lets Keeper tell work
+// from before a revocation apart from work after it.
+const chatRuntimeEpochHeader = "X-DragPass-Chat-Runtime-Epoch"
+
+var chatRuntimeEpochPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,43}\.[0-9]{1,20}$`)
 
 // openAppRequest authenticates the session, opens the sealed body and refuses
 // a replayed envelope. Every answer that is not a sealed 200 is a failure the
@@ -364,7 +390,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 	s.mu.Lock()
 	current, ok := s.sessions[token]
 	if !ok || !now.Before(current.expires) {
-		delete(s.sessions, token)
+		s.deleteSessionLocked(token)
 		s.mu.Unlock()
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return appRequest{}, false
@@ -373,6 +399,11 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 	s.mu.Unlock()
 	if !validCSRF || r.Header.Get("Origin") != current.origin {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return appRequest{}, false
+	}
+	epoch := r.Header.Get(chatRuntimeEpochHeader)
+	if epoch != "" && !chatRuntimeEpochPattern.MatchString(epoch) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return appRequest{}, false
 	}
 	var envelope sealedEnvelope
@@ -408,7 +439,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		return appRequest{}, false
 	}
 	current.sealed[envelope.Nonce] = struct{}{}
-	return appRequest{session: current, token: token, path: r.URL.Path, nonce: envelope.Nonce, plain: plain}, true
+	return appRequest{session: current, token: token, path: r.URL.Path, nonce: envelope.Nonce, plain: plain, epoch: epoch}, true
 }
 
 // writeSealed answers under the session key, bound to the request it answers.
@@ -435,7 +466,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	response, err := s.handle("request_key_status", nil)
+	response, err := s.handle(request.token, "request_key_status", nil)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -541,7 +572,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin stri
 	s.mu.Lock()
 	for key, value := range s.sessions {
 		if !now.Before(value.expires) {
-			delete(s.sessions, key)
+			s.deleteSessionLocked(key)
 		}
 	}
 	if len(s.sessions) >= 64 {
@@ -583,6 +614,7 @@ func (s *Server) refreshSecret() error {
 	s.secret = latest
 	s.appKey = latest.AppPairingKey()
 	s.sessions = make(map[string]session)
+	s.app.DropAllChatRuntimeSessions()
 	s.challenges = make(map[string]time.Time)
 	s.proxy.rekey(latest.NativeProxyKey())
 	return nil
@@ -595,9 +627,15 @@ func constantTimeEqual(provided, expected string) bool {
 func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 	token := bearerToken(r)
 	s.mu.Lock()
-	delete(s.sessions, token)
+	s.deleteSessionLocked(token)
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteSessionLocked ends a session and the chat runtime lease bound to it.
+func (s *Server) deleteSessionLocked(token string) {
+	delete(s.sessions, token)
+	s.app.DropChatRuntimeSession(token)
 }
 
 func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
@@ -624,7 +662,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	current, ok := s.sessions[token]
 	if !ok || !s.now().Before(current.expires) {
-		delete(s.sessions, token)
+		s.deleteSessionLocked(token)
 		s.mu.Unlock()
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -652,7 +690,15 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		input.Nonce, input.BodySHA256, input.AccountID, input.TokenID, input.DeviceID,
 	}, "\n")
 	body, _ := json.Marshal(map[string]string{"canonical_request": canonical})
-	response, err := s.handle("sign_request", body)
+	sign := s.handle
+	if isChatWrite(input.Method, input.Path) {
+		sign = func(session, action string, payload []byte) (proto.BaseResponse, error) {
+			return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
+				return s.app.HandleAppChatWrite(session, request.epoch, msg)
+			})
+		}
+	}
+	response, err := sign(token, "sign_request", body)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -704,20 +750,61 @@ func validUUID(value string) bool {
 	return value == strings.ToLower(value) && uuidPattern.MatchString(value)
 }
 
-func (s *Server) handle(action string, payload []byte) (proto.BaseResponse, error) {
-	request := map[string]any{"action": action}
+// isChatWrite is a server request that changes chat: every non-GET under
+// the conversations and chat API, except fetching a state permit, which
+// writes nothing. Keeper signs one only for the chat runtime lease holder at
+// the current epoch, so a runtime revoked by a logout or reset cannot post a
+// message or a Commit even with a request it built before.
+func isChatWrite(method, path string) bool {
+	if method == http.MethodGet {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/v1/chat/") {
+		return true
+	}
+	if path != "/api/v1/conversations" && !strings.HasPrefix(path, "/api/v1/conversations/") {
+		return false
+	}
+	parts := strings.Split(path, "/")
+	return !(method == http.MethodPost && len(parts) == 6 && parts[5] == "state-permit")
+}
+
+// handle runs one action as the App caller bound to session ("" for Keeper's
+// own reads, which no lease-gated action accepts), presenting no chat runtime
+// epoch. The payload travels as the exact bytes given.
+func (s *Server) handle(session, action string, payload []byte) (proto.BaseResponse, error) {
+	return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
+		return s.app.HandleAppRequest(session, "", msg)
+	})
+}
+
+// handleRequest is handle for an opened App request, presenting its epoch.
+func (s *Server) handleRequest(request appRequest, action string, payload []byte) (proto.BaseResponse, error) {
+	return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
+		return s.app.HandleAppRequest(request.token, request.epoch, msg)
+	})
+}
+
+func (s *Server) dispatch(action string, payload []byte, run func([]byte) proto.BaseResponse) (proto.BaseResponse, error) {
+	request := struct {
+		Action  string          `json:"action"`
+		Payload json.RawMessage `json:"payload,omitempty"`
+	}{Action: action}
 	if len(payload) > 0 {
-		var decoded any
-		if err := json.Unmarshal(payload, &decoded); err != nil {
-			return proto.BaseResponse{}, err
+		if !json.Valid(payload) {
+			return proto.BaseResponse{}, errors.New("payload is not JSON")
 		}
-		request["payload"] = decoded
+		request.Payload = payload
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return proto.BaseResponse{}, err
 	}
-	return s.app.HandleRequest(encoded), nil
+	response := run(encoded)
+	if s.onAction != nil {
+		s.onAction(action, payload, response)
+	}
+	return response, nil
 }
 
 func randomToken() (string, error) {

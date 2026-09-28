@@ -27,6 +27,7 @@ var ChatCapabilities = []string{
 	"sync_block.v1",       // a refused received Commit blocks the row, not the conversation
 	"safety_number.v1",    // pairwise safety number on peer_key_pin_verify
 	"removed_accounts.v1", // mls_process reports the accounts a confirmed Commit removed
+	"app_runtime.v1",      // chat runtime lease and the App's /v1/chat/* local routes
 }
 
 type PingResponseData struct {
