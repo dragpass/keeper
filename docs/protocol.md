@@ -179,7 +179,7 @@ recovery / request signing. The private key never leaves its slot.
 |---|---|---|---|
 |`archive_key_generate`|_empty_|`{ publickey, fingerprint }`|Generate an RSA archive keypair if no active key exists. If one already exists, idempotently return only its metadata. `publickey` is a PEM string; `fingerprint` is `hex(sha256(publickey PEM))`.|
 |`archive_key_status`|_empty_|`{ has_active, publickey?, fingerprint? }`|Whether an active archive key exists + the public key. Before enable, has_active=false.|
-|`archive_unwrap_and_rewrap`|`wrapped_for_archive_b64`, `recipient_public_key`|`{ encrypted_for_other_b64 }`|Break-glass re-grant composite. Unwrap an OLD Group DEK wrapped to the archive public key (`org_owner_archive` grant) with the archive private key → RSA-OAEP re-wrap to a target member's public key. raw Group DEK lives only in Keeper memory (memguard); the response carries only the new wrap. Unwrap tries the org slot first and falls back to the **account archive slot** on decrypt failure — after an ownership handoff, grants are wrapped to the new owner's account directory key. Both slots empty → `not_found`. Same raw-free pattern as `dek_rewrap_for_member`.|
+|`archive_unwrap_and_rewrap`|`wrapped_for_archive_b64`, `recipient_public_key`, optional `owner_account_id` + `recipient_account_id` (together) and `rotation_statements` (0.0.56)|`{ encrypted_for_other_b64 }`|Break-glass re-grant composite. With the account ids the recipient is judged by the peer key pin exactly as on `dek_rewrap_for_member`, before the archive key is touched; `changed` refuses with `peer_key_changed` and nothing is wrapped. Unwrap an OLD Group DEK wrapped to the archive public key (`org_owner_archive` grant) with the archive private key → RSA-OAEP re-wrap to a target member's public key. raw Group DEK lives only in Keeper memory (memguard); the response carries only the new wrap. Unwrap tries the org slot first and falls back to the **account archive slot** on decrypt failure — after an ownership handoff, grants are wrapped to the new owner's account directory key. Both slots empty → `not_found`. Same raw-free pattern as `dek_rewrap_for_member`.|
 |`archive_key_rotate_begin`|_empty_|`{ publickey, fingerprint }`|Same-device rotation, step 1. Generate a NEW archive keypair into the **staging** slot (`org_archive_private_key_staging`) and return its public key + fingerprint. The **active** slot is left untouched, so `archive_unwrap_and_rewrap` keeps unwrapping with the OLD active key until commit — the caller re-wraps every existing grant to this new `publickey` first. `archive_key_generate` is idempotent and can't do this on the same device. Any abandoned staging is wiped and replaced. No active key present → `validation_error` (first-time enable is `archive_key_generate`, not a rotation).|
 |`archive_key_rotate_commit`|_empty_|`{ fingerprint }`|Same-device rotation, step 2. Promote the staged keypair to the active slot; the Save over the active private-key slot replaces (wipes) the old active private key at rest. Clears the staging slot. Returns the promoted (now active) key `fingerprint`. No staging present → `not_found`.|
 |`archive_key_rotate_abort`|_empty_|`{ aborted }`|Discard the staging slot without touching the active key. `aborted=true` when a staged key was cleared, `false` when there was none (no-op success). Cleanup for a rotation that was never committed.|
@@ -222,7 +222,7 @@ dependency).
 |`archive_share_rewrap`|`wrapped_key`, `ciphertext`, `session_public_key`|`{ wrapped_key, ciphertext }`|An approving admin re-wraps their own share from their ACCOUNT archive key (the dedicated account slot — the key the share was wrapped to at split time; the org slot is not consulted) to the recovery session public key. Distinct from `archive_unwrap_and_rewrap` because shares are hybrid envelopes, not 32-byte DEKs. Missing account archive slot → `not_found`.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
 |`archive_session_end`|_empty_|`{ ended }`|Destroy the recovery-session keypair. Idempotent (`ended=false` when none was open).|
-|`archive_quorum_combine_and_rewrap`|`rewrapped_shares[]` (each `{ wrapped_key, ciphertext }` to the session key), `wrapped_old_dek_b64`, `recipient_public_keys[]`|`{ grants: [{ recipient_fingerprint, encrypted_group_dek_b64 }] }`|Coordinator unwraps the re-wrapped shares with the session private key, Shamir-reconstructs the archive private key, RSA-OAEP-unwraps the OLD Group DEK, and re-wraps it to each target member. All reconstructed key material (shares, private key, raw DEK) lives only in memguard and is wiped before returning. Below-threshold or tampered shares reconstruct a non-parsable key → `crypto_failure` (no silent wrong-DEK leak). Missing session slot → `not_found`.|
+|`archive_quorum_combine_and_rewrap`|`rewrapped_shares[]` (each `{ wrapped_key, ciphertext }` to the session key), `wrapped_old_dek_b64`, and either `recipient_public_keys[]` or (0.0.56) `owner_account_id` + `recipients[]` (`{ account_id?, public_key, rotation_statements? }`, as on `dek_unwrap_and_rewrap_for_many`; not both)|`{ grants: [{ recipient_fingerprint, encrypted_group_dek_b64 }] }`|With `recipients[]` every recipient naming an account is judged by its pin before anything is reassembled; one `changed` refuses the whole call. Coordinator unwraps the re-wrapped shares with the session private key, Shamir-reconstructs the archive private key, RSA-OAEP-unwraps the OLD Group DEK, and re-wraps it to each target member. All reconstructed key material (shares, private key, raw DEK) lives only in memguard and is wiped before returning. Below-threshold or tampered shares reconstruct a non-parsable key → `crypto_failure` (no silent wrong-DEK leak). Missing session slot → `not_found`.|
 
 ### Server key distribution (Phase 13b)
 
@@ -2164,15 +2164,29 @@ Native Messaging only.
 `account_archive_key_status`, `archive_key_rotate_begin`,
 `archive_key_rotate_commit`, `archive_key_rotate_abort`,
 `archive_session_begin`, `archive_session_end` (all `{}`),
-`archive_key_split` (512 KiB), `archive_share_rewrap`,
-`archive_quorum_combine_and_rewrap` (512 KiB), each with the action's request,
-and `archive_unwrap_and_rewrap` with its own shape:
-`{ wrapped_for_archive_b64, to_staged_archive_key: true }` wraps to the staged
-key of the rotation in progress, which Keeper reads itself (400 when nothing is
-staged), and `{ wrapped_for_archive_b64, recipient_public_key }` keeps the
-Extension's caller-chosen recipient for break-glass re-grant and ownership
-handoff. Exactly one of the two. The split, share rewrap and quorum combine
-recipients are caller-chosen on the Extension path too and stay so.
+`archive_key_split` (512 KiB) and `archive_share_rewrap`, each with the
+action's request. Two routes have their own shape (0.0.56), so a member
+account key is always pin-checked:
+
+- `archive_unwrap_and_rewrap`, exactly one target:
+  `{ wrapped_for_archive_b64, to_staged_archive_key: true }` wraps to the
+  staged key of the rotation in progress, which Keeper reads itself (400 when
+  nothing is staged);
+  `{ wrapped_for_archive_b64, recipient_public_key, owner_account_id,
+  recipient_account_id, rotation_statements? }` is a break-glass re-grant to a
+  member's account key, both ids required, judged by the pin (`changed`
+  refuses with `peer_key_changed`);
+  `{ wrapped_for_archive_b64, account_archive_public_key }` is an ownership
+  handoff to the new owner's account archive key.
+- `archive_quorum_combine_and_rewrap` (512 KiB):
+  `{ rewrapped_shares, wrapped_old_dek_b64, owner_account_id, recipients }`,
+  every recipient `{ account_id, public_key, rotation_statements? }` naming its
+  account; there is no `recipient_public_keys[]`.
+
+Accepted gap (threat model §4.11): the handoff target, the split recipients
+(account archive keys) and the share rewrap target (the ephemeral key of a
+recovery session) are keys no pin tracks, so they stay caller-chosen, as on
+the Extension path.
 
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,

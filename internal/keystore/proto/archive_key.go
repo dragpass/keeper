@@ -101,16 +101,40 @@ type AccountArchiveKeyStatusResponseData struct {
 //	is tried, covering handoff-received grants wrapped to the account
 //	directory key) and re-wrapped to this key; the response carries only the
 //	new wrap.
+//
+// OwnerAccountID / RecipientAccountID / RotationStatements (0.0.56) name
+// whose account key RecipientPublicKey is meant to be, as on
+// dek_rewrap_for_member, and turn the peer key pin on. Without them the
+// recipient is unchecked (the Native Messaging shape, and an ownership
+// handoff, whose target is an account archive key no pin tracks).
 type ArchiveUnwrapAndRewrapRequest struct {
-	WrappedForArchiveB64 string `json:"wrapped_for_archive_b64"`
-	RecipientPublicKey   string `json:"recipient_public_key"`
+	WrappedForArchiveB64 string                 `json:"wrapped_for_archive_b64"`
+	RecipientPublicKey   string                 `json:"recipient_public_key"`
+	OwnerAccountID       string                 `json:"owner_account_id,omitempty"`
+	RecipientAccountID   string                 `json:"recipient_account_id,omitempty"`
+	RotationStatements   []KeyRotationStatement `json:"rotation_statements,omitempty"`
 }
 
 func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForArchiveB64, "wrapped_for_archive_b64"); err != nil {
 		return err
 	}
-	return requirePEM(r.RecipientPublicKey, "recipient_public_key")
+	if err := requirePEM(r.RecipientPublicKey, "recipient_public_key"); err != nil {
+		return err
+	}
+	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if err := requireOptionalAccountUUID(r.RecipientAccountID, "recipient_account_id"); err != nil {
+		return err
+	}
+	if (r.OwnerAccountID == "") != (r.RecipientAccountID == "") {
+		return newValidationError("owner_account_id", "must be sent together with recipient_account_id")
+	}
+	if r.RecipientAccountID == "" && len(r.RotationStatements) > 0 {
+		return newValidationError("rotation_statements", "must name the recipient account")
+	}
+	return ValidateKeyRotationStatements(r.RotationStatements)
 }
 
 type ArchiveUnwrapAndRewrapResponseData struct {

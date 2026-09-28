@@ -298,11 +298,13 @@ var peerKeyRoutes = map[string]appRoute{
 }
 
 // archiveRoutes is the org archive key, break-glass and quorum surface.
-// Recipients chosen by the caller (split, share rewrap, quorum combine,
-// break-glass and handoff rewrap) keep the Extension's parity: they are org
-// admins, members or a recovery session the server names, with no account pin
-// to check (threat model §4.11 accepted gap). The one target Keeper knows
-// itself, the staged key of a rotation, is bound here.
+// Recipients that are member account keys (a break-glass re-grant, a quorum
+// combine) must name their accounts, so Keeper judges each against its peer
+// key pin as rewrap-for-member does, and a changed key refuses. The rest name
+// keys no pin tracks, and stay the threat model §4.11 accepted gap: an
+// ownership handoff and a split go to account archive keys, and a share
+// rewrap to the ephemeral key of a recovery session. The one target Keeper
+// knows itself, the staged key of a rotation, is bound here.
 var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_generate":         archiveEmptyRoute(proto.ActionArchiveKeyGenerate),
 	"/v1/archive/archive_key_status":           archiveEmptyRoute(proto.ActionArchiveKeyStatus),
@@ -331,7 +333,8 @@ var archiveRoutes = map[string]appRoute{
 	},
 	"/v1/archive/archive_quorum_combine_and_rewrap": {
 		action:     proto.ActionArchiveQuorumCombineAndRewrap,
-		input:      func() any { return &proto.ArchiveQuorumCombineAndRewrapRequest{} },
+		input:      func() any { return &appQuorumCombine{} },
+		bind:       bindQuorumCombine,
 		plainLimit: proto.DEKRewrapMaxRequestBytes,
 	},
 }
@@ -340,21 +343,44 @@ func archiveEmptyRoute(action string) appRoute {
 	return appRoute{action: action, input: func() any { return &struct{}{} }}
 }
 
-// appArchiveRewrap names its target: either the staged archive key of a
-// rotation in progress, which Keeper reads itself, or a recipient key for a
-// break-glass re-grant or an ownership handoff. Exactly one.
+// appArchiveRewrap names its target, exactly one of: the staged archive key
+// of a rotation in progress, which Keeper reads itself; a member's account key
+// for a break-glass re-grant, with both account ids so the pin is enforced;
+// or the new owner's account archive key for an ownership handoff.
 type appArchiveRewrap struct {
-	WrappedForArchiveB64 string `json:"wrapped_for_archive_b64"`
-	RecipientPublicKey   string `json:"recipient_public_key,omitempty"`
-	ToStagedArchiveKey   bool   `json:"to_staged_archive_key,omitempty"`
+	WrappedForArchiveB64    string                       `json:"wrapped_for_archive_b64"`
+	ToStagedArchiveKey      bool                         `json:"to_staged_archive_key,omitempty"`
+	RecipientPublicKey      string                       `json:"recipient_public_key,omitempty"`
+	OwnerAccountID          string                       `json:"owner_account_id,omitempty"`
+	RecipientAccountID      string                       `json:"recipient_account_id,omitempty"`
+	RotationStatements      []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
+	AccountArchivePublicKey string                       `json:"account_archive_public_key,omitempty"`
 }
 
 func bindArchiveRewrap(s *Server, input any) (any, error) {
 	in := input.(*appArchiveRewrap)
-	if in.ToStagedArchiveKey == (in.RecipientPublicKey != "") {
+	member := in.RecipientPublicKey != ""
+	handoff := in.AccountArchivePublicKey != ""
+	named := in.OwnerAccountID != "" || in.RecipientAccountID != "" || len(in.RotationStatements) > 0
+	targets := 0
+	for _, chosen := range []bool{in.ToStagedArchiveKey, member, handoff} {
+		if chosen {
+			targets++
+		}
+	}
+	if targets != 1 || named != member || (member && (in.OwnerAccountID == "" || in.RecipientAccountID == "")) {
 		return nil, errAppRouteRefused
 	}
-	target := in.RecipientPublicKey
+	if member {
+		return proto.ArchiveUnwrapAndRewrapRequest{
+			WrappedForArchiveB64: in.WrappedForArchiveB64,
+			RecipientPublicKey:   in.RecipientPublicKey,
+			OwnerAccountID:       in.OwnerAccountID,
+			RecipientAccountID:   in.RecipientAccountID,
+			RotationStatements:   in.RotationStatements,
+		}, nil
+	}
+	target := in.AccountArchivePublicKey
 	if in.ToStagedArchiveKey {
 		// A public key, read without the request lock: a rotate_begin that
 		// lands in between restages, and this grant goes to the key the App
@@ -369,5 +395,32 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 	return proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: in.WrappedForArchiveB64,
 		RecipientPublicKey:   target,
+	}, nil
+}
+
+// appQuorumCombine is the combine with only the pin-carrying recipient list:
+// every re-grant target names its account.
+type appQuorumCombine struct {
+	RewrappedShares  []proto.RewrappedShareInput `json:"rewrapped_shares"`
+	WrappedOldDEKB64 string                      `json:"wrapped_old_dek_b64"`
+	OwnerAccountID   string                      `json:"owner_account_id"`
+	Recipients       []proto.DEKRewrapRecipient  `json:"recipients"`
+}
+
+func bindQuorumCombine(_ *Server, input any) (any, error) {
+	in := input.(*appQuorumCombine)
+	if in.OwnerAccountID == "" || len(in.Recipients) == 0 {
+		return nil, errAppRouteRefused
+	}
+	for _, recipient := range in.Recipients {
+		if recipient.AccountID == "" {
+			return nil, errAppRouteRefused
+		}
+	}
+	return proto.ArchiveQuorumCombineAndRewrapRequest{
+		RewrappedShares:  in.RewrappedShares,
+		WrappedOldDEKB64: in.WrappedOldDEKB64,
+		OwnerAccountID:   in.OwnerAccountID,
+		Recipients:       in.Recipients,
 	}, nil
 }

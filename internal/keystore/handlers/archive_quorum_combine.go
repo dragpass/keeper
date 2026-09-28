@@ -39,14 +39,28 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 		return errs.Response(err)
 	}
 
-	pubs := make([]*rsa.PublicKey, len(req.RecipientPublicKeys))
-	for i, pem := range req.RecipientPublicKeys {
-		pk, err := crypto.ParsePublicKey(pem)
+	recipients := req.RecipientList()
+	pubs := make([]*rsa.PublicKey, len(recipients))
+	checks := make([]peerKeyPinCheck, len(recipients))
+	for i, recipient := range recipients {
+		pk, err := crypto.ParsePublicKey(recipient.PublicKey)
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeValidation,
-				fmt.Sprintf("failed to parse recipient_public_keys[%d]: %v", i, err))
+				fmt.Sprintf("failed to parse recipient public key [%d]: %v", i, err))
 		}
 		pubs[i] = pk
+		checks[i] = peerKeyPinCheck{
+			accountID:  recipient.AccountID,
+			observed:   crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
+			statements: recipient.RotationStatements,
+		}
+	}
+	// Every recipient is judged before the archive key is reassembled, so a
+	// refusal leaves nothing half granted and no key material ever opened.
+	if len(req.Recipients) > 0 {
+		if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, checks); !ok {
+			return pinResp
+		}
 	}
 
 	wrappedOldDEK, err := base64.StdEncoding.DecodeString(req.WrappedOldDEKB64)
@@ -120,7 +134,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 				fmt.Sprintf("re-wrap for recipient %d failed: %v", i, encErr))
 		}
 		grants[i] = proto.QuorumRewrapGrant{
-			RecipientFingerprint: fingerprintBase64Public(req.RecipientPublicKeys[i]),
+			RecipientFingerprint: fingerprintBase64Public(recipients[i].PublicKey),
 			EncryptedGroupDEKB64: base64.StdEncoding.EncodeToString(enc),
 		}
 	}

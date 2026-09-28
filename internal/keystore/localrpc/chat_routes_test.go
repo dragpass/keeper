@@ -593,22 +593,50 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 		t.Fatal("the rotation rewrap is not to the staged archive key")
 	}
 
-	// Break-glass and handoff keep the Extension's caller-chosen recipient.
-	member := routeKeypair(t)
-	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey})
+	// Break-glass re-grants to a member's account key, judged by its pin.
+	member, stranger := routeKeypair(t), routeKeypair(t)
+	regrant := func(key string) map[string]any {
+		return map[string]any{
+			"wrapped_for_archive_b64": wrapped, "recipient_public_key": key,
+			"owner_account_id": routeOwner, "recipient_account_id": routePeer,
+		}
+	}
+	code, result, body = rewrap(regrant(member.PublicKey))
 	if code != http.StatusOK || !result.Success {
-		t.Fatalf("recipient rewrap: %d %s", code, body)
+		t.Fatalf("member re-grant: %d %s", code, body)
 	}
 	_ = json.Unmarshal(result.Data, &data)
 	if !bytes.Equal(openWith(t, member.PrivateKey, data.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("the recipient rewrap did not reach the recipient")
+		t.Fatal("the member re-grant did not reach the member")
+	}
+	code, result, body = rewrap(regrant(stranger.PublicKey))
+	if code != http.StatusOK || result.Success || result.ErrorCode != "peer_key_changed" || strings.Contains(body, "encrypted_for_other") {
+		t.Fatalf("re-grant to a changed key: %d %s", code, body)
+	}
+
+	// An ownership handoff goes to the new owner's account archive key, which
+	// no pin tracks; the route says so by name.
+	handoff := routeKeypair(t)
+	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "account_archive_public_key": handoff.PublicKey})
+	if code != http.StatusOK || !result.Success {
+		t.Fatalf("handoff rewrap: %d %s", code, body)
+	}
+	_ = json.Unmarshal(result.Data, &data)
+	if !bytes.Equal(openWith(t, handoff.PrivateKey, data.EncryptedForOtherB64), groupDEK) {
+		t.Fatal("the handoff rewrap did not reach the new owner")
 	}
 
 	for name, request := range map[string]map[string]any{
-		"both targets":   {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey, "to_staged_archive_key": true},
-		"no target":      {"wrapped_for_archive_b64": wrapped},
-		"a false flag":   {"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": false},
-		"an extra field": {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey, "target": "x"},
+		"both targets":             {"wrapped_for_archive_b64": wrapped, "account_archive_public_key": member.PublicKey, "to_staged_archive_key": true},
+		"no target":                {"wrapped_for_archive_b64": wrapped},
+		"a false flag":             {"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": false},
+		"an extra field":           {"wrapped_for_archive_b64": wrapped, "account_archive_public_key": member.PublicKey, "target": "x"},
+		"an unnamed recipient":     {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey},
+		"no owner":                 {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey, "recipient_account_id": routePeer},
+		"no recipient account":     {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey, "owner_account_id": routeOwner},
+		"a named handoff":          {"wrapped_for_archive_b64": wrapped, "account_archive_public_key": member.PublicKey, "recipient_account_id": routePeer, "owner_account_id": routeOwner},
+		"a member and a handoff":   {"wrapped_for_archive_b64": wrapped, "recipient_public_key": member.PublicKey, "account_archive_public_key": member.PublicKey, "owner_account_id": routeOwner, "recipient_account_id": routePeer},
+		"a staged key with a name": {"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner, "recipient_account_id": routePeer},
 	} {
 		if code, _, _ := rewrap(request); code != http.StatusBadRequest {
 			t.Fatalf("rewrap with %s: %d", name, code)

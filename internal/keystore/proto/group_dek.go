@@ -248,7 +248,13 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 		}
 		return nil
 	}
-	if len(r.Recipients) > DEKRewrapMaxRecipients {
+	return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
+}
+
+// validateRewrapRecipients checks a pin-carrying recipient list, shared by
+// every wrap action that takes one.
+func validateRewrapRecipients(recipients []DEKRewrapRecipient, ownerAccountID string) error {
+	if len(recipients) > DEKRewrapMaxRecipients {
 		return newValidationError("recipients", "must hold at most 64 recipients")
 	}
 	// One account may not appear twice. The response lists run parallel to the
@@ -257,8 +263,8 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	// instead of the one the call started from. Either the caller built the
 	// list wrong or something upstream is trying to get two different keys
 	// accepted for one account in a single pass.
-	seenAccounts := make(map[string]struct{}, len(r.Recipients))
-	for _, recipient := range r.Recipients {
+	seenAccounts := make(map[string]struct{}, len(recipients))
+	for _, recipient := range recipients {
 		if recipient.AccountID == "" {
 			continue
 		}
@@ -267,7 +273,7 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 		}
 		seenAccounts[recipient.AccountID] = struct{}{}
 	}
-	for _, recipient := range r.Recipients {
+	for _, recipient := range recipients {
 		if err := requirePEM(recipient.PublicKey, "recipients.public_key"); err != nil {
 			return err
 		}
@@ -276,7 +282,7 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 		}
 		// A pin lives in an owner's set, so naming a peer without naming the
 		// owner asks for a record with nowhere to go.
-		if recipient.AccountID != "" && r.OwnerAccountID == "" {
+		if recipient.AccountID != "" && ownerAccountID == "" {
 			return newValidationError(
 				"owner_account_id",
 				"must be sent when a recipient names an account_id",
