@@ -30,6 +30,16 @@ import (
 // The caller (App) injects log and deps explicitly so the keystore root is
 // not imported, avoiding an import cycle.
 func HandleRequest(log logger.Logger, deps handlers.Deps, msg []byte) proto.BaseResponse {
+	return HandleRequestGated(log, deps, msg, nil)
+}
+
+// Gate may refuse an action before its handler runs. It sees the action the
+// dispatcher is about to run, parsed once, so the two cannot disagree.
+type Gate func(action string) (refusal proto.BaseResponse, admitted bool)
+
+// HandleRequestGated is HandleRequest with a gate consulted after the parse and
+// before the handler. A refusal runs nothing and still echoes the RequestID.
+func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate Gate) proto.BaseResponse {
 	var base proto.BaseRequest
 	if err := json.Unmarshal(msg, &base); err != nil {
 		log.Printf("failed to unmarshal base request: %v", err)
@@ -38,9 +48,22 @@ func HandleRequest(log logger.Logger, deps handlers.Deps, msg []byte) proto.Base
 
 	log.Printf("received action: %s request_id: %s", base.Action, base.RequestID)
 
-	resp := dispatchAction(log, deps, base)
+	var resp proto.BaseResponse
+	if refusal, admitted := admit(gate, base.Action); !admitted {
+		log.Printf("action refused before dispatch: %s", base.Action)
+		resp = refusal
+	} else {
+		resp = dispatchAction(log, deps, base)
+	}
 	resp.RequestID = base.RequestID
 	return resp
+}
+
+func admit(gate Gate, action string) (proto.BaseResponse, bool) {
+	if gate == nil {
+		return proto.BaseResponse{}, true
+	}
+	return gate(action)
 }
 
 // dispatchAction looks up the handler in actionRegistry and forwards deps +

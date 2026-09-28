@@ -24,6 +24,8 @@ type testAppClient struct {
 	session    string
 	csrf       string
 	sessionKey []byte
+	// epoch is the chat runtime epoch last granted, sent on every request.
+	epoch string
 }
 
 func (c *testAppClient) do(method, path string, body []byte, withSession bool) (*http.Response, error) {
@@ -40,6 +42,9 @@ func (c *testAppClient) do(method, path string, body []byte, withSession bool) (
 	if withSession {
 		request.Header.Set("Authorization", "Bearer "+c.session)
 		request.Header.Set("X-DragPass-CSRF", c.csrf)
+		if c.epoch != "" {
+			request.Header.Set(chatRuntimeEpochHeader, c.epoch)
+		}
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	return client.Do(request)
@@ -120,6 +125,17 @@ func (c *testAppClient) call(path string, body any) (proto.BaseResponse, error) 
 	}
 	err = json.Unmarshal(opened, &envelope)
 	return envelope, err
+}
+
+// claim takes the chat runtime lease for holder and keeps the epoch it was
+// granted.
+func (c *testAppClient) claim(holder string) (proto.BaseResponse, error) {
+	response, err := c.call("/v1/chat/runtime/claim", map[string]string{"holder_id": holder})
+	if err == nil && response.Success {
+		raw, _ := json.Marshal(response.Data)
+		c.epoch = epochOf(raw)
+	}
+	return response, err
 }
 
 func (c *testAppClient) status() (proto.BaseResponse, error) {

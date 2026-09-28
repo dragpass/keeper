@@ -138,6 +138,18 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
 	}
 
+	// A re-grant naming the member's account is judged by that member's pin
+	// before the archive key is touched, as dek_rewrap_for_member is.
+	if req.RecipientAccountID != "" {
+		if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, []peerKeyPinCheck{{
+			accountID:  req.RecipientAccountID,
+			observed:   crypto.AccountKeyFingerprint([]byte(req.RecipientPublicKey)),
+			statements: req.RotationStatements,
+		}}); !ok {
+			return pinResp
+		}
+	}
+
 	encrypted, err := base64.StdEncoding.DecodeString(req.WrappedForArchiveB64)
 	if err != nil {
 		d.Logger.Printf("archive unwrap and rewrap error: failed to decode wrapped_for_archive_b64: %v", err)

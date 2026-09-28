@@ -98,7 +98,8 @@ type App struct {
 	MessageChallenges   *handlers.MessageChallengeStore
 	KeyTransparency     keytransparency.Gate
 
-	requestMu sync.Mutex
+	requestMu   sync.Mutex
+	chatRuntime chatRuntimeLease
 }
 
 // NewApp builds an App, filling in production defaults for nil fields in
