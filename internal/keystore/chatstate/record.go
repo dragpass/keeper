@@ -150,6 +150,11 @@ type PendingRoomName struct {
 // which is what lets a single file replacement be the unit of consistency and
 // removes any need for an index or a transaction.
 type Record struct {
+	// staticChain is set, for one load only, by the chat-state actions that
+	// send on the account's static chain (Reserve, CommitOutbox,
+	// MarkReceived). It is never stored.
+	staticChain bool
+
 	SchemaVersion  int    `json:"schema_version"`
 	OwnerAccountID string `json:"owner_account_id"`
 	ConversationID string `json:"conversation_id"`
@@ -415,7 +420,12 @@ func (r *Record) ownsChain(epoch uint64, leaf uint32, accepted bool) bool {
 	}
 	own, known := r.ownLeaf()
 	if !known {
-		return true
+		// An MLS record that never held a group or wrote anything has no
+		// chain of its own: nothing here could have sent. The account's
+		// watermark is another device's (a recovered identity, a device
+		// before its Welcome), and the join judges it again once this
+		// device has a leaf. The static-chain actions keep the old rule.
+		return r.staticChain || len(r.GroupState) > 0 || r.Generation > 0 || r.NextIndex > 0
 	}
 	return leaf == own.Index && epoch >= own.SinceEpoch
 }
