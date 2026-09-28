@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore"
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -184,5 +185,47 @@ func TestAppSignupRoutesRefuseAnotherInputWhileStagedAndAbort(t *testing.T) {
 	}
 	if code, result, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", other); code != http.StatusOK || !result.Success {
 		t.Fatalf("a new signup after the abort: %d %s", code, body)
+	}
+}
+
+// The pending sign-in and the signup retry are account entry, not chat: they
+// run while another App session holds the chat runtime lease, with no epoch,
+// and the same-input retry still answers for the staged key.
+func TestAppPendingLoginRoutesRunBesideAHeldChatRuntimeLease(t *testing.T) {
+	server, _ := newChatTestServer(t)
+	store := server.app.Store.(*keychain.MemorySecretStore)
+	chatSession, chatCSRF := openTestSession(t, server)
+	if granted := claimLease(t, server, chatSession, chatCSRF, routeHolder); !granted.Success {
+		t.Fatalf("claim: %+v", granted)
+	}
+	session, csrf := openTestSession(t, server)
+
+	const alias = "alice"
+	input := map[string]string{"alias": alias, "password": "correct horse battery staple", "recovery_key": "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"}
+	code, prepared, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", input)
+	if code != http.StatusOK || !prepared.Success {
+		t.Fatalf("signup prepare beside the lease: %d %s", code, body)
+	}
+	var first proto.AuthSignupPrepareResponseData
+	_ = json.Unmarshal(prepared.Data, &first)
+	staged := store.Snapshot()
+
+	code, retried, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", input)
+	if code != http.StatusOK || !retried.Success {
+		t.Fatalf("same-input retry beside the lease: %d %s", code, body)
+	}
+	var again proto.AuthSignupPrepareResponseData
+	_ = json.Unmarshal(retried.Data, &again)
+	if again.PublicKey != first.PublicKey || !reflect.DeepEqual(store.Snapshot(), staged) {
+		t.Fatal("the retry did not answer for the staged key without writing")
+	}
+
+	code, signed, body := callRoute(t, server, session, csrf, "/v1/auth/login/pending/sign-alias", map[string]string{"alias": alias})
+	if code != http.StatusOK || !signed.Success {
+		t.Fatalf("pending sign alias beside the lease: %d %s", code, body)
+	}
+
+	if _, result := callWithEpoch(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{}, ""); result.ErrorCode != keystore.ErrCodeChatRuntimeLeaseRequired {
+		t.Fatalf("the signing-in session reached a gated chat route: %+v", result)
 	}
 }

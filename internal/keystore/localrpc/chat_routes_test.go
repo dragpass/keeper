@@ -118,6 +118,7 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/recovery/close",
 	"/v1/auth/recovery/prepare",
 	"/v1/auth/recovery/rewrap-group-dek",
+	"/v1/auth/signup/abort",
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
 	"/v1/chat/chat_state_read_outbox",
