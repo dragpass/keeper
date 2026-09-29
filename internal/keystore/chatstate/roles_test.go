@@ -99,7 +99,7 @@ func TestRoles_OneLeafPerAccountAfterTheCommit(t *testing.T) {
 		if roles != nil && roles.Kind == RolesKindDM {
 			epoch = 0 // a DM adds only at its create
 		}
-		twoNew := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA}, RolesBefore: roles,
+		twoNew := CommitChange{CommitterAccountID: rolesA, CreatorAccountID: rolesA, Before: []string{rolesA}, RolesBefore: roles,
 			Added: []string{rolesB, rolesB}, Epoch: epoch}
 		if err := JudgeReceived(twoNew, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 			t.Errorf("%s: two new leaves of one account in one commit = %v; want refused", name, err)

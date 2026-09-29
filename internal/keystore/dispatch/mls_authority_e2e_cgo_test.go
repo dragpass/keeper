@@ -12,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -82,42 +83,16 @@ func latchedData(t *testing.T, resp proto.BaseResponse) proto.ChatStateRekeyLatc
 	return data
 }
 
-// Q4's repro. Bob, a plain member, runs a client that tells his own Keeper a
-// person asked for the Remove and posts a Commit that declares the member set
-// unchanged while it removes Carol's leaf. The server accepts it (the set is the same)
-// and signs that set. Alice refuses to apply it and stops at that epoch (N3),
-// naming the epoch and the committer; the conversation is not latched,
-// nothing is reset, her history stays readable, a new message is refused,
-// and the same row is refused again each time it is served.
-func TestMLSAuthority_ASameSetRemoveOfAnotherMemberIsRefusedAndBlocks(t *testing.T) {
+// A legacy member cannot build a Remove by claiming the app asked for it.
+// Receipt-side attacks are exercised using a permissive MLS client below in
+// TestMLSAdversary_LegacyRoomRejectsMemberAddAndRemove.
+func TestMLSAuthority_ALegacyMemberCannotBuildARemoveOfAnotherMember(t *testing.T) {
 	r := newRoom(t)
-	before := r.send(r.bob, 1, 2, "carol is still here")
-	shown := r.alice.decrypt(before)
-	assertShown(t, shown, 0, "carol is still here", r.bob, false)
-
-	built := r.bob.userRemove(2, e2eCarol)
-	r.bob.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
-
-	for _, attestation := range []*proto.MLSCommitAttestation{attested(e2eAlice, e2eBob, e2eCarol), nil} {
-		req := r.alice.processRequest(r.nextSeq(), 3, built.CommitB64)
-		req.CommitAttestation = attestation
-		got := blockedData(t, r.alice.call(proto.MLSProcess, req))
-		if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.Epoch != 3 ||
-			got.CommitterAccountID != e2eBob || got.CommitterDeviceID != e2eDevice || got.CommitSHA256 == "" {
-			t.Fatalf("block = %+v", got)
-		}
-	}
-
-	status := r.alice.status()
-	if status.NeedsRekey || status.SyncBlocked == nil || status.SyncBlocked.Epoch != 3 ||
-		status.SyncBlocked.CommitterAccountID != e2eBob || status.Epoch != 2 {
-		t.Fatalf("status after the refusal = %+v", status)
-	}
-	// Not reset: what she already read is still there, and nothing new goes
-	// out on top of a state nobody agreed on.
-	assertShown(t, r.alice.decrypt(before), 0, "carol is still here", r.bob, true)
-	r.alice.refused(proto.MLSEncrypt, r.alice.encryptRequest(messageID(9), 2, "hello"),
-		proto.ChatMLSErrorCodeSyncBlocked)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: r.bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2,
+		RemoveAccountIDs: []string{e2eCarol}, UserInitiated: true,
+	}), proto.ChatMLSErrorCodeCommitUnauthorized)
 }
 
 // N3: a blocked row is not a dead end. Another, valid Commit for the same
@@ -126,16 +101,21 @@ func TestMLSAuthority_ASameSetRemoveOfAnotherMemberIsRefusedAndBlocks(t *testing
 // never moved the confirmed state: the valid Commit applies to the epoch the
 // refused one was built on.
 func TestMLSAuthority_AValidCommitForTheBlockedEpochClearsTheBlock(t *testing.T) {
-	r := newRoom(t)
-	bad := r.bob.userRemove(2, e2eCarol)
-	r.bob.confirm(bad.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
-	blockedData(t, r.alice.call(proto.MLSProcess, r.alice.processRequestAttested(r.nextSeq(), 3, bad.CommitB64,
-		e2eAlice, e2eBob, e2eCarol)))
-
-	good := r.carol.buildUpdate(2)
-	r.carol.confirm(good.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
-	if got := r.alice.process(r.nextSeq(), 3, good.CommitB64); got.Epoch != 3 {
-		t.Fatalf("alice applied the valid commit for the blocked epoch as %+v", got)
+	r := newAdvRoomWithLegacy(t, false, true)
+	lawfulSeq, lawfulB64 := r.lawfulRow()
+	bad, _ := r.adv.Build(mlsadversary.Commit{Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device)}})
+	badSeq := r.nextSeq()
+	badReq := r.alice.processRequest(badSeq, 3, advB64(bad))
+	badReq.CommitAttestation = attested(e2eAlice, e2eCarol, advMallory)
+	blockedData(t, r.alice.call(proto.MLSProcess, badReq))
+	good := commitOf(r.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: r.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: r.alice.nextCommitID(), ExpectedEpoch: 2, UpdateSelf: true,
+	}))
+	r.alice.confirm(good.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	lawful := r.carol.processRequest(lawfulSeq, 2, lawfulB64)
+	if got := r.carol.must(proto.MLSProcess, lawful).Data.(proto.MLSProcessResponseData); got.Epoch != 2 {
+		t.Fatalf("carol caught up on the lawful row at %+v", got)
 	}
 	if st := r.alice.status(); st.SyncBlocked != nil || st.NeedsRekey || st.Epoch != 3 {
 		t.Fatalf("status after the valid commit = %+v", st)
@@ -143,10 +123,9 @@ func TestMLSAuthority_AValidCommitForTheBlockedEpochClearsTheBlock(t *testing.T)
 	r.alice.must(proto.MLSEncrypt, r.alice.encryptRequest(messageID(1), 3, "back in step"))
 }
 
-// Automation cannot build a Remove of a member or an Add in a legacy room:
-// only a person on this device asking for it (legacy_temporary), or for a
-// Remove a signed statement. The Commit authority rules refuse before anything
-// is built.
+// A legacy room's creator may request membership changes. Other members
+// cannot gain that authority from user_initiated; signed statements still let
+// any member carry an authorized removal.
 func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	r := newRoom(t)
 	resp := r.bob.buildRemove(2, e2eCarol)
@@ -183,10 +162,8 @@ func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	})
 }
 
-// In a legacy room an owner's Remove is applied by every receiver whose row
-// names the new member set (R3b, legacy_temporary), and an R-b Remove by a
-// plain member carrying the org admin's statement even once the server no
-// longer lists the departure.
+// In a legacy room the creator may remove members. Any member may also carry
+// an org-admin-signed removal statement, independent of the server's roster.
 func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	r := newRoom(t)
 	built := r.alice.userRemove(2, e2eCarol)
@@ -280,7 +257,11 @@ func TestMLSAuthority_AnAttestationThatDoesNotVerifyIsNotAuthorized(t *testing.T
 // can stop when the winner touched the accounts it was about.
 func TestMLSAuthority_ALostRaceReportsWhatTheWinnerDid(t *testing.T) {
 	r := newRoom(t)
-	winner := r.bob.userRemove(2, e2eCarol)
+	winner := commitOf(r.bob.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+		Permit: r.bob.permit(e2eCarol), OrgID: e2eOrg, ConversationID: e2eConv,
+		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eCarol},
+		OrgRemovalStatements: []proto.MLSOrgRemovalStatement{orgRemoval(newKeeper(t, e2eAdmin), e2eCarol)},
+	}))
 	loser := r.alice.userRemove(2, e2eCarol)
 	r.bob.confirm(winner.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	got := r.alice.must(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
@@ -296,19 +277,21 @@ func TestMLSAuthority_ALostRaceReportsWhatTheWinnerDid(t *testing.T) {
 	// A winner the rules refuse is not applied (N3): the loser's own pending
 	// Commit, which lost the epoch either way, is dropped, the confirmed state
 	// stays, and the conversation stops at the winner's epoch.
-	r2 := newRoom(t)
-	bad := r2.bob.userRemove(2, e2eCarol)
+	r2 := newAdvRoomWithLegacy(t, false, true)
+	lawfulSeq, lawfulB64 := r2.lawfulRow()
 	lost := r2.alice.buildUpdate(2)
-	data := blockedData(t, r2.alice.call(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
+	bad, _ := r2.adv.Build(mlsadversary.Commit{Removes: []uint32{r2.adv.IndexOf(e2eCarol, r2.carol.device)}})
+	blockedData(t, r2.alice.call(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
 		Permit: r2.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: lost.ClientCommitID, Outcome: proto.MLSCommitOutcomeSuperseded,
-		WinnerCommitB64: bad.CommitB64, WinnerAttestation: attested(e2eAlice, e2eBob, e2eCarol),
+		WinnerCommitB64: advB64(bad), WinnerAttestation: attested(e2eAlice, e2eCarol, advMallory),
 	}))
-	if data.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || data.Epoch != 3 {
-		t.Fatalf("block = %+v", data)
+	if st := r2.alice.status(); st.CommitPending || st.SyncBlocked == nil || st.Epoch != 2 {
+		t.Fatalf("status after the unauthorized winner = %+v", st)
 	}
-	if st := r2.alice.status(); st.CommitPending || st.NeedsRekey || st.Epoch != 2 || st.SyncBlocked == nil {
-		t.Fatalf("status after the refused winner = %+v", st)
+	lawful := r2.carol.processRequest(lawfulSeq, 2, lawfulB64)
+	if got := r2.carol.must(proto.MLSProcess, lawful).Data.(proto.MLSProcessResponseData); got.Epoch != 2 {
+		t.Fatalf("carol caught up on the lawful row at %+v", got)
 	}
 }
 

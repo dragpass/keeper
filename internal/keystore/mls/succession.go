@@ -57,10 +57,20 @@ func committerOf(before []Leaf, index uint32) (string, error) {
 	return "", failed("the committer is not a leaf of the group")
 }
 
+func creatorAccount(leaves []Leaf) (string, error) {
+	for _, leaf := range leaves {
+		if leaf.Index == 0 {
+			account, _, err := ParseCredentialIdentity(leaf.Identity)
+			return account, err
+		}
+	}
+	return "", failed("the creator is not a leaf of the group")
+}
+
 // judgeSuccession holds a Commit to the succession rule. added carries each
 // entering leaf (a KeyPackage's, or an Add the collect pass saw).
 func judgeSuccession(
-	removed, added []Leaf, committer string, handovers []chatstate.LeafHandover, roles *chatstate.Roles,
+	removed, added []Leaf, committer, creator string, handovers []chatstate.LeafHandover, roles *chatstate.Roles,
 	building, userInitiated bool,
 ) error {
 	r, err := successionLeaves(removed)
@@ -73,6 +83,7 @@ func judgeSuccession(
 	}
 	return chatstate.JudgeSuccession(chatstate.SuccessionChange{
 		CommitterAccountID: committer,
+		CreatorAccountID:   creator,
 		Removed:            r,
 		Added:              a,
 		Handovers:          handovers,
@@ -94,8 +105,8 @@ func judgeReceivedSuccession(shape CommitShape, change chatstate.CommitChange) e
 			Reason:             "the commit carries authenticated data that is not a leaf handover",
 		}
 	}
-	err = judgeSuccession(shape.Removed, shape.Added, change.CommitterAccountID, handovers,
-		change.EffectiveRoles(), false, false)
+	err = judgeSuccession(shape.Removed, shape.Added, change.CommitterAccountID, change.CreatorAccountID,
+		handovers, change.EffectiveRoles(), false, false)
 	var refused *chatstate.UnauthorizedCommitError
 	if errors.As(err, &refused) {
 		refused.CommitterDeviceID = change.CommitterDeviceID

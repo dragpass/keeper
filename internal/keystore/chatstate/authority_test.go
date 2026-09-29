@@ -74,15 +74,18 @@ func TestJudgeReceived_TheRules(t *testing.T) {
 		"a member cannot remove a member": {
 			CommitChange{CommitterAccountID: authC, Removed: []string{authB}, Before: abc, RolesBefore: room(authA)},
 			CommitAuthority{}, false},
-		"R3b holds only for a group without roles (legacy_temporary)": {
-			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Before: abc},
-			CommitAuthority{CommitMembers: []string{authA, authB}, CommitMembersKnown: true}, true},
-		"R3b is not authority in a room with roles": {
+		"the legacy creator removes a member": {
+			CommitChange{CommitterAccountID: authA, CreatorAccountID: authA, Removed: []string{authC}, Before: abc},
+			CommitAuthority{}, true},
+		"a legacy member cannot remove another member": {
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authC}, Before: abc},
+			CommitAuthority{}, false},
+		"a member cannot remove another in a room": {
 			CommitChange{CommitterAccountID: authC, Removed: []string{authB}, Before: abc, RolesBefore: room(authA)},
-			CommitAuthority{CommitMembers: []string{authA, authC}, CommitMembersKnown: true}, false},
+			CommitAuthority{}, false},
 		"a same-set remove": {
 			CommitChange{CommitterAccountID: authB, Removed: []string{authC}},
-			CommitAuthority{CommitMembers: []string{authA, authB, authC}, CommitMembersKnown: true}, false},
+			CommitAuthority{}, false},
 		"a remove with no evidence at all": {
 			CommitChange{CommitterAccountID: authB, Removed: []string{authC}}, CommitAuthority{}, false},
 		"a plain member adds in a room": {
@@ -95,10 +98,10 @@ func TestJudgeReceived_TheRules(t *testing.T) {
 			CommitChange{CommitterAccountID: authA, Added: []string{authC}, Before: []string{authA, authB}, Epoch: 1,
 				RolesBefore: &Roles{Kind: RolesKindDM}},
 			CommitAuthority{}, false},
-		// 임시, 정책 미충족 (legacy_temporary): a group without roles takes a
-		// received Add on its leaf alone.
-		"a legacy group takes an add on its leaf": {
-			CommitChange{CommitterAccountID: authA, Added: []string{authC}}, CommitAuthority{}, true},
+		"a legacy creator can add": {
+			CommitChange{CommitterAccountID: authA, CreatorAccountID: authA, Added: []string{authD}}, CommitAuthority{}, true},
+		"a legacy member cannot add": {
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Added: []string{authD}}, CommitAuthority{}, false},
 		"a roles change by an admin": {
 			CommitChange{CommitterAccountID: authB, Before: abc, RolesBefore: room(authA, authB),
 				RolesChange: RolesSet, RolesAfter: room(authB, authA)},
@@ -147,8 +150,10 @@ func TestJudgeLocalPlan_BuildRules(t *testing.T) {
 		"an update": {CommitPlan{}, legacy, nil, nil},
 		"an automated add": {CommitPlan{}, CommitChange{CommitterAccountID: authB, Added: []string{authD}}, nil,
 			ErrCommitUnauthorized},
-		"an add a person asked for, legacy": {CommitPlan{UserInitiated: true},
-			CommitChange{CommitterAccountID: authB, Added: []string{authD}}, nil, nil},
+		"the legacy creator adds a person when asked": {CommitPlan{UserInitiated: true},
+			CommitChange{CommitterAccountID: authA, CreatorAccountID: authA, Added: []string{authD}}, nil, nil},
+		"a legacy member cannot add a person even when asked": {CommitPlan{UserInitiated: true},
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Added: []string{authD}}, nil, ErrCommitUnauthorized},
 		"an add a person asked for by a plain member of a room": {CommitPlan{UserInitiated: true},
 			inRoom(CommitChange{CommitterAccountID: authC, Added: []string{authD}, Epoch: 2}), nil, ErrCommitUnauthorized},
 		"the permit's word is no longer authority": {CommitPlan{},
@@ -162,8 +167,10 @@ func TestJudgeLocalPlan_BuildRules(t *testing.T) {
 			inRoom(CommitChange{CommitterAccountID: authB, Removed: []string{authC}}), nil, nil},
 		"an admin's remove, not asked for": {CommitPlan{},
 			inRoom(CommitChange{CommitterAccountID: authB, Removed: []string{authC}}), nil, ErrCommitUnauthorized},
-		"legacy: a member's remove a person asked for (R4i)": {CommitPlan{UserInitiated: true},
-			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Before: abc}, nil, nil},
+		"the legacy creator removes a member when asked": {CommitPlan{UserInitiated: true},
+			CommitChange{CommitterAccountID: authA, CreatorAccountID: authA, Removed: []string{authC}, Before: abc}, nil, nil},
+		"a legacy member cannot remove another member when asked": {CommitPlan{UserInitiated: true},
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authC}, Before: abc}, nil, ErrCommitUnauthorized},
 		"an owner's roles change needs a person": {CommitPlan{},
 			inRoom(CommitChange{CommitterAccountID: authA, RolesChange: RolesSet, RolesAfter: room(authB)}), nil,
 			ErrCommitUnauthorized},

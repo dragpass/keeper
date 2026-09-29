@@ -30,9 +30,8 @@ func TestCommitMembers_TheAttestationIsBoundToItsCommit(t *testing.T) {
 	}
 	a.Signature = base64.StdEncoding.EncodeToString(sig)
 
-	members, ok := commitMembers(f.deps, chatConvID, 3, commit, &a)
-	if !ok || members == nil || !slices.Equal(members.AccountIDs, a.MemberAccountIDs) {
-		t.Fatalf("a genuine attestation = %+v, %v", members, ok)
+	if !verifyCommitAttestation(f.deps, chatConvID, 3, commit, &a) {
+		t.Fatal("a genuine attestation did not verify")
 	}
 	for name, tc := range map[string]struct {
 		conv   string
@@ -43,16 +42,16 @@ func TestCommitMembers_TheAttestationIsBoundToItsCommit(t *testing.T) {
 		"another epoch":        {chatConvID, 4, commit},
 		"another conversation": {chatOrgID, 3, commit},
 	} {
-		if _, ok := commitMembers(f.deps, tc.conv, tc.epoch, tc.commit, &a); ok {
+		if verifyCommitAttestation(f.deps, tc.conv, tc.epoch, tc.commit, &a) {
 			t.Fatalf("%s: the attestation verified", name)
 		}
 	}
 	edited := a
 	edited.MemberAccountIDs = []string{chatAccountID}
-	if _, ok := commitMembers(f.deps, chatConvID, 3, commit, &edited); ok {
+	if verifyCommitAttestation(f.deps, chatConvID, 3, commit, &edited) {
 		t.Fatal("an edited member set verified")
 	}
-	if members, ok := commitMembers(f.deps, chatConvID, 3, commit, nil); !ok || members != nil {
-		t.Fatal("no attestation must read as no evidence, not as a refusal")
+	if !verifyCommitAttestation(f.deps, chatConvID, 3, commit, nil) {
+		t.Fatal("an absent attestation must remain optional")
 	}
 }

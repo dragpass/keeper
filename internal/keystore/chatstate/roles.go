@@ -42,9 +42,7 @@ const (
 	// AuthorityDM — a DM marked as one in the group context.
 	AuthorityDM = "dm"
 	// AuthorityLegacyTemporary — a group created before 0.0.55 carries no
-	// roles. It is judged by the wave 4 rules, which rest partly on the
-	// server's word (임시, 정책 미충족): an Add needs only a verified leaf,
-	// and a Remove may rest on the member set the server signed (R3b).
+	// roles. Its creator temporarily holds owner authority until migration.
 	AuthorityLegacyTemporary = "legacy_temporary"
 )
 
@@ -291,7 +289,9 @@ func judgeRoles(c CommitChange) string {
 			continue // R2
 		}
 		switch {
+		case roles == nil && c.CommitterAccountID == c.CreatorAccountID && c.CreatorAccountID != "":
 		case roles == nil:
+			return "only the legacy room's creator may add a member before roles are migrated"
 		case roles.Kind == RolesKindDM:
 			if c.Epoch != 0 {
 				return "a DM adds nobody after it is created"

@@ -173,7 +173,8 @@ func TestJudgeSuccession_ARecoveredIdentityIsSeatedOnlyByAPerson(t *testing.T) {
 	newPub, _ := leafKey(t)
 	old := succLeaf(succAccount, succOldDev, oldPub, "k1")
 	recovered := succLeaf(succAccount, succNewDev, newPub, "k2")
-	c := SuccessionChange{CommitterAccountID: succOther, Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered}}
+	c := SuccessionChange{CommitterAccountID: succOther, CreatorAccountID: succOther,
+		Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered}}
 
 	// Received: the account key changed and another member committed it.
 	if err := JudgeSuccession(c); err != nil {
@@ -209,8 +210,8 @@ func TestJudgeSuccession_ARecoveredIdentityIsSeatedOnlyByAPerson(t *testing.T) {
 }
 
 // In a room with roles only its owner or an admin seats a recovered identity,
-// on receipt as on build; a plain member's Commit is refused. A DM, whose
-// roles list nobody, and a group without roles keep the peer rule.
+// on receipt as on build; a plain member's Commit is refused. A DM keeps the
+// peer rule, while a legacy room temporarily trusts only its creator.
 func TestJudgeSuccession_InARoomOnlyTheOwnerOrAnAdminSeatsARecoveredIdentity(t *testing.T) {
 	const owner, admin, member = "e1111111-1111-4111-8111-111111111111", "e2222222-2222-4222-8222-222222222222", succOther
 	oldPub, _ := leafKey(t)
@@ -232,11 +233,13 @@ func TestJudgeSuccession_InARoomOnlyTheOwnerOrAnAdminSeatsARecoveredIdentity(t *
 		{"room admin", &room, admin, true},
 		{"room member", &room, member, false},
 		{"dm peer", &dm, member, true},
-		{"legacy member", nil, member, true},
+		{"legacy creator", nil, member, true},
+		{"legacy other member", nil, owner, false},
 	} {
 		for _, building := range []bool{false, true} {
 			err := JudgeSuccession(SuccessionChange{
-				CommitterAccountID: tc.committer, Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered},
+				CommitterAccountID: tc.committer, CreatorAccountID: member,
+				Removed: []SuccessionLeaf{old}, Added: []SuccessionLeaf{recovered},
 				Roles: tc.roles, Building: building, UserInitiated: building,
 			})
 			if (err == nil) != tc.allowed {

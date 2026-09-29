@@ -1134,13 +1134,18 @@ Commit was accepted (stated, not hidden). A statement dated ahead of the clock
 is not refused, since only its signer can date it. The pending removal list in the permit is
 only a reason to stop encrypting (S-1); it is no longer authority for a Remove.
 
-**legacy_temporary (임시, 정책 미충족).** A group created before 0.0.55 carries
-no roles until its creator's Commit sets them (`mls_conversation_status`
-reports `authority: "legacy_temporary"` and `roles_migratable` once every leaf
-advertises `0xF0D1`). Until then three wave 4 paths stand: a received Add rests
-on its leaf alone; a Remove may rest on **R3b**, the row's `commit_attestation`
-no longer listing A; and a local Add or member Remove rests on `user_initiated`.
-The unsigned R3 is gone for every group.
+**legacy_temporary.** A group created before 0.0.55 carries no roles until its
+creator's Commit sets them (`mls_conversation_status` reports
+`authority: "legacy_temporary"` and `roles_migratable` once every leaf
+advertises `0xF0D1`). Until migration, the account on authenticated leaf 0 is
+the temporary owner: only that creator may add members, remove other members,
+or set the first roles, and local builds still require `user_initiated` for
+those actions. Other members cannot gain authority from that flag or from a
+server-signed roster. A member's own leave, a signed organization-removal
+statement, and a signed device revocation remain valid. Seating a recovered
+identity is also creator-only until roles are migrated. If the creator is no
+longer available, recover the conversation as a new room. This rule supersedes
+the earlier `legacy_temporary` behavior described in the 0.0.55 history entry.
 
 **A Commit the rules refuse on receipt is not applied (Q4), and it does not latch the conversation (N3).** One bad row must never lock a conversation for good: a malicious server, or one member's modified client, can always produce such a Commit. The refusal is recorded as a **sync block** on that row instead, in the conversation's anchor (the keyring entry under `chat-state-anchor:`, field `sync_block`: `{ epoch, cause, committer_account_id, committer_device_id, commit_sha256 }`). Nothing else in the anchor moves (generation, reserved ceiling, epoch, watermark, the rekey fields) and the state file is not written, with one exception: when this device's own pending Commit lost its epoch to the refused one (`mls_commit_confirm` superseded), the lost pending is dropped and the confirmed state written back unchanged. The answer is `CHAT_MLS_ROW_REFUSED` with the block as `data` (a refusal by the leaf check keeps `CHAT_MLS_LEAF_UNTRUSTED` and records a block with `cause: "leaf_untrusted"`). While the block holds: nothing is applied past the confirmed epoch (a later row is `CHAT_MLS_EPOCH_STALE`); a new message is refused with `CHAT_MLS_SYNC_BLOCKED`; reading the history, and building this device's own Commit for that epoch, still work. It clears when a valid Commit for its epoch is applied: another row the server serves for that epoch, this device's own Commit once the server accepts it, or the same row re-judged once what refused it no longer does (a changed key the person has since verified). `mls_conversation_status` reports it as `sync_blocked` (null when none). What still latches (`needs_rekey`) is a real state problem: rollback, missing state, a watermark ahead, and a fork (the server serving, for an epoch this device already confirmed, another Commit than the one it applied). A block that no valid Commit ever clears leaves the conversation stopped, and the way on is a new group (room recovery).
 
@@ -1205,11 +1210,10 @@ chain from the pinned key, so `rotation_statements` must carry the recovery
 statement), and the committer is another account. Building one also needs
 `user_initiated: true`: automation never seats a recovered identity, a person
 does — in a DM the peer, once; in a room its owner or admin. In a room whose
-group context carries roles the Keeper holds that on both sides: a plain
-member's build is `CHAT_MLS_COMMIT_UNAUTHORIZED`, and a received one is
-refused and is blocked (`unauthorized_commit`, a sync block), judged by the roles before the
-Commit (**임시, 정책 미충족** only for a `legacy_temporary` room, which has no
-roles to hold it to). It is not the old identity's succession: the peer's
+group context carries roles, the Keeper holds that rule on both sides. In a
+`legacy_temporary` room, only the account on leaf 0 may seat the recovered
+identity until roles are migrated. Unauthorized received Commits are blocked
+(`unauthorized_commit`, a sync block). It is not the old identity's succession: the peer's
 pin for the account moves to `rotated` over the chain (never to `verified`),
 and the leaf-replacement latch keeps every member's sends in that conversation
 refused until the Commit is confirmed or applied. A device of the **same**
@@ -1231,8 +1235,8 @@ where `member_account_ids` is the member set the row's Commit declared, lowercas
 UUIDs ascending joined with `,`, and `commit_sha256_hex` the SHA-256 of the
 Commit bytes. `mls_process` takes it as `commit_attestation`, and
 `mls_commit_confirm` (superseded) as `winner_attestation`, verified against the
-epoch the pending Commit's winner produces. It is evidence for R3b only, in a
-legacy_temporary group, never for an Add. One that does not verify is
+epoch the pending Commit's winner produces. It describes the server's roster
+claim but never authorizes an Add or Remove. One that does not verify is
 `CHAT_STATE_NOT_AUTHORIZED` and applies nothing: a tampered row is never read as
 an old one. Golden:
 

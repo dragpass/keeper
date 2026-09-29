@@ -447,16 +447,14 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 			return chatStateInvalidInput("winner_commit_b64 must be valid standard Base64")
 		}
 		outcome.Kind, outcome.WinnerMessage = chatstate.CommitSuperseded, winner
-		// The winner's epoch is not in the request: it is the one after the
-		// pending Commit's, which only the store knows, so the attestation is
-		// verified there against that epoch.
+		// The winner's epoch is the one after the pending Commit's, which only
+		// the store knows, so its attestation is verified there.
 		if a := req.WinnerAttestation; a != nil {
-			outcome.WinnerMembers = func(epoch uint64) (*chatstate.ServerCommitMembers, error) {
-				members, ok := commitMembers(d, c.conv, epoch, winner, a)
-				if !ok {
-					return nil, errAttestationRefused
+			outcome.VerifyWinnerAttestation = func(epoch uint64) error {
+				if !verifyCommitAttestation(d, c.conv, epoch, winner, a) {
+					return errAttestationRefused
 				}
-				return members, nil
+				return nil
 			}
 		}
 	}
@@ -524,8 +522,7 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if form, err := mls.WireFormOf(commit); err != nil || form != mls.WireFormPublicMessage {
 		return chatStateInvalidInput("commit_b64 is not an MLS PublicMessage")
 	}
-	members, ok := commitMembers(d, c.conv, req.Epoch, commit, req.CommitAttestation)
-	if !ok {
+	if !verifyCommitAttestation(d, c.conv, req.Epoch, commit, req.CommitAttestation) {
 		return chatStateNotAuthorized(d, "commit attestation")
 	}
 	v := c.verifier(d, req.RotationStatements)
@@ -537,7 +534,6 @@ func HandleMLSProcess(d Deps, payload json.RawMessage) proto.BaseResponse {
 		Message:       commit,
 		Handshake:     true,
 		ProducedEpoch: req.Epoch,
-		CommitMembers: members,
 	}, cipher)
 	if errors.Is(err, chatstate.ErrHandshakeApplied) {
 		removed, generation, found, lookupErr := c.store.ConfirmedRemoval(c.conv, c.wm, req.Seq, req.Epoch, commit)

@@ -31,14 +31,14 @@
 //	R2  the same Commit adds a leaf of A (a replace, or a rejoin).
 //	S   a verified statement the Commit carries covers that leaf.
 //	RR  C's role lets it remove A (roles.go roleMayRemove).
-//	R3b legacy_temporary only: the member set the server signed for this very
-//	    Commit no longer holds A. Receiving only.
+//	L   the creator of a legacy room temporarily holds owner authority until
+//	    the room's roles are migrated.
 //
 // # Adds and roles
 //
 // roles.go: in a room an Add needs the committer to be owner or admin, in a
-// DM there is none after the create, and a group without roles (legacy) takes
-// any Add whose leaf verifies. In every group an account holds one leaf (Q14,
+// DM there is none after the create, and a legacy room temporarily trusts its
+// creator as owner. In every group an account holds one leaf (Q14,
 // N1), judged on the whole candidate tree after the Commit: a Commit that
 // leaves any account with two leaves is refused, whether they come in with
 // it or were already there. Only Add, Remove and a roles-only group
@@ -49,7 +49,8 @@
 // A Commit this device builds is judged by the same rules before anything is
 // built, over the change the plan would make (PlanJudge). On top of them,
 // user_initiated gates the app's intent and nothing else: a local Add, a
-// role-based Remove and an owner's roles change need a person to have asked;
+// role-based or legacy-creator Remove, and a roles change need a person to
+// have asked;
 // a Remove resting on a signed statement, a migration and an ownerless claim
 // do not. It is never authority on its own.
 //
@@ -68,12 +69,10 @@
 //     for as long as the statement is inside its 30-day window
 //     (proto.MLSStatementMaxAgeSeconds, Q10).
 //
-// 임시, 정책 미충족 (legacy_temporary): a group created before 0.0.55 carries
-// no roles until its owner's Commit sets them. Until then a received Add rests
-// on its leaf alone, a Remove may rest on R3b (the server's signature), and a
-// local Add or member Remove rests on user_initiated (the app's word). These
-// are the paths marked legacyTemporary below; the status reports the group's
-// authority so the app can say so.
+// A legacy_temporary group has no roles until its creator migrates them. Until
+// then, only the authenticated creator has temporary owner authority. Other
+// members must rely on signed statements for removals or create a new room if
+// the creator is no longer available.
 //
 // # A refusal
 //
@@ -134,43 +133,10 @@ type RemovalEvidence interface {
 	Authorized(change CommitChange) (authorized []bool, invalid int, err error)
 }
 
-// CommitAuthority is the evidence a Commit is judged by beyond its own group
-// state.
+// CommitAuthority is the signed evidence a Commit carries.
 type CommitAuthority struct {
-	// CommitMembers is the member set the server signed for the Commit being
-	// judged, and CommitMembersKnown whether the row carried such a signature.
-	// Read for legacy_temporary groups only (R3b).
-	CommitMembers      []string
-	CommitMembersKnown bool
-
 	// Evidence verifies the statements the Commit carries. Nil verifies none.
 	Evidence RemovalEvidence
-}
-
-// AuthorityReceiver is a cipher that judges the Commits it applies. The
-// store hands it the evidence before every Open and ApplyMessage; a cipher
-// that does not implement it judges nothing, which only test fakes do.
-type AuthorityReceiver interface {
-	SetCommitAuthority(CommitAuthority)
-}
-
-// ServerCommitMembers is a member set the server signed for one Commit,
-// already verified by the caller. Nil means the row carried none.
-type ServerCommitMembers struct {
-	AccountIDs []string
-}
-
-func (s *Store) armAuthority(cipher any, members *ServerCommitMembers) {
-	receiver, ok := cipher.(AuthorityReceiver)
-	if !ok {
-		return
-	}
-	var auth CommitAuthority
-	if members != nil {
-		auth.CommitMembers = slices.Clone(members.AccountIDs)
-		auth.CommitMembersKnown = true
-	}
-	receiver.SetCommitAuthority(auth)
 }
 
 // CommitChange is what one Commit does, in accounts: who committed it (from
@@ -244,8 +210,8 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 		case slices.Contains(change.Added, account): // R2
 		case authorized[i]: // S
 		case roleMayRemove(roles, change.CommitterAccountID, account) && (plan == nil || asked): // RR
-		case roles == nil && plan == nil && change.legacyTemporaryR3b(auth, account):
-		case roles == nil && asked: // legacyTemporary: R4i, the app's word
+		case roles == nil && change.CreatorAccountID != "" &&
+			change.CommitterAccountID == change.CreatorAccountID && (plan == nil || asked): // L
 		default:
 			return invalid, refuse("a remove is not the committer's own, not paired with an add, not signed, and not the committer's role to make")
 		}
@@ -263,12 +229,6 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 		return invalid, refuse("a roles change needs a person on this device to ask for it")
 	}
 	return invalid, nil
-}
-
-// legacyTemporaryR3b is R3b: in a group without roles, the member set the
-// server signed for this Commit no longer holds the account. 임시, 정책 미충족.
-func (c CommitChange) legacyTemporaryR3b(auth CommitAuthority, account string) bool {
-	return auth.CommitMembersKnown && !slices.Contains(auth.CommitMembers, account)
 }
 
 // PlanJudge is a cipher that can describe, before building, the change a plan

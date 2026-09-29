@@ -148,6 +148,12 @@ func TestEvidence_EachRuleStillNeedsItsOwnPart(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newEvidenceGroup(t)
 			_, err := e.carolReceivesWithEvidence(e.craftBoth(t, ev(t, e)))
+			if name == "handover without the leave" {
+				if err != nil {
+					t.Fatalf("creator-authorized removal = %v; want allowed", err)
+				}
+				return
+			}
 			var blocked *chatstate.SyncBlockedError
 			if !errors.As(err, &blocked) || blocked.Block.Cause != chatstate.SyncBlockUnauthorizedCommit {
 				t.Fatalf("receive = %v; want an unauthorized_commit block", err)
