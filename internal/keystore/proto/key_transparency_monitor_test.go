@@ -39,3 +39,16 @@ func TestKeyTransparencyMonitorRequestValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyTransparencyMonitorAcceptsAccountEnrollment(t *testing.T) {
+	request := KeyTransparencyMonitorRequest{
+		AccountID: "00000000-0000-4000-8000-000000000001",
+		Events: []KeyTransparencyMonitorEventRequest{{
+			EventID: "00000000-0000-4000-8000-000000000002", SourceType: "account_key_enrollment",
+			Evidence: KeyTransparencyEvidence{StatementB64: base64.StdEncoding.EncodeToString([]byte("statement"))},
+		}},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("account enrollment event rejected: %v", err)
+	}
+}
