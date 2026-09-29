@@ -28,6 +28,21 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 		t.Fatalf("HandleAuthSignupPrepare: %s", response.Error)
 	}
 	data := response.Data.(proto.AuthSignupPrepareResponseData)
+	if data.AccountID == "" || data.EnrollmentSignature == "" {
+		t.Fatalf("account enrollment proof missing: %+v", data)
+	}
+	parsedPublicKey, err := keepercrypto.ParsePublicKey(data.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentSignature, err := base64.StdEncoding.DecodeString(data.EnrollmentSignature)
+	if err != nil || keepercrypto.VerifySignature(
+		parsedPublicKey,
+		signupEnrollmentCanonical(data.AccountID, keepercrypto.AccountKeyFingerprint([]byte(data.PublicKey))),
+		enrollmentSignature,
+	) != nil {
+		t.Fatal("account enrollment signature does not bind the returned account ID and public key")
+	}
 	if data.PasswordWrappedDEKB64 == "" || data.DeviceWrappedDEKB64 == "" || data.RecoveryAuthSeed == "" {
 		t.Fatalf("encrypted signup material missing: %+v", data)
 	}

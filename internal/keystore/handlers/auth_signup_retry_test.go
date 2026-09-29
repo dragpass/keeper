@@ -62,6 +62,9 @@ func TestAuthSignupPrepareRetryWithTheSameInputAnswersForTheStagedKey(t *testing
 	if again.PublicKey != first.PublicKey || again.DeviceWrappedDEKB64 != first.DeviceWrappedDEKB64 {
 		t.Fatal("the retry answered for another key or DEK than the staged ones")
 	}
+	if again.AccountID != first.AccountID {
+		t.Fatal("the retry changed the staged account ID")
+	}
 	if again.RecoveryAuthSeed != first.RecoveryAuthSeed {
 		t.Fatal("the retry derived another recovery seed")
 	}
@@ -73,6 +76,14 @@ func TestAuthSignupPrepareRetryWithTheSameInputAnswersForTheStagedKey(t *testing
 	signature, _ := base64.StdEncoding.DecodeString(again.Signature)
 	if crypto.VerifySignature(publicKey, signupRequest().Alias, signature) != nil {
 		t.Fatal("the retry's alias signature is not by the staged key")
+	}
+	enrollmentSignature, err := base64.StdEncoding.DecodeString(again.EnrollmentSignature)
+	if err != nil || crypto.VerifySignature(
+		publicKey,
+		signupEnrollmentCanonical(again.AccountID, crypto.AccountKeyFingerprint([]byte(again.PublicKey))),
+		enrollmentSignature,
+	) != nil {
+		t.Fatal("the retry's enrollment signature does not bind the staged account ID and key")
 	}
 	_, wrapKey, err := recoverykey.Derive([]byte(signupRecoveryKey), signupRequest().Alias, recoverykey.Version)
 	if err != nil {

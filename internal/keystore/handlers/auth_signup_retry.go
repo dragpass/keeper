@@ -11,7 +11,10 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/awnumar/memguard"
@@ -38,13 +41,14 @@ const signupInputDomain = "dragpass-signup-prepare-input-v1"
 type signupInputRecord struct {
 	Version     int    `json:"v"`
 	Fingerprint string `json:"public_key_fingerprint"`
+	AccountID   string `json:"account_id"`
 	Salt        string `json:"salt"`
 	Hash        string `json:"hash"`
 }
 
-func signupInputHash(fingerprint, alias string, recoveryKey []byte, password *memguard.LockedBuffer, salt []byte) []byte {
+func signupInputHash(fingerprint, accountID, alias string, recoveryKey []byte, password *memguard.LockedBuffer, salt []byte) []byte {
 	var canonical []byte
-	for _, field := range [][]byte{[]byte(signupInputDomain), []byte(fingerprint), []byte(alias), recoveryKey, password.Bytes()} {
+	for _, field := range [][]byte{[]byte(signupInputDomain), []byte(fingerprint), []byte(accountID), []byte(alias), recoveryKey, password.Bytes()} {
 		canonical = binary.BigEndian.AppendUint32(canonical, uint32(len(field)))
 		canonical = append(canonical, field...)
 	}
@@ -52,7 +56,18 @@ func signupInputHash(fingerprint, alias string, recoveryKey []byte, password *me
 	return pbkdf2.Key(canonical, salt, dekPBKDF2Iterations, 32, sha256.New)
 }
 
-func newSignupInputRecord(d Deps, publicKey, alias string, recoveryKey []byte, password *memguard.LockedBuffer) (string, error) {
+func newSignupAccountID(d Deps) (string, error) {
+	var raw [16]byte
+	if err := d.FillRandom(raw[:]); err != nil {
+		return "", err
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	encoded := hex.EncodeToString(raw[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:]), nil
+}
+
+func newSignupInputRecord(d Deps, publicKey, accountID, alias string, recoveryKey []byte, password *memguard.LockedBuffer) (string, error) {
 	salt := make([]byte, 16)
 	if err := d.FillRandom(salt); err != nil {
 		return "", err
@@ -61,10 +76,27 @@ func newSignupInputRecord(d Deps, publicKey, alias string, recoveryKey []byte, p
 	record, err := json.Marshal(signupInputRecord{
 		Version:     1,
 		Fingerprint: fingerprint,
+		AccountID:   accountID,
 		Salt:        base64.StdEncoding.EncodeToString(salt),
-		Hash:        base64.StdEncoding.EncodeToString(signupInputHash(fingerprint, alias, recoveryKey, password, salt)),
+		Hash:        base64.StdEncoding.EncodeToString(signupInputHash(fingerprint, accountID, alias, recoveryKey, password, salt)),
 	})
 	return string(record), err
+}
+
+func signupEnrollmentCanonical(accountID, fingerprint string) string {
+	return strings.Join([]string{"dragpass.keyenrollment", "1", accountID, fingerprint}, "|")
+}
+
+func readSignupAccountID(d Deps) (string, error) {
+	stored, err := keychain.GetPendingSignupPrepareInput(d.Store)
+	if err != nil {
+		return "", err
+	}
+	var record signupInputRecord
+	if json.Unmarshal([]byte(stored), &record) != nil || record.Version != 1 || record.AccountID == "" {
+		return "", keychain.ErrSecretNotFound
+	}
+	return record.AccountID, nil
 }
 
 // signupInputMatches reports whether the stored record names the staged key
@@ -87,7 +119,7 @@ func signupInputMatches(d Deps, publicKey, alias string, recoveryKey []byte, pas
 	if saltErr != nil || hashErr != nil {
 		return false
 	}
-	got := signupInputHash(fingerprint, alias, recoveryKey, password, salt)
+	got := signupInputHash(fingerprint, record.AccountID, alias, recoveryKey, password, salt)
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
@@ -95,7 +127,18 @@ func signupInputMatches(d Deps, publicKey, alias string, recoveryKey []byte, pas
 // without writing: the same keypair and DEK, freshly wrapped for the password
 // and the recovery key of the matching input.
 func answerStagedSignup(d Deps, alias string, privateKey, publicKey string, password *memguard.LockedBuffer, recoveryAuthSeed string, wrapKey []byte) proto.BaseResponse {
+	accountID, err := readSignupAccountID(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "the staged signup account identity is missing")
+	}
 	signature, response := signWithStagedKey(keychain.StagedAccountKeypair{PrivateKey: privateKey, PublicKey: publicKey}, alias)
+	if !response.Success {
+		return response
+	}
+	enrollmentSignature, response := signWithStagedKey(
+		keychain.StagedAccountKeypair{PrivateKey: privateKey, PublicKey: publicKey},
+		signupEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(publicKey))),
+	)
 	if !response.Success {
 		return response
 	}
@@ -127,6 +170,8 @@ func answerStagedSignup(d Deps, alias string, privateKey, publicKey string, pass
 	}
 
 	return proto.BaseResponse{Success: true, Data: proto.AuthSignupPrepareResponseData{
+		AccountID:             accountID,
+		EnrollmentSignature:   enrollmentSignature,
 		PasswordWrappedDEKB64: passwordWrapped,
 		DeviceWrappedDEKB64:   deviceWrapped,
 		RecoveryAuthSeed:      recoveryAuthSeed,
