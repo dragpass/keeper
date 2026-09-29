@@ -99,11 +99,16 @@ func threeMembers(t *testing.T) (g groupOf, carolS *mls.Session, carolStore *cha
 // the Commit the server kept.
 func carolCommits(
 	t testing.TB, s *mls.Session, store *chatstate.Store, wm chatstate.ServerWatermark, plan chatstate.CommitPlan,
+	evidence ...chatstate.RemovalEvidence,
 ) []byte {
 	t.Helper()
+	cipher := mls.NewCipher(s, trustAll{})
+	if len(evidence) > 0 {
+		cipher.SetEvidence(evidence[0])
+	}
 	out, err := store.BeginCommit(conv, wm, chatstate.BeginCommitRequest{
 		ClientCommitID: nextCommitID(), Plan: plan,
-	}, mls.NewCipher(s, trustAll{}))
+	}, cipher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +192,7 @@ func TestS1_LosingToAWinnerThatAlsoRemovesUnlatches(t *testing.T) {
 	g.refusedSend(t, removalOf(accountB), "a permit named bob")
 
 	winner := carolCommits(t, carolS, carolStore, removalOf(accountB),
-		chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}, UserInitiated: true})
+		chatstate.CommitPlan{RemoveAccountIDs: []string{accountB}, UserInitiated: true}, everyRemoval{})
 	pending := g.beginRemove(t, removalOf(accountB), accountB)
 	g.loseTo(t, pending.ClientCommitID, winner, removalOf(accountB))
 

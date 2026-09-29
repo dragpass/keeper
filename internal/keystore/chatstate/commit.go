@@ -317,10 +317,9 @@ type CommitOutcome struct {
 	// one lock and one file replacement.
 	WinnerMessage []byte
 
-	// WinnerMembers verifies the member set the server signed for the winning
-	// Commit against the epoch it produces, which only the pending Commit
-	// here knows, and returns it. Nil when the winner's row carried none.
-	WinnerMembers func(epoch uint64) (*ServerCommitMembers, error)
+	// VerifyWinnerAttestation checks the winning Commit's server signature at
+	// the epoch this pending Commit expected. It is never authorization.
+	VerifyWinnerAttestation func(epoch uint64) error
 }
 
 // ConfirmCommitResult is the state after the verdict.
@@ -513,13 +512,11 @@ func (s *Store) ConfirmCommit(
 			}
 			welcome = pending.Welcome
 		} else {
-			var members *ServerCommitMembers
-			if outcome.WinnerMembers != nil {
-				if members, err = outcome.WinnerMembers(pending.ExpectedEpoch + 1); err != nil {
+			if outcome.VerifyWinnerAttestation != nil {
+				if err = outcome.VerifyWinnerAttestation(pending.ExpectedEpoch + 1); err != nil {
 					return err
 				}
 			}
-			s.armAuthority(cipher, members)
 			// Order matters and is one operation in the library: applying the
 			// winner runs on the state that never moved, and it drops our fork
 			// as it goes. ClearPending first would work too, but only this way

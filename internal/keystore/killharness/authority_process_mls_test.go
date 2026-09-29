@@ -14,6 +14,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -42,6 +44,7 @@ func (d *device) attestedProcess(seq, epoch uint64, commitB64 string, members ..
 // threeParty is Alice, Bob and Carol at epoch 1, every process stopped.
 type threeParty struct {
 	alice, bob, carol *device
+	bobAdv            *mlsadversary.Client
 	seq               uint64
 }
 
@@ -52,23 +55,36 @@ func newThreeParty(t *testing.T) *threeParty {
 	a.enrol()
 	b.enrol()
 	c.enrol()
+	leaf, found, err := keychain.GetMLSLeafKey(fileKeyring(bob.keyring()))
+	if err != nil || !found {
+		t.Fatalf("bob's leaf key: %v", err)
+	}
+	bobAdv := mlsadversary.Start(t, leaf, true)
 	id := alice.nextCommitID()
 	var built proto.MLSCommitResponseData
 	a.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 		Permit: alice.permit(), OrgID: hOrg, ConversationID: hConv, ClientCommitID: id,
-		Members: []proto.MLSMemberKeyPackage{b.keyPackage(), c.keyPackage()},
+		Members: []proto.MLSMemberKeyPackage{
+			c.keyPackage(),
+			{AccountID: hBob, DeviceID: hDevice, KeyPackageB64: base64.StdEncoding.EncodeToString(bobAdv.KeyPackage())},
+		},
 	}, &built)
 	a.must(proto.MLSCommitConfirm, alice.confirmRequest(id), nil)
-	for _, p := range []*keeperProc{b, c} {
-		p.must(proto.MLSJoin, proto.MLSJoinRequest{
-			Permit: p.d.permit(), OrgID: hOrg, ConversationID: hConv, WelcomeB64: built.WelcomeB64,
-		}, nil)
+	c.must(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: carol.permit(), OrgID: hOrg, ConversationID: hConv, WelcomeB64: built.WelcomeB64,
+	}, nil)
+	welcome, err := base64.StdEncoding.DecodeString(built.WelcomeB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if epoch := bobAdv.Join(welcome); epoch != 1 {
+		t.Fatalf("bob's adversary joined at epoch %d", epoch)
 	}
 	for _, p := range []*keeperProc{a, b, c} {
 		p.in.Close()
 		<-p.done
 	}
-	return &threeParty{alice: alice, bob: bob, carol: carol, seq: 1}
+	return &threeParty{alice: alice, bob: bob, carol: carol, bobAdv: bobAdv, seq: 1}
 }
 
 func (g *threeParty) nextSeq() uint64 {
@@ -76,21 +92,15 @@ func (g *threeParty) nextSeq() uint64 {
 	return g.seq
 }
 
-// bobRemovesCarol is the malicious Commit: Bob's client tells his Keeper a
-// person asked for it, and the server accepts the Commit because it declares
-// the member set unchanged.
+// bobRemovesCarol builds a valid Commit with a permissive client, bypassing
+// the Keeper's local authority checks.
 func (g *threeParty) bobRemovesCarol(t *testing.T) proto.MLSCommitResponseData {
 	t.Helper()
-	b := g.bob.start("", 0)
-	defer func() { b.in.Close(); <-b.done }()
-	var built proto.MLSCommitResponseData
-	b.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
-		Permit: g.bob.permit(), OrgID: hOrg, ConversationID: hConv,
-		ClientCommitID: g.bob.nextCommitID(), ExpectedEpoch: 1, RemoveAccountIDs: []string{hCarol},
-		UserInitiated: true,
-	}, &built)
-	b.must(proto.MLSCommitConfirm, g.bob.confirmRequest(built.ClientCommitID), nil)
-	return built
+	commit, err := g.bobAdv.Build(mlsadversary.Commit{Removes: []uint32{g.bobAdv.IndexOf(hCarol, hDevice)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proto.MLSCommitResponseData{CommitB64: base64.StdEncoding.EncodeToString(commit)}
 }
 
 // blockDetail is the sync block a CHAT_MLS_ROW_REFUSED answer carries (N3).

@@ -71,6 +71,10 @@ func unb64(t *testing.T, s string) []byte {
 }
 
 func newAdvRoom(t *testing.T, malloryIsAdmin bool) *advRoom {
+	return newAdvRoomWithLegacy(t, malloryIsAdmin, false)
+}
+
+func newAdvRoomWithLegacy(t *testing.T, malloryIsAdmin, legacy bool) *advRoom {
 	t.Helper()
 	e2eStateRoot(t)
 	alice, carol, mallory := newKeeper(t, e2eAlice), newKeeper(t, e2eCarol), newKeeper(t, advMallory)
@@ -80,14 +84,17 @@ func newAdvRoom(t *testing.T, malloryIsAdmin bool) *advRoom {
 		admins = []string{advMallory}
 	}
 	id := alice.nextCommitID()
-	built := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+	create := proto.MLSGroupCreateRequest{
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: id,
 		Members: []proto.MLSMemberKeyPackage{
 			carol.keyPackage(),
 			{AccountID: advMallory, DeviceID: mallory.device, KeyPackageB64: advB64(adv.KeyPackage())},
 		},
-		Roles: roleSet(e2eAlice, admins...),
-	}))
+	}
+	if !legacy {
+		create.Roles = roleSet(e2eAlice, admins...)
+	}
+	built := commitOf(alice.must(proto.MLSGroupCreate, create))
 	alice.confirm(id, proto.MLSCommitOutcomeAccepted, "")
 	carol.must(proto.MLSJoin, proto.MLSJoinRequest{
 		Permit: carol.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64,
@@ -186,7 +193,7 @@ var blockedUnauthorized = refusal{block: true}
 func (r *advRoom) assertRefused(who *keeper, req proto.MLSProcessRequest, want refusal) {
 	r.t.Helper()
 	st := who.status()
-	if st.Epoch != 2 || st.NeedsRekey || len(st.Roles) == 0 {
+	if st.Epoch != 2 || st.NeedsRekey {
 		r.t.Fatalf("%s before the malicious commit = %+v", who.id[:8], st)
 	}
 	before := stateOf(r.t, who)
@@ -212,6 +219,24 @@ func (r *advRoom) assertRefused(who *keeper, req proto.MLSProcessRequest, want r
 	who.refused(proto.MLSEncrypt, who.encryptRequest(messageID(7), 2, "not on top of a refused commit"),
 		proto.ChatMLSErrorCodeSyncBlocked)
 	assertUnchanged(r.t, name, before, stateOf(r.t, who))
+}
+
+// A cryptographically valid Commit from a non-creator is not enough to
+// mutate a pre-0.0.55 room, even when the server attests its resulting roster.
+func TestMLSAdversary_LegacyRoomRejectsMemberAddAndRemove(t *testing.T) {
+	t.Run("add", func(t *testing.T) {
+		r := newAdvRoomWithLegacy(t, false, true)
+		lawfulSeq, lawfulB64 := r.lawfulRow()
+		dave := newKeeper(t, e2eDave)
+		commit, _ := r.adv.Build(mlsadversary.Commit{Adds: [][]byte{keyPackageBytes(t, dave.keyPackage())}})
+		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
+	})
+	t.Run("remove", func(t *testing.T) {
+		r := newAdvRoomWithLegacy(t, false, true)
+		lawfulSeq, lawfulB64 := r.lawfulRow()
+		commit, _ := r.adv.Build(mlsadversary.Commit{Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device)}})
+		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized, blockedUnauthorized)
+	})
 }
 
 // deliver hands the malicious Commit to Alice live and to Carol on catch-up,

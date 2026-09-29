@@ -201,11 +201,6 @@ type Cipher struct {
 	session  *Session
 	verifier LeafVerifier
 
-	// authority is the evidence the next applied Commit is judged by, handed
-	// in by chatstate before every Open and ApplyMessage (AuthorityReceiver).
-	// Unset it is empty, which admits only R1 and R2.
-	authority chatstate.CommitAuthority
-
 	// lastChange is what the last Commit this cipher applied did.
 	lastChange *chatstate.CommitChange
 
@@ -220,13 +215,9 @@ type Cipher struct {
 }
 
 var (
-	_ chatstate.AuthorityReceiver = (*Cipher)(nil)
-	_ chatstate.ChangeReporter    = (*Cipher)(nil)
-	_ chatstate.PlanJudge         = (*Cipher)(nil)
+	_ chatstate.ChangeReporter = (*Cipher)(nil)
+	_ chatstate.PlanJudge      = (*Cipher)(nil)
 )
-
-// SetCommitAuthority is chatstate.AuthorityReceiver.
-func (c *Cipher) SetCommitAuthority(auth chatstate.CommitAuthority) { c.authority = auth }
 
 // SetEvidence sets the verifier for the statements Commits carry.
 func (c *Cipher) SetEvidence(e chatstate.RemovalEvidence) { c.evidence = e }
@@ -235,9 +226,7 @@ func (c *Cipher) SetEvidence(e chatstate.RemovalEvidence) { c.evidence = e }
 func (c *Cipher) Evidence() chatstate.RemovalEvidence { return c.evidence }
 
 func (c *Cipher) judgedAuthority() chatstate.CommitAuthority {
-	auth := c.authority
-	auth.Evidence = c.evidence
-	return auth
+	return chatstate.CommitAuthority{Evidence: c.evidence}
 }
 
 // LastCommitChange is chatstate.ChangeReporter.
@@ -616,7 +605,14 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, nil, roles, true, false); err != nil {
+	creator := ""
+	if roles == nil {
+		creator, err = creatorAccount(leaves)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	if err := judgeSuccession(removed, entering, committer, creator, nil, roles, true, false); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
@@ -740,7 +736,14 @@ func (c *Cipher) commitReplaceAccounts(
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := judgeSuccession(removed, entering, committer, carried, roles, true, userInitiated); err != nil {
+	creator := ""
+	if roles == nil {
+		creator, err = creatorAccount(leaves)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	if err := judgeSuccession(removed, entering, committer, creator, carried, roles, true, userInitiated); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {

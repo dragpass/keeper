@@ -600,10 +600,9 @@ type MLSRejoinRequestSignResponseData struct {
 }
 
 // MLSCommitAttestation is the server's signature over the member set a
-// handshake row's Commit declared (0.0.55): which accounts the conversation
-// holds once that Commit is applied, bound to the Commit's own bytes. It is
-// the evidence the authority rules read for R3b, and never for an Add. It is
-// server-attested: 임시, 정책 미충족 (Q5).
+// handshake row's Commit declares (0.0.55), bound to the Commit's own bytes.
+// Keeper verifies it as row metadata; it does not authorize MLS membership
+// changes.
 type MLSCommitAttestation struct {
 	MemberAccountIDs []string `json:"member_account_ids"`
 	ServerKeyVersion uint     `json:"server_key_version"`
@@ -1315,8 +1314,8 @@ type MLSConversationStatusResponseData struct {
 	DeviceRevokeLatch []MLSDeviceRef `json:"device_revoke_latch"`
 
 	// Authority names the rules the group is judged by (0.0.55): roles, dm,
-	// legacy_temporary (a group made before roles, judged by the wave 4
-	// rules that rest partly on the server's word), or "" with no group
+	// legacy_temporary (a group made before roles, where its creator temporarily
+	// holds owner authority), or "" with no group
 	// state. Roles is a room's owner and admins from its group context, []
 	// otherwise. RolesMigratable reports whether every leaf advertises the
 	// roles extension, so the owner of a legacy room can set its roles.

@@ -41,10 +41,9 @@
 // replacement. What a late use can do is only the succession the old leaf
 // approved, for that exact old leaf and that exact new leaf.
 //
-// 임시, 정책 미충족 (legacy_temporary only): in a group created without roles
-// Rv rests on the committer being another member, as every Add there rests on
-// its leaf alone. Building one still rests on the app's word that a person
-// asked.
+// In a legacy room without roles, only its creator may seat a recovered
+// identity until roles are migrated. A room whose creator is unavailable must
+// be recovered as a new room.
 
 package chatstate
 
@@ -238,6 +237,7 @@ func (l SuccessionLeaf) Fingerprint() string { return leafKeyFingerprint(l.Signa
 // handovers it carries.
 type SuccessionChange struct {
 	CommitterAccountID string
+	CreatorAccountID   string
 	Removed            []SuccessionLeaf
 	Added              []SuccessionLeaf
 	Handovers          []LeafHandover
@@ -278,7 +278,7 @@ func JudgeSuccession(c SuccessionChange) error {
 			continue // H
 		}
 		if recoveredIdentity(removedOfAccount, added) && c.CommitterAccountID != added.AccountID &&
-			(!c.Building || c.UserInitiated) && maySeatRecovered(c.Roles, c.CommitterAccountID) {
+			(!c.Building || c.UserInitiated) && maySeatRecovered(c.Roles, c.CommitterAccountID, c.CreatorAccountID) {
 			continue // Rv
 		}
 		return refuse("a leaf of an account replaces another of its leaves without the old leaf's handover or a person seating a recovered identity")
@@ -286,10 +286,13 @@ func JudgeSuccession(c SuccessionChange) error {
 	return nil
 }
 
-// maySeatRecovered is Rv's committer rule: in a room with roles its owner or
-// an admin; in a DM or a group without roles any other member.
-func maySeatRecovered(roles *Roles, committer string) bool {
-	return roles == nil || roles.Kind != RolesKindRoom || roles.RoleOf(committer) != ""
+// maySeatRecovered is Rv's committer rule: a room owner or admin, a DM peer,
+// or the creator of a legacy room before its roles are migrated.
+func maySeatRecovered(roles *Roles, committer, creator string) bool {
+	if roles == nil {
+		return creator != "" && committer == creator
+	}
+	return roles.Kind != RolesKindRoom || roles.RoleOf(committer) != ""
 }
 
 func approvedByOldLeaf(handovers []LeafHandover, removed []SuccessionLeaf, added SuccessionLeaf) bool {
