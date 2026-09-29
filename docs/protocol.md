@@ -1623,6 +1623,14 @@ state change is persisted. This does not verify first-observation TOFU and does
 not by itself provide independent client gossip or protect against a quorum
 that colludes with the log.
 
+Locally signed rotation and MLS-leaf statements are staged in the OS keychain
+by a hash of their new public key. A server-confirmed rotation, recovery, or
+leaf acceptance promotes only the statement digest to a local known-event
+record; abort removes the staged record. The statement itself is not retained
+in this record. This is provenance for the planned account self-monitoring
+flow, not yet a monitor action or a proof that the server returned a complete
+event list.
+
 **Storage.** `peer-pin:<owner>:<peer>` holds the record (~230 bytes);
 `peer-pin-index:<owner>:<n>` holds up to 48 peer ids per chunk, because
 `SecretStore` has no listing operation and the Windows Credential Manager caps

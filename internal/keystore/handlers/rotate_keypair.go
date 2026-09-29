@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -121,6 +122,19 @@ func HandleRotateUserKeypairPrepare(d Deps, req proto.RotateUserKeypairPrepareRe
 		_ = keychain.DeletePendingPublicKey(d.Store)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "rotation statement failed: "+err.Error())
 	}
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(statement)
+	pendingEventID, idErr := keychain.PendingKeyTransparencyEventID([]byte(keyPair.PublicKey))
+	if err == nil {
+		err = idErr
+	}
+	if err == nil {
+		err = keychain.StageKeyTransparencyEvent(d.Store, statement.AccountID, pendingEventID, canonical)
+	}
+	if err != nil {
+		_ = keychain.DeletePendingPrivateKey(d.Store)
+		_ = keychain.DeletePendingPublicKey(d.Store)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "rotation statement could not be recorded locally")
+	}
 
 	d.Logger.Println("rotate user keypair prepare successful (pending stored, challenge and statement signatures generated)")
 	return proto.BaseResponse{Success: true, Data: proto.RotateUserKeypairPrepareResponseData{
@@ -168,6 +182,13 @@ func HandleRotateUserKeypairPromote(d Deps, req proto.RotateUserKeypairPromoteRe
 	}
 	if payload.PendingPublicKeySHA256 != pendingPublicKeyHash(pendingPub) {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "pending public key does not match signed confirmation")
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(pendingPub))
+	if err == nil {
+		err = keychain.PromoteKeyTransparencyEvent(d.Store, pendingEventID)
+	}
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "confirmed rotation statement could not be recorded locally")
 	}
 
 	promoted, err := keychain.PromotePendingKeypair(d.Store)

@@ -78,6 +78,13 @@ func DiscardPendingRecoveryKeypair(store SecretStore, publicKey string) (bool, e
 		if staged != publicKey {
 			return nil
 		}
+		pendingEventID, err := PendingKeyTransparencyEventID([]byte(publicKey))
+		if err != nil {
+			return err
+		}
+		if err := DeletePendingKeyTransparencyEvent(store, pendingEventID); err != nil {
+			return err
+		}
 		if err := DeletePendingRecoveryPrivateKey(store); err != nil && !errors.Is(err, ErrSecretNotFound) {
 			return err
 		}
@@ -121,6 +128,13 @@ func AcceptSessionCode(store SecretStore, open SessionCodeOpener) (SessionCodeAc
 			config.PendingRecoveryKeeperPrivateKey, config.PendingRecoveryKeeperPublicKey); ok {
 			candidates++
 			if code, opened := open(privateKey); opened {
+				pendingEventID, err := PendingKeyTransparencyEventID([]byte(publicKey))
+				if err != nil {
+					return err
+				}
+				if err := PromoteKeyTransparencyEvent(store, pendingEventID); err != nil {
+					return err
+				}
 				if err := activateKeypair(store, privateKey, publicKey, code); err != nil {
 					return err
 				}

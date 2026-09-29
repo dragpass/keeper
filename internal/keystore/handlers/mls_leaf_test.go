@@ -23,6 +23,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -166,6 +167,20 @@ func TestHandleMLSLeafDeclare_EnrollSignsAVerifiableDeclarationIntoPending(t *te
 	if key.AccountID != leafTestAccountID || key.DeviceID != leafTestDeviceID {
 		t.Fatal("pending leaf key does not name the declared account and device")
 	}
+	canonical, err := keytransparency.EncodeMLSLeafBindingStatement(decl, accountPub)
+	if err != nil {
+		t.Fatalf("encode leaf statement: %v", err)
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(decl.SignatureKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(config.Service, config.KeyTransparencyPendingEventPrefix+pendingEventID); err != nil {
+		t.Fatalf("locally signed leaf was not staged: %v", err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, decl.AccountID, canonical); err != nil || known {
+		t.Fatalf("unaccepted leaf was marked known: known=%t err=%v", known, err)
+	}
 	secretB64 := base64.StdEncoding.EncodeToString(key.SecretKey)
 	seedB64 := base64.StdEncoding.EncodeToString(key.SecretKey[:ed25519.SeedSize])
 	for _, leaked := range []string{secretB64, seedB64} {
@@ -292,6 +307,13 @@ func TestHandleMLSLeafDeclare_RotateStagesANewKeyAndPromoteReplacesTheOld(t *tes
 
 	if got := promoteLeaf(t, deps, rotated); !got.Promoted || got.Fingerprint != rotated.SignatureKeyFingerprint {
 		t.Fatalf("promote = %+v", got)
+	}
+	canonical, err := keytransparency.EncodeMLSLeafBindingStatement(rotated, accountPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, rotated.AccountID, canonical); err != nil || !known {
+		t.Fatalf("accepted leaf was not marked known: known=%t err=%v", known, err)
 	}
 	newKey := storedLeafKey(t, store)
 	if rotated.SignatureKey != base64.StdEncoding.EncodeToString(newKey.PublicKey) {
