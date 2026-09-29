@@ -202,6 +202,11 @@ func (c *Client) Process(message []byte) uint64 {
 	return c.epochOf(c.do("process", hex.EncodeToString(message)))
 }
 
+func (c *Client) ProposeAdd(keyPackage []byte) []byte {
+	c.t.Helper()
+	return c.unhex(c.do("propose-add", hex.EncodeToString(keyPackage))[0])
+}
+
 func (c *Client) epochOf(f []string) uint64 {
 	c.t.Helper()
 	n, err := strconv.ParseUint(f[0], 10, 64)
