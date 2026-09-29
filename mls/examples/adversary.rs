@@ -26,6 +26,7 @@
 //     create <group_id> <roles>    -> ok       (a group of its own, roles "-" for none)
 //     join <welcome>               -> ok <epoch>
 //     process <message>            -> ok <epoch>
+//     propose-add <key_package>     -> ok <proposal>
 //     commit <adds> <removes> <roles> <aad> <apply 0|1>
 //                                  -> ok <commit> <welcome>
 //     roster                       -> ok <index>:<identity>,...
@@ -268,6 +269,19 @@ impl Adversary {
         Ok(group.current_epoch())
     }
 
+    fn propose_add(&mut self, key_package: &str) -> Res<String> {
+        let key_package =
+            MlsMessage::from_bytes(&unhex(key_package)?).map_err(|err| e("key package", err))?;
+        let message = self
+            .group()?
+            .propose_add(key_package, Vec::new())
+            .map_err(|err| e("add proposal", err))?;
+        message
+            .to_bytes()
+            .map(|bytes| hex(&bytes))
+            .map_err(|err| e("proposal encode", err))
+    }
+
     fn commit(&mut self, args: &[&str]) -> Res<String> {
         let [adds, removes, roles, aad, apply] = args else {
             return Err("commit takes five fields".into());
@@ -362,6 +376,7 @@ fn answer(adversary: &mut Option<Adversary>, line: &str) -> Res<String> {
         ("create", [group_id, roles]) => a.create(group_id, roles).map(|()| String::new()),
         ("join", [welcome]) => Ok(a.join(welcome)?.to_string()),
         ("process", [message]) => Ok(a.process(message)?.to_string()),
+        ("propose-add", [key_package]) => a.propose_add(key_package),
         ("commit", rest) => a.commit(rest),
         ("roster", []) => a.roster(),
         ("epoch", []) => Ok(a.group()?.current_epoch().to_string()),
