@@ -20,6 +20,7 @@ use mls_rs::{
 };
 use mls_rs_core::crypto::SignatureSecretKey;
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::authority::{AuthorityRules, CommitShape, RemovalApproval};
@@ -869,6 +870,21 @@ impl Session {
         Ok(self.group_mut()?.current_epoch())
     }
 
+    pub fn epoch_comparison_digest(&mut self, conversation_id: &[u8]) -> Res<(u64, Vec<u8>)> {
+        let group = self.group_mut()?;
+        let epoch = group.current_epoch();
+        let authenticator = group
+            .epoch_authenticator()
+            .map_err(|e| err("epoch authenticator", e))?;
+        let mut digest = Sha256::new();
+        digest.update(b"dragpass.mls.epoch-comparison|1\0");
+        digest.update((conversation_id.len() as u64).to_be_bytes());
+        digest.update(conversation_id);
+        digest.update(epoch.to_be_bytes());
+        digest.update(authenticator.as_bytes());
+        Ok((epoch, digest.finalize().to_vec()))
+    }
+
     /// Encrypt one application message, consuming the generation `send_position`
     /// reported.
     ///
@@ -1319,6 +1335,43 @@ mod tests {
             joiner.join(&welcome).unwrap();
         }
         (alice, bob, carol)
+    }
+
+    #[test]
+    fn epoch_comparison_digest_matches_members_and_changes_with_epoch_or_room() {
+        let (mut alice, mut bob, _) = three();
+        let (alice_epoch, alice_digest) = alice.epoch_comparison_digest(b"g").unwrap();
+        let (bob_epoch, bob_digest) = bob.epoch_comparison_digest(b"g").unwrap();
+        assert_eq!(alice_epoch, bob_epoch);
+        assert_eq!(alice_digest.len(), 32);
+        assert_eq!(alice_digest, bob_digest);
+        assert_ne!(
+            alice_digest,
+            alice.epoch_comparison_digest(b"other-room").unwrap().1
+        );
+
+        let prior = alice_digest;
+        let (commit, _) = alice.commit_update().unwrap();
+        alice.apply_pending_commit().unwrap();
+        bob.process(&commit).unwrap();
+        let (alice_epoch, alice_digest) = alice.epoch_comparison_digest(b"g").unwrap();
+        let (bob_epoch, bob_digest) = bob.epoch_comparison_digest(b"g").unwrap();
+        assert_eq!(alice_epoch, bob_epoch);
+        assert_ne!(alice_digest, prior);
+        assert_eq!(alice_digest, bob_digest);
+    }
+
+    #[test]
+    fn divergent_group_states_have_different_epoch_comparison_digests() {
+        let mut alice = member("alice");
+        let mut bob = member("bob");
+        alice.create_group(b"g").unwrap();
+        bob.create_group(b"g").unwrap();
+
+        let (alice_epoch, alice_digest) = alice.epoch_comparison_digest(b"room").unwrap();
+        let (bob_epoch, bob_digest) = bob.epoch_comparison_digest(b"room").unwrap();
+        assert_eq!(alice_epoch, bob_epoch);
+        assert_ne!(alice_digest, bob_digest);
     }
 
     const ROOM_A: &str = "0a000000-0000-4000-8000-000000000001";

@@ -860,6 +860,34 @@ pub unsafe extern "C" fn dpmls_group_epoch(handle: *mut Session, out: *mut u64) 
     })
 }
 
+/// Return a room- and epoch-bound comparison digest, never the authenticator.
+///
+/// # Safety
+/// `handle` as in `session_of`; `conversation_id` follows `slice`; `epoch` and
+/// `out` must point to writable values.
+#[no_mangle]
+pub unsafe extern "C" fn dpmls_group_epoch_comparison(
+    handle: *mut Session,
+    conversation_id: *const u8,
+    conversation_id_len: usize,
+    epoch: *mut u64,
+    out: *mut DpBuf,
+) -> i32 {
+    guard(|| {
+        if epoch.is_null() || out.is_null() {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        let conversation_id = slice(conversation_id, conversation_id_len)?;
+        let (confirmed_epoch, digest) =
+            session_of(handle)?.epoch_comparison_digest(conversation_id)?;
+        unsafe {
+            *epoch = confirmed_epoch;
+            put(out, digest)?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
 /// # Safety
 /// Pointer rules as in `slice`; `handle` as in `session_of`.
 #[no_mangle]

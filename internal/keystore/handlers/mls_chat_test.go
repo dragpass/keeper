@@ -106,6 +106,9 @@ func mlsChatCases() []mlsChatCase {
 		{proto.MLSConversationStatus, HandleMLSConversationStatus, func(p proto.ChatStatePermit) any {
 			return proto.MLSConversationStatusRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
 		}},
+		{proto.MLSEpochComparison, HandleMLSEpochComparison, func(p proto.ChatStatePermit) any {
+			return proto.MLSEpochComparisonRequest{Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID}
+		}},
 		{proto.MLSDecryptBatchForAppDisplay, HandleMLSDecryptBatchForAppDisplay, func(p proto.ChatStatePermit) any {
 			return proto.MLSDecryptBatchForAppDisplayRequest{
 				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,

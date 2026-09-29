@@ -87,6 +87,9 @@ int32_t dpmls_group_commit_apply(DpSession *handle);
 int32_t dpmls_group_commit_clear(DpSession *handle);
 int32_t dpmls_group_has_pending_commit(DpSession *handle, uint8_t *out);
 int32_t dpmls_group_epoch(DpSession *handle, uint64_t *out);
+int32_t dpmls_group_epoch_comparison(DpSession *handle,
+                                     const uint8_t *conversation_id, size_t conversation_id_len,
+                                     uint64_t *epoch, DpBuf *out);
 int32_t dpmls_group_id(DpSession *handle, DpBuf *out);
 int32_t dpmls_group_join(DpSession *handle, const uint8_t *welcome, size_t welcome_len);
 
@@ -455,6 +458,23 @@ func (s *Session) Epoch() (uint64, error) {
 		return 0, statusError(rc)
 	}
 	return uint64(out), nil
+}
+
+func (s *Session) EpochComparisonDigest(conversationID []byte) (uint64, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return 0, nil, err
+	}
+	var epoch C.uint64_t
+	var digest C.DpBuf
+	rc := C.dpmls_group_epoch_comparison(h, bytePtr(conversationID), C.size_t(len(conversationID)), &epoch, &digest)
+	runtime.KeepAlive(conversationID)
+	if rc != 0 {
+		return 0, nil, statusError(rc)
+	}
+	return uint64(epoch), takeBuf(&digest), nil
 }
 
 func (s *Session) Join(welcome []byte) error {

@@ -84,6 +84,9 @@ func (s *Session) ClearPendingCommit() error { return ErrUnavailable }
 func (s *Session) HasPendingCommit() (bool, error) { return false, ErrUnavailable }
 
 func (s *Session) Epoch() (uint64, error) { return 0, ErrUnavailable }
+func (s *Session) EpochComparisonDigest([]byte) (uint64, []byte, error) {
+	return 0, nil, ErrUnavailable
+}
 
 func (s *Session) GroupID() ([]byte, error) { return nil, ErrUnavailable }
 

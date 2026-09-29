@@ -1222,6 +1222,25 @@ type MLSConversationStatusRequest struct {
 	ConversationID string          `json:"conversation_id"`
 }
 
+type MLSEpochComparisonRequest struct {
+	Permit         ChatStatePermit `json:"permit"`
+	OrgID          string          `json:"org_id"`
+	ConversationID string          `json:"conversation_id"`
+}
+
+func (r MLSEpochComparisonRequest) ChatStateContext() (ChatStatePermit, string, string) {
+	return r.Permit, r.OrgID, r.ConversationID
+}
+
+func (r MLSEpochComparisonRequest) Validate() error {
+	return validateChatStateContext(r.Permit, r.OrgID, r.ConversationID)
+}
+
+type MLSEpochComparisonResponseData struct {
+	Epoch     uint64 `json:"epoch"`
+	DigestB64 string `json:"digest_b64"`
+}
+
 func (r MLSConversationStatusRequest) ChatStateContext() (ChatStatePermit, string, string) {
 	return r.Permit, r.OrgID, r.ConversationID
 }

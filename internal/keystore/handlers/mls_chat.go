@@ -924,6 +924,23 @@ func HandleMLSConversationStatus(d Deps, payload json.RawMessage) proto.BaseResp
 	return proto.BaseResponse{Success: true, Data: data}
 }
 
+func HandleMLSEpochComparison(d Deps, payload json.RawMessage) proto.BaseResponse {
+	var req proto.MLSEpochComparisonRequest
+	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
+	if !ok {
+		return resp
+	}
+	defer c.close()
+
+	comparison, err := c.store.CompareEpoch(c.conv, c.wm, mls.NewCipher(c.session, nil))
+	if err != nil {
+		return chatStateFailure(d, "mls epoch comparison", err)
+	}
+	return proto.BaseResponse{Success: true, Data: proto.MLSEpochComparisonResponseData{
+		Epoch: comparison.Epoch, DigestB64: base64.StdEncoding.EncodeToString(comparison.Digest),
+	}}
+}
+
 // reportAuthority fills the status's authority, roles and roles_migratable
 // from the group context the session memberTrust loaded. A read that fails
 // leaves authority "" rather than naming rules the group may not be under.

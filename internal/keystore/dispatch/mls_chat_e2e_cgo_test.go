@@ -643,6 +643,43 @@ func (k *keeper) statusWith(p proto.ChatStatePermit) proto.MLSConversationStatus
 	}).Data.(proto.MLSConversationStatusResponseData)
 }
 
+func (k *keeper) epochComparison() proto.MLSEpochComparisonResponseData {
+	k.t.Helper()
+	return k.must(proto.MLSEpochComparison, proto.MLSEpochComparisonRequest{
+		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+	}).Data.(proto.MLSEpochComparisonResponseData)
+}
+
+func TestMLSChatE2E_EpochComparisonMatchesMembersAndSeparatesDivergentStates(t *testing.T) {
+	first := newDM(t)
+	firstRoot := os.Getenv(chatstate.RootEnvVar)
+	first.alice.root, first.bob.root = firstRoot, firstRoot
+	a, b := first.alice.epochComparison(), first.bob.epochComparison()
+	if a.Epoch != 1 || b.Epoch != a.Epoch || a.DigestB64 != b.DigestB64 {
+		t.Fatalf("same MLS epoch produced different comparison values: alice=%+v bob=%+v", a, b)
+	}
+
+	update := first.alice.buildUpdate(1)
+	first.alice.refused(proto.MLSEpochComparison, proto.MLSEpochComparisonRequest{
+		Permit: first.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+	}, proto.ChatMLSErrorCodeCommitPending)
+	first.alice.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	first.bob.process(first.nextSeq(), 2, update.CommitB64)
+	afterAlice, afterBob := first.alice.epochComparison(), first.bob.epochComparison()
+	if afterAlice.Epoch != 2 || afterBob.Epoch != 2 || afterAlice.DigestB64 != afterBob.DigestB64 ||
+		afterAlice.DigestB64 == a.DigestB64 {
+		t.Fatalf("comparison did not follow the confirmed epoch: before=%+v after alice=%+v bob=%+v", a, afterAlice, afterBob)
+	}
+
+	second := newDM(t)
+	secondRoot := os.Getenv(chatstate.RootEnvVar)
+	second.alice.root, second.bob.root = secondRoot, secondRoot
+	other := second.alice.epochComparison()
+	if other.Epoch != a.Epoch || other.DigestB64 == a.DigestB64 {
+		t.Fatalf("divergent MLS state was not distinguished: first=%+v other=%+v", a, other)
+	}
+}
+
 func (k *keeper) status(removals ...string) proto.MLSConversationStatusResponseData {
 	k.t.Helper()
 	return k.statusWith(k.permit(removals...))

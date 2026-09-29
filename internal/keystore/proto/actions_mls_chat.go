@@ -214,6 +214,7 @@ const (
 	//             removal_latch_account_ids, needs_rekey, rekey_cause?,
 	//             removed_from_group }
 	MLSConversationStatus = "mls_conversation_status"
+	MLSEpochComparison    = "mls_epoch_comparison"
 
 	// MLSRejoinRequestSign signs this device's request to be re-seated in a
 	// conversation whose every Welcome it could not use (0.0.55, design Q6).

@@ -287,6 +287,7 @@ dependencies = [
  "mls-rs",
  "mls-rs-core",
  "mls-rs-crypto-rustcrypto",
+ "sha2",
  "zeroize",
 ]
 
