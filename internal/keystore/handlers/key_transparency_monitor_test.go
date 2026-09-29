@@ -97,6 +97,55 @@ func TestKeyTransparencyMonitorVerifiesAndClassifiesAccountEvents(t *testing.T) 
 	}
 }
 
+func TestKeyTransparencyMonitorVerifiesAccountEnrollment(t *testing.T) {
+	accountID := "00000000-0000-4000-8000-000000000001"
+	pair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pem := []byte(pair.PublicKey)
+	fingerprint := keepercrypto.AccountKeyFingerprint(pem)
+	privateKey, err := keepercrypto.ParsePrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := proto.AccountKeyEnrollmentCanonical(accountID, fingerprint)
+	signature, err := keepercrypto.SignData(privateKey, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := keytransparency.EncodeAccountKeyEnrollmentStatement(accountID, fingerprint, pem, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, trust := signedStatementEvidence(t, statement)
+	deps, _, _ := newTestDeps(t)
+	deps.KeyTransparency = keytransparency.Gate{Trust: trust}
+	request := proto.KeyTransparencyMonitorRequest{
+		AccountID: accountID,
+		Events: []proto.KeyTransparencyMonitorEventRequest{{
+			EventID: "00000000-0000-4000-8000-000000000002", SourceType: keytransparency.StatementAccountKeyEnrollment,
+			Evidence: evidence,
+		}},
+	}
+	response := HandleKeyTransparencyMonitor(deps, request)
+	if !response.Success {
+		t.Fatalf("monitor failed: %s (%s)", response.Error, response.ErrorCode)
+	}
+	result := response.Data.(proto.KeyTransparencyMonitorResponse)
+	if result.Checked != 1 || result.CheckpointSize != 1 || len(result.Events) != 1 {
+		t.Fatalf("unexpected enrollment result: %+v", result)
+	}
+	event := result.Events[0]
+	if event.SourceType != keytransparency.StatementAccountKeyEnrollment || event.Fingerprint != fingerprint || event.Reason != "enroll" || event.KnownOnThisDevice {
+		t.Fatalf("unexpected enrollment verdict: %+v", event)
+	}
+	request.Events[0].SourceType = keytransparency.StatementAccountKeyRotation
+	if refused := HandleKeyTransparencyMonitor(deps, request); refused.Success {
+		t.Fatal("accepted an event source that did not match the signed enrollment statement")
+	}
+}
+
 func signedStatementEvidence(t *testing.T, statement []byte) (proto.KeyTransparencyEvidence, *keytransparency.Trust) {
 	t.Helper()
 	logPrivate, logPublic, err := note.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x31}, 4096)), "dragpass.test/log")
