@@ -20,10 +20,11 @@ package proto
 // same reason peer_key_pin_verify does: a fingerprint the caller supplies is a
 // fingerprint the caller chose.
 type PeerKeyChainEvaluateRequest struct {
-	OwnerAccountID     string                 `json:"owner_account_id"`
-	AccountID          string                 `json:"account_id"`
-	PublicKey          string                 `json:"public_key"`
-	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+	OwnerAccountID     string                   `json:"owner_account_id"`
+	AccountID          string                   `json:"account_id"`
+	PublicKey          string                   `json:"public_key"`
+	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
 }
 
 func (r PeerKeyChainEvaluateRequest) Validate() error {
@@ -36,7 +37,10 @@ func (r PeerKeyChainEvaluateRequest) Validate() error {
 	if err := requirePEM(r.PublicKey, "public_key"); err != nil {
 		return err
 	}
-	return ValidateKeyRotationStatements(r.RotationStatements)
+	if err := ValidateKeyRotationStatements(r.RotationStatements); err != nil {
+		return err
+	}
+	return validateKeyTransparencyEvidence(r.EnrollmentEvidence, "enrollment_evidence")
 }
 
 // PeerKeyChainEvaluateResponseData is the verdict.

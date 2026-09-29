@@ -98,9 +98,11 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 	// re-serialization of the parsed key: the Extension and the server hash
 	// the same bytes, and re-encoding here would quietly break the match.
 	pinStates, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, []peerKeyPinCheck{{
-		accountID:  req.OtherAccountID,
-		observed:   crypto.AccountKeyFingerprint([]byte(req.OtherPublicKey)),
-		statements: req.RotationStatements,
+		accountID:          req.OtherAccountID,
+		observed:           crypto.AccountKeyFingerprint([]byte(req.OtherPublicKey)),
+		publicKey:          req.OtherPublicKey,
+		statements:         req.RotationStatements,
+		enrollmentEvidence: req.EnrollmentEvidence,
 	}})
 	if !ok {
 		return pinResp
@@ -180,9 +182,11 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		}
 		recipientKeys[i] = pub
 		checks[i] = peerKeyPinCheck{
-			accountID:  recipient.AccountID,
-			observed:   crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
-			statements: recipient.RotationStatements,
+			accountID:          recipient.AccountID,
+			observed:           crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
+			publicKey:          recipient.PublicKey,
+			statements:         recipient.RotationStatements,
+			enrollmentEvidence: recipient.EnrollmentEvidence,
 		}
 		if recipient.AccountID != "" {
 			pinEnforced = true

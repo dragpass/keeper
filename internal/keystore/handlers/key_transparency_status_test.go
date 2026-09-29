@@ -60,7 +60,7 @@ func statusOf(t *testing.T, deps Deps) proto.KeyTransparencyStatusResponse {
 
 func TestHandleKeyTransparencyStatusReportsTheGate(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	if s := statusOf(t, deps); s.Configured || s.TrustError != "" || s.Anchored {
+	if s := statusOf(t, deps); s.Configured || s.TrustError != "" || s.Anchored || !s.FirstPinEnforced {
 		t.Fatalf("absent status = %+v, want unconfigured", s)
 	}
 

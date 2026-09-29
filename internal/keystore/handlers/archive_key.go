@@ -142,9 +142,11 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 	// before the archive key is touched, as dek_rewrap_for_member is.
 	if req.RecipientAccountID != "" {
 		if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, []peerKeyPinCheck{{
-			accountID:  req.RecipientAccountID,
-			observed:   crypto.AccountKeyFingerprint([]byte(req.RecipientPublicKey)),
-			statements: req.RotationStatements,
+			accountID:          req.RecipientAccountID,
+			observed:           crypto.AccountKeyFingerprint([]byte(req.RecipientPublicKey)),
+			publicKey:          req.RecipientPublicKey,
+			statements:         req.RotationStatements,
+			enrollmentEvidence: req.EnrollmentEvidence,
 		}}); !ok {
 			return pinResp
 		}

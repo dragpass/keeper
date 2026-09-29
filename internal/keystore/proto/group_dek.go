@@ -133,7 +133,8 @@ type DEKRewrapForMemberRequest struct {
 	// RotationStatements is the chain that explains a key change, fetched
 	// from the server only when the pin and the served key already disagree.
 	// Absent means no rotation is claimed.
-	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
 }
 
 func (r DEKRewrapForMemberRequest) Validate() error {
@@ -158,7 +159,13 @@ func (r DEKRewrapForMemberRequest) Validate() error {
 			"must be sent together with other_account_id",
 		)
 	}
-	return ValidateKeyRotationStatements(r.RotationStatements)
+	if err := ValidateKeyRotationStatements(r.RotationStatements); err != nil {
+		return err
+	}
+	if r.OtherAccountID == "" && r.EnrollmentEvidence != nil {
+		return newValidationError("enrollment_evidence", "requires other_account_id")
+	}
+	return validateKeyTransparencyEvidence(r.EnrollmentEvidence, "enrollment_evidence")
 }
 
 type DEKRewrapForMemberResponseData struct {
@@ -204,9 +211,10 @@ type DEKUnwrapAndRewrapForManyRequest struct {
 // wrapped to; AccountID names whose key it is meant to be, which is what makes
 // the claim checkable.
 type DEKRewrapRecipient struct {
-	AccountID          string                 `json:"account_id,omitempty"`
-	PublicKey          string                 `json:"public_key"`
-	RotationStatements []KeyRotationStatement `json:"rotation_statements,omitempty"`
+	AccountID          string                   `json:"account_id,omitempty"`
+	PublicKey          string                   `json:"public_key"`
+	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
 }
 
 // DEKRewrapMaxRecipients caps one call. The org member ceiling is 30, plus the
@@ -289,6 +297,12 @@ func validateRewrapRecipients(recipients []DEKRewrapRecipient, ownerAccountID st
 			)
 		}
 		if err := ValidateKeyRotationStatements(recipient.RotationStatements); err != nil {
+			return err
+		}
+		if recipient.AccountID == "" && recipient.EnrollmentEvidence != nil {
+			return newValidationError("recipients.enrollment_evidence", "requires account_id")
+		}
+		if err := validateKeyTransparencyEvidence(recipient.EnrollmentEvidence, "recipients.enrollment_evidence"); err != nil {
 			return err
 		}
 	}

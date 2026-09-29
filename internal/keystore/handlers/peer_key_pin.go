@@ -31,9 +31,11 @@ const peerKeyPinStateExempt = "exempt"
 // peerKeyPinCheck is one recipient's input to the state machine. An empty
 // accountID means "no pin to enforce" and short-circuits to exempt.
 type peerKeyPinCheck struct {
-	accountID  string
-	observed   string
-	statements []proto.KeyRotationStatement
+	accountID          string
+	observed           string
+	publicKey          string
+	statements         []proto.KeyRotationStatement
+	enrollmentEvidence *proto.KeyTransparencyEvidence
 }
 
 // enforcePeerKeyPins runs the state machine for every recipient and, only if
@@ -89,6 +91,10 @@ func enforcePeerKeyPins(
 		}
 		if existing != nil && existing.Fingerprint != check.observed {
 			if err := verifyRotationTransparency(d, check.statements); err != nil {
+				return nil, keyTransparencyRefusal(d, err), false
+			}
+		} else if existing == nil {
+			if err := verifyAccountEnrollmentTransparency(d, check.enrollmentEvidence, check.accountID, check.publicKey); err != nil {
 				return nil, keyTransparencyRefusal(d, err), false
 			}
 		}
