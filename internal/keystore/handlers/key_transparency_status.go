@@ -11,7 +11,8 @@ import (
 func HandleKeyTransparencyStatus(d Deps, _ proto.KeyTransparencyStatusRequest) proto.BaseResponse {
 	gate := d.KeyTransparency
 	result := proto.KeyTransparencyStatusResponse{
-		Configured: gate.Trust != nil,
+		Configured:       gate.Trust != nil,
+		FirstPinEnforced: true,
 	}
 	if gate.ConfigErr != nil {
 		result.TrustError = proto.KeyTransparencyTrustErrorInvalid

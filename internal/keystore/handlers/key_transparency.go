@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -39,6 +40,35 @@ func verifyRotationTransparency(d Deps, statements []proto.KeyRotationStatement)
 		}
 	}
 	return nil
+}
+
+func verifyAccountEnrollmentTransparency(
+	d Deps,
+	evidence *proto.KeyTransparencyEvidence,
+	accountID string,
+	publicKey string,
+) error {
+	if !d.KeyTransparency.Required() {
+		return nil
+	}
+	trust, err := usableTrust(d)
+	if err != nil {
+		return err
+	}
+	if evidence == nil {
+		return keytransparency.ErrInvalidCheckpoint
+	}
+	statement, err := base64.StdEncoding.DecodeString(evidence.StatementB64)
+	if err != nil {
+		return keytransparency.ErrInvalidCheckpoint
+	}
+	verified, err := keytransparency.VerifyAccountStatement(statement, accountID)
+	if err != nil || verified.SourceType != keytransparency.StatementAccountKeyEnrollment ||
+		verified.Fingerprint != crypto.AccountKeyFingerprint([]byte(publicKey)) {
+		return keytransparency.ErrInvalidCheckpoint
+	}
+	_, err = keytransparency.VerifyAndPersistEvidence(d.Store, *trust, *evidence, statement)
+	return err
 }
 
 func verifyMLSLeafTransparency(d Deps, evidence []proto.KeyTransparencyEvidence, declaration proto.MLSLeafDeclaration, accountPublicKey string) error {

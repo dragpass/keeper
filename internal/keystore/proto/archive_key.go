@@ -108,11 +108,12 @@ type AccountArchiveKeyStatusResponseData struct {
 // recipient is unchecked (the Native Messaging shape, and an ownership
 // handoff, whose target is an account archive key no pin tracks).
 type ArchiveUnwrapAndRewrapRequest struct {
-	WrappedForArchiveB64 string                 `json:"wrapped_for_archive_b64"`
-	RecipientPublicKey   string                 `json:"recipient_public_key"`
-	OwnerAccountID       string                 `json:"owner_account_id,omitempty"`
-	RecipientAccountID   string                 `json:"recipient_account_id,omitempty"`
-	RotationStatements   []KeyRotationStatement `json:"rotation_statements,omitempty"`
+	WrappedForArchiveB64 string                   `json:"wrapped_for_archive_b64"`
+	RecipientPublicKey   string                   `json:"recipient_public_key"`
+	OwnerAccountID       string                   `json:"owner_account_id,omitempty"`
+	RecipientAccountID   string                   `json:"recipient_account_id,omitempty"`
+	RotationStatements   []KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence   *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
 }
 
 func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
@@ -134,7 +135,13 @@ func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 	if r.RecipientAccountID == "" && len(r.RotationStatements) > 0 {
 		return newValidationError("rotation_statements", "must name the recipient account")
 	}
-	return ValidateKeyRotationStatements(r.RotationStatements)
+	if r.RecipientAccountID == "" && r.EnrollmentEvidence != nil {
+		return newValidationError("enrollment_evidence", "must name the recipient account")
+	}
+	if err := ValidateKeyRotationStatements(r.RotationStatements); err != nil {
+		return err
+	}
+	return validateKeyTransparencyEvidence(r.EnrollmentEvidence, "enrollment_evidence")
 }
 
 type ArchiveUnwrapAndRewrapResponseData struct {

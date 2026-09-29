@@ -50,9 +50,11 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 		}
 		pubs[i] = pk
 		checks[i] = peerKeyPinCheck{
-			accountID:  recipient.AccountID,
-			observed:   crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
-			statements: recipient.RotationStatements,
+			accountID:          recipient.AccountID,
+			observed:           crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
+			publicKey:          recipient.PublicKey,
+			statements:         recipient.RotationStatements,
+			enrollmentEvidence: recipient.EnrollmentEvidence,
 		}
 	}
 	// Every recipient is judged before the archive key is reassembled, so a

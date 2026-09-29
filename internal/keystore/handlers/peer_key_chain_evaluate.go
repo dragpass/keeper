@@ -74,6 +74,10 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 		if err := verifyRotationTransparency(d, req.RotationStatements); err != nil {
 			return keyTransparencyRefusal(d, err)
 		}
+	} else if existing == nil {
+		if err := verifyAccountEnrollmentTransparency(d, req.EnrollmentEvidence, req.AccountID, req.PublicKey); err != nil {
+			return keyTransparencyRefusal(d, err)
+		}
 	}
 
 	// The same call the wrap path makes, with the same arguments.
