@@ -38,7 +38,7 @@ func (r KeyTransparencyMonitorRequest) Validate() error {
 			return errors.New("events contain a duplicate event_id")
 		}
 		seen[event.EventID] = struct{}{}
-		if event.SourceType != "account_key_rotation" && event.SourceType != "mls_leaf_binding" {
+		if event.SourceType != "account_key_enrollment" && event.SourceType != "account_key_rotation" && event.SourceType != "mls_leaf_binding" {
 			return errors.New("events contain an unsupported source_type")
 		}
 		if len(event.Evidence.StatementB64) > keyTransparencyMonitorMaxFieldSize || len(event.Evidence.CheckpointB64) > keyTransparencyMonitorMaxFieldSize || len(event.Evidence.SaltB64) > 128 || len(event.Evidence.InclusionProofB64) > 64 || len(event.Evidence.ConsistencyProofB64) > 64 {
