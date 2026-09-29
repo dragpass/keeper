@@ -56,6 +56,12 @@ func (a *App) HandlersDeps() handlers.Deps {
 	}
 }
 
+func (a *App) VerifyKeyTransparencyAccountEvents(request proto.KeyTransparencyMonitorRequest) proto.BaseResponse {
+	a.requestMu.Lock()
+	defer a.requestMu.Unlock()
+	return handlers.HandleKeyTransparencyMonitor(a.HandlersDeps(), request)
+}
+
 func (a *App) NewMessenger(in io.Reader, out io.Writer) *dispatch.Messenger {
 	return dispatch.NewMessenger(in, out, a.Logger)
 }

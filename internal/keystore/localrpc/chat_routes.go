@@ -31,6 +31,9 @@ func longWriteRoute(path string) bool {
 	case "/v1/peer-key/chain-evaluate", "/v1/archive/archive_key_split", "/v1/archive/archive_quorum_combine_and_rewrap":
 		return true
 	}
+	if path == "/v1/key-transparency/monitor" {
+		return true
+	}
 	return strings.HasPrefix(path, "/v1/chat/")
 }
 
@@ -270,6 +273,11 @@ func remarshal(from, into any) error {
 // peer_key_pin_forget is left out: forgetting a pin re-TOFUs a changed key,
 // and the key-trust UI no longer offers it (MLS hardening policy Q9 (a)).
 var peerKeyRoutes = map[string]appRoute{
+	"/v1/key-transparency/monitor": {
+		input:      func() any { return &proto.KeyTransparencyMonitorRequest{} },
+		plainLimit: proto.KeyTransparencyMonitorMaxRequestSize,
+		run:        runKeyTransparencyMonitor,
+	},
 	"/v1/peer-key/pin-list": {
 		action: proto.ActionPeerKeyPinList,
 		input:  func() any { return &proto.PeerKeyPinListRequest{} },
@@ -295,6 +303,14 @@ var peerKeyRoutes = map[string]appRoute{
 		action: proto.ActionPeerKeyPolicySet,
 		input:  func() any { return &proto.PeerKeyPolicySetRequest{} },
 	},
+}
+
+func runKeyTransparencyMonitor(s *Server, _ appRequest, input any) (proto.BaseResponse, error) {
+	monitorRequest := input.(*proto.KeyTransparencyMonitorRequest)
+	if err := monitorRequest.Validate(); err != nil {
+		return proto.BaseResponse{}, errAppRouteRefused
+	}
+	return s.app.VerifyKeyTransparencyAccountEvents(*monitorRequest), nil
 }
 
 // archiveRoutes is the org archive key, break-glass and quorum surface.
