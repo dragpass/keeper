@@ -2,6 +2,7 @@ package keytransparency
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"strconv"
 	"strings"
@@ -10,14 +11,15 @@ import (
 )
 
 const (
-	StatementAccountKeyRotation = "account_key_rotation"
-	StatementMLSLeafBinding     = "mls_leaf_binding"
-	statementDomain             = "dragpass.kt.statement"
-	statementMaxBytes           = 64 * 1024
+	StatementAccountKeyEnrollment = "account_key_enrollment"
+	StatementAccountKeyRotation   = "account_key_rotation"
+	StatementMLSLeafBinding       = "mls_leaf_binding"
+	statementDomain               = "dragpass.kt.statement"
+	statementMaxBytes             = 64 * 1024
 )
 
 func EncodeStatement(kind string, fields ...[]byte) ([]byte, error) {
-	if kind != StatementAccountKeyRotation && kind != StatementMLSLeafBinding {
+	if kind != StatementAccountKeyEnrollment && kind != StatementAccountKeyRotation && kind != StatementMLSLeafBinding {
 		return nil, errors.New("unknown key transparency statement kind")
 	}
 	if len(fields) == 0 || len(fields) > 16 {
@@ -35,6 +37,23 @@ func EncodeStatement(kind string, fields ...[]byte) ([]byte, error) {
 		return nil, errors.New("key transparency statement is too large")
 	}
 	return statement, nil
+}
+
+func EncodeAccountKeyEnrollmentStatement(accountID, fingerprint string, publicKeyPEM, signature []byte) ([]byte, error) {
+	if !isLowerHexFingerprint(fingerprint) {
+		return nil, errors.New("invalid account key fingerprint")
+	}
+	return EncodeStatement(StatementAccountKeyEnrollment,
+		[]byte(accountID), []byte(fingerprint), publicKeyPEM, signature,
+	)
+}
+
+func isLowerHexFingerprint(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && hex.EncodeToString(decoded) == value
 }
 
 func EncodeAccountKeyRotationStatement(statement proto.KeyRotationStatement) ([]byte, error) {

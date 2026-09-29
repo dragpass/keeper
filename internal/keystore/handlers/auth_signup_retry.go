@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/awnumar/memguard"
@@ -83,10 +82,6 @@ func newSignupInputRecord(d Deps, publicKey, accountID, alias string, recoveryKe
 	return string(record), err
 }
 
-func signupEnrollmentCanonical(accountID, fingerprint string) string {
-	return strings.Join([]string{"dragpass.keyenrollment", "1", accountID, fingerprint}, "|")
-}
-
 func readSignupAccountID(d Deps) (string, error) {
 	stored, err := keychain.GetPendingSignupPrepareInput(d.Store)
 	if err != nil {
@@ -137,7 +132,7 @@ func answerStagedSignup(d Deps, alias string, privateKey, publicKey string, pass
 	}
 	enrollmentSignature, response := signWithStagedKey(
 		keychain.StagedAccountKeypair{PrivateKey: privateKey, PublicKey: publicKey},
-		signupEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(publicKey))),
+		proto.AccountKeyEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(publicKey))),
 	)
 	if !response.Success {
 		return response

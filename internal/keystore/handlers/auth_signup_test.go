@@ -38,7 +38,7 @@ func TestHandleAuthSignupPrepareDoesNotReturnSecrets(t *testing.T) {
 	enrollmentSignature, err := base64.StdEncoding.DecodeString(data.EnrollmentSignature)
 	if err != nil || keepercrypto.VerifySignature(
 		parsedPublicKey,
-		signupEnrollmentCanonical(data.AccountID, keepercrypto.AccountKeyFingerprint([]byte(data.PublicKey))),
+		proto.AccountKeyEnrollmentCanonical(data.AccountID, keepercrypto.AccountKeyFingerprint([]byte(data.PublicKey))),
 		enrollmentSignature,
 	) != nil {
 		t.Fatal("account enrollment signature does not bind the returned account ID and public key")

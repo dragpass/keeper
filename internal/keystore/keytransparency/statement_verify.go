@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	rotationStatementFieldCount = 9
-	mlsLeafStatementFieldCount  = 9
+	accountKeyEnrollmentStatementFieldCount = 4
+	rotationStatementFieldCount             = 9
+	mlsLeafStatementFieldCount              = 9
 )
 
 type VerifiedStatement struct {
@@ -44,6 +45,23 @@ func VerifyAccountStatement(statement []byte, expectedAccountID string) (Verifie
 		fields[index] = string(decoded)
 	}
 	switch parts[2] {
+	case StatementAccountKeyEnrollment:
+		if len(fields) != accountKeyEnrollmentStatementFieldCount || fields[0] != expectedAccountID {
+			return result, ErrInvalidCheckpoint
+		}
+		fingerprint := fields[1]
+		if !isLowerHexFingerprint(fingerprint) || crypto.AccountKeyFingerprint([]byte(fields[2])) != fingerprint {
+			return result, ErrInvalidCheckpoint
+		}
+		canonical := proto.AccountKeyEnrollmentCanonical(fields[0], fingerprint)
+		if err := verifyAccountSignatureBytes(fields[2], []byte(fields[3]), canonical); err != nil {
+			return result, ErrInvalidCheckpoint
+		}
+		reencoded, err := EncodeAccountKeyEnrollmentStatement(fields[0], fingerprint, []byte(fields[2]), []byte(fields[3]))
+		if err != nil || string(reencoded) != string(statement) {
+			return result, ErrInvalidCheckpoint
+		}
+		result = VerifiedStatement{SourceType: StatementAccountKeyEnrollment, AccountID: fields[0], Fingerprint: fingerprint, Reason: "enroll"}
 	case StatementAccountKeyRotation:
 		if len(fields) != rotationStatementFieldCount {
 			return result, ErrInvalidCheckpoint
@@ -120,6 +138,14 @@ func verifyAccountSignature(publicKeyPEM, signatureB64, canonical string) error 
 		return err
 	}
 	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return err
+	}
+	return crypto.VerifySignature(publicKey, canonical, signature)
+}
+
+func verifyAccountSignatureBytes(publicKeyPEM string, signature []byte, canonical string) error {
+	publicKey, err := crypto.ParsePublicKey(publicKeyPEM)
 	if err != nil {
 		return err
 	}
