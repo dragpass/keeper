@@ -89,6 +89,7 @@ func chatRoutes() map[string]appRoute {
 		{proto.MLSRoomNameSeal, func() any { return &proto.MLSRoomNameSealRequest{} }, stateCap},
 		{proto.MLSRoomNameOpen, func() any { return &proto.MLSRoomNameOpenRequest{} }, stateCap},
 		{proto.MLSConversationStatus, func() any { return &proto.MLSConversationStatusRequest{} }, stateCap},
+		{proto.MLSEpochComparison, func() any { return &proto.MLSEpochComparisonRequest{} }, stateCap},
 		{proto.MLSRejoinRequestSign, func() any { return &proto.MLSRejoinRequestSignRequest{} }, stateCap},
 		{proto.MLSCommitAbandon, func() any { return &proto.MLSCommitAbandonRequest{} }, stateCap},
 		{proto.MLSLeaveRequestSign, func() any { return &proto.MLSLeaveRequestSignRequest{} }, stateCap},

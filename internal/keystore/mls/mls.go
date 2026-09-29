@@ -808,6 +808,10 @@ func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
 
 func (c *Cipher) Epoch() (uint64, error) { return c.session.Epoch() }
 
+func (c *Cipher) EpochComparisonDigest(conversationID []byte) (uint64, []byte, error) {
+	return c.session.EpochComparisonDigest(conversationID)
+}
+
 func (c *Cipher) ExportSecret(label, context []byte, n int) ([]byte, error) {
 	return c.session.ExportSecret(label, context, n)
 }

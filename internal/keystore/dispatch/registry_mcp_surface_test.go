@@ -115,6 +115,7 @@ var mlsChatActionNames = []string{
 	proto.MLSRoomNameSeal,
 	proto.MLSRoomNameOpen,
 	proto.MLSConversationStatus,
+	proto.MLSEpochComparison,
 	proto.MLSRejoinRequestSign,
 	proto.MLSCommitAbandon,
 	proto.MLSLeaveRequestSign,
