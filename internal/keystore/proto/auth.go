@@ -14,6 +14,8 @@ func (r AuthSignupPrepareRequest) Validate() error {
 }
 
 type AuthSignupPrepareResponseData struct {
+	AccountID             string `json:"account_id"`
+	EnrollmentSignature   string `json:"enrollment_signature"`
 	PasswordWrappedDEKB64 string `json:"password_wrapped_dek_b64"`
 	DeviceWrappedDEKB64   string `json:"device_wrapped_dek_b64"`
 	RecoveryAuthSeed      string `json:"recovery_auth_seed"`

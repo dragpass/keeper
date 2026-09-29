@@ -78,6 +78,10 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	if response := ensureSignupDeviceKey(d); !response.Success {
 		return response
 	}
+	accountID, err := newSignupAccountID(d)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate signup account identity")
+	}
 	dekData, response := generateAndWrapDual(d, passwordBuffer, keychain.SavePendingSignupDeviceWrappedDEK)
 	if !response.Success {
 		return response
@@ -93,7 +97,7 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	}
 	// Written last: a prepare that stops before this leaves a staged key no
 	// retry can match, which the App aborts or signs in with.
-	record, err := newSignupInputRecord(d, signData.PublicKey, req.Alias, normalizedRecoveryKey, passwordBuffer)
+	record, err := newSignupInputRecord(d, signData.PublicKey, accountID, req.Alias, normalizedRecoveryKey, passwordBuffer)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeInternal, "failed to record the signup input")
 	}
@@ -101,7 +105,21 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to record the signup input")
 	}
 
+	pendingPrivate, err := getPendingPrivateKeySecure(d.Store)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to load the staged signup key")
+	}
+	enrollmentSignature, err := signDataSecure(
+		pendingPrivate,
+		signupEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(signData.PublicKey))),
+	)
+	pendingPrivate.Destroy()
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to sign the account enrollment")
+	}
 	return proto.BaseResponse{Success: true, Data: proto.AuthSignupPrepareResponseData{
+		AccountID:             accountID,
+		EnrollmentSignature:   enrollmentSignature,
 		PasswordWrappedDEKB64: dekData.PasswordWrappedDEKB64,
 		DeviceWrappedDEKB64:   dekData.DeviceWrappedDEKB64,
 		RecoveryAuthSeed:      recoveryAuthSeed,
