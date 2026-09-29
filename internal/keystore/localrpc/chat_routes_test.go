@@ -154,6 +154,7 @@ var pinnedAppRoutes = []string{
 	"/v1/group-dek/generate",
 	"/v1/group-dek/rewrap-for-many",
 	"/v1/group-dek/rewrap-for-member",
+	"/v1/key-transparency/monitor",
 	"/v1/key-transparency/status",
 	"/v1/peer-key/chain-evaluate",
 	"/v1/peer-key/pin",

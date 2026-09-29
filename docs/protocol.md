@@ -1576,6 +1576,7 @@ like `voluntary`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`key_transparency_status`|_empty_|`{ configured, trust_error?, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. The status makes no claim about witness independence: a verified proof is a server-side record, and clients label it that way. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
+|`key_transparency_monitor` (App local RPC only)|`account_id`, `events: [{ event_id, source_type, evidence }]`|`{ account_id, checked, checkpoint_size, events: [{ event_id, source_type, device_id?, fingerprint, reason, known_on_this_device }] }`|For each self-account event, verifies the canonical statement and its signatures, inclusion proof, fresh witness quorum, and checkpoint monotonicity before comparing the statement digest with this device's locally accepted-event markers. `known_on_this_device:false` means first seen here, not malicious. This does not prove the server returned a complete event list or prove non-inclusion. It is deliberately not a Native Messaging action.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -2058,6 +2059,7 @@ route-specific request shape; unknown fields are 400.
 |`/v1/auth/recovery/rewrap-group-dek`|`dek_rewrap_with_old_key_to_self`|No `new_public_key`: the target is always this Keeper's active key.|
 |`/v1/account-key/public`|`getpublickey`||
 |`/v1/key-transparency/status`|`key_transparency_status`||
+|`/v1/key-transparency/monitor`|App-only Keeper handler|Strict body; 8 MiB cap; verifies up to 100 event proofs; 60 s write deadline.|
 |`/v1/peer-key/pin`|`peer_key_pin_get`||
 |`/v1/group-dek/generate`|`group_dek_generate_and_open`|Takes `{}`; the wrap is to this Keeper's active key, never a caller key.|
 |`/v1/group-dek/close`|`group_session_close`||
@@ -2067,7 +2069,7 @@ route-specific request shape; unknown fields are 400.
 Every other session route keeps the 8 KiB request cap.
 
 The server writes an answer within 8 s. `/v1/chat/*`,
-`/v1/peer-key/chain-evaluate`, `/v1/archive/archive_key_split` and
+`/v1/peer-key/chain-evaluate`, `/v1/key-transparency/monitor`, `/v1/archive/archive_key_split` and
 `/v1/archive/archive_quorum_combine_and_rewrap` get 60 s instead (a room
 create verifying 32 KeyPackages, a 200-message display batch, a call queued
 behind an Extension request); the read deadline is unchanged.
