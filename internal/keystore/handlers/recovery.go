@@ -11,6 +11,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -153,6 +154,10 @@ func generateKeypairWithRecoveryWrapKey(
 	// are until save_session_code sees the server accept this key. A recovery
 	// the server refuses or never receives changes nothing a login needs.
 	if err := keychain.StagePendingRecoveryKeypair(d.Store, string(privKeyBuf.Bytes()), keyPair.PublicKey); err != nil {
+		pendingEventID, idErr := keychain.PendingKeyTransparencyEventID([]byte(keyPair.PublicKey))
+		if idErr == nil {
+			_ = keychain.DeletePendingKeyTransparencyEvent(d.Store, pendingEventID)
+		}
 		d.Logger.Printf("recovery wrap error: staging the new keypair failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "staging the recovery keypair failed: "+err.Error())
 	}
@@ -212,6 +217,17 @@ func buildRecoveryRotationStatement(
 	})
 	if useErr != nil {
 		return proto.KeyRotationStatement{}, useErr
+	}
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(statement)
+	if err != nil {
+		return proto.KeyRotationStatement{}, err
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(newPublicPEM))
+	if err == nil {
+		err = keychain.StageKeyTransparencyEvent(d.Store, statement.AccountID, pendingEventID, canonical)
+	}
+	if err != nil {
+		return proto.KeyRotationStatement{}, errors.New("recovery rotation statement could not be recorded locally")
 	}
 	return statement, nil
 }

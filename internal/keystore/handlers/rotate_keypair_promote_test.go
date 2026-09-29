@@ -11,6 +11,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -71,6 +72,13 @@ func TestHandleRotateUserKeypairPromote_Success(t *testing.T) {
 	}
 	if promData.ActivePublicKey == oldPub {
 		t.Errorf("active pub unchanged after promote")
+	}
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(prepData.RotationStatement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, prepData.RotationStatement.AccountID, canonical); err != nil || !known {
+		t.Fatalf("accepted rotation was not marked known: known=%t err=%v", known, err)
 	}
 
 	// verify pending slot was cleared

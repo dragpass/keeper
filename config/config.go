@@ -110,8 +110,10 @@ const (
 	// keychain/mls_leaf_newest.go. It is what refuses a superseded
 	// declaration, whose account-key signature still verifies. Not key
 	// material: a timestamp and a hash of a public key.
-	MLSLeafNewestPrefix          = "mls-leaf-newest:"
-	KeyTransparencyAnchorAccount = "key-transparency-checkpoint-anchor"
+	MLSLeafNewestPrefix               = "mls-leaf-newest:"
+	KeyTransparencyAnchorAccount      = "key-transparency-checkpoint-anchor"
+	KeyTransparencyKnownEventPrefix   = "key-transparency-known-event:"
+	KeyTransparencyPendingEventPrefix = "key-transparency-pending-event:"
 
 	// Peer key device policy (account key trust v1, strict mode).
 	//

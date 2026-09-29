@@ -11,8 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -121,6 +123,20 @@ func TestHandleRotateUserKeypairPrepare_Success(t *testing.T) {
 	}
 	if data.NewPublicKey == oldPub {
 		t.Errorf("NewPublicKey unexpectedly equals OldPublicKey")
+	}
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(data.RotationStatement)
+	if err != nil {
+		t.Fatalf("encode rotation statement: %v", err)
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(data.NewPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(config.Service, config.KeyTransparencyPendingEventPrefix+pendingEventID); err != nil {
+		t.Fatalf("locally signed rotation was not staged: %v", err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, data.RotationStatement.AccountID, canonical); err != nil || known {
+		t.Fatalf("unaccepted rotation was marked known: known=%t err=%v", known, err)
 	}
 
 	// verify it was saved into the pending slot

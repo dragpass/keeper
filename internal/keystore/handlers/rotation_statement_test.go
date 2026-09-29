@@ -22,9 +22,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -76,6 +78,20 @@ func TestRotationStatement_PrepareOutputRotatesAPin(t *testing.T) {
 	); err != nil {
 		t.Fatalf("the Keeper does not accept its own statement: %v", err)
 	}
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(statement)
+	if err != nil {
+		t.Fatalf("encode rotation statement: %v", err)
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(data.NewPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(config.Service, config.KeyTransparencyPendingEventPrefix+pendingEventID); err != nil {
+		t.Fatalf("locally signed rotation was not staged: %v", err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, statement.AccountID, canonical); err != nil || known {
+		t.Fatalf("unaccepted rotation was marked known: known=%t err=%v", known, err)
+	}
 
 	// And a peer pinned to the old key must advance rather than refuse.
 	pinned := &keychain.PeerKeyPin{
@@ -99,7 +115,7 @@ func TestRotationStatement_PrepareOutputRotatesAPin(t *testing.T) {
 // The recovery flow's statement has to do the same job, with reason fixed and
 // the old half taken from the recovery handle rather than the Keychain.
 func TestRotationStatement_RecoveryOutputRotatesAPin(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
+	deps, _, store := newTestDeps(t)
 
 	// The key the recovery restores. It is deliberately NOT the Keychain's
 	// active key, so a statement built from the active slot would fail here.
@@ -120,6 +136,20 @@ func TestRotationStatement_RecoveryOutputRotatesAPin(t *testing.T) {
 	}
 	data := resp.Data.(proto.GenerateKeypairWithRecoveryWrapResponseData)
 	statement := data.RotationStatement
+	canonical, err := keytransparency.EncodeAccountKeyRotationStatement(statement)
+	if err != nil {
+		t.Fatalf("encode recovery rotation statement: %v", err)
+	}
+	pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(data.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(config.Service, config.KeyTransparencyPendingEventPrefix+pendingEventID); err != nil {
+		t.Fatalf("locally signed recovery was not staged: %v", err)
+	}
+	if known, err := keychain.HasKnownKeyTransparencyEvent(store, statement.AccountID, canonical); err != nil || known {
+		t.Fatalf("unaccepted recovery was marked known: known=%t err=%v", known, err)
+	}
 
 	if statement.Reason != proto.KeyRotationReasonRecovery {
 		t.Fatalf("reason = %q, want recovery (the Keeper fixes it, the caller cannot)", statement.Reason)

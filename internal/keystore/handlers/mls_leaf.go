@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -169,6 +170,18 @@ func declareLocked(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse,
 	}); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf key could not be stored"), false
 	}
+	canonical, err := keytransparency.EncodeMLSLeafBindingStatement(declaration, accountPublicKeyPEM)
+	pendingEventID, idErr := keychain.PendingKeyTransparencyEventID([]byte(declaration.SignatureKey))
+	if err == nil {
+		err = idErr
+	}
+	if err == nil {
+		err = keychain.StageKeyTransparencyEvent(d.Store, declaration.AccountID, pendingEventID, canonical)
+	}
+	if err != nil {
+		_, _ = keychain.DeleteMLSLeafPending(d.Store)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf statement could not be recorded locally"), false
+	}
 	return proto.BaseResponse{Success: true, Data: proto.MLSLeafDeclareResponseData{MLSLeafDeclaration: declaration}}, true
 }
 
@@ -245,6 +258,10 @@ func promoteLocked(d Deps, accepted proto.MLSLeafAccepted) proto.BaseResponse {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "pending mls leaf declaration is unreadable")
 		}
 		if accepted.Names(decl) {
+			pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(decl.SignatureKey))
+			if err != nil || keychain.PromoteKeyTransparencyEvent(d.Store, pendingEventID) != nil {
+				return errs.CodeResponse(errs.ErrCodeStorageFailure, "accepted mls leaf statement could not be recorded locally")
+			}
 			dropped, err := chatstate.DropKeyPackagesExcept(d.Store, pending.AccountID, decl.SignatureKeyFingerprint, d.Now())
 			if err != nil {
 				d.Logger.Println("mls leaf promote: the previous leaf's key packages could not be dropped")
@@ -271,6 +288,10 @@ func promoteLocked(d Deps, accepted proto.MLSLeafAccepted) proto.BaseResponse {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "active mls leaf declaration is unreadable")
 		}
 		if accepted.Names(decl) {
+			pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(decl.SignatureKey))
+			if err != nil || keychain.PromoteKeyTransparencyEvent(d.Store, pendingEventID) != nil {
+				return errs.CodeResponse(errs.ErrCodeStorageFailure, "accepted mls leaf statement could not be recorded locally")
+			}
 			return proto.BaseResponse{Success: true, Data: proto.MLSLeafPromoteResponseData{
 				Promoted: false, Fingerprint: decl.SignatureKeyFingerprint,
 			}}
@@ -288,7 +309,18 @@ func HandleMLSLeafAbort(d Deps, req proto.MLSLeafAbortRequest) proto.BaseRespons
 		failed  bool
 	)
 	lockErr := keychain.WithMLSLeafLock(d.Store, func() error {
-		var err error
+		pending, found, err := keychain.GetMLSLeafPending(d.Store)
+		if err != nil {
+			failed = true
+			return nil
+		}
+		if found {
+			pendingEventID, idErr := pendingMLSLeafTransparencyID(pending)
+			if idErr != nil || keychain.DeletePendingKeyTransparencyEvent(d.Store, pendingEventID) != nil {
+				failed = true
+				return nil
+			}
+		}
 		aborted, err = keychain.DeleteMLSLeafPending(d.Store)
 		failed = err != nil
 		return nil
@@ -301,6 +333,14 @@ func HandleMLSLeafAbort(d Deps, req proto.MLSLeafAbortRequest) proto.BaseRespons
 	}
 	d.Logger.Printf("mls leaf abort successful (aborted=%t)", aborted)
 	return proto.BaseResponse{Success: true, Data: proto.MLSLeafAbortResponseData{Aborted: aborted}}
+}
+
+func pendingMLSLeafTransparencyID(pending keychain.MLSLeafKey) (string, error) {
+	declaration, err := storedMLSLeafDeclaration(pending)
+	if err != nil {
+		return "", err
+	}
+	return keychain.PendingKeyTransparencyEventID([]byte(declaration.SignatureKey))
 }
 
 // HandleMLSLeafStatus reports which entries exist, by signature key

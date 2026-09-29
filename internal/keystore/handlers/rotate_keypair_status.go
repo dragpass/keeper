@@ -8,6 +8,7 @@
 package handlers
 
 import (
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -33,6 +34,13 @@ func HandleRotateUserKeypairStatus(d Deps, req proto.RotateUserKeypairStatusRequ
 func HandleRotateUserKeypairAbort(d Deps, req proto.RotateUserKeypairAbortRequest) proto.BaseResponse {
 	d.Logger.Println("rotate user keypair abort request processing...")
 
+	pendingPub, _ := keychain.GetPendingPublicKey(d.Store)
+	if pendingPub != "" {
+		pendingEventID, err := keychain.PendingKeyTransparencyEventID([]byte(pendingPub))
+		if err != nil || keychain.DeletePendingKeyTransparencyEvent(d.Store, pendingEventID) != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "pending rotation statement could not be removed")
+		}
+	}
 	_, hadPriv := getPendingPrivateKeyPresence(d.Store)
 	_, hadPub := getPendingPublicKeyPresence(d.Store)
 
