@@ -80,7 +80,7 @@ func TestAuthSignupPrepareRetryWithTheSameInputAnswersForTheStagedKey(t *testing
 	enrollmentSignature, err := base64.StdEncoding.DecodeString(again.EnrollmentSignature)
 	if err != nil || crypto.VerifySignature(
 		publicKey,
-		signupEnrollmentCanonical(again.AccountID, crypto.AccountKeyFingerprint([]byte(again.PublicKey))),
+		proto.AccountKeyEnrollmentCanonical(again.AccountID, crypto.AccountKeyFingerprint([]byte(again.PublicKey))),
 		enrollmentSignature,
 	) != nil {
 		t.Fatal("the retry's enrollment signature does not bind the staged account ID and key")

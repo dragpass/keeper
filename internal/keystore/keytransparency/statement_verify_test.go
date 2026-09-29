@@ -14,6 +14,63 @@ import (
 
 const monitorAccountID = "00000000-0000-4000-8000-000000000001"
 
+func TestVerifyAccountStatementEnrollment(t *testing.T) {
+	pair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pem := []byte(pair.PublicKey)
+	fingerprint := keepercrypto.AccountKeyFingerprint(pem)
+	privateKey, err := keepercrypto.ParsePrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := proto.AccountKeyEnrollmentCanonical(monitorAccountID, fingerprint)
+	if canonical != "dragpass.keyenrollment|1|"+monitorAccountID+"|"+fingerprint {
+		t.Fatalf("canonical = %q", canonical)
+	}
+	signature, err := signStatement(t, privateKey, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureBytes, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := EncodeAccountKeyEnrollmentStatement(monitorAccountID, fingerprint, pem, signatureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := VerifyAccountStatement(statement, monitorAccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.SourceType != StatementAccountKeyEnrollment || verified.AccountID != monitorAccountID || verified.Fingerprint != fingerprint || verified.Reason != "enroll" || verified.Digest == "" {
+		t.Fatalf("unexpected enrollment verdict: %+v", verified)
+	}
+	if _, err := VerifyAccountStatement(statement, "00000000-0000-4000-8000-000000000002"); err == nil {
+		t.Fatal("accepted an enrollment for another account")
+	}
+	forged, err := EncodeAccountKeyEnrollmentStatement(monitorAccountID, fingerprint, pem, []byte("forged"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyAccountStatement(forged, monitorAccountID); err == nil {
+		t.Fatal("accepted a forged enrollment signature")
+	}
+	otherPair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keySwapped, err := EncodeAccountKeyEnrollmentStatement(monitorAccountID, fingerprint, []byte(otherPair.PublicKey), signatureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyAccountStatement(keySwapped, monitorAccountID); err == nil {
+		t.Fatal("accepted a key that does not match the committed fingerprint")
+	}
+}
+
 func TestVerifyAccountStatementRotation(t *testing.T) {
 	oldKey, err := keepercrypto.GenerateRSAKeyPair()
 	if err != nil {

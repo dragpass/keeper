@@ -1576,7 +1576,7 @@ like `voluntary`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`key_transparency_status`|_empty_|`{ configured, trust_error?, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. The status makes no claim about witness independence: a verified proof is a server-side record, and clients label it that way. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
-|`key_transparency_monitor` (App local RPC only)|`account_id`, `events: [{ event_id, source_type, evidence }]`|`{ account_id, checked, checkpoint_size, events: [{ event_id, source_type, device_id?, fingerprint, reason, known_on_this_device }] }`|For each self-account event, verifies the canonical statement and its signatures, inclusion proof, fresh witness quorum, and checkpoint monotonicity before comparing the statement digest with this device's locally accepted-event markers. `known_on_this_device:false` means first seen here, not malicious. This does not prove the server returned a complete event list or prove non-inclusion. It is deliberately not a Native Messaging action.|
+|`key_transparency_monitor` (App local RPC only)|`account_id`, `events: [{ event_id, source_type, evidence }]`|`{ account_id, checked, checkpoint_size, events: [{ event_id, source_type, device_id?, fingerprint, reason, known_on_this_device }] }`|For each self-account event, verifies the account-key enrollment, account-key rotation, or MLS leaf-binding statement and its signatures, inclusion proof, fresh witness quorum, and checkpoint monotonicity before comparing the statement digest with this device's locally accepted-event markers. `known_on_this_device:false` means first seen here, not malicious. This does not prove the server returned a complete event list or prove non-inclusion. It is deliberately not a Native Messaging action.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1603,8 +1603,10 @@ decides the gate:
 |present but unreadable or invalid|Refused, fail closed: `key_transparency_trust_invalid` (peer key actions) or `CHAT_MLS_KEY_TRANSPARENCY_TRUST_INVALID` (MLS). There is no fallback to the pre-transparency rules, so corrupting the file cannot switch verification off. The process keeps running and logs the reason.|`configured: false`, `trust_error: "invalid"`|
 
 A verified proof shows that the server's log and the configured witnesses
-recorded the key. Until an independent witness exists, that is a server-side
-record, not an independent verification. The
+recorded the key. Account enrollment statements bind the proposed account UUID
+and account-key fingerprint under `dragpass.keyenrollment|1|<account_id>|<fingerprint>`.
+Until an independent witness exists, that is a server-side record, not an
+independent verification. The
 `key_transparency_status` action reports the persisted checkpoint but does not
 refresh it.
 
@@ -1628,9 +1630,8 @@ Locally signed rotation and MLS-leaf statements are staged in the OS keychain
 by a hash of their new public key. A server-confirmed rotation, recovery, or
 leaf acceptance promotes only the statement digest to a local known-event
 record; abort removes the staged record. The statement itself is not retained
-in this record. This is provenance for the planned account self-monitoring
-flow, not yet a monitor action or a proof that the server returned a complete
-event list.
+in this record. This is provenance for the account self-monitoring flow, not a
+proof that the server returned a complete event list.
 
 **Storage.** `peer-pin:<owner>:<peer>` holds the record (~230 bytes);
 `peer-pin-index:<owner>:<n>` holds up to 48 peer ids per chunk, because

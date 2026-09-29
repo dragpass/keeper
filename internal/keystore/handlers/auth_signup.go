@@ -111,7 +111,7 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	}
 	enrollmentSignature, err := signDataSecure(
 		pendingPrivate,
-		signupEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(signData.PublicKey))),
+		proto.AccountKeyEnrollmentCanonical(accountID, crypto.AccountKeyFingerprint([]byte(signData.PublicKey))),
 	)
 	pendingPrivate.Destroy()
 	if err != nil {
