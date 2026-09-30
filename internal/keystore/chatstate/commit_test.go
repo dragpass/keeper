@@ -145,6 +145,12 @@ func (c *fakeCommitter) ApplyMessage(message []byte) (uint64, bool, error) {
 	return c.epoch, c.removes, nil
 }
 
+type nonAdvancingCommitter struct{ fakeCommitter }
+
+func (c *nonAdvancingCommitter) ApplyMessage([]byte) (uint64, bool, error) {
+	return c.epoch, false, nil
+}
+
 // fakeExport stands in for MLS-Exporter: one key per epoch, label and
 // context, so a name sealed for one epoch does not open under another.
 func fakeExport(epoch uint64, label, context []byte, n int) []byte {
@@ -475,6 +481,27 @@ func TestARereadStillWorksWhileACommitIsUnsettled(t *testing.T) {
 	}
 	if string(got.Plaintext) != "delivered" {
 		t.Fatalf("reread returned %q", got.Plaintext)
+	}
+}
+
+func TestACommitWinnerMustAdvanceExactlyOneEpoch(t *testing.T) {
+	store, _ := newTestStore(t)
+	seedGroupState(t, store, testConvA, 4, 0, 0)
+	cipher := &nonAdvancingCommitter{}
+	beginForTest(t, store, testCommitA, cipher)
+	before := readRecordForTest(t, store, testConvA)
+
+	_, err := store.ConfirmCommit(testConvA, noWatermark, CommitOutcome{
+		ClientCommitID: testCommitA,
+		Kind:           CommitSuperseded,
+		WinnerMessage:  []byte("commit@4"),
+	}, cipher)
+	if !errors.Is(err, ErrWinnerEpochMismatch) {
+		t.Fatalf("non-advancing winner = %v, want %v", err, ErrWinnerEpochMismatch)
+	}
+	after := readRecordForTest(t, store, testConvA)
+	if after.Generation != before.Generation || after.Pending == nil || after.Pending.ClientCommitID != testCommitA {
+		t.Fatalf("invalid winner changed the stored commit state: before=%+v after=%+v", before, after)
 	}
 }
 
