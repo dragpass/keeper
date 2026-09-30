@@ -37,6 +37,13 @@ jobs:
           cache: true
       - run: go build ./...
       - run: go test ./... -count=1
+      - name: Windows scheduled Keeper service smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go build -o keeper-service-test.exe .
+          $env:KEEPER_WINDOWS_SERVICE_TEST_BINARY = (Resolve-Path .\keeper-service-test.exe).Path
+          go test ./internal/keystore/service -run '^TestWindowsScheduledKeeperServiceStartsAndServesHealth$' -count=1 -v
       # The App -> Keeper round trip against the release binary, named so a
       # skip or a rename cannot pass quietly: `app pair --no-open`, a session
       # opened with the printed key, sealed status / lease claim / gated chat
