@@ -4,6 +4,10 @@ package chatstate
 
 import "os"
 
+func replaceStateFile(source, target string) error {
+	return os.Rename(source, target)
+}
+
 // syncDir flushes the directory entry the rename created. Without it the rename
 // can still be in the log when the machine loses power, which would take the
 // new file with it.

@@ -725,7 +725,7 @@ func replaceFile(dir, path string, data []byte) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceStateFile(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
