@@ -26,7 +26,10 @@ func manageWindows(action, executable string) error {
 	if err != nil || currentUser.Uid == "" || currentUser.Username == "" {
 		return errors.New("could not determine the current Windows user")
 	}
-	taskName := scheduledTaskName + " " + currentUser.Uid
+	return manageWindowsTask(action, executable, scheduledTaskName+" "+currentUser.Uid)
+}
+
+func manageWindowsTask(action, executable, taskName string) error {
 	if action == "uninstall" {
 		_ = exec.Command("schtasks.exe", "/End", "/TN", taskName).Run()
 		if output, err := exec.Command("schtasks.exe", "/Delete", "/F", "/TN", taskName).CombinedOutput(); err != nil {
