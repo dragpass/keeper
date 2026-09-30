@@ -6,6 +6,8 @@ package chatstate
 import (
 	"bytes"
 	"errors"
+
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // ErrGroupExists — the conversation already holds a group, or a Commit that
@@ -86,6 +88,7 @@ func (s *Store) CreateGroup(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(state)
 		var name *SealedRoomName
 		if req.RoomName != nil {
 			if name, err = sealForPending(cipher, conversationID, built.ExpectedEpoch, req.RoomName); err != nil {

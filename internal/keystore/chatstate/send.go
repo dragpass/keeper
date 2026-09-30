@@ -50,6 +50,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // maxBurnForward bounds the recovery loop. One burn is all a crash between the
@@ -228,6 +230,7 @@ func (s *Store) Send(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(state)
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.enterEpoch(position.Epoch)
@@ -282,6 +285,7 @@ func (s *Store) Send(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(advanced)
 		now := time.Now()
 		sent, err := s.sealSentHistory(conversationID, req.ClientMessageID, position, self, req.Plaintext, now)
 		if err != nil {

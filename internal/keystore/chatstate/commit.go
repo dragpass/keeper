@@ -52,6 +52,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // MaxCommitBytes bounds a Commit and a Welcome. A Commit carries a path update
@@ -433,6 +435,7 @@ func (s *Store) BeginCommit(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(state)
 		// Before the write, so a name that cannot be resealed persists no
 		// Commit either.
 		var name *SealedRoomName
@@ -554,6 +557,7 @@ func (s *Store) ConfirmCommit(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(state)
 		crashAt(CrashConfirmAfterApply)
 		loaded := rec.Generation
 		rec.GroupState = state
@@ -605,6 +609,7 @@ func (s *Store) refuseWinner(
 	if cerr != nil {
 		return cerr
 	}
+	defer secure.Zeroize(state)
 	loaded := rec.Generation
 	rec.GroupState = state
 	rec.Pending = nil
@@ -672,6 +677,7 @@ func (s *Store) AbandonLegacyPending(
 		if err != nil {
 			return err
 		}
+		defer secure.Zeroize(state)
 		loaded := rec.Generation
 		rec.GroupState = state
 		rec.Pending = nil

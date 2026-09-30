@@ -619,6 +619,7 @@ func (s *Store) receiveOne(
 	var entry HistoryEntry
 	if opened.Application {
 		if entry, err = s.sealHistory(conversationID, req.Seq, position, sender, opened.Plaintext, time.Now()); err != nil {
+			secure.Zeroize(state)
 			return ReceiveResult{}, false, err
 		}
 	}
