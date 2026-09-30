@@ -801,9 +801,20 @@ func (c *Cipher) ApplyPending() error { return c.session.ApplyPendingCommit() }
 func (c *Cipher) ClearPending() error { return c.session.ClearPendingCommit() }
 
 func (c *Cipher) ApplyMessage(message []byte) (uint64, bool, error) {
+	form, err := WireFormOf(message)
+	if err != nil {
+		return 0, false, err
+	}
+	if form != WireFormPublicMessage {
+		return 0, false, failed("a winning Commit must be a PublicMessage")
+	}
 	processed, change, err := c.session.processAuthorized(message, c.verifier, c.judgedAuthority())
 	if err != nil {
 		return 0, false, err
+	}
+	defer secure.Zeroize(processed.Plaintext)
+	if processed.Application {
+		return 0, false, failed("a winning Commit cannot be an application message")
 	}
 	c.lastChange = change
 	return processed.Epoch, processed.Removed, nil

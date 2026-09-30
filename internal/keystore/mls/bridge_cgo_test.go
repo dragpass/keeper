@@ -14,6 +14,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 const (
@@ -152,6 +153,30 @@ func TestApplicationMessageRoundTripsBetweenMembers(t *testing.T) {
 	}
 	if *got.KeyGeneration != 0 {
 		t.Fatalf("first message decrypted at generation %d, want 0", *got.KeyGeneration)
+	}
+}
+
+func TestCommitWinnerRejectsAnApplicationMessage(t *testing.T) {
+	alice, bob, _ := twoMemberGroup(t)
+	winner, err := bob.Encrypt([]byte("not a commit"), nil)
+	if err != nil {
+		t.Fatalf("encrypt application message: %v", err)
+	}
+	if form, err := WireFormOf(winner); err != nil || form != WireFormPrivateMessage {
+		t.Fatalf("application wire form = %v, %v", form, err)
+	}
+
+	if _, _, err := NewCipher(alice, trustAll{}).ApplyMessage(winner); err == nil {
+		t.Fatal("accepted an application message as a winning Commit")
+	}
+
+	opened, err := alice.Process(winner)
+	if err != nil {
+		t.Fatalf("rejected message was consumed before refusal: %v", err)
+	}
+	defer secure.Zeroize(opened.Plaintext)
+	if !opened.Application || string(opened.Plaintext) != "not a commit" {
+		t.Fatalf("message after refusal = %+v", opened)
 	}
 }
 

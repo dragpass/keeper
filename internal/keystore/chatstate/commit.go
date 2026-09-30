@@ -76,6 +76,9 @@ var (
 	// this device is waiting on. Settling on it would apply a verdict about
 	// somebody else's attempt to ours.
 	ErrCommitMismatch = errors.New("chat state pending commit does not match this outcome")
+
+	// ErrWinnerEpochMismatch — a Commit outcome did not produce the next epoch.
+	ErrWinnerEpochMismatch = errors.New("chat state Commit outcome did not advance exactly one epoch")
 )
 
 // CommitCipher is the MLS half of building and settling one Commit. Every
@@ -513,6 +516,9 @@ func (s *Store) ConfirmCommit(
 			if epoch, err = cipher.Epoch(); err != nil {
 				return err
 			}
+			if epoch != pending.ExpectedEpoch+1 {
+				return ErrWinnerEpochMismatch
+			}
 			welcome = pending.Welcome
 		} else {
 			if outcome.VerifyWinnerAttestation != nil {
@@ -527,6 +533,9 @@ func (s *Store) ConfirmCommit(
 			// yet applied.
 			if epoch, removed, err = cipher.ApplyMessage(outcome.WinnerMessage); err != nil {
 				return s.refuseWinner(p, rec, anchor, cipher, err, pending.ExpectedEpoch+1, outcome.WinnerMessage)
+			}
+			if epoch != pending.ExpectedEpoch+1 {
+				return ErrWinnerEpochMismatch
 			}
 			if reporter, ok := cipher.(ChangeReporter); ok {
 				if change, ok := reporter.LastCommitChange(); ok {
