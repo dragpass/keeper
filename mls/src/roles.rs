@@ -286,7 +286,7 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
         }
         match &roles {
             None => {
-                if change.committer != change.creator {
+                if change.committer.is_some() && change.committer != change.creator {
                     return Err(
                         "only the room's creator may add members before roles are migrated",
                     );
