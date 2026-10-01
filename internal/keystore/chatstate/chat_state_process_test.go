@@ -494,10 +494,10 @@ func TestChatStateAbandonsAPositionAfterAKill(t *testing.T) {
 	env.waitReady(t, "crash-ready")
 	env.waitReady(t, "reserved-index")
 
-	raw, err := os.ReadFile(checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := waitForFileContent(t, checkpoint, func(raw []byte) bool {
+		_, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+		return err == nil
+	})
 	killed, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
 	if err != nil {
 		t.Fatal(err)
@@ -684,10 +684,10 @@ func TestChatStateSendAbandonsAnUnfinishedPositionAfterAKill(t *testing.T) {
 	env.waitReady(t, "tc-crash-ready")
 	env.waitReady(t, "pending-generation")
 
-	raw, err := os.ReadFile(checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := waitForFileContent(t, checkpoint, func(raw []byte) bool {
+		_, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+		return err == nil
+	})
 	killed, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
 	if err != nil {
 		t.Fatal(err)
@@ -1311,6 +1311,23 @@ func waitForFile(path string) error {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for %s", path)
+}
+
+func waitForFileContent(t *testing.T, path string, ready func([]byte) bool) []byte {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if err == nil && ready(raw) {
+			return raw
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for valid contents in %s", path)
+	return nil
 }
 
 // ────────────────────────────────────────────────────────────────────────
