@@ -285,7 +285,14 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
             continue;
         }
         match &roles {
-            None => {}
+            None => {
+                // Go's preflight rejects identities outside the DragPass account format.
+                if change.committer.is_some() && change.committer != change.creator {
+                    return Err(
+                        "only the room's creator may add members before roles are migrated",
+                    );
+                }
+            }
             Some(Roles::Dm) => {
                 if change.epoch != 0 {
                     return Err("a DM adds nobody after it is created");
@@ -593,6 +600,20 @@ mod tests {
         c.roles_after = Some(Some(room(A, &[])));
         assert!(check(&c).is_ok());
         assert_eq!(effective_roles(&c), Some(room(A, &[])));
+    }
+
+    #[test]
+    fn a_legacy_room_allows_adds_only_from_its_creator() {
+        let before = [acct(A), acct(B)];
+        let mut c = change(&before, B, None);
+        c.added = vec![acct(C)];
+        assert!(check(&c).is_err(), "a legacy member must not add");
+
+        c.committer = acct(A);
+        assert!(
+            check(&c).is_ok(),
+            "the creator retains temporary owner authority"
+        );
     }
 
     #[test]
