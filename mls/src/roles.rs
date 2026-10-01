@@ -286,6 +286,7 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
         }
         match &roles {
             None => {
+                // Go's preflight rejects identities outside the DragPass account format.
                 if change.committer.is_some() && change.committer != change.creator {
                     return Err(
                         "only the room's creator may add members before roles are migrated",
