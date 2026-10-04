@@ -80,7 +80,7 @@ func HandleDeviceKeyEnsure(d Deps, req proto.DeviceKeyEnsureRequest) proto.BaseR
 var errDeviceKeyGeneration = errors.New("device key generation failed")
 
 // ensureDeviceKey is the one place a device key is minted, shared by
-// device_key_ensure and auth_signup_prepare.
+// device_key_ensure, auth_signup_prepare and dek_rotate_to_device_key.
 func ensureDeviceKey(d Deps) (bool, proto.BaseResponse) {
 	created, err := keychain.EnsureDeviceKey(d.Store, func() (string, error) {
 		raw := make([]byte, 32)

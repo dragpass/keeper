@@ -199,6 +199,68 @@ func TestDEKRotateToDeviceKey_Roundtrip(t *testing.T) {
 	}
 }
 
+// passwordWrappedDEKFromOtherDevice returns the server's password-wrapped DEK
+// as an account created on another device left it.
+func passwordWrappedDEKFromOtherDevice(t *testing.T, password string) string {
+	t.Helper()
+	other, _, otherStore := newTestDeps(t)
+	setKeychainDeviceKey(t, otherStore, make([]byte, 32))
+	signup := signupDEKForTest(other, password)
+	if !signup.Success {
+		t.Fatalf("signup setup: %s", signup.Error)
+	}
+	return signup.Data.(proto.DEKGenerateAndWrapDualResponseData).PasswordWrappedDEKB64
+}
+
+// A device that got the account through an App recovery never ran signup, so
+// it has no device key when the first password sign-in restores the DEK.
+func TestDEKRotateToDeviceKey_CreatesDeviceKeyWhenAbsent(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	password := "testpass-recovered"
+	wrapped := passwordWrappedDEKFromOtherDevice(t, password)
+
+	rotate := HandleDEKRotateToDeviceKey(deps, proto.DEKRotateToDeviceKeyRequest{
+		Password:        password,
+		EncryptedDEKB64: wrapped,
+	})
+	if !rotate.Success {
+		t.Fatalf("rotate failed: %s", rotate.Error)
+	}
+	deviceKeyB64, err := keychain.GetDeviceKey(store)
+	if err != nil {
+		t.Fatalf("device key not stored: %v", err)
+	}
+	deviceKey, err := base64.StdEncoding.DecodeString(deviceKeyB64)
+	if err != nil || len(deviceKey) != 32 {
+		t.Fatalf("stored device key is malformed: len=%d err=%v", len(deviceKey), err)
+	}
+	stored, err := keychain.GetPersonalDeviceWrappedDEK(store)
+	if err != nil {
+		t.Fatalf("personal DEK not stored: %v", err)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(stored)
+	if _, err := AESGCMOpen(deviceKey, raw[:12], raw[12:]); err != nil {
+		t.Fatalf("stored DEK does not open with the created device key: %v", err)
+	}
+}
+
+func TestDEKRotateToDeviceKey_WrongPasswordCreatesNoDeviceKey(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	wrapped := passwordWrappedDEKFromOtherDevice(t, "correct")
+
+	rotate := HandleDEKRotateToDeviceKey(deps, proto.DEKRotateToDeviceKeyRequest{
+		Password:        "WRONG",
+		EncryptedDEKB64: wrapped,
+	})
+	if rotate.Success {
+		t.Fatal("expected failure for wrong password")
+	}
+	present, err := keychain.DeviceKeyPresent(store)
+	if err != nil || present {
+		t.Fatalf("wrong password left a device key: present=%v err=%v", present, err)
+	}
+}
+
 func TestDEKRotateToDeviceKey_WrongPasswordRejected(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deviceKey := make([]byte, 32)

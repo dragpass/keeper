@@ -72,7 +72,18 @@ func HandleDEKRotateToDeviceKey(d Deps, req proto.DEKRotateToDeviceKeyRequest) p
 }
 
 func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.LockedBuffer) proto.BaseResponse {
+	dek, response := openPasswordWrappedDEK(encryptedDEKB64, pwBuf)
+	if !response.Success {
+		return response
+	}
+	defer secure.Zeroize(dek)
 
+	// A device that got the account through an App recovery never ran signup
+	// and has no device key yet. Minted only after the password opened the
+	// DEK, so a wrong password leaves the Keychain untouched.
+	if _, response := ensureDeviceKey(d); !response.Success {
+		return response
+	}
 	// fetch deviceKey internally — never accept it via the IPC payload
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
@@ -80,12 +91,6 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	}
 	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 	defer deviceKeyBuf.Destroy()
-
-	dek, response := openPasswordWrappedDEK(encryptedDEKB64, pwBuf)
-	if !response.Success {
-		return response
-	}
-	defer secure.Zeroize(dek)
 
 	// rewrap with deviceKey
 	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
