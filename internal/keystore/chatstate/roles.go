@@ -284,6 +284,17 @@ func judgeRoles(c CommitChange) string {
 		}
 	}
 	roles := c.effectiveRoles()
+	if roles == nil && c.vacatesCreatorLeaf() {
+		// RFC 9420 puts an Add in the leftmost blank leaf, and the next
+		// Commit reads leaf 0 as the creator. Only the creator's own account
+		// may come back into it; once it has left, nobody does, so a legacy
+		// room without its creator never gains another one.
+		for _, account := range c.Added {
+			if account == "" || account != c.CreatorAccountID {
+				return "a legacy room's creator leaf takes no other account"
+			}
+		}
+	}
 	for _, account := range c.Added {
 		if slices.Contains(c.Removed, account) {
 			continue // R2
@@ -311,6 +322,13 @@ func judgeRoles(c CommitChange) string {
 		return "a DM holds two accounts at most"
 	}
 	return ""
+}
+
+// vacatesCreatorLeaf is roles::vacates_creator_leaf: leaf 0 is blank already,
+// or a leaf of the creator's account is removed. Judged by account, as Rust
+// judges it.
+func (c CommitChange) vacatesCreatorLeaf() bool {
+	return c.CreatorAccountID == "" || slices.Contains(c.Removed, c.CreatorAccountID)
 }
 
 func judgeRolesChange(c CommitChange) string {

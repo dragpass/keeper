@@ -494,3 +494,78 @@ func TestMLSAdversary_ARefusedCommitLeavesNoAdminPin(t *testing.T) {
 		t.Fatalf("the admin was not pinned by the applied commit: %v", err)
 	}
 }
+
+const advEve = "f7777777-7777-4777-8777-777777777777"
+
+// A legacy room reads its creator off leaf 0, and RFC 9420 puts an Add in the
+// leftmost blank leaf. After the creator leaves, Eve (a plain member) re-seats
+// Mallory under the same leaf key, the R2 shape any member may commit, and
+// Mallory would land in leaf 0: from the next Commit on she would hold the
+// creator's temporary owner authority, adding members and migrating the roles
+// with herself as owner. Bob refuses the re-seat and is blocked at its epoch.
+// Control: the same re-seat while the creator still holds leaf 0 is applied.
+func TestMLSAdversary_ALegacyRoomSeatsNobodyElseInItsCreatorLeaf(t *testing.T) {
+	e2eStateRoot(t)
+	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
+	mallory, eve := newKeeper(t, advMallory), newKeeper(t, advEve)
+	mAdv := mlsadversary.Start(t, leafKeyOf(t, mallory), true)
+	eAdv := mlsadversary.Start(t, leafKeyOf(t, eve), true)
+	id := alice.nextCommitID()
+	created := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: id,
+		Members: []proto.MLSMemberKeyPackage{
+			bob.keyPackage(),
+			{AccountID: advEve, DeviceID: eve.device, KeyPackageB64: advB64(eAdv.KeyPackage())},
+			{AccountID: advMallory, DeviceID: mallory.device, KeyPackageB64: advB64(mAdv.KeyPackage())},
+		},
+	}))
+	alice.confirm(id, proto.MLSCommitOutcomeAccepted, "")
+	bob.must(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: created.WelcomeB64,
+	})
+	for _, a := range []*mlsadversary.Client{mAdv, eAdv} {
+		if got := a.Join(unb64(t, created.WelcomeB64)); got != 1 {
+			t.Fatalf("an adversary joined at epoch %d", got)
+		}
+	}
+	reseat := func(expected uint64) []byte {
+		commit, welcome := eAdv.Build(mlsadversary.Commit{
+			Removes: []uint32{eAdv.IndexOf(advMallory, mallory.device)},
+			Adds:    [][]byte{mAdv.KeyPackage()},
+			Apply:   true,
+		})
+		if got := mAdv.Join(welcome); got != expected {
+			t.Fatalf("mallory was re-seated at epoch %d", got)
+		}
+		return commit
+	}
+
+	if got := bob.process(2, 2, advB64(reseat(2))); got.Epoch != 2 {
+		t.Fatalf("bob applied the re-seat beside the creator at %+v", got)
+	}
+	if got := mAdv.IndexOf(advMallory, mallory.device); got == 0 {
+		t.Fatal("the control re-seat put mallory in the creator's leaf")
+	}
+
+	req := bob.buildRequest(2)
+	req.Permit, req.RemoveAccountIDs = bob.permit(e2eAlice), []string{e2eAlice}
+	req.LeaveStatements = []proto.MLSLeaveStatement{alice.leave()}
+	left := bob.accepted(req)
+	for _, a := range []*mlsadversary.Client{mAdv, eAdv} {
+		if got := a.Process(unb64(t, left.CommitB64)); got != 3 {
+			t.Fatalf("an adversary followed the leave to epoch %d", got)
+		}
+	}
+
+	commit := reseat(4)
+	if got := mAdv.IndexOf(advMallory, mallory.device); got != 0 {
+		t.Fatalf("the re-seat put mallory in leaf %d; the attack needs leaf 0", got)
+	}
+	got := blockedData(t, bob.call(proto.MLSProcess, bob.processRequest(4, 4, advB64(commit))))
+	if got.Cause != proto.ChatStateRekeyCauseUnauthorizedCommit || got.CommitterAccountID != advEve || got.Epoch != 4 {
+		t.Fatalf("bob blocked %+v; want unauthorized_commit at epoch 4 naming eve", got)
+	}
+	if st := bob.status(); st.Epoch != 3 || st.Authority != chatstate.AuthorityLegacyTemporary || st.NeedsRekey {
+		t.Fatalf("bob after the refusal = %+v", st)
+	}
+}

@@ -55,7 +55,20 @@ func TestJudgeReceived_TheRules(t *testing.T) {
 		"R1: the committer's own account": {
 			CommitChange{CommitterAccountID: authB, Removed: []string{authB}}, CommitAuthority{}, true},
 		"R2: a remove paired with an add of the account": {
-			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Added: []string{authC}}, CommitAuthority{}, true},
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authC}, Added: []string{authC},
+				Before: abc}, CommitAuthority{}, true},
+		"R2 into a legacy room's blank creator leaf": {
+			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Added: []string{authC},
+				Before: []string{authB, authC}}, CommitAuthority{}, false},
+		"R2 beside the legacy creator's removal": {
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authA, authC},
+				Added: []string{authC}, Before: abc}, CommitAuthority{Evidence: fixedEvidence{authorized: []int{0}}}, false},
+		"the legacy creator's own leaf in its place": {
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authA},
+				Added: []string{authA}, Before: abc}, CommitAuthority{}, true},
+		"R2 in a room whose roles do not depend on leaf 0": {
+			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Added: []string{authC},
+				Before: []string{authB, authC}, RolesBefore: room(authB)}, CommitAuthority{}, true},
 		"S: a remove a verified statement covers": {
 			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Before: abc, RolesBefore: room(authA)},
 			CommitAuthority{Evidence: fixedEvidence{authorized: []int{0}}}, true},
@@ -181,7 +194,11 @@ func TestJudgeLocalPlan_BuildRules(t *testing.T) {
 			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Before: abc, RolesChange: RolesSet,
 				RolesAfter: room(authB)}, nil, ErrCommitUnauthorized},
 		"a rejoin (R2)": {CommitPlan{},
-			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Added: []string{authC}}, nil, nil},
+			CommitChange{CommitterAccountID: authB, CreatorAccountID: authA, Removed: []string{authC},
+				Added: []string{authC}, Before: abc}, nil, nil},
+		"a rejoin into a legacy room's blank creator leaf": {CommitPlan{},
+			CommitChange{CommitterAccountID: authB, Removed: []string{authC}, Added: []string{authC},
+				Before: []string{authB, authC}}, nil, ErrCommitUnauthorized},
 	} {
 		err := judgeLocalPlan(tc.plan, fakePlanJudge{change: tc.change, evidence: tc.evidence})
 		if (tc.want == nil) != (err == nil) || (err != nil && !errors.Is(err, tc.want)) {

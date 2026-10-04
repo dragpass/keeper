@@ -191,6 +191,7 @@ pub fn same_except_roles(a: &ExtensionList, b: &ExtensionList) -> bool {
 pub struct Change<'a> {
     pub committer: Option<String>,
     /// The account holding leaf 0, the leaf of whoever created the group.
+    /// `check` keeps any other account from entering it in a legacy room.
     pub creator: Option<String>,
     pub epoch: u64,
     pub before: &'a [Option<String>],
@@ -278,6 +279,21 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
         return Err("an account holds more than one leaf after the commit");
     }
     let roles = effective_roles(change);
+    // Go's preflight rejects identities outside the DragPass account format,
+    // so a committer without an account is a generic test session.
+    if roles.is_none() && change.committer.is_some() && vacates_creator_leaf(change) {
+        // RFC 9420 puts an Add in the leftmost blank leaf, and the next
+        // Commit reads leaf 0 as the creator. Only the creator's own account
+        // may come back into it; once it has left, nobody does, so a legacy
+        // room without its creator never gains another one.
+        if change
+            .added
+            .iter()
+            .any(|a| a.is_none() || *a != change.creator)
+        {
+            return Err("a legacy room's creator leaf takes no other account");
+        }
+    }
     for added in &change.added {
         let account = added.as_deref();
         // R2: the account is also removed here — a replace or a rejoin.
@@ -318,6 +334,17 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
         return Err("a DM holds two accounts at most");
     }
     Ok(())
+}
+
+/// Whether leaf 0 may be blank once the Commit's Removes are applied: it is
+/// blank already, or a leaf of the creator's account is removed. Judged by
+/// account, as Go judges it (chatstate/roles.go judgeRoles), so a Remove of
+/// another leaf of the creator's account counts too.
+fn vacates_creator_leaf(change: &Change<'_>) -> bool {
+    match change.creator.as_deref() {
+        None => true,
+        Some(creator) => change.is_removed(creator),
+    }
 }
 
 fn check_roles_change(change: &Change<'_>, after: Option<&Roles>) -> Result<(), Refusal> {
@@ -614,6 +641,50 @@ mod tests {
             check(&c).is_ok(),
             "the creator retains temporary owner authority"
         );
+    }
+
+    // An Add lands in the leftmost blank leaf, and leaf 0 names the creator.
+    // Once the creator's leaf is blank, or removed by the same Commit, no
+    // other account may enter it, not even through a re-seat (R2).
+    #[test]
+    fn a_legacy_room_never_seats_another_account_in_its_creator_leaf() {
+        let without_creator = [acct(B), acct(C)];
+        let mut reseat = change(&without_creator, B, None);
+        reseat.creator = None;
+        reseat.removed = vec![acct(C)];
+        reseat.added = vec![acct(C)];
+        assert!(check(&reseat).is_err(), "a re-seat after the creator left");
+
+        let with_creator = [acct(A), acct(B), acct(C)];
+        let mut same_commit = change(&with_creator, B, None);
+        same_commit.removed = vec![acct(A), acct(C)];
+        same_commit.added = vec![acct(C)];
+        assert!(
+            check(&same_commit).is_err(),
+            "a re-seat beside the creator's removal"
+        );
+
+        let mut creator_replaced = change(&with_creator, B, None);
+        creator_replaced.removed = vec![acct(A)];
+        creator_replaced.added = vec![acct(A)];
+        assert!(
+            check(&creator_replaced).is_ok(),
+            "the creator's own leaf in its place"
+        );
+
+        let mut reseat_beside_creator = change(&with_creator, B, None);
+        reseat_beside_creator.removed = vec![acct(C)];
+        reseat_beside_creator.added = vec![acct(C)];
+        assert!(
+            check(&reseat_beside_creator).is_ok(),
+            "a re-seat while the creator holds leaf 0"
+        );
+
+        let mut migrated = change(&without_creator, B, Some(room(B, &[])));
+        migrated.creator = None;
+        migrated.removed = vec![acct(C)];
+        migrated.added = vec![acct(C)];
+        assert!(check(&migrated).is_ok(), "a room with roles");
     }
 
     #[test]
