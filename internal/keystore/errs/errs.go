@@ -143,8 +143,7 @@ func CodeForError(err error) ErrorCode {
 // responsible for sanitizing. The code uses CodeForError mapping.
 //
 // Named simply `Response` to avoid package stuttering
-// (`errs.ErrorResponse`). The keystore root `errorResponse` alias preserves
-// compatibility with existing callers.
+// (`errs.ErrorResponse`).
 func Response(err error) proto.BaseResponse {
 	if err == nil {
 		return proto.BaseResponse{Success: false}
@@ -161,8 +160,7 @@ func Response(err error) proto.BaseResponse {
 // CodeForError cannot auto-map (crypto_failure, storage_failure, unsupported).
 //
 // Named simply `CodeResponse` to avoid package stuttering
-// (`errs.ErrorCodeResponse`). The keystore root `errorCodeResponse` alias
-// preserves compatibility with existing callers.
+// (`errs.ErrorCodeResponse`).
 func CodeResponse(code ErrorCode, message string) proto.BaseResponse {
 	return proto.BaseResponse{
 		Success:   false,

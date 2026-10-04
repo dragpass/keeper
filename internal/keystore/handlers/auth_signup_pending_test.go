@@ -33,12 +33,9 @@ func TestAuthSignupPrepareKeepsTheNewDEKPendingUntilTheSessionCodeIsSaved(t *tes
 		t.Fatalf("pending DEK = %q, %v; want the first prepare's, answered again by the retry", pending, err)
 	}
 
-	promoted, err := keychain.PromotePendingKeypair(store)
-	if err != nil || !promoted {
-		t.Fatalf("promote keypair: %v %v", promoted, err)
-	}
-	if err := keychain.PromotePendingSignupDEK(store, promoted); err != nil {
-		t.Fatal(err)
+	accepted, _, err := keychain.AcceptSessionCode(store, openAnySessionCode)
+	if err != nil || accepted != keychain.SessionCodeAcceptedSignup {
+		t.Fatalf("accept session code: %q %v", accepted, err)
 	}
 	if active, _ := keychain.GetPersonalDeviceWrappedDEK(store); active != want {
 		t.Fatalf("active DEK after completion = %q, want %q", active, want)
@@ -47,8 +44,9 @@ func TestAuthSignupPrepareKeepsTheNewDEKPendingUntilTheSessionCodeIsSaved(t *tes
 		t.Fatal("pending DEK survived its promotion")
 	}
 	// A repeated completion (a retried save_session_code) is a no-op.
-	if err := keychain.PromotePendingSignupDEK(store, false); err != nil {
-		t.Fatal(err)
+	if accepted, _, err := keychain.AcceptSessionCode(store, openAnySessionCode); err != nil ||
+		accepted != keychain.SessionCodeAcceptedActive {
+		t.Fatalf("repeated accept: %q %v", accepted, err)
 	}
 	if active, _ := keychain.GetPersonalDeviceWrappedDEK(store); active != want {
 		t.Fatal("a repeated completion changed the active DEK")
@@ -65,8 +63,12 @@ func TestStalePendingSignupDEKIsDroppedNotPromoted(t *testing.T) {
 	if err := keychain.SavePendingSignupDeviceWrappedDEK(store, "stale"); err != nil {
 		t.Fatal(err)
 	}
-	if err := keychain.PromotePendingSignupDEK(store, false); err != nil {
+	if err := keychain.SavePrivateKey(store, "active-private-key"); err != nil {
 		t.Fatal(err)
+	}
+	if accepted, _, err := keychain.AcceptSessionCode(store, openAnySessionCode); err != nil ||
+		accepted != keychain.SessionCodeAcceptedActive {
+		t.Fatalf("accept session code: %q %v", accepted, err)
 	}
 	if active, _ := keychain.GetPersonalDeviceWrappedDEK(store); active != "active" {
 		t.Fatalf("active DEK = %q", active)
@@ -75,3 +77,7 @@ func TestStalePendingSignupDEKIsDroppedNotPromoted(t *testing.T) {
 		t.Fatal("stale pending DEK was kept")
 	}
 }
+
+// openAnySessionCode stands in for the server's session code, which opens with
+// whichever key AcceptSessionCode tries first.
+func openAnySessionCode(string) (string, bool) { return "session-code", true }

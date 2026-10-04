@@ -15,8 +15,8 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func (k *keeper) markSentRequest(id string, seq uint64) proto.MLSMarkSentRequest {
@@ -324,7 +324,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 	}
 	for _, k := range []*keeper{alice, bob, carol} {
 		for _, text := range []string{name, "새 이름"} {
-			if k.deps.Logger.(*logger.MemoryLogger).Contains(text) {
+			if k.deps.Logger.(*testdouble.MemoryLogger).Contains(text) {
 				t.Fatalf("%s's log carries a room name", k.id[:8])
 			}
 		}

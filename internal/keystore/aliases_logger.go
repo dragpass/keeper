@@ -1,4 +1,4 @@
-// Logger (StdLogger / MemoryLogger) aliases.
+// Logger (StdLogger) aliases.
 //
 // Handlers and tests reference these names without the `logger.` prefix; the
 // actual implementation lives in internal/keystore/logger/.
@@ -11,5 +11,3 @@ type (
 	Logger    = logger.Logger
 	StdLogger = logger.StdLogger
 )
-
-var NewMemoryLogger = logger.NewMemoryLogger

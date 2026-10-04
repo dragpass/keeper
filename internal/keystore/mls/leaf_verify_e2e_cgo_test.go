@@ -20,10 +20,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -45,7 +44,7 @@ var noWatermark = chatstate.ServerWatermark{}
 // declares, a leaf key with its declaration.
 type account struct {
 	id    string
-	store *keychain.MemorySecretStore
+	store *testdouble.MemorySecretStore
 	deps  handlers.Deps
 	pem   string
 	priv  *rsa.PrivateKey
@@ -53,7 +52,7 @@ type account struct {
 
 func newAccount(t testing.TB, id string) *account {
 	t.Helper()
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	pair, err := crypto.GenerateRSAKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -71,9 +70,9 @@ func newAccount(t testing.TB, id string) *account {
 	return &account{
 		id: id, store: store, pem: pair.PublicKey, priv: priv,
 		deps: handlers.Deps{
-			Logger:            logger.NewMemoryLogger(),
+			Logger:            testdouble.NewMemoryLogger(),
 			Store:             store,
-			ServerKeyVerifier: verifier.AlwaysOKVerifier{},
+			ServerKeyVerifier: testdouble.AlwaysOKVerifier{},
 		},
 	}
 }

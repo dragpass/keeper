@@ -23,6 +23,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -75,9 +76,9 @@ func signRootPayloadForTest(t *testing.T, priv *rsa.PrivateKey, payload []byte) 
 // refresh_server_keys_test cases. Operates on the test's SecretStore directly.
 func resetServerKeySlots(t *testing.T, store keychain.SecretStore) {
 	t.Helper()
-	_ = keychain.DeleteServerPublicKeyForVersion(store, 1)
-	_ = keychain.DeleteServerPublicKeyForVersion(store, 2)
-	_ = keychain.DeleteServerPublicKeyForVersion(store, 3)
+	for version := 1; version <= 3; version++ {
+		_ = store.Delete(config.Service, fmt.Sprintf("%s%d", config.DragPassServerPublicKeyVersionedPrefix, version))
+	}
 	// active version pointer + root pubkey fingerprint also reset
 	_ = store.Delete(config.Service, config.DragPassServerPublicKeyActiveVersion)
 	_ = store.Delete(config.Service, config.DragPassServerRootPublicKeyFingerprint)

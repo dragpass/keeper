@@ -4,20 +4,9 @@ package proto
 
 import "errors"
 
-// DEKGenerateAndWrapDualRequest generates a new DEK at signup and wraps it
-// with both password and deviceKey in one shot. The Extension never sees
-// plaintext DEK.
-//
-// deviceKey is fetched directly from the Keeper Keychain rather than via the
-// IPC payload, so the raw key never crosses the process boundary.
-type DEKGenerateAndWrapDualRequest struct {
-	Password string `json:"password"`
-}
-
-func (r DEKGenerateAndWrapDualRequest) Validate() error {
-	return requireString(r.Password, "password")
-}
-
+// DEKGenerateAndWrapDualResponseData is the signup dual wrap's output: one
+// new DEK wrapped for the password and for the device. The signup prepare
+// action builds it in-process; the plaintext DEK never leaves the Keeper.
 type DEKGenerateAndWrapDualResponseData struct {
 	// PasswordWrappedDEKB64: Base64(salt(16) || iv(12) || ciphertext_with_tag) —
 	// for server transmission. The Extension Braille-encodes it and passes
@@ -54,18 +43,6 @@ type DEKRotateToDeviceKeyResponseData struct {
 	// The Extension Braille-encodes it before storing in
 	// deviceMasterStorage.
 	DeviceWrappedDEKB64 string `json:"device_wrapped_dek_b64"`
-}
-
-// DEKRotateToDeviceKeyPromptRequest is the app-first login variant. The
-// password is collected by Keeper's trusted OS UI and never crosses Native
-// Messaging.
-type DEKRotateToDeviceKeyPromptRequest struct {
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
-}
-
-func (r DEKRotateToDeviceKeyPromptRequest) Validate() error {
-	_, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64")
-	return err
 }
 
 // DEKUnwrapAndEncryptRequest unwraps a device-wrapped personal DEK and

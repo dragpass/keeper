@@ -18,6 +18,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -436,7 +437,7 @@ func observeActions(server *Server) *[]observedAction {
 
 func TestRoomRowNameSealUsesAThrowawayKeyAndTheFixedAAD(t *testing.T) {
 	server, _ := newChatTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	own := routeKeypair(t)
 	_ = keychain.SavePrivateKey(store, own.PrivateKey)
 	_ = keychain.SavePublicKey(store, own.PublicKey)
@@ -563,7 +564,7 @@ func TestPeerKeyRoutesPassTheirTypedRequests(t *testing.T) {
 
 func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	server, _ := newChatTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 
 	code, generated, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_generate", map[string]any{})

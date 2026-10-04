@@ -514,29 +514,6 @@ Promotes pending keypair to permanent storage and saves the session code. Used d
 
 ---
 
-#### `getsessioncode` - Get Session Code
-
-Retrieves the stored session code.
-
-**Request:**
-```json
-{
-  "action": "getsessioncode"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "session_code": "stored_session_code"
-  }
-}
-```
-
----
-
 ### Signup Flow
 
 #### `signalias` - Sign User Alias

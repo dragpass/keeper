@@ -13,9 +13,8 @@ func groupActions() map[string]actionHandlerFunc {
 		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf),
 
 		// Group DEK opaque handle
-		proto.ActionGroupSessionOpen:   wrap(handlers.HandleGroupSessionOpen),
-		proto.ActionGroupSessionClose:  wrap(handlers.HandleGroupSessionClose),
-		proto.ActionGroupSessionStatus: wrap(handlers.HandleGroupSessionStatus),
+		proto.ActionGroupSessionOpen:  wrap(handlers.HandleGroupSessionOpen),
+		proto.ActionGroupSessionClose: wrap(handlers.HandleGroupSessionClose),
 
 		// Admin-path raw-free composite actions (Group DEK never crosses into JS).
 		proto.ActionGroupDEKGenerateAndOpen: wrap(handlers.HandleGroupDEKGenerateAndOpen),

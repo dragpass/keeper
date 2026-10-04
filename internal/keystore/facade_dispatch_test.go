@@ -38,6 +38,25 @@ func TestHandleRequest_UnknownAction(t *testing.T) {
 	}
 }
 
+// Actions removed once no client called them answer an old client the way any
+// unknown action does: the unsupported code, the request id echoed, nothing
+// run. A chat state one is no longer gated either, so it gets this answer
+// rather than chat_runtime_busy whoever holds the lease.
+func TestHandleRequest_RemovedActionsAnswerUnsupported(t *testing.T) {
+	app := newFacadeTestApp()
+	for _, action := range []string{
+		"chat_state_reserve_send", "chat_state_commit_outbox", "chat_state_mark_received",
+		"dek_generate_and_wrap_dual", "generatekeypairwithrecoverywrap",
+		"group_session_status", "getsessioncode",
+	} {
+		resp := app.HandleRequest([]byte(`{"action":"` + action + `","request_id":"old","payload":{}}`))
+		if resp.Success || resp.ErrorCode != string(ErrCodeUnsupported) ||
+			resp.Error != "unknown action: "+action || resp.RequestID != "old" {
+			t.Errorf("%s: %+v", action, resp)
+		}
+	}
+}
+
 func TestHandleRequest_InvalidJSON(t *testing.T) {
 	app := newFacadeTestApp()
 	resp := app.HandleRequest([]byte(`{not valid json`))
@@ -173,7 +192,7 @@ func TestHandleRequest_SignAlias_WithRecoveryWrap(t *testing.T) {
 	}
 
 	// Confirm the wrapped value matches the actual pending private key.
-	pending, err := app.getPendingPrivateKey()
+	pending, err := keychain.GetPendingPrivateKey(app.Store)
 	if err != nil {
 		t.Fatalf("getPendingPrivateKey: %v", err)
 	}
@@ -211,9 +230,9 @@ func TestHandleRequest_SignAlias_AlreadyRegistered(t *testing.T) {
 	// Set up permanent keypair + session code (simulates registered device)
 	kp, _ := GenerateRSAKeyPair()
 	app := newFacadeTestApp()
-	app.savePrivateKey(kp.PrivateKey)
-	app.savePublicKey(kp.PublicKey)
-	app.saveSessionCode("ABCD-EFGH-1234")
+	keychain.SavePrivateKey(app.Store, kp.PrivateKey)
+	keychain.SavePublicKey(app.Store, kp.PublicKey)
+	keychain.SaveSessionCode(app.Store, "ABCD-EFGH-1234")
 
 	msg := `{"action":"signalias","payload":{"alias":"testuser"}}`
 	resp := app.HandleRequest([]byte(msg))
@@ -227,7 +246,7 @@ func TestHandleRequest_SignAliasWithTimestamp(t *testing.T) {
 	app := newFacadeTestApp()
 	// Ensure permanent keypair exists
 	kp, _ := GenerateRSAKeyPair()
-	app.savePrivateKey(kp.PrivateKey)
+	keychain.SavePrivateKey(app.Store, kp.PrivateKey)
 
 	msg := `{"action":"signaliaswithtimestamp","payload":{"alias":"loginuser"}}`
 	resp := app.HandleRequest([]byte(msg))
@@ -262,7 +281,7 @@ func TestHandleRequest_SignAliasWithTimestamp_NoKeypair(t *testing.T) {
 func TestHandleRequest_GetPublicKey(t *testing.T) {
 	app := newFacadeTestApp()
 	kp, _ := GenerateRSAKeyPair()
-	app.savePublicKey(kp.PublicKey)
+	keychain.SavePublicKey(app.Store, kp.PublicKey)
 
 	msg := `{"action":"getpublickey"}`
 	resp := app.HandleRequest([]byte(msg))

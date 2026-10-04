@@ -65,50 +65,6 @@ func signRecoveryChallenge(d Deps, challengeToken, recoveryHandle string) proto.
 	return proto.BaseResponse{Success: true, Data: proto.RecoverySignResponseData{Signature: challengeSignatureBase64}}
 }
 
-// HandleGenerateKeypairWithRecoveryWrap generates a new RSA keypair and
-// immediately wraps the private key with the supplied wrap_key (AES-GCM 32B).
-// The new keypair is staged; save_session_code makes it active once the
-// server's session code opens with it.
-//
-// The private key plaintext never leaves the Keeper. The Extension only
-// receives the wrapped result.
-//
-// The signature field is the server's signature over challenge_token. The
-// Keeper verifies it with the server public key.
-func HandleGenerateKeypairWithRecoveryWrap(d Deps, req proto.GenerateKeypairWithRecoveryWrapRequest) proto.BaseResponse {
-	d.Logger.Println("generate keypair with recovery wrap request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// Wraps the 4-step server signature verification into a single helper call.
-	if ok, resp := verifyServerSig(d, req.ChallengeToken, req.Signature, req.ServerKeyVersion, "recovery wrap"); !ok {
-		return resp
-	}
-
-	// Checked here, before the statement is built and before the new keypair
-	// reaches the Keychain, so a refused date leaves the account exactly as it
-	// was rather than rotated with a statement nobody will accept.
-	if rotatedAtTooFarAhead(d, req.RotatedAt) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "rotated_at is too far in the future")
-	}
-
-	// decode wrap_key (AES-GCM 32B raw)
-	wrapKey, resp, ok := decodeBase64Len(req.WrapKeyB64, 32, "wrap_key")
-	if !ok {
-		d.Logger.Printf("recovery wrap error: %s", resp.Error)
-		return resp
-	}
-	wrapKeyBuf := memguard.NewBufferFromBytes(wrapKey)
-	defer wrapKeyBuf.Destroy()
-	return generateKeypairWithRecoveryWrapKey(d, wrapKeyBuf, recoveryStatementInput{
-		accountID:      req.AccountID,
-		rotatedAt:      req.RotatedAt,
-		recoveryHandle: req.RecoveryHandle,
-	})
-}
-
 // recoveryStatementInput is what the keypair step needs to produce the
 // rotation statement. The handle points at the OLD private key; the composite
 // action passes the one it opened itself.

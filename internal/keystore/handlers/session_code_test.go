@@ -67,17 +67,6 @@ func TestApp_HandleSaveSessionCode_DoesNotEchoEncrypted(t *testing.T) {
 	}
 }
 
-// TestApp_HandleGetSessionCode_LogsProcessing: goes into the not-found branch
-// against an empty keychain, but the processing log must still be emitted.
-func TestApp_HandleGetSessionCode_LogsProcessing(t *testing.T) {
-	deps, log, _ := newTestDeps(t)
-
-	_ = HandleGetSessionCode(deps, proto.GetSessionCodeRequest{})
-	if !log.Contains("session code retrieval request processing") {
-		t.Fatalf("expected processing log, got %v", log.Messages())
-	}
-}
-
 // TestHandleSaveSessionCode_ValidationDelegation: the validation-failure
 // branch must return the same envelope as the dispatcher.
 func TestHandleSaveSessionCode_ValidationDelegation(t *testing.T) {
@@ -90,11 +79,4 @@ func TestHandleSaveSessionCode_ValidationDelegation(t *testing.T) {
 	if resp.Error == "" {
 		t.Fatalf("expected non-empty error")
 	}
-}
-
-// TestHandleGetSessionCode_BareDelegation: ensures not-found is returned against an empty store.
-func TestHandleGetSessionCode_BareDelegation(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	resp := HandleGetSessionCode(deps, proto.GetSessionCodeRequest{})
-	_ = resp // only verifies the envelope shape — failure on empty store is OK
 }

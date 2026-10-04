@@ -10,13 +10,14 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // Quorum combine on the App route takes only pin-carrying recipients, each
 // naming its account; Keeper judges them before it reassembles anything.
 func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	server, _ := newChatTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 
 	archive := routeKeypair(t)

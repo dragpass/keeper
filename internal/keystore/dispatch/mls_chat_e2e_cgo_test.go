@@ -23,9 +23,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -42,7 +41,7 @@ type keeper struct {
 	t       *testing.T
 	id      string
 	device  string
-	store   *keychain.MemorySecretStore
+	store   *testdouble.MemorySecretStore
 	deps    handlers.Deps
 	commits int
 
@@ -68,7 +67,7 @@ func (k *keeper) revoking() []proto.MLSDeviceRef {
 
 func newKeeper(t *testing.T, id string) *keeper {
 	t.Helper()
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	pair, err := crypto.GenerateRSAKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -80,9 +79,9 @@ func newKeeper(t *testing.T, id string) *keeper {
 		t.Fatal(err)
 	}
 	k := &keeper{t: t, id: id, device: e2eDevice, store: store, deps: handlers.Deps{
-		Logger:            logger.NewMemoryLogger(),
+		Logger:            testdouble.NewMemoryLogger(),
 		Store:             store,
-		ServerKeyVerifier: verifier.AlwaysOKVerifier{},
+		ServerKeyVerifier: testdouble.AlwaysOKVerifier{},
 	}}
 	k.declare(proto.MLSLeafReasonEnroll, time.Now().Unix())
 	return k
@@ -109,7 +108,7 @@ func (k *keeper) call(action string, payload any) proto.BaseResponse {
 		os.Setenv(chatstate.RootEnvVar, k.root)
 		defer os.Setenv(chatstate.RootEnvVar, shared)
 	}
-	return HandleRequest(k.deps.Logger, k.deps, msg)
+	return HandleRequestGated(k.deps.Logger, k.deps, msg, nil)
 }
 
 func (k *keeper) must(action string, payload any) proto.BaseResponse {
@@ -510,7 +509,7 @@ func TestMLSChatE2E_EachSideEncryptsAndTheOtherReads(t *testing.T) {
 	}
 	for _, k := range []*keeper{c.alice, c.bob} {
 		for _, text := range []string{"hello bob", "hello alice", "again"} {
-			if k.deps.Logger.(*logger.MemoryLogger).Contains(text) {
+			if k.deps.Logger.(*testdouble.MemoryLogger).Contains(text) {
 				t.Fatalf("%s's log carries a plaintext", k.id[:8])
 			}
 		}

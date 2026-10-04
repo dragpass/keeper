@@ -87,7 +87,7 @@ func (m *Messenger) SendResponse(resp proto.BaseResponse) error {
 // The Data field may contain sensitive payloads, so it is replaced with
 // "[DATA_MASKED]"; only Success/Error/ErrorCode are kept as-is.
 //
-// Tests can capture logs by passing MemoryLogger. A nil logger disables logs.
+// Tests can capture logs by passing testdouble.MemoryLogger. A nil logger disables logs.
 func (m *Messenger) logSafeResponse(resp proto.BaseResponse) {
 	if m.log == nil {
 		return

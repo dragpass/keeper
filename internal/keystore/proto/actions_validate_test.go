@@ -75,24 +75,6 @@ func TestRecoverySign_Validate_RejectsShortHandle(t *testing.T) {
 	}
 }
 
-func TestGenerateKeypairWithRecoveryWrap_Validate_RejectsNon32BWrapKey(t *testing.T) {
-	r := GenerateKeypairWithRecoveryWrapRequest{
-		AccountID:      "11111111-1111-4111-8111-111111111111",
-		RotatedAt:      1758240000,
-		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		ChallengeToken: "ct",
-		Signature:      "sig",
-		WrapKeyB64:     "AAAAAAAAAAAAAAAAAAAAAg==", // 16B
-	}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-32B wrap_key")
-	}
-	if !strings.Contains(err.Error(), "wrap_key_b64") {
-		t.Fatalf("error must mention field, got %q", err.Error())
-	}
-}
-
 func TestRecoverySessionOpen_Validate_RejectsInvalidWrappedKeeper(t *testing.T) {
 	r := RecoverySessionOpenRequest{
 		ChallengeToken:   "ct",
@@ -159,13 +141,6 @@ func TestGroupSessionOpen_Validate_RejectsInvalidBase64(t *testing.T) {
 
 func TestGroupSessionClose_Validate_RejectsShortHandle(t *testing.T) {
 	r := GroupSessionCloseRequest{GroupHandle: testShortHandle}
-	if err := r.Validate(); err == nil {
-		t.Fatalf("expected error for short handle")
-	}
-}
-
-func TestGroupSessionStatus_Validate_RejectsShortHandle(t *testing.T) {
-	r := GroupSessionStatusRequest{GroupHandle: testShortHandle}
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected error for short handle")
 	}

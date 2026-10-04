@@ -12,6 +12,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -40,7 +41,7 @@ func (exactTokenVerifier) Verify(token, sig string, _ uint) error {
 // and the server holds its public key.
 type pendingDevice struct {
 	deps         Deps
-	store        *keychain.MemorySecretStore
+	store        *testdouble.MemorySecretStore
 	staged       *crypto.KeyPair
 	encryptedDEK string
 }
@@ -53,7 +54,7 @@ func passwordWrappedDEK(t *testing.T, password string) string {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x31}, 32))
-	response := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
+	response := signupDEKForTest(deps, password)
 	if !response.Success {
 		t.Fatalf("password-wrapped DEK: %s", response.Error)
 	}

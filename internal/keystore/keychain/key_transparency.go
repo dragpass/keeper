@@ -32,31 +32,6 @@ func GetKeyTransparencyCheckpoint(store SecretStore) (KeyTransparencyCheckpoint,
 	return anchor, true, nil
 }
 
-func SaveKeyTransparencyCheckpoint(store SecretStore, next KeyTransparencyCheckpoint) error {
-	if next.Version != 1 || next.Origin == "" || next.Size == 0 || len(next.Root) != 32 {
-		return errors.New("key transparency checkpoint anchor is malformed")
-	}
-	return WithKeychainProcessLock(store, func() error {
-		current, exists, err := GetKeyTransparencyCheckpoint(store)
-		if err != nil {
-			return err
-		}
-		if exists {
-			if current.Origin != next.Origin || next.Size < current.Size {
-				return errors.New("key transparency checkpoint anchor cannot move backwards")
-			}
-			if next.Size == current.Size && !bytes.Equal(next.Root, current.Root) {
-				return errors.New("key transparency checkpoint conflicts with stored anchor")
-			}
-		}
-		encoded, err := json.Marshal(next)
-		if err != nil {
-			return err
-		}
-		return store.Set(config.Service, config.KeyTransparencyAnchorAccount, string(encoded))
-	})
-}
-
 func UpdateKeyTransparencyCheckpoint(
 	store SecretStore,
 	transition func(*KeyTransparencyCheckpoint) (KeyTransparencyCheckpoint, error),

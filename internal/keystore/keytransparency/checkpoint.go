@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -259,29 +258,4 @@ func VerifyInclusion(anchor CheckpointAnchor, leafIndex uint64, leafHash []byte,
 		return ErrInvalidCheckpoint
 	}
 	return proof.VerifyInclusion(rfc6962.DefaultHasher, leafIndex, anchor.Size, leafHash, nodes, anchor.Root)
-}
-
-func EncodeAnchor(anchor CheckpointAnchor) (string, error) {
-	if anchor.Version != 1 || anchor.Origin == "" || anchor.Size == 0 || len(anchor.Root) != 32 {
-		return "", ErrInvalidCheckpoint
-	}
-	raw, err := json.Marshal(anchor)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(raw), nil
-}
-
-func DecodeAnchor(encoded string) (CheckpointAnchor, error) {
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return CheckpointAnchor{}, ErrInvalidCheckpoint
-	}
-	var anchor CheckpointAnchor
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&anchor); err != nil || anchor.Version != 1 || anchor.Origin == "" || anchor.Size == 0 || len(anchor.Root) != 32 {
-		return CheckpointAnchor{}, ErrInvalidCheckpoint
-	}
-	return anchor, nil
 }

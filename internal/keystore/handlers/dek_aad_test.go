@@ -27,9 +27,7 @@ func sealPersonalWithAAD(t *testing.T) (deps Deps, encryptedDEKB64 string, dek [
 	}
 	setKeychainDeviceKey(t, store, deviceKey)
 
-	resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{
-		Password: "testpass-aad",
-	})
+	resp := signupDEKForTest(deps, "testpass-aad")
 	if !resp.Success {
 		t.Fatalf("dual wrap failed: %s", resp.Error)
 	}

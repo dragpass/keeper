@@ -68,12 +68,6 @@ var (
 	// message. Refusing is the point: two plaintexts at one position is the
 	// key-reuse failure this package is built to prevent.
 	ErrPositionTaken = errors.New("chain position already carries a message")
-
-	// ErrPositionNotReserved — the position sits at or beyond the sending
-	// chain's high-water mark, so nothing ever handed it out. Reserve raises
-	// that mark and so does Send, which is why this is phrased as the mark
-	// rather than as one of the two paths.
-	ErrPositionNotReserved = errors.New("chain position was not reserved")
 )
 
 const (

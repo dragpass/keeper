@@ -13,7 +13,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func TestApp_HandleRotateUserKeypairPromote_VerifyFailedShortCircuits(t *testing.T) {
@@ -92,7 +92,7 @@ func TestHandleRotateUserKeypairPromote_RejectsBadServerSig(t *testing.T) {
 	// reject. Two deps separate the verify branches (both share the same store).
 	prepDeps, _, store := newTestDeps(t)
 	promoteDeps := prepDeps
-	promoteDeps.ServerKeyVerifier = verifier.AlwaysFailVerifier{Err: errors.New("server signature verification failed: stub")}
+	promoteDeps.ServerKeyVerifier = testdouble.AlwaysFailVerifier{Err: errors.New("server signature verification failed: stub")}
 
 	seedActiveKeypairForRotateTest(t, store)
 

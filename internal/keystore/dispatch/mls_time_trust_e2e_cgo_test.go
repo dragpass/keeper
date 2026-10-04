@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // A permit the server issued in the past, beyond its window, opens nothing.
@@ -44,7 +44,7 @@ func TestMLSTimeTrust_AnExpiredKeyPackageIsRefusedAtTheAdd(t *testing.T) {
 	req.Add, req.UserInitiated = []proto.MLSMemberKeyPackage{kp}, true
 	resp := r.alice.call(proto.MLSCommitBuild, req)
 	assertCode(t, resp, proto.ChatMLSErrorCodeLeafUntrusted)
-	if !r.alice.deps.Logger.(*logger.MemoryLogger).Contains("leaf declaration has expired") {
+	if !r.alice.deps.Logger.(*testdouble.MemoryLogger).Contains("leaf declaration has expired") {
 		t.Fatalf("refused for another reason than the expiry: %+v", resp)
 	}
 }

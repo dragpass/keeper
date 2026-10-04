@@ -15,29 +15,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// HandleDEKGenerateAndWrapDual performs the signup flow's dual wrap in one call.
-func HandleDEKGenerateAndWrapDual(d Deps, req proto.DEKGenerateAndWrapDualRequest) proto.BaseResponse {
-	d.Logger.Println("dek generate and wrap dual request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	// protect password
-	password := req.Password
-	pwBuf := memguard.NewBufferFromBytes([]byte(password))
-	secure.WipeString(&password)
-	secure.WipeString(&req.Password)
-	defer pwBuf.Destroy()
-
-	data, response := generateAndWrapDual(d, pwBuf, keychain.SavePersonalDeviceWrappedDEK)
-	if !response.Success {
-		return response
-	}
-	d.Logger.Println("dek generate and wrap dual successful")
-	return proto.BaseResponse{Success: true, Data: data}
-}
-
 // generateAndWrapDual makes one DEK and wraps it for the password and the
 // device; save decides where the device-wrapped copy goes.
 func generateAndWrapDual(d Deps, password *memguard.LockedBuffer, save func(keychain.SecretStore, string) error) (proto.DEKGenerateAndWrapDualResponseData, proto.BaseResponse) {

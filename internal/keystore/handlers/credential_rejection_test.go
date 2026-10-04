@@ -31,8 +31,8 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // credRejectHost — no row here is supposed to reach the network, but a check
@@ -59,7 +59,7 @@ var errCredRejectSignature = errors.New("server signature mismatch")
 
 // assertCredRejection pins the refusal: never a success, the exact error_code
 // and message, and no trace of the sealed secret in either output surface.
-func assertCredRejection(t *testing.T, resp proto.BaseResponse, log *logger.MemoryLogger,
+func assertCredRejection(t *testing.T, resp proto.BaseResponse, log *testdouble.MemoryLogger,
 	wantCode errs.ErrorCode, wantError string) {
 	t.Helper()
 	if resp.Success {

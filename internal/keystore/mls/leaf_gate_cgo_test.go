@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/config"
-	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // threeMemberAttempt is alice and bob in a group, and a Commit alice built
@@ -157,7 +157,7 @@ func TestAnApplicationMessageIsNotCollected(t *testing.T) {
 }
 
 func TestNewDeviceSession_RefusesAKeyWithNoStoredDeclaration(t *testing.T) {
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	// What 0.0.43 wrote: a v1 record with no declaration.
 	raw := `{"v":1,"account_id":"a","device_id":"d","secret_key":"` +
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7aie8zrakLWKjqNAqbw1zZTIVdx3iQ6Y6wEihi1naKQ==" +

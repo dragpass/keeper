@@ -1,20 +1,9 @@
 package recoverykey
 
 import (
-	"bytes"
 	"encoding/base64"
 	"testing"
 )
-
-func TestGenerateFormatsSixGroups(t *testing.T) {
-	key, err := Generate(bytes.NewReader(make([]byte, Length)))
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if got, want := string(key), "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA"; got != want {
-		t.Fatalf("key = %q, want %q", got, want)
-	}
-}
 
 func TestNormalizeMatchesClientContract(t *testing.T) {
 	key, err := Normalize([]byte(" abcd-efgh-jklm-npqr-stuv-wxyz "))

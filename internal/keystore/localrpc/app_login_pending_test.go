@@ -13,6 +13,7 @@ import (
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // exactServerVerifier accepts a server signature only for the token it was
@@ -48,7 +49,7 @@ func verifySigned(t *testing.T, publicKeyPEM, data, signature string) bool {
 func TestAppPendingLoginRoutesSignWithTheStagedKeyThenPromote(t *testing.T) {
 	server := newTestServer(t)
 	server.app.ServerKeyVerifier = exactServerVerifier{}
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 
 	const alias, password = "alice", "correct horse battery staple"
@@ -157,7 +158,7 @@ func TestAppPendingLoginRoutesSignWithTheStagedKeyThenPromote(t *testing.T) {
 // and the keyring keeps its bytes; the abort route drops it by public key.
 func TestAppSignupRoutesRefuseAnotherInputWhileStagedAndAbort(t *testing.T) {
 	server := newTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 	input := map[string]string{"alias": "alice", "password": "correct horse battery staple", "recovery_key": "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"}
 	code, prepared, body := callRoute(t, server, session, csrf, "/v1/auth/signup/prepare", input)
@@ -193,7 +194,7 @@ func TestAppSignupRoutesRefuseAnotherInputWhileStagedAndAbort(t *testing.T) {
 // and the same-input retry still answers for the staged key.
 func TestAppPendingLoginRoutesRunBesideAHeldChatRuntimeLease(t *testing.T) {
 	server, _ := newChatTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	chatSession, chatCSRF := openTestSession(t, server)
 	if granted := claimLease(t, server, chatSession, chatCSRF, routeHolder); !granted.Success {
 		t.Fatalf("claim: %+v", granted)

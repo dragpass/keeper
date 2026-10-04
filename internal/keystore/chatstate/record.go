@@ -150,9 +150,10 @@ type PendingRoomName struct {
 // which is what lets a single file replacement be the unit of consistency and
 // removes any need for an index or a transaction.
 type Record struct {
-	// staticChain is set, for one load only, by the chat-state actions that
-	// send on the account's static chain (Reserve, CommitOutbox,
-	// MarkReceived). It is never stored.
+	// staticChain is set, for one load only, by loadCheckedStatic. That and
+	// the pre-MLS static-chain operations using it (Reserve, CommitOutbox,
+	// MarkReceived) now live in static_chain_test.go: their actions are gone,
+	// but they still drive the anchor and lock tests. It is never stored.
 	staticChain bool
 
 	SchemaVersion  int    `json:"schema_version"`
@@ -330,26 +331,6 @@ func (r *Record) findOutbox(clientMessageID string) (OutboxEntry, bool) {
 func (r *Record) positionTaken(p Position) bool {
 	for _, e := range r.Outbox {
 		if e.Position == p {
-			return true
-		}
-	}
-	return false
-}
-
-// sealedBySendPath reports whether the MLS send path already built a
-// ciphertext at this epoch and generation.
-//
-// The two send paths share one counter but never one Position: Send names the
-// leaf and the axis, the pre-MLS commit_outbox path leaves both empty, so
-// positionTaken — which compares whole Positions — cannot see the collision.
-// Neither can NextIndex any more: Send raising it is exactly what makes a
-// generation Send already spent look handed-out to commit_outbox. Only the
-// numbers can meet, and one number carrying two ciphertexts is what this
-// package exists to refuse.
-func (r *Record) sealedBySendPath(p Position) bool {
-	for _, e := range r.Outbox {
-		if e.Position.ContentType.valid() &&
-			e.Position.Epoch == p.Epoch && e.Position.Generation == p.Generation {
 			return true
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -277,7 +278,7 @@ func newTestStore(t *testing.T) *chatstate.Store {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	store, err := chatstate.Open(keychain.NewMemorySecretStore(), testOwner)
+	store, err := chatstate.Open(testdouble.NewMemorySecretStore(), testOwner)
 	if err != nil {
 		t.Fatalf("open chat state store: %v", err)
 	}
@@ -371,7 +372,7 @@ func twoMemberStores(t *testing.T) (aliceStore, bobStore *chatstate.Store, alice
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	secrets := keychain.NewMemorySecretStore()
+	secrets := testdouble.NewMemorySecretStore()
 
 	var err error
 	if aliceStore, err = chatstate.Open(secrets, testOwner); err != nil {
@@ -831,7 +832,7 @@ func TestAPendingCommitEnlargesTheStoredBlob(t *testing.T) {
 // the library, so this is what shows mls-rs accepts that layout as a signer and
 // that the leaf it builds carries the declared key and identity.
 func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	if _, _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafKey) {
 		t.Fatalf("NewDeviceSession with no key = %v; want ErrNoLeafKey", err)
 	}

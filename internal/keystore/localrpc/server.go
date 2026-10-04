@@ -155,18 +155,6 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(s.serveHTTP)
 }
 
-func Listen() (net.Listener, error) {
-	return net.Listen("tcp4", DefaultAddress)
-}
-
-func (s *Server) Serve(ctx context.Context) error {
-	listener, err := Listen()
-	if err != nil {
-		return err
-	}
-	return s.ServeListener(ctx, listener)
-}
-
 func (s *Server) ServeListener(ctx context.Context, listener net.Listener) error {
 	s.host = listener.Addr().String()
 	server := &http.Server{

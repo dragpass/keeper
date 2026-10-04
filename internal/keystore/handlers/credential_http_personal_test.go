@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 func TestWithCredentialDEKUsesLocalPersonalWrap(t *testing.T) {
@@ -15,7 +14,7 @@ func TestWithCredentialDEKUsesLocalPersonalWrap(t *testing.T) {
 	}
 	setKeychainDeviceKey(t, store, deviceKey)
 
-	dual := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "password"})
+	dual := signupDEKForTest(deps, "password")
 	if !dual.Success {
 		t.Fatalf("generate personal DEK: %s", dual.Error)
 	}

@@ -1,7 +1,6 @@
 package keystore
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 )
@@ -27,19 +26,8 @@ func TestHandleRequest_GroupSession_FullLifecycle(t *testing.T) {
 	}
 	handle := openTestGroupSession(t, app, raw)
 
-	statusMsg := fmt.Sprintf(`{"action":"group_session_status","payload":{"group_handle":%q}}`, handle)
-	statusResp := app.HandleRequest([]byte(statusMsg))
-	if !statusResp.Success {
-		t.Fatalf("status: %s", statusResp.Error)
-	}
-	rawStatus, _ := json.Marshal(statusResp.Data)
-	var statusData GroupSessionStatusResponseData
-	json.Unmarshal(rawStatus, &statusData)
-	if !statusData.Exists {
-		t.Error("status should report exists=true")
-	}
-	if statusData.RemainingMs <= 0 {
-		t.Errorf("remaining_ms should be > 0, got %d", statusData.RemainingMs)
+	if exists, remaining := app.GroupSessions.Status(handle); !exists || remaining <= 0 {
+		t.Fatalf("open handle: exists=%v remaining_ms=%d", exists, remaining)
 	}
 
 	closeMsg := fmt.Sprintf(`{"action":"group_session_close","payload":{"group_handle":%q}}`, handle)
@@ -48,15 +36,8 @@ func TestHandleRequest_GroupSession_FullLifecycle(t *testing.T) {
 		t.Fatalf("close: %s", closeResp.Error)
 	}
 
-	statusResp2 := app.HandleRequest([]byte(statusMsg))
-	if !statusResp2.Success {
-		t.Fatalf("status after close: %s", statusResp2.Error)
-	}
-	rawStatus2, _ := json.Marshal(statusResp2.Data)
-	var statusData2 GroupSessionStatusResponseData
-	json.Unmarshal(rawStatus2, &statusData2)
-	if statusData2.Exists {
-		t.Error("status after close should report exists=false")
+	if exists, _ := app.GroupSessions.Status(handle); exists {
+		t.Error("handle still exists after close")
 	}
 
 	closeResp2 := app.HandleRequest([]byte(closeMsg))

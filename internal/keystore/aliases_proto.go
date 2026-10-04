@@ -15,7 +15,6 @@ type (
 	GetPublicKeyResponseData            = proto.GetPublicKeyResponseData
 	GetServerPublicKeyResponseData      = proto.GetServerPublicKeyResponseData
 	GroupDEKGenerateAndOpenResponseData = proto.GroupDEKGenerateAndOpenResponseData
-	GroupSessionStatusResponseData      = proto.GroupSessionStatusResponseData
 	SignAliasResponseData               = proto.SignAliasResponseData
 	SignAliasWithTimestampResponseData  = proto.SignAliasWithTimestampResponseData
 )

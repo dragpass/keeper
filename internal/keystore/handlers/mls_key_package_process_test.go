@@ -26,10 +26,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -73,9 +72,9 @@ func TestMLSKeyPackageProcessHelper(t *testing.T) {
 		return
 	}
 	deps := Deps{
-		Logger:            logger.NewMemoryLogger(),
+		Logger:            testdouble.NewMemoryLogger(),
 		Store:             keychain.KeyringSecretStore{},
-		ServerKeyVerifier: verifier.AlwaysOKVerifier{},
+		ServerKeyVerifier: testdouble.AlwaysOKVerifier{},
 	}
 	switch mode {
 	case "stage":

@@ -14,5 +14,4 @@ var (
 	ErrServerKeyVersionNotFound = keychain.ErrServerKeyVersionNotFound
 	ErrNoActiveServerKey        = keychain.ErrNoActiveServerKey
 	LoadE2EKeyringFile          = keychain.LoadE2EKeyringFile
-	NewMemorySecretStore        = keychain.NewMemorySecretStore
 )

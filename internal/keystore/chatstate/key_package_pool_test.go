@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 var poolNow = time.Unix(1_790_000_000, 0)
@@ -314,7 +315,7 @@ func TestKeyPackagePool_DropMintsNoSealKey(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	secrets := keychain.NewMemorySecretStore()
+	secrets := testdouble.NewMemorySecretStore()
 	if dropped, err := DropKeyPackagesExcept(secrets, testOwner, poolLeafA, poolNow); err != nil || dropped != 0 {
 		t.Fatalf("drop without a seal key = %d, %v", dropped, err)
 	}
@@ -392,7 +393,7 @@ func TestKeyPackagePool_SweepMintsNoSealKey(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	secrets := keychain.NewMemorySecretStore()
+	secrets := testdouble.NewMemorySecretStore()
 	dropped, remaining, err := DropKeyPackagesUnless(secrets, testOwner, poolNow,
 		func([]byte) (bool, error) { return false, nil })
 	if err != nil || dropped != 0 || remaining != 0 {

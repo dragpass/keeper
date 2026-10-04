@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -32,13 +33,26 @@ func setKeychainDeviceKey(t *testing.T, store keychain.SecretStore, deviceKey []
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// dek_generate_and_wrap_dual
+// generateAndWrapDual (the signup dual wrap)
 //
 // deviceKey is fetched directly from the Keychain instead of via IPC payload.
 // Tests seed it with setKeychainDeviceKey before the call.
 // ────────────────────────────────────────────────────────────────────────
 
-func TestDEKGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
+// signupDEKForTest runs the signup dual wrap with the device copy saved as the
+// active personal DEK, which is what the removed dek_generate_and_wrap_dual
+// action did. Tests use it to seed a personal DEK.
+func signupDEKForTest(d Deps, password string) proto.BaseResponse {
+	pwBuf := memguard.NewBufferFromBytes([]byte(password))
+	defer pwBuf.Destroy()
+	data, resp := generateAndWrapDual(d, pwBuf, keychain.SavePersonalDeviceWrappedDEK)
+	if !resp.Success {
+		return resp
+	}
+	return proto.BaseResponse{Success: true, Data: data}
+}
+
+func TestGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deviceKey := make([]byte, 32)
 	for i := range deviceKey {
@@ -47,7 +61,7 @@ func TestDEKGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	setKeychainDeviceKey(t, store, deviceKey)
 	password := "testpass-dual"
 
-	resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
+	resp := signupDEKForTest(deps, password)
 	if !resp.Success {
 		t.Fatalf("dual wrap failed: %s", resp.Error)
 	}
@@ -98,13 +112,13 @@ func TestDEKGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	}
 }
 
-func TestDEKGenerateAndWrapDual_DistinctOutputs(t *testing.T) {
+func TestGenerateAndWrapDual_DistinctOutputs(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deviceKey := make([]byte, 32)
 	setKeychainDeviceKey(t, store, deviceKey)
 
-	r1 := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "p"})
-	r2 := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "p"})
+	r1 := signupDEKForTest(deps, "p")
+	r2 := signupDEKForTest(deps, "p")
 	d1 := r1.Data.(proto.DEKGenerateAndWrapDualResponseData)
 	d2 := r2.Data.(proto.DEKGenerateAndWrapDualResponseData)
 
@@ -116,12 +130,12 @@ func TestDEKGenerateAndWrapDual_DistinctOutputs(t *testing.T) {
 	}
 }
 
-// TestDEKGenerateAndWrapDual_NoKeychainDeviceKey: ensures the handler clearly
+// TestGenerateAndWrapDual_NoKeychainDeviceKey: ensures the dual wrap clearly
 // rejects when no deviceKey is present in the Store (security guard against
 // running without a provisioned deviceKey).
-func TestDEKGenerateAndWrapDual_NoKeychainDeviceKey(t *testing.T) {
+func TestGenerateAndWrapDual_NoKeychainDeviceKey(t *testing.T) {
 	deps, _, _ := newTestDeps(t) // empty store
-	resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "p"})
+	resp := signupDEKForTest(deps, "p")
 	if resp.Success {
 		t.Error("expected failure when device key not in keychain")
 	}
@@ -146,7 +160,7 @@ func TestDEKRotateToDeviceKey_Roundtrip(t *testing.T) {
 	setKeychainDeviceKey(t, store, deviceKey)
 	password := "testpass-rotate"
 
-	signup := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
+	signup := signupDEKForTest(deps, password)
 	if !signup.Success {
 		t.Fatalf("signup setup: %s", signup.Error)
 	}
@@ -190,7 +204,7 @@ func TestDEKRotateToDeviceKey_WrongPasswordRejected(t *testing.T) {
 	deviceKey := make([]byte, 32)
 	setKeychainDeviceKey(t, store, deviceKey)
 
-	signup := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "correct"})
+	signup := signupDEKForTest(deps, "correct")
 	signupData := signup.Data.(proto.DEKGenerateAndWrapDualResponseData)
 
 	rotate := HandleDEKRotateToDeviceKey(deps, proto.DEKRotateToDeviceKeyRequest{
@@ -239,7 +253,7 @@ func TestDEKRotateToDeviceKey_TooShortInput(t *testing.T) {
 func signupAndGetDeviceWrap(t *testing.T, deps Deps, store keychain.SecretStore, password string, deviceKey []byte) string {
 	t.Helper()
 	setKeychainDeviceKey(t, store, deviceKey)
-	resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
+	resp := signupDEKForTest(deps, password)
 	if !resp.Success {
 		t.Fatalf("setup dual wrap: %s", resp.Error)
 	}
@@ -265,20 +279,6 @@ func TestDEKUnwrap_EncryptValidation(t *testing.T) {
 			t.Errorf("case %d: expected validation failure", i)
 		}
 	}
-}
-
-// TestDEKGenerateAndWrapDual_Validation: ensures an empty password is rejected.
-func TestDEKGenerateAndWrapDual_Validation(t *testing.T) {
-	deps, _, store := newTestDeps(t)
-	deviceKey := make([]byte, 32)
-	setKeychainDeviceKey(t, store, deviceKey)
-
-	t.Run("empty_password", func(t *testing.T) {
-		resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: ""})
-		if resp.Success {
-			t.Error("expected failure")
-		}
-	})
 }
 
 // --- App receiver method DI guard --------

@@ -5,16 +5,15 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/config"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 )
 
 func resetServerKeySlots(t *testing.T, store SecretStore) {
 	t.Helper()
-	_ = DeleteServerPublicKeyForVersion(store, 1)
-	_ = DeleteServerPublicKeyForVersion(store, 2)
-	_ = DeleteServerPublicKeyForVersion(store, 3)
-	_ = KrDelete(config.Service, config.DragPassServerPublicKeyActiveVersion)
-	_ = KrDelete(config.Service, config.DragPassServerRootPublicKeyFingerprint)
+	for version := uint(1); version <= 3; version++ {
+		_ = store.Delete(config.Service, versionedServerKeyAccount(version))
+	}
+	_ = krDelete(config.Service, config.DragPassServerPublicKeyActiveVersion)
+	_ = krDelete(config.Service, config.DragPassServerRootPublicKeyFingerprint)
 }
 
 func TestSaveAndGetServerPublicKeyByVersion(t *testing.T) {
@@ -161,7 +160,7 @@ func TestBootstrap_PopulatesAllSlots(t *testing.T) {
 	store := defaultKeyringStore()
 	resetServerKeySlots(t, store)
 
-	if err := EnsureServerPublicKey(store, logger.NewMemoryLogger()); err != nil {
+	if err := EnsureServerPublicKey(store, discardLogger{}); err != nil {
 		t.Fatalf("EnsureServerPublicKey: %v", err)
 	}
 
@@ -190,7 +189,7 @@ func TestBootstrap_DoesNotOverwriteAfterRefresh(t *testing.T) {
 		t.Fatalf("save active=2: %v", err)
 	}
 	// Second boot: bootstrap must not roll back to v1.
-	if err := EnsureServerPublicKey(store, logger.NewMemoryLogger()); err != nil {
+	if err := EnsureServerPublicKey(store, discardLogger{}); err != nil {
 		t.Fatalf("EnsureServerPublicKey: %v", err)
 	}
 	v, _ := GetActiveServerKeyVersion(store)

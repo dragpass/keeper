@@ -2,7 +2,7 @@
 //
 // dispatcher / messaging / utils are split out of the keystore root into the
 // dispatch subpackage. App.HandleRequest is a thin wrapper that delegates to
-// dispatch.HandleRequest.
+// dispatch.HandleRequestGated.
 //
 // dispatch does not import the keystore root (avoids an import cycle). The
 // caller (App) injects logger.Logger and handlers.Deps explicitly — same Deps
@@ -22,23 +22,20 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-// HandleRequest parses an incoming msg, looks up the action, and invokes the
-// handler. The request's RequestID is echoed back in the response so the
-// Extension can multiplex; if JSON parsing fails and RequestID cannot be
-// read, an empty string is sent.
-//
-// The caller (App) injects log and deps explicitly so the keystore root is
-// not imported, avoiding an import cycle.
-func HandleRequest(log logger.Logger, deps handlers.Deps, msg []byte) proto.BaseResponse {
-	return HandleRequestGated(log, deps, msg, nil)
-}
-
 // Gate may refuse an action before its handler runs. It sees the action the
 // dispatcher is about to run, parsed once, so the two cannot disagree.
 type Gate func(action string) (refusal proto.BaseResponse, admitted bool)
 
-// HandleRequestGated is HandleRequest with a gate consulted after the parse and
-// before the handler. A refusal runs nothing and still echoes the RequestID.
+// HandleRequestGated parses an incoming msg, looks up the action, and invokes
+// the handler. The request's RequestID is echoed back in the response so the
+// Extension can multiplex; if JSON parsing fails and RequestID cannot be read,
+// an empty string is sent.
+//
+// gate, when not nil, is consulted after the parse and before the handler. A
+// refusal runs nothing and still echoes the RequestID.
+//
+// The caller (App) injects log and deps explicitly so the keystore root is
+// not imported, avoiding an import cycle.
 func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate Gate) proto.BaseResponse {
 	var base proto.BaseRequest
 	if err := json.Unmarshal(msg, &base); err != nil {

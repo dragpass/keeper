@@ -441,29 +441,6 @@ OS 키스토어에 저장된 서버 공개키를 가져옵니다.
 
 ---
 
-#### `getsessioncode` - Get Session Code
-
-저장된 세션 코드를 가져옵니다.
-
-**Request:**
-```json
-{
-  "action": "getsessioncode"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "session_code": "stored_session_code"
-  }
-}
-```
-
----
-
 ### Signup Flow
 
 #### `signalias` - Sign User Alias

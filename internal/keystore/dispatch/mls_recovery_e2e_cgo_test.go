@@ -18,9 +18,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // recoveredKeeper is what RK24 recovery leaves on a new machine of of's
@@ -40,7 +39,7 @@ func recoveredKeeper(t *testing.T, of *keeper, device string) (*keeper, proto.Ke
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	if err := keychain.SavePrivateKey(store, pair.PrivateKey); err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +71,9 @@ func recoveredKeeper(t *testing.T, of *keeper, device string) (*keeper, proto.Ke
 		t: t, id: of.id, device: device, store: store,
 		root: filepath.Join(t.TempDir(), "chat-state-"+device[:8]),
 		deps: handlers.Deps{
-			Logger:            logger.NewMemoryLogger(),
+			Logger:            testdouble.NewMemoryLogger(),
 			Store:             store,
-			ServerKeyVerifier: verifier.AlwaysOKVerifier{},
+			ServerKeyVerifier: testdouble.AlwaysOKVerifier{},
 		},
 	}, st
 }

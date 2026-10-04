@@ -1,6 +1,6 @@
 // envelope_models.go — Shared request/response envelopes + empty payload
-// structs. BaseRequest / BaseResponse + 8 empty payloads (PingRequest,
-// GetDeviceKeyRequest, DeleteDeviceKeyRequest, GetSessionCodeRequest,
+// structs. BaseRequest / BaseResponse + 7 empty payloads (PingRequest,
+// GetDeviceKeyRequest, DeleteDeviceKeyRequest,
 // GetPublicKeyRequest, GetServerPublicKeyRequest,
 // SaveDeviceKeyResponseData, DeleteDeviceKeyResponseData).
 
@@ -26,7 +26,6 @@ type BaseRequest struct {
 type PingRequest struct{}
 type GetDeviceKeyRequest struct{}
 type DeleteDeviceKeyRequest struct{}
-type GetSessionCodeRequest struct{}
 type GetPublicKeyRequest struct{}
 type GetServerPublicKeyRequest struct{}
 type SaveDeviceKeyResponseData struct{}

@@ -1,5 +1,5 @@
 // group_session_test.go — regression guard for group_session.go
-// (HandleGroupSession{Open, Close, Status}).
+// (HandleGroupSession{Open, Close}).
 //
 // **Defects this test catches:**
 //   - regressions where the handler calls stdlib `log.*` directly (bypassing a.Logger)
@@ -51,24 +51,6 @@ func TestApp_HandleGroupSessionClose_LogsLifecycle(t *testing.T) {
 	}
 	if !log.Contains("group session close successful") {
 		t.Fatalf("expected successful log")
-	}
-}
-
-func TestApp_HandleGroupSessionStatus_LogsProcessing(t *testing.T) {
-	deps, log, _ := newTestDeps(t)
-
-	resp := HandleGroupSessionStatus(deps, proto.GroupSessionStatusRequest{
-		GroupHandle: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
-	})
-	if !resp.Success {
-		t.Fatalf("status should succeed, got %s", resp.Error)
-	}
-	data := resp.Data.(proto.GroupSessionStatusResponseData)
-	if data.Exists {
-		t.Fatalf("Exists should be false for unknown handle")
-	}
-	if !log.Contains("group session status request processing") {
-		t.Fatalf("expected processing log")
 	}
 }
 

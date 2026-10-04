@@ -1,6 +1,6 @@
 // recovery_models.go — Recovery flow payloads.
-// RecoverySign / GenerateKeypairWithRecoveryWrap / RecoverySessionOpen /
-// RecoverySessionClose request/response.
+// RecoverySign / RecoverySessionOpen / RecoverySessionClose request/response,
+// and the keypair step's output the recovery composite returns.
 
 package proto
 
@@ -40,60 +40,9 @@ type RecoverySignResponseData struct {
 	Signature string `json:"signature"` // signature over challenge_token by the old private key (Base64)
 }
 
-// GenerateKeypairWithRecoveryWrapRequest is called right before Recovery
-// Complete: generate a new RSA keypair and immediately wrap the private
-// key with wrap_key via AES-GCM, then return the wrapped result. The
-// Extension never sees the plaintext private key.
-//
-// The new keypair is stored in the Keychain as active, while the wrapped
-// result is sent to the server as recovery_wrapped_keeper for future
-// recovery.
-//
-// wrap_key is the Base64 of the raw bytes (32B AES-GCM key) that the
-// client derived from the RK24 HKDF wrap path (after PBKDF2).
-//
-// The recovery_handle is what makes a rotation statement possible here: it
-// already points at the OLD private key inside memguard, put there by
-// recovery_session_open so recoverysign could use it. The same handle signs
-// the statement's OLD half, and the keypair generated below signs the NEW
-// half, so one flow holds both halves of the proof a peer needs.
-type GenerateKeypairWithRecoveryWrapRequest struct {
-	ChallengeToken   string `json:"challenge_token"`
-	Signature        string `json:"signature"`                    // server signature over challenge_token
-	WrapKeyB64       string `json:"wrap_key_b64"`                 // Base64 of a 32B raw AES-GCM key
-	ServerKeyVersion uint   `json:"server_key_version,omitempty"` // falls back to active when 0
-	// AccountID is the subject of the rotation statement canonical.
-	AccountID string `json:"account_id"`
-	// RotatedAt is the Unix seconds the statement is dated.
-	RotatedAt int64 `json:"rotated_at"`
-	// RecoveryHandle points at the OLD private key in memguard. There is no
-	// `reason` field: this flow always declares `recovery`, and no caller can
-	// label a recovery as something else.
-	RecoveryHandle string `json:"recovery_handle"`
-}
-
-func (r GenerateKeypairWithRecoveryWrapRequest) Validate() error {
-	if err := requireString(r.ChallengeToken, "challenge_token"); err != nil {
-		return err
-	}
-	if err := requireString(r.Signature, "signature"); err != nil {
-		return err
-	}
-	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
-		return err
-	}
-	if err := requireRotatedAt(r.RotatedAt, "rotated_at"); err != nil {
-		return err
-	}
-	if err := requireHandle(r.RecoveryHandle, "recovery_handle"); err != nil {
-		return err
-	}
-	// wrap_key is the Base64 of a 32B AES-GCM raw key (Recovery RK24 wrap
-	// path).
-	_, err := requireBase64Len(r.WrapKeyB64, "wrap_key_b64", 32)
-	return err
-}
-
+// GenerateKeypairWithRecoveryWrapResponseData is the recovery keypair step's
+// output: a new RSA keypair whose private key is wrapped with the RK24 wrap
+// key, plus the rotation statement whose OLD half the recovery handle signed.
 type GenerateKeypairWithRecoveryWrapResponseData struct {
 	PublicKey     string `json:"publickey"`
 	WrappedKeeper string `json:"wrapped_keeper"` // private key AES-GCM-wrapped with wrap_key (Base64: iv || ciphertext)

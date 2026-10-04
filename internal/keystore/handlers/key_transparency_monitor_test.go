@@ -12,6 +12,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 	formatlog "github.com/transparency-dev/formats/log"
 	formatnote "github.com/transparency-dev/formats/note"
 	"github.com/transparency-dev/merkle/rfc6962"
@@ -58,7 +59,7 @@ func TestKeyTransparencyMonitorVerifiesAndClassifiesAccountEvents(t *testing.T) 
 		t.Fatal(err)
 	}
 	evidence, trust := signedStatementEvidence(t, statement)
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	deps, _, _ := newTestDeps(t)
 	deps.Store = store
 	deps.KeyTransparency = keytransparency.Gate{Trust: trust}

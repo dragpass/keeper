@@ -32,10 +32,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// MaxReserveCount bounds one reservation. A caller that wants more positions
-// than this is not composing a message.
-const MaxReserveCount = 64
-
 // Store is one owner account's view of the chat state directory. It holds
 // derived key material, so it is built per operation and closed after.
 type Store struct {
@@ -51,18 +47,6 @@ type Store struct {
 	historyKey  []byte
 	poolKey     []byte
 	lockTimeout time.Duration
-}
-
-// Reservation is the answer to "which positions may I encrypt with". It is
-// returned only after the consumption of those positions is on disk and
-// fsynced, so a crash between this answer and the encryption loses a message
-// and never reuses a position. A gap in the chain is ordinary; a repeat is not
-// recoverable.
-type Reservation struct {
-	Epoch           uint64
-	FirstChainIndex uint64
-	Count           int
-	Generation      uint64
 }
 
 // Open returns the owner's store, minting the seal key on first use.
@@ -105,84 +89,6 @@ func (s *Store) Close() {
 	secure.Zeroize(s.poolKey)
 }
 
-// Reserve consumes count chain positions and returns them. The consumption is
-// durable before this returns; see Reservation.
-func (s *Store) Reserve(conversationID string, count int, wm ServerWatermark) (Reservation, error) {
-	if count < 1 || count > MaxReserveCount {
-		return Reservation{}, fmt.Errorf("reserve count must be 1..%d", MaxReserveCount)
-	}
-	var out Reservation
-	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
-		if err != nil {
-			return err
-		}
-		if anchor.SyncBlock != nil {
-			return ErrSyncBlocked
-		}
-		loaded := rec.Generation
-		first := rec.NextIndex
-		need := first + uint64(count)
-		anchor.ReservedBefore = max(anchor.ReservedBefore, need)
-		if err := saveAnchor(s.secrets, p.tag, anchor); err != nil {
-			return err
-		}
-		rec.NextIndex = need
-		if err := s.commit(p, rec, loaded, anchor); err != nil {
-			return err
-		}
-		out = Reservation{
-			Epoch:           rec.Epoch,
-			FirstChainIndex: first,
-			Count:           count,
-			Generation:      rec.Generation,
-		}
-		return nil
-	})
-	return out, err
-}
-
-// CommitOutbox stores the ciphertext built for a reserved position. The stored
-// entry is authoritative: a second call with the same client message id returns
-// what is already there and writes nothing, so a retransmission after a lost
-// response is the same bytes rather than a second encryption.
-func (s *Store) CommitOutbox(
-	conversationID string, wm ServerWatermark, entry OutboxEntry,
-) (OutboxEntry, bool, error) {
-	if len(entry.IV) != ivBytes ||
-		len(entry.Ciphertext) == 0 || len(entry.Ciphertext) > MaxCiphertextBytes {
-		return OutboxEntry{}, false, errors.New("outbox entry has an unusable ciphertext")
-	}
-	var (
-		stored  OutboxEntry
-		created bool
-	)
-	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
-		if err != nil {
-			return err
-		}
-		if existing, ok := rec.findOutbox(entry.ClientMessageID); ok {
-			stored, created = existing, false
-			return nil
-		}
-		if entry.Position.Epoch != rec.Epoch || entry.Position.Generation >= rec.NextIndex {
-			return ErrPositionNotReserved
-		}
-		if rec.positionTaken(entry.Position) || rec.sealedBySendPath(entry.Position) {
-			return ErrPositionTaken
-		}
-		loaded := rec.Generation
-		rec.appendOutbox(entry)
-		if err := s.commit(p, rec, loaded, anchor); err != nil {
-			return err
-		}
-		stored, created = entry, true
-		return nil
-	})
-	return stored, created, err
-}
-
 // ReadOutbox returns the stored ciphertext for a client message id.
 func (s *Store) ReadOutbox(
 	conversationID string, wm ServerWatermark, clientMessageID string,
@@ -201,43 +107,6 @@ func (s *Store) ReadOutbox(
 		return nil
 	})
 	return out, err
-}
-
-// MarkReceived records an inbound position and reports whether this delivery
-// was the first. Persisting the mark before the caller is told it may show the
-// message is what keeps a redelivery from advancing the state twice.
-//
-// A position that does not name its ratchet is refused rather than stored: an
-// unnamed axis collapses two senders' chains onto one key, and the answer this
-// returns would then be "redelivery" for a message nobody has seen.
-func (s *Store) MarkReceived(
-	conversationID string, wm ServerWatermark, pos Position,
-) (bool, uint64, error) {
-	if !pos.ContentType.valid() {
-		return false, 0, errors.New("received position must name a content type")
-	}
-	var (
-		first      bool
-		generation uint64
-	)
-	err := s.withConversation(conversationID, func(p convPaths) error {
-		rec, anchor, err := s.loadCheckedStatic(p, conversationID, wm)
-		if err != nil {
-			return err
-		}
-		if rec.receivedContains(pos) {
-			first, generation = false, rec.Generation
-			return nil
-		}
-		loaded := rec.Generation
-		rec.appendReceived(pos)
-		if err := s.commit(p, rec, loaded, anchor); err != nil {
-			return err
-		}
-		first, generation = true, rec.Generation
-		return nil
-	})
-	return first, generation, err
 }
 
 // SaveGroupState replaces the conversation's serialized MLS state with the
@@ -544,24 +413,6 @@ func (s *Store) loadLocal(p convPaths, conversationID string) (*Record, Anchor, 
 		return nil, anchor, s.latchRekey(p.tag, anchor, RekeyCauseRollback)
 	}
 	return rec, anchor, nil
-}
-
-// loadCheckedStatic is loadChecked for the actions that send on the account's
-// static chain: an untouched record still judges the account's watermark as
-// its own, as before MLS.
-func (s *Store) loadCheckedStatic(
-	p convPaths, conversationID string, wm ServerWatermark,
-) (*Record, Anchor, error) {
-	rec, anchor, err := s.loadLocal(p, conversationID)
-	if err != nil {
-		return nil, anchor, err
-	}
-	rec.staticChain = true
-	checked, anchor, err := s.judgeWatermark(p, rec, anchor, wm)
-	if checked != nil {
-		checked.staticChain = false
-	}
-	return checked, anchor, err
 }
 
 // judgeWatermark is loadChecked's second half.
