@@ -62,3 +62,46 @@ func (s *Session) ApproveRemovalsForTest(leaves []Leaf) error { return s.approve
 // carries, so a test can play a member whose client writes data its Keeper
 // would never write.
 func (s *Session) SetNextCommitAADForTest(aad []byte) error { return s.setNextCommitAAD(aad) }
+
+// Persist flushes the session's group state into the conversation's record.
+// It is a test convenience: production writes group state inside the
+// chatstate transactions the MLS handlers run, never through a bare flush.
+//
+// The flush and the write are two steps because only the second is durable.
+// mls-rs advances its secret tree in memory and writes nothing until it is
+// asked, so anything that moved the group forward is lost unless this runs
+// after it. Pairing an advance with this call is an invariant of the layer
+// above; nothing below checks it.
+func Persist(
+	store *chatstate.Store,
+	conversationID string,
+	wm chatstate.ServerWatermark,
+	s *Session,
+) (uint64, error) {
+	blob, err := s.Flush()
+	if err != nil {
+		return 0, err
+	}
+	defer secure.Zeroize(blob)
+	return store.SaveGroupState(conversationID, wm, blob)
+}
+
+// Restore loads the conversation's stored group state into the session. It
+// reports false when the conversation has no group state yet, which is an
+// ordinary state and not an error.
+func Restore(
+	store *chatstate.Store,
+	conversationID string,
+	wm chatstate.ServerWatermark,
+	s *Session,
+) (bool, error) {
+	blob, err := store.LoadGroupState(conversationID, wm)
+	if err != nil {
+		return false, err
+	}
+	if len(blob) == 0 {
+		return false, nil
+	}
+	defer secure.Zeroize(blob)
+	return true, s.Load(blob)
+}

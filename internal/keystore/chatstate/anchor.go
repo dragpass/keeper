@@ -236,12 +236,6 @@ func deleteAnchor(secrets keychain.SecretStore, conversationTag string) error {
 	return err
 }
 
-// rewound reports whether the record has fallen behind either axis: the
-// local one (rewoundLocally) or the watermark (watermarkAhead).
-func (a Anchor) rewound(rec *Record, wm ServerWatermark) bool {
-	return a.rewoundLocally(rec) || a.watermarkAhead(rec, wm)
-}
-
 // rewoundLocally is the half of the judgement that needs nothing but the file
 // and the keyring:
 //

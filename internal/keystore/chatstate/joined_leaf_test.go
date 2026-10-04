@@ -118,6 +118,9 @@ func TestAJoinWithTheFileMissingUnderANonZeroAnchorLatches(t *testing.T) {
 // does not rewrite it.
 func TestTheFirstLatchCauseIsKept(t *testing.T) {
 	store, _ := newTestStore(t)
+	if _, err := store.Reserve(testConvA, 1, noWatermark); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextApplicationIndex: 3}); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("reserve = %v, want ErrRekeyRequired", err)
 	}

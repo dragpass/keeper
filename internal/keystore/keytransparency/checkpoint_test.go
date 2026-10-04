@@ -104,7 +104,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 	if _, err := VerifyAndPersistStatement(store, trust, second, statement, salt, 0, [][]byte{leafB}); err != nil {
 		t.Fatalf("verify consistent update: %v", err)
 	}
-	if _, err := VerifyAndPersist(store, trust, first); !errors.Is(err, ErrCheckpointRollback) {
+	if _, err := verifyAndPersist(store, trust, first, nil, time.Now()); !errors.Is(err, ErrCheckpointRollback) {
 		t.Fatalf("rollback error = %v, want ErrCheckpointRollback", err)
 	}
 	anchor, found, err := keychain.GetKeyTransparencyCheckpoint(store)
@@ -112,7 +112,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 		t.Fatalf("anchor after rollback attempt = %#v, found=%v, err=%v", anchor, found, err)
 	}
 	withoutQuorum := makeEvidence(2, rootTwo, witnessSigners[0])
-	if _, err := VerifyCheckpoint(trust, withoutQuorum, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}); !errors.Is(err, ErrWitnessQuorum) {
+	if _, err := VerifyCheckpointAt(trust, withoutQuorum, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}, time.Now()); !errors.Is(err, ErrWitnessQuorum) {
 		t.Fatalf("quorum error = %v, want ErrWitnessQuorum", err)
 	}
 	if _, err := VerifyCheckpointAt(trust, first, CheckpointAnchor{}, time.Now().Add(25*time.Hour)); !errors.Is(err, ErrCheckpointFreshness) {
@@ -123,7 +123,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 	}
 	missingFreshnessPolicy := trust
 	missingFreshnessPolicy.MaxCheckpointAge = 0
-	if _, err := VerifyCheckpoint(missingFreshnessPolicy, first, CheckpointAnchor{}); !errors.Is(err, ErrInvalidCheckpoint) {
+	if _, err := VerifyCheckpointAt(missingFreshnessPolicy, first, CheckpointAnchor{}, time.Now()); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("missing freshness policy error = %v, want ErrInvalidCheckpoint", err)
 	}
 	staleStore := testdouble.NewMemorySecretStore()
@@ -134,7 +134,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 		t.Fatalf("stale checkpoint changed anchor: found=%v err=%v", found, err)
 	}
 	fork := makeEvidence(2, bytes.Repeat([]byte{0x61}, 32), witnessSigners[0], witnessSigners[2])
-	if _, err := VerifyCheckpoint(trust, fork, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}); !errors.Is(err, ErrCheckpointFork) {
+	if _, err := VerifyCheckpointAt(trust, fork, CheckpointAnchor{Version: 1, Origin: trust.Origin, Size: 2, Root: rootTwo}, time.Now()); !errors.Is(err, ErrCheckpointFork) {
 		t.Fatalf("fork error = %v, want ErrCheckpointFork", err)
 	}
 }

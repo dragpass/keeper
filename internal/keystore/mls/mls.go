@@ -139,47 +139,6 @@ type Processed struct {
 	KeyGeneration *uint32
 }
 
-// Persist flushes the session's group state into the conversation's record.
-//
-// The flush and the write are two steps because only the second is durable.
-// mls-rs advances its secret tree in memory and writes nothing until it is
-// asked, so anything that moved the group forward is lost unless this runs
-// after it. Pairing an advance with this call is an invariant of the layer
-// above; nothing below checks it.
-func Persist(
-	store *chatstate.Store,
-	conversationID string,
-	wm chatstate.ServerWatermark,
-	s *Session,
-) (uint64, error) {
-	blob, err := s.Flush()
-	if err != nil {
-		return 0, err
-	}
-	defer secure.Zeroize(blob)
-	return store.SaveGroupState(conversationID, wm, blob)
-}
-
-// Restore loads the conversation's stored group state into the session. It
-// reports false when the conversation has no group state yet, which is an
-// ordinary state and not an error.
-func Restore(
-	store *chatstate.Store,
-	conversationID string,
-	wm chatstate.ServerWatermark,
-	s *Session,
-) (bool, error) {
-	blob, err := store.LoadGroupState(conversationID, wm)
-	if err != nil {
-		return false, err
-	}
-	if len(blob) == 0 {
-		return false, nil
-	}
-	defer secure.Zeroize(blob)
-	return true, s.Load(blob)
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // The seam chatstate drives its transactions through.
 // ────────────────────────────────────────────────────────────────────────

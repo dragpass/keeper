@@ -73,7 +73,9 @@ func (e *statementEvidence) commitPins() error {
 }
 
 // NewStatementEvidence is the verifier the MLS actions set on every cipher
-// (mls.Cipher.SetEvidence), for a caller that drives a cipher itself.
+// (mls.Cipher.SetEvidence), for a caller that drives a cipher itself. The
+// handlers use newStatementEvidence; this exported form exists for the mls
+// package's end-to-end tests, which cannot import handler internals.
 func NewStatementEvidence(d Deps, permit proto.ChatStatePermit) chatstate.RemovalEvidence {
 	return newStatementEvidence(d, permit)
 }
