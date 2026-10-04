@@ -330,12 +330,7 @@ func TestDEKUnwrapAndRewrapForMany_Validate_RecipientShapes(t *testing.T) {
 		name string
 		req  proto.DEKUnwrapAndRewrapForManyRequest
 	}{
-		{"both shapes at once", proto.DEKUnwrapAndRewrapForManyRequest{
-			WrappedForMeB64:     wrapped,
-			Recipients:          []proto.DEKRewrapRecipient{{PublicKey: pem}},
-			RecipientPublicKeys: []string{pem},
-		}},
-		{"neither shape", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: wrapped}},
+		{"no recipients", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: wrapped}},
 		{"account without owner", proto.DEKUnwrapAndRewrapForManyRequest{
 			WrappedForMeB64: wrapped,
 			Recipients:      []proto.DEKRewrapRecipient{{AccountID: pinPeer, PublicKey: pem}},
@@ -375,17 +370,6 @@ func TestDEKUnwrapAndRewrapForMany_Validate_RecipientShapes(t *testing.T) {
 	}
 	if err := twoExempt.Validate(); err != nil {
 		t.Fatalf("two exempt recipients rejected: %v", err)
-	}
-
-	// The legacy flat list still validates on its own.
-	legacy := proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64: wrapped, RecipientPublicKeys: []string{pem},
-	}
-	if err := legacy.Validate(); err != nil {
-		t.Fatalf("legacy shape rejected: %v", err)
-	}
-	if list := legacy.RecipientList(); len(list) != 1 || list[0].AccountID != "" {
-		t.Fatalf("RecipientList() = %+v, want one account-less recipient", list)
 	}
 }
 

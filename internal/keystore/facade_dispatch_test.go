@@ -1,6 +1,6 @@
 // facade_dispatch_test.go: baseline HandleRequest dispatcher behavior.
 // Collects light dispatch-path checks for Ping / UnknownAction /
-// InvalidJSON / DeviceKey CRUD / five SignAlias variants /
+// InvalidJSON / DeviceKey delete+status+ensure / five SignAlias variants /
 // SignAliasWithTimestamp / GetPublicKey / GetServerPublicKey / etc. in
 // one file.
 package keystore
@@ -49,6 +49,7 @@ func TestHandleRequest_RemovedActionsAnswerUnsupported(t *testing.T) {
 		"dek_generate_and_wrap_dual", "generatekeypairwithrecoverywrap",
 		"group_session_status", "getsessioncode",
 		"mls_key_package_pool_sweep", "mls_commit_abandon",
+		"getdevicekey", "savedevicekey",
 	} {
 		resp := app.HandleRequest([]byte(`{"action":"` + action + `","request_id":"old","payload":{}}`))
 		if resp.Success || resp.ErrorCode != string(ErrCodeUnsupported) ||
@@ -72,40 +73,11 @@ func TestHandleRequest_InvalidJSON(t *testing.T) {
 // strengthened with requireBase64Len(key, 32).
 const validDeviceKeyB64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
-func TestHandleRequest_SaveDeviceKey(t *testing.T) {
-	app := newFacadeTestApp()
-	msg := `{"action":"savedevicekey","payload":{"key":"` + validDeviceKeyB64 + `"}}`
-	resp := app.HandleRequest([]byte(msg))
-
-	if !resp.Success {
-		t.Errorf("save device key failed: %s", resp.Error)
-	}
-}
-
-func TestHandleRequest_GetDeviceKey(t *testing.T) {
-	app := newFacadeTestApp()
-	// Save first
-	app.HandleRequest([]byte(`{"action":"savedevicekey","payload":{"key":"` + validDeviceKeyB64 + `"}}`))
-
-	msg := `{"action":"getdevicekey"}`
-	resp := app.HandleRequest([]byte(msg))
-
-	if !resp.Success {
-		t.Fatalf("get device key failed: %s", resp.Error)
-	}
-
-	data, _ := json.Marshal(resp.Data)
-	var got GetDeviceKeyResponseData
-	json.Unmarshal(data, &got)
-
-	if got.Key != validDeviceKeyB64 {
-		t.Errorf("device key = %q, want %q", got.Key, validDeviceKeyB64)
-	}
-}
-
 func TestHandleRequest_DeleteDeviceKey(t *testing.T) {
 	app := newFacadeTestApp()
-	app.HandleRequest([]byte(`{"action":"savedevicekey","payload":{"key":"` + validDeviceKeyB64 + `"}}`))
+	if err := keychain.SaveDeviceKey(app.Store, validDeviceKeyB64); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	msg := `{"action":"deletedevicekey"}`
 	resp := app.HandleRequest([]byte(msg))
@@ -135,23 +107,15 @@ func TestHandleRequest_DeviceKeyEnsureThenStatus(t *testing.T) {
 		t.Fatalf("status after ensure: %+v", after)
 	}
 
-	stored := app.HandleRequest([]byte(`{"action":"getdevicekey"}`))
-	key := stored.Data.(GetDeviceKeyResponseData).Key
+	key, err := keychain.GetDeviceKey(app.Store)
+	if err != nil {
+		t.Fatalf("read stored key: %v", err)
+	}
 	for _, resp := range []BaseResponse{ensured, after} {
 		encoded, _ := json.Marshal(resp)
 		if key == "" || strings.Contains(string(encoded), key) || strings.Contains(string(encoded), `"key"`) {
 			t.Fatalf("device key crossed the boundary: %s", encoded)
 		}
-	}
-}
-
-func TestHandleRequest_SaveDeviceKey_MissingKey(t *testing.T) {
-	app := newFacadeTestApp()
-	msg := `{"action":"savedevicekey","payload":{"key":""}}`
-	resp := app.HandleRequest([]byte(msg))
-
-	if resp.Success {
-		t.Error("expected failure for empty key")
 	}
 }
 

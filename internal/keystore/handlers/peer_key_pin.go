@@ -54,8 +54,9 @@ func enforcePeerKeyPins(
 	d Deps, ownerAccountID string, checks []peerKeyPinCheck,
 ) ([]string, proto.BaseResponse, bool) {
 	// The owner half of every pin key is checked before any of them is read.
-	// A legacy call carries no owner id and has no pin set to be steered
-	// into, so there is nothing to bind. See peer_key_owner.go.
+	// A call that names no account (the self-rewrap, an archive-only
+	// rewrap) carries no owner id and has no pin set to be steered into, so
+	// there is nothing to bind. See peer_key_owner.go.
 	if ownerAccountID != "" {
 		if resp, ok := requirePeerKeyOwner(d, ownerAccountID); !ok {
 			return nil, resp, false

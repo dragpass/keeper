@@ -165,9 +165,7 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		return errs.Response(err)
 	}
 
-	// Both request shapes are read as one list. A legacy entry simply carries
-	// no account id, which is how it ends up exempt.
-	recipients := req.RecipientList()
+	recipients := req.Recipients
 
 	// Parse every recipient public key up front so a bad key fails before we
 	// unwrap the raw Group DEK.

@@ -102,12 +102,11 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	if refused.Success || refused.ErrorCode != string(errs.ErrCodePeerKeyChanged) {
 		t.Fatalf("combine with a changed recipient: %+v", refused)
 	}
-	both := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	none := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
-		OwnerAccountID: archivePinOwner, RecipientPublicKeys: []string{member.PublicKey},
-		Recipients: []proto.DEKRewrapRecipient{{AccountID: archivePinMember, PublicKey: member.PublicKey}},
+		OwnerAccountID: archivePinOwner,
 	})
-	if both.Success || !strings.Contains(both.Error, "recipients") {
-		t.Fatalf("both recipient shapes: %+v", both)
+	if none.Success || !strings.Contains(none.Error, "recipients") {
+		t.Fatalf("no recipients: %+v", none)
 	}
 }

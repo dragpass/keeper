@@ -120,9 +120,9 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 
 	// 6) combine + re-grant.
 	combResp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
-		RewrappedShares:     rewrapped,
-		WrappedOldDEKB64:    base64.StdEncoding.EncodeToString(wrappedOld),
-		RecipientPublicKeys: []string{memberKP.PublicKey},
+		RewrappedShares:  rewrapped,
+		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
+		Recipients:       exemptRecipients(memberKP.PublicKey),
 	})
 	if !combResp.Success {
 		t.Fatalf("combine failed: %s", combResp.Error)
@@ -182,9 +182,9 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
 	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
-		RewrappedShares:     rewrapped,
-		WrappedOldDEKB64:    base64.StdEncoding.EncodeToString(wrappedOld),
-		RecipientPublicKeys: []string{memberKP.PublicKey},
+		RewrappedShares:  rewrapped,
+		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
+		Recipients:       exemptRecipients(memberKP.PublicKey),
 	})
 	if resp.Success {
 		t.Fatal("combine with below-threshold shares must fail, not silently reconstruct")
@@ -226,9 +226,9 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
 	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
-		RewrappedShares:     rewrapped,
-		WrappedOldDEKB64:    base64.StdEncoding.EncodeToString(wrappedOld),
-		RecipientPublicKeys: []string{memberKP.PublicKey},
+		RewrappedShares:  rewrapped,
+		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
+		Recipients:       exemptRecipients(memberKP.PublicKey),
 	})
 	if !resp.Success {
 		t.Fatalf("combine failed: %s", resp.Error)
