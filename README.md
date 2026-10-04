@@ -294,9 +294,57 @@ Check if the DragPass Keeper is running and responsive.
 
 ### Device Key Management
 
+#### `device_key_status` - Device Key Status
+
+Reports whether a device key is stored. Never returns key bytes.
+
+**Request:**
+```json
+{
+  "action": "device_key_status"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "present": true
+  }
+}
+```
+
+---
+
+#### `device_key_ensure` - Ensure Device Key
+
+Generates a random 32-byte device key inside Keeper and stores it when none exists. `created` is `false` when a key was already stored. Idempotent; never returns key bytes.
+
+**Request:**
+```json
+{
+  "action": "device_key_ensure"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "created": true
+  }
+}
+```
+
+---
+
 #### `savedevicekey` - Save Device Key
 
 Stores the device encryption key in the OS keystore.
+
+> **Deprecated.** The key crosses the IPC boundary. Use `device_key_ensure`; kept only for extensions that predate it.
 
 **Request:**
 ```json
@@ -320,6 +368,8 @@ Stores the device encryption key in the OS keystore.
 #### `getdevicekey` - Get Device Key
 
 Retrieves the stored device encryption key.
+
+> **Deprecated.** Returns the raw key to the caller. Use `device_key_status`; kept only for extensions that predate it.
 
 **Request:**
 ```json

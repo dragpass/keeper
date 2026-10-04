@@ -114,6 +114,36 @@ func TestHandleRequest_DeleteDeviceKey(t *testing.T) {
 	}
 }
 
+func TestHandleRequest_DeviceKeyEnsureThenStatus(t *testing.T) {
+	app := newFacadeTestApp()
+
+	before := app.HandleRequest([]byte(`{"action":"device_key_status","request_id":"r1"}`))
+	if !before.Success || before.RequestID != "r1" {
+		t.Fatalf("status before ensure: %+v", before)
+	}
+	if before.Data.(DeviceKeyStatusResponseData).Present {
+		t.Fatal("present before ensure")
+	}
+
+	ensured := app.HandleRequest([]byte(`{"action":"device_key_ensure"}`))
+	if !ensured.Success || !ensured.Data.(DeviceKeyEnsureResponseData).Created {
+		t.Fatalf("ensure: %+v", ensured)
+	}
+	after := app.HandleRequest([]byte(`{"action":"device_key_status"}`))
+	if !after.Success || !after.Data.(DeviceKeyStatusResponseData).Present {
+		t.Fatalf("status after ensure: %+v", after)
+	}
+
+	stored := app.HandleRequest([]byte(`{"action":"getdevicekey"}`))
+	key := stored.Data.(GetDeviceKeyResponseData).Key
+	for _, resp := range []BaseResponse{ensured, after} {
+		encoded, _ := json.Marshal(resp)
+		if key == "" || strings.Contains(string(encoded), key) || strings.Contains(string(encoded), `"key"`) {
+			t.Fatalf("device key crossed the boundary: %s", encoded)
+		}
+	}
+}
+
 func TestHandleRequest_SaveDeviceKey_MissingKey(t *testing.T) {
 	app := newFacadeTestApp()
 	msg := `{"action":"savedevicekey","payload":{"key":""}}`

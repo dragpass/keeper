@@ -11,6 +11,8 @@ type (
 	DEKRewrapForMemberResponseData      = proto.DEKRewrapForMemberResponseData
 	DEKRotateToDeviceKeyResponseData    = proto.DEKRotateToDeviceKeyResponseData
 	DEKUnwrapAndEncryptResponseData     = proto.DEKUnwrapAndEncryptResponseData
+	DeviceKeyEnsureResponseData         = proto.DeviceKeyEnsureResponseData
+	DeviceKeyStatusResponseData         = proto.DeviceKeyStatusResponseData
 	GetDeviceKeyResponseData            = proto.GetDeviceKeyResponseData
 	GetPublicKeyResponseData            = proto.GetPublicKeyResponseData
 	GetServerPublicKeyResponseData      = proto.GetServerPublicKeyResponseData

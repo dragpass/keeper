@@ -221,9 +221,57 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 
 ### Device Key Management
 
+#### `device_key_status` - Device Key Status
+
+기기 암호화 키가 저장돼 있는지 알려줍니다. 키 바이트는 돌려주지 않습니다.
+
+**Request:**
+```json
+{
+  "action": "device_key_status"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "present": true
+  }
+}
+```
+
+---
+
+#### `device_key_ensure` - Ensure Device Key
+
+저장된 키가 없으면 Keeper 안에서 32바이트 무작위 기기 키를 만들어 저장합니다. 이미 있으면 `created` 가 `false` 입니다. 여러 번 불러도 결과가 같고, 키 바이트는 돌려주지 않습니다.
+
+**Request:**
+```json
+{
+  "action": "device_key_ensure"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "created": true
+  }
+}
+```
+
+---
+
 #### `savedevicekey` - Save Device Key
 
 기기 암호화 키를 OS 키스토어에 저장합니다.
+
+> **Deprecated.** 키가 IPC 경계를 넘습니다. `device_key_ensure` 를 쓰세요. 이 액션은 그보다 오래된 확장을 위해서만 남아 있습니다.
 
 **Request:**
 ```json
@@ -247,6 +295,8 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 #### `getdevicekey` - Get Device Key
 
 저장된 기기 암호화 키를 가져옵니다.
+
+> **Deprecated.** 원본 키를 호출자에게 돌려줍니다. `device_key_status` 를 쓰세요. 이 액션은 그보다 오래된 확장을 위해서만 남아 있습니다.
 
 **Request:**
 ```json
