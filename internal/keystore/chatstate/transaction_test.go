@@ -33,7 +33,6 @@ type fakeCipher struct {
 
 	burns    int
 	seals    int
-	opens    int
 	lastAAD  []byte
 	sealErr  error
 	beforeAt func()

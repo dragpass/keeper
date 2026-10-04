@@ -60,10 +60,6 @@ type VerifiedCheckpoint struct {
 
 const commitmentDomain = "dragpass.kt.leaf.v1\x00"
 
-func VerifyAndPersist(store keychain.SecretStore, trust Trust, evidence CheckpointEvidence) (*VerifiedCheckpoint, error) {
-	return verifyAndPersist(store, trust, evidence, nil, time.Now())
-}
-
 func VerifyAndPersistStatement(
 	store keychain.SecretStore,
 	trust Trust,
@@ -168,10 +164,6 @@ func verifyAndPersist(
 		return nil, err
 	}
 	return verified, nil
-}
-
-func VerifyCheckpoint(trust Trust, evidence CheckpointEvidence, previous CheckpointAnchor) (*VerifiedCheckpoint, error) {
-	return VerifyCheckpointAt(trust, evidence, previous, time.Now())
 }
 
 // VerifyCheckpointAt verifies the signed checkpoint, fresh witness quorum, and monotonic transition.

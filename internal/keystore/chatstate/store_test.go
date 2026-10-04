@@ -227,8 +227,13 @@ func TestServerWatermarkBehindTheAnchorLoses(t *testing.T) {
 
 // A server that claims positions the file has never used is either lying or
 // reporting a chain this device rewound away from. Either way it is refused.
-func TestServerWatermarkAheadOfAFreshFileRefuses(t *testing.T) {
+// The file must have written something first: an untouched record does not
+// own the account's watermark (Record.ownsChain).
+func TestServerWatermarkAheadOfTheFileRefuses(t *testing.T) {
 	store, _ := newTestStore(t)
+	if _, err := store.Reserve(testConvA, 1, noWatermark); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
 	if _, err := store.Reserve(testConvA, 1, ServerWatermark{NextApplicationIndex: 3}); !errors.Is(err, ErrRekeyRequired) {
 		t.Fatalf("reserve under a watermark ahead of the file = %v, want ErrRekeyRequired", err)
 	}

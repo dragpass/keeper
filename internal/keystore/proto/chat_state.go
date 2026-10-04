@@ -146,7 +146,7 @@ const (
 // Four slots rather than one because naming a position in an MLS group takes
 // four (chatstate.Position): every sender has its own ratchet and each sender
 // has a handshake one and an application one. Only the application axis is
-// compared; see chatstate.Anchor.rewound for why the handshake one is carried
+// compared; see chatstate.Anchor.watermarkAhead for why the handshake one is carried
 // and not looked at.
 type ChatStatePermit struct {
 	AccountID      string `json:"account_id"` // from the user JWT, never from the request

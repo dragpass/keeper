@@ -311,9 +311,3 @@ var errTampered = errorString("signature does not verify")
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
-
-func (k *keeper) processRequestAttested(seq, epoch uint64, commitB64 string, members ...string) proto.MLSProcessRequest {
-	req := k.processRequest(seq, epoch, commitB64)
-	req.CommitAttestation = attested(members...)
-	return req
-}

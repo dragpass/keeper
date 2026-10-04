@@ -150,12 +150,6 @@ type PendingRoomName struct {
 // which is what lets a single file replacement be the unit of consistency and
 // removes any need for an index or a transaction.
 type Record struct {
-	// staticChain is set, for one load only, by loadCheckedStatic. That and
-	// the pre-MLS static-chain operations using it (Reserve, CommitOutbox,
-	// MarkReceived) now live in static_chain_test.go: their actions are gone,
-	// but they still drive the anchor and lock tests. It is never stored.
-	staticChain bool
-
 	SchemaVersion  int    `json:"schema_version"`
 	OwnerAccountID string `json:"owner_account_id"`
 	ConversationID string `json:"conversation_id"`
@@ -405,8 +399,8 @@ func (r *Record) ownsChain(epoch uint64, leaf uint32, accepted bool) bool {
 		// chain of its own: nothing here could have sent. The account's
 		// watermark is another device's (a recovered identity, a device
 		// before its Welcome), and the join judges it again once this
-		// device has a leaf. The static-chain actions keep the old rule.
-		return r.staticChain || len(r.GroupState) > 0 || r.Generation > 0 || r.NextIndex > 0
+		// device has a leaf.
+		return len(r.GroupState) > 0 || r.Generation > 0 || r.NextIndex > 0
 	}
 	return leaf == own.Index && epoch >= own.SinceEpoch
 }

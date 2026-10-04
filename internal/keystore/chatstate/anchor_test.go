@@ -18,6 +18,12 @@ import (
 const legacyAnchorJSON = `{"generation":9,"reserved_before":12,"epoch":3,` +
 	`"watermark_epoch":3,"watermark_next_index":7,"needs_rekey":false}`
 
+// rewound reports whether the record has fallen behind either axis: the
+// local one (rewoundLocally) or the watermark (watermarkAhead).
+func (a Anchor) rewound(rec *Record, wm ServerWatermark) bool {
+	return a.rewoundLocally(rec) || a.watermarkAhead(rec, wm)
+}
+
 func TestALegacyAnchorFoldsItsWatermarkIntoTheApplicationAxis(t *testing.T) {
 	secrets := testdouble.NewMemorySecretStore()
 	const tag = "conversation-tag"
