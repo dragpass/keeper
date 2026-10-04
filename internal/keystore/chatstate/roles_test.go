@@ -70,8 +70,8 @@ func TestRoles_OwnerlessClaim(t *testing.T) {
 // account in the tree comes in only in place of the one it holds (R2), on
 // receipt as on build, whoever commits it.
 func TestRoles_AnAccountThatHoldsALeafIsAddedAgainOnlyInItsPlace(t *testing.T) {
-	for name, roles := range map[string]*Roles{"legacy": nil, "room": room(rolesA), "dm": {Kind: RolesKindDM}} {
-		add := CommitChange{CommitterAccountID: rolesA, CreatorAccountID: rolesA, Before: []string{rolesA, rolesB},
+	for name, roles := range map[string]*Roles{"room": room(rolesA), "dm": {Kind: RolesKindDM}} {
+		add := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA, rolesB},
 			RolesBefore: roles, Added: []string{rolesB}}
 		if err := JudgeReceived(add, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 			t.Errorf("%s: a second leaf of an account in the tree = %v; want refused", name, err)
@@ -94,12 +94,12 @@ func TestRoles_AnAccountThatHoldsALeafIsAddedAgainOnlyInItsPlace(t *testing.T) {
 // re-seat that brings in two leaves for the one it removes, both leave the
 // account with two leaves, and are refused in every kind of group.
 func TestRoles_OneLeafPerAccountAfterTheCommit(t *testing.T) {
-	for name, roles := range map[string]*Roles{"legacy": nil, "room": room(rolesA), "dm": {Kind: RolesKindDM}} {
+	for name, roles := range map[string]*Roles{"room": room(rolesA), "dm": {Kind: RolesKindDM}} {
 		epoch := uint64(5)
-		if roles != nil && roles.Kind == RolesKindDM {
+		if roles.Kind == RolesKindDM {
 			epoch = 0 // a DM adds only at its create
 		}
-		twoNew := CommitChange{CommitterAccountID: rolesA, CreatorAccountID: rolesA, Before: []string{rolesA}, RolesBefore: roles,
+		twoNew := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA}, RolesBefore: roles,
 			Added: []string{rolesB, rolesB}, Epoch: epoch}
 		if err := JudgeReceived(twoNew, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 			t.Errorf("%s: two new leaves of one account in one commit = %v; want refused", name, err)
@@ -120,13 +120,14 @@ func TestRoles_OneLeafPerAccountAfterTheCommit(t *testing.T) {
 // N1: the whole candidate tree, not only the accounts a Commit adds to.
 func TestRoles_ATreeThatHoldsTwoLeavesOfAnAccountTakesNoCommitThatKeepsThem(t *testing.T) {
 	before := []string{rolesA, rolesB, rolesB}
-	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+	roles := room(rolesA)
+	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before, RolesBefore: roles}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 		t.Errorf("an update over the duplicate = %v; want refused", err)
 	}
-	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before, Added: []string{rolesC}}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
+	if err := JudgeReceived(CommitChange{CommitterAccountID: rolesA, Before: before, RolesBefore: roles, Added: []string{rolesC}}, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 		t.Errorf("an unrelated add = %v; want refused", err)
 	}
-	fix := CommitChange{CommitterAccountID: rolesB, Before: before, Removed: []string{rolesB}}
+	fix := CommitChange{CommitterAccountID: rolesB, Before: before, RolesBefore: roles, Removed: []string{rolesB}}
 	if err := JudgeReceived(fix, CommitAuthority{}); err != nil {
 		t.Errorf("removing one of the two = %v", err)
 	}

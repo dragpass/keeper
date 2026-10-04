@@ -46,9 +46,9 @@ func (g groupOf) refusedSend(t testing.TB, wm chatstate.ServerWatermark, why str
 	}
 }
 
-// beginRemove is a Remove a person on alice's device asked for. These groups
-// carry no roles (legacy_temporary), so that is what lets alice build it; the
-// authority rules have their own tests, and these are about the latch.
+// beginRemove is a Remove a person on alice's device asked for. Alice is the
+// room's owner, so that is what lets her build it; the authority rules have
+// their own tests, and these are about the latch.
 func (g groupOf) beginRemove(t testing.TB, wm chatstate.ServerWatermark, accounts ...string) chatstate.BeginCommitResult {
 	t.Helper()
 	out, err := g.aliceStore.BeginCommit(conv, wm, chatstate.BeginCommitRequest{

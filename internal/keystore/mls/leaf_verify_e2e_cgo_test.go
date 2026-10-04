@@ -165,6 +165,12 @@ func (a *account) newestOf(t testing.TB, peer string) (keychain.MLSLeafNewest, b
 	return rec, found
 }
 
+// ownerRoles is a room's roles payload naming account its owner, as every
+// group is created with.
+func ownerRoles(account string) []byte {
+	return chatstate.Roles{Kind: chatstate.RolesKindRoom, Owner: account}.Encode()
+}
+
 // forged is a client no Keeper is: its own leaf key, and whatever declaration
 // payload the attacker chose (nil for none).
 func forged(t testing.TB, accountID, deviceID string, payload func(leafKey ed25519.PublicKey) []byte) *mls.Session {
@@ -251,7 +257,7 @@ func newGroup(t *testing.T) groupOf {
 	stateRoot(t)
 	alice := newAccount(t, accountA)
 	s := alice.device(t, device1)
-	if err := s.CreateGroup([]byte(conv)); err != nil {
+	if err := s.CreateGroup([]byte(conv), ownerRoles(accountA)); err != nil {
 		t.Fatal(err)
 	}
 	store := openStore(t, alice.store, alice.id)
@@ -580,7 +586,7 @@ func TestAWelcomeWhoseTreeHoldsOneUntrustedLeafIsRefused(t *testing.T) {
 	stateRoot(t)
 	alice := newAccount(t, accountA)
 	aliceS := alice.device(t, device1)
-	if err := aliceS.CreateGroup([]byte(conv)); err != nil {
+	if err := aliceS.CreateGroup([]byte(conv), ownerRoles(accountA)); err != nil {
 		t.Fatal(err)
 	}
 	// Alice does not check: mallory's forged leaf goes in first.
@@ -694,7 +700,7 @@ func TestTheStoredDeclarationIsEmbeddedUnchangedAndRotateReplacesBoth(t *testing
 	s1 := bob.session(t)
 	kp1 := keyPackage(t, s1)
 	carrier := forged(t, accountA, device1, func(ed25519.PublicKey) []byte { return []byte("x") })
-	if err := carrier.CreateGroup([]byte("probe")); err != nil {
+	if err := carrier.CreateGroup([]byte("probe"), ownerRoles(accountA)); err != nil {
 		t.Fatal(err)
 	}
 	spy := &recordLeaves{}
@@ -773,7 +779,7 @@ func TestAWelcomeTreeHoldingARotatedMembersOldLeafIsStillJoinable(t *testing.T) 
 	// Alice's group, with bob's old leaf in it.
 	alice := newAccount(t, accountA)
 	aliceS := alice.device(t, device1)
-	if err := aliceS.CreateGroup([]byte("older group")); err != nil {
+	if err := aliceS.CreateGroup([]byte("older group"), ownerRoles(accountA)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := aliceS.CommitAddMemberVerified(keyPackage(t, bobOld), alice.verifier()); err != nil {
@@ -787,7 +793,7 @@ func TestAWelcomeTreeHoldingARotatedMembersOldLeafIsStillJoinable(t *testing.T) 
 	bob.declare(t, device1, proto.MLSLeafReasonRotate, t0+60)
 	dave := newAccount(t, accountC)
 	daveOwn := dave.device(t, device1)
-	if err := daveOwn.CreateGroup([]byte("dave's group")); err != nil {
+	if err := daveOwn.CreateGroup([]byte("dave's group"), ownerRoles(accountC)); err != nil {
 		t.Fatal(err)
 	}
 	v := dave.verifier()
@@ -846,7 +852,7 @@ func TestAPendingLeafKeyNeverSigns(t *testing.T) {
 	staged := bob2.declarePending(t, device1, proto.MLSLeafReasonRotate, time.Now().Unix()+1)
 	spy := &recordLeaves{}
 	carrier := forged(t, accountA, device1, func(ed25519.PublicKey) []byte { return []byte("x") })
-	if err := carrier.CreateGroup([]byte("probe")); err != nil {
+	if err := carrier.CreateGroup([]byte("probe"), ownerRoles(accountA)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := carrier.CommitAddMemberVerified(keyPackage(t, bob2.session(t)), spy); err != nil {
@@ -1009,7 +1015,7 @@ func TestAJoinWhoseGroupStateIsNotWrittenKeepsThePoolEntry(t *testing.T) {
 func invite(t testing.TB, host *account, groupID string, members ...[]byte) (*mls.Session, func(kp []byte) []byte) {
 	t.Helper()
 	s := host.session(t)
-	if err := s.CreateGroup([]byte(groupID)); err != nil {
+	if err := s.CreateGroup([]byte(groupID), ownerRoles(host.id)); err != nil {
 		t.Fatal(err)
 	}
 	add := func(kp []byte) []byte {
@@ -1070,7 +1076,7 @@ func newStaleTreeScenario(t *testing.T) staleTreeScenario {
 
 	clock := time.Now().Unix()
 	dave.deps.Clock = func() time.Time { return time.Unix(clock, 0) }
-	if err := daveOwn.CreateGroup([]byte("dave's group")); err != nil {
+	if err := daveOwn.CreateGroup([]byte("dave's group"), ownerRoles(accountC)); err != nil {
 		t.Fatal(err)
 	}
 	v := dave.verifier()

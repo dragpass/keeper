@@ -18,7 +18,8 @@
 //	    change only verifies at all over a rotation chain the leaf verifier
 //	    accepted), and the committer is another account. In a room with
 //	    roles the committer must also be its owner or an admin under the
-//	    roles before the Commit; in a DM the other account is the peer.
+//	    roles before the Commit; in a DM the other account is the peer. A
+//	    group without roles seats nobody.
 //	    Building one also needs a person on this device to ask for it
 //	    (UserInitiated): a recovered identity is seated only by a peer's
 //	    decision, never by automation. It is a new identity taking a seat,
@@ -40,10 +41,6 @@
 // that was offline for a week still has to be able to build or apply the
 // replacement. What a late use can do is only the succession the old leaf
 // approved, for that exact old leaf and that exact new leaf.
-//
-// In a legacy room without roles, only its creator may seat a recovered
-// identity until roles are migrated. A room whose creator is unavailable must
-// be recovered as a new room.
 
 package chatstate
 
@@ -237,7 +234,6 @@ func (l SuccessionLeaf) Fingerprint() string { return leafKeyFingerprint(l.Signa
 // handovers it carries.
 type SuccessionChange struct {
 	CommitterAccountID string
-	CreatorAccountID   string
 	Removed            []SuccessionLeaf
 	Added              []SuccessionLeaf
 	Handovers          []LeafHandover
@@ -249,8 +245,8 @@ type SuccessionChange struct {
 	UserInitiated bool
 
 	// Roles are the group's roles the Commit is judged against (nil for a
-	// group without roles). In a room only its owner or an admin seats a
-	// recovered identity.
+	// group without roles, which seats nobody). In a room only its owner or an
+	// admin seats a recovered identity.
 	Roles *Roles
 }
 
@@ -278,7 +274,7 @@ func JudgeSuccession(c SuccessionChange) error {
 			continue // H
 		}
 		if recoveredIdentity(removedOfAccount, added) && c.CommitterAccountID != added.AccountID &&
-			(!c.Building || c.UserInitiated) && maySeatRecovered(c.Roles, c.CommitterAccountID, c.CreatorAccountID) {
+			(!c.Building || c.UserInitiated) && maySeatRecovered(c.Roles, c.CommitterAccountID) {
 			continue // Rv
 		}
 		return refuse("a leaf of an account replaces another of its leaves without the old leaf's handover or a person seating a recovered identity")
@@ -286,11 +282,11 @@ func JudgeSuccession(c SuccessionChange) error {
 	return nil
 }
 
-// maySeatRecovered is Rv's committer rule: a room owner or admin, a DM peer,
-// or the creator of a legacy room before its roles are migrated.
-func maySeatRecovered(roles *Roles, committer, creator string) bool {
+// maySeatRecovered is Rv's committer rule: a room owner or admin, or a DM
+// peer.
+func maySeatRecovered(roles *Roles, committer string) bool {
 	if roles == nil {
-		return creator != "" && committer == creator
+		return false
 	}
 	return roles.Kind != RolesKindRoom || roles.RoleOf(committer) != ""
 }

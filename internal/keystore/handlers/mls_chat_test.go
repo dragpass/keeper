@@ -34,6 +34,12 @@ type mlsChatCase struct {
 	request func(p proto.ChatStatePermit) any
 }
 
+// ownerRolesOf is a room's roles with the permit's account as owner.
+func ownerRolesOf(p proto.ChatStatePermit) *proto.MLSRoleSet {
+	return &proto.MLSRoleSet{Kind: proto.MLSRolesKindRoom,
+		Entries: []proto.MLSRoleEntry{{AccountID: p.AccountID, Role: proto.MLSRoleOwner}}}
+}
+
 // mlsChatCases is one well-formed request per action. "Well-formed" is only
 // structural: none of these would get past MLS, which is the point — a
 // refusal below has to come from the gate, before anything looks at a byte.
@@ -42,7 +48,7 @@ func mlsChatCases() []mlsChatCase {
 	return []mlsChatCase{
 		{proto.MLSGroupCreate, HandleMLSGroupCreate, func(p proto.ChatStatePermit) any {
 			return proto.MLSGroupCreateRequest{
-				Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+				Permit: p, Roles: ownerRolesOf(p), OrgID: p.OrgID, ConversationID: p.ConversationID,
 				ClientCommitID: mlsTestCommitID, Members: member,
 			}
 		}},
@@ -293,9 +299,14 @@ func TestMLSChat_ValidationRefusesMalformedRequests(t *testing.T) {
 	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), proto.ChatStateErrorCodeInvalidInput)
 
 	create := proto.MLSGroupCreateRequest{
-		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
+		Permit: p, Roles: ownerRolesOf(p), OrgID: p.OrgID, ConversationID: p.ConversationID,
 		ClientCommitID: mlsTestCommitID, Members: make([]proto.MLSMemberKeyPackage, proto.MLSChatMaxMembersPerCommit+1),
 	}
+	assertChatStateFailure(t, HandleMLSGroupCreate(f.deps, chatMarshal(t, create)),
+		proto.ChatStateErrorCodeInvalidInput)
+	// 0.0.58: a create without roles would make a group that takes no Commit.
+	create.Members, create.Roles = create.Members[:1], nil
+	create.Members[0] = proto.MLSMemberKeyPackage{AccountID: mlsTestPeer, DeviceID: mlsTestDevice, KeyPackageB64: mlsTestBlobB64}
 	assertChatStateFailure(t, HandleMLSGroupCreate(f.deps, chatMarshal(t, create)),
 		proto.ChatStateErrorCodeInvalidInput)
 	f.assertStateRootAbsent(t)

@@ -94,9 +94,6 @@ func commitChangeOf(shape CommitShape, before []Leaf) (chatstate.CommitChange, e
 			return chatstate.CommitChange{}, err
 		}
 		change.Before = append(change.Before, account)
-		if l.Index == 0 {
-			change.CreatorAccountID = account
-		}
 	}
 	for _, l := range shape.Removed {
 		account, device, err := ParseCredentialIdentity(l.Identity)

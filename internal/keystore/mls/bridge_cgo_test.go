@@ -46,6 +46,21 @@ func newSession(t testing.TB, identity string) *Session {
 	return s
 }
 
+// ownerRoles is a room's roles payload naming account its owner, as every
+// group is created with.
+func ownerRoles(account string) []byte {
+	return chatstate.Roles{Kind: chatstate.RolesKindRoom, Owner: account}.Encode()
+}
+
+// ownerRolesFor is ownerRoles for a named test member (testIdentity).
+func ownerRolesFor(name string) []byte {
+	account, _, err := ParseCredentialIdentity(testIdentity(name))
+	if err != nil {
+		panic(err)
+	}
+	return ownerRoles(account)
+}
+
 // testIdentity gives a named test member a DragPass device identity, the only
 // kind Cipher.Open can name as the sender of a message. The ids are derived
 // from the name so a restored session is the same member.
@@ -65,7 +80,7 @@ func twoMemberGroup(t testing.TB) (alice, bob *Session, commit []byte) {
 	alice = newSession(t, "alice@device-1")
 	bob = newSession(t, "bob@device-1")
 
-	if err := alice.CreateGroup([]byte("conversation-under-test")); err != nil {
+	if err := alice.CreateGroup([]byte("conversation-under-test"), ownerRolesFor("alice@device-1")); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
 	kp, err := bob.KeyPackage()
@@ -352,7 +367,7 @@ func TestCallsAfterCloseFailInsteadOfTouchingAFreedHandle(t *testing.T) {
 	}
 	s.Close()
 	s.Close()
-	if err := s.CreateGroup([]byte("gid")); err == nil {
+	if err := s.CreateGroup([]byte("gid"), ownerRolesFor("alice@device-1")); err == nil {
 		t.Fatal("CreateGroup ran on a closed session")
 	}
 }
@@ -878,7 +893,7 @@ func TestNewDeviceSession_SignsWithTheDeclaredKey(t *testing.T) {
 
 	// bob joining and opening alice's message proves the key signs and
 	// verifies, not only that it serializes.
-	if err := alice.CreateGroup([]byte("device-session-group")); err != nil {
+	if err := alice.CreateGroup([]byte("device-session-group"), ownerRoles(testOwner)); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
 	bob := newSession(t, "bob@device-1")

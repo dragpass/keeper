@@ -226,7 +226,7 @@ func HandleMLSGroupCreate(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if err != nil {
 		return chatStateInvalidInput("roles must be one owner and admins, or a DM with none")
 	}
-	if req.Roles != nil && req.Roles.Kind == proto.MLSRolesKindRoom && !roleSetOwnedBy(req.Roles, c.permit.AccountID) {
+	if req.Roles.Kind == proto.MLSRolesKindRoom && !roleSetOwnedBy(req.Roles, c.permit.AccountID) {
 		// N11: a new room's creator is its owner, in the authenticated group
 		// context from its first epoch; nothing about another room carries over.
 		return chatStateInvalidInput("a new room's owner is the account that creates it")
@@ -919,17 +919,16 @@ func HandleMLSEpochComparison(d Deps, payload json.RawMessage) proto.BaseRespons
 	}}
 }
 
-// reportAuthority fills the status's authority, roles and roles_migratable
-// from the group context the session memberTrust loaded. A read that fails
-// leaves authority "" rather than naming rules the group may not be under.
+// reportAuthority fills the status's authority and roles from the group
+// context the session memberTrust loaded. A read that fails leaves authority
+// "" rather than naming rules the group may not be under.
 func (c *mlsChat) reportAuthority(d Deps, data *proto.MLSConversationStatusResponseData) {
-	roles, supported, err := mls.NewCipher(c.session, nil).Authority()
+	roles, err := mls.NewCipher(c.session, nil).Authority()
 	if err != nil {
 		d.Logger.Println("mls conversation status: the group's roles were not read")
 		return
 	}
 	data.Authority = chatstate.AuthorityOf(roles)
-	data.RolesMigratable = supported
 	if roles != nil {
 		for _, e := range roles.Entries() {
 			data.Roles = append(data.Roles, proto.MLSRoleEntry{AccountID: e.AccountID, Role: e.Role})

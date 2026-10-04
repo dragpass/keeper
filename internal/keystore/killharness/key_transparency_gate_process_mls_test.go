@@ -82,7 +82,7 @@ func TestKeyTransparencyGateAtTheProcessBoundary(t *testing.T) {
 			a.enrol()
 			b.enrol()
 			create := proto.MLSGroupCreateRequest{
-				Permit: alice.permit(), OrgID: hOrg, ConversationID: hConv,
+				Permit: alice.permit(), Roles: ownerRoles(alice.account), OrgID: hOrg, ConversationID: hConv,
 				ClientCommitID: alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{b.keyPackage()},
 			}
 			if tc.wantCode == "" {

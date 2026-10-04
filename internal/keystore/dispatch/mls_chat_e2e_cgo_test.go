@@ -260,7 +260,7 @@ func newDM(t *testing.T) *dm {
 
 	id := alice.nextCommitID()
 	create := proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}
 	if got := bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey {
@@ -307,7 +307,7 @@ func TestMLSChatE2E_ADMIsCreatedConfirmedAndJoined(t *testing.T) {
 	}
 	// A second create over the confirmed group is refused and moves nothing.
 	c.alice.refused(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: c.alice.permit(), Roles: roleSet(c.alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{c.bob.keyPackage()},
 	}, proto.ChatStateErrorCodeConflict)
 }
@@ -320,13 +320,13 @@ func TestMLSChatE2E_AKeyPackageForAnotherAccountIsRefused(t *testing.T) {
 	kp := bob.keyPackage()
 	kp.AccountID = "c3333333-3333-4333-8333-333333333333"
 	alice.refused(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{kp},
 	}, proto.ChatMLSErrorCodeLeafUntrusted)
 
 	// Nothing was persisted: a correct create afterwards is the first one.
 	created := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}))
 	if !created.Created {
@@ -746,7 +746,7 @@ func TestMLSChatE2E_AWelcomeForAKeyPackageOfTheOldLeafIsUnusable(t *testing.T) {
 	kp := bob.keyPackage()
 	id := alice.nextCommitID()
 	built := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{kp},
 	}))
 	alice.confirm(id, proto.MLSCommitOutcomeAccepted, "")
@@ -811,7 +811,7 @@ func TestMLSChatE2E_ALatchedConversationKeepsItsHistoryReadable(t *testing.T) {
 	carol := newKeeper(t, "c3333333-3333-4333-8333-333333333333")
 	id := carol.nextCommitID()
 	invite := commitOf(carol.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: carol.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: carol.permit(), Roles: roleSet(carol.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{c.alice.keyPackage()},
 	}))
 	carol.confirm(id, proto.MLSCommitOutcomeAccepted, "")

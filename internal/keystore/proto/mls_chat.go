@@ -60,6 +60,12 @@ const (
 	// this code: it is CHAT_MLS_ROW_REFUSED.
 	ChatMLSErrorCodeCommitUnauthorized = "CHAT_MLS_COMMIT_UNAUTHORIZED"
 
+	// ChatMLSErrorCodeRoomRecreateRequired — this device was asked to build a
+	// Commit on a group whose context carries no roles (0.0.58). No Keeper
+	// accepts one, so the conversation takes no Commit any more and the room
+	// must be recreated. Nothing was built.
+	ChatMLSErrorCodeRoomRecreateRequired = "CHAT_MLS_ROOM_RECREATE_REQUIRED"
+
 	// ChatMLSErrorCodeRowRefused — mls_process (or a superseded
 	// mls_commit_confirm) refused a received Commit the authority rules do
 	// not allow (N3). Nothing was applied. The conversation is not latched:
@@ -298,7 +304,7 @@ type MLSGroupCreateRequest struct {
 
 	// Roles is the group's roles, written into its group context at create
 	// (0.0.55, Q3 phase 2): a room with this account as owner, or a DM.
-	// Omitted, the group is created without roles (legacy_temporary).
+	// Required (0.0.58): a group without roles takes no Commit.
 	Roles *MLSRoleSet `json:"roles,omitempty"`
 }
 
@@ -322,14 +328,15 @@ func (r MLSGroupCreateRequest) Validate() error {
 	if err := validateAppContext(r.AppContextB64); err != nil {
 		return err
 	}
-	if r.Roles != nil {
-		if err := r.Roles.Validate("roles"); err != nil {
-			return err
-		}
-		if r.Roles.Kind == MLSRolesKindRoom && !slices.Contains(r.Roles.Entries,
-			MLSRoleEntry{AccountID: r.Permit.AccountID, Role: MLSRoleOwner}) {
-			return newValidationError("roles", "the creator is the room's owner")
-		}
+	if r.Roles == nil {
+		return newValidationError("roles", "is required")
+	}
+	if err := r.Roles.Validate("roles"); err != nil {
+		return err
+	}
+	if r.Roles.Kind == MLSRolesKindRoom && !slices.Contains(r.Roles.Entries,
+		MLSRoleEntry{AccountID: r.Permit.AccountID, Role: MLSRoleOwner}) {
+		return newValidationError("roles", "the creator is the room's owner")
 	}
 	return ValidateKeyRotationStatements(r.RotationStatements)
 }
@@ -1287,14 +1294,11 @@ type MLSConversationStatusResponseData struct {
 	DeviceRevokeLatch []MLSDeviceRef `json:"device_revoke_latch"`
 
 	// Authority names the rules the group is judged by (0.0.55): roles, dm,
-	// legacy_temporary (a group made before roles, where its creator temporarily
-	// holds owner authority), or "" with no group
-	// state. Roles is a room's owner and admins from its group context, []
-	// otherwise. RolesMigratable reports whether every leaf advertises the
-	// roles extension, so the owner of a legacy room can set its roles.
-	Authority       string         `json:"authority"`
-	Roles           []MLSRoleEntry `json:"roles"`
-	RolesMigratable bool           `json:"roles_migratable"`
+	// roleless (0.0.58: a group whose context carries no roles; it takes no
+	// Commit and the room must be recreated), or "" with no group state. Roles
+	// is a room's owner and admins from its group context, [] otherwise.
+	Authority string         `json:"authority"`
+	Roles     []MLSRoleEntry `json:"roles"`
 
 	NeedsRekey bool `json:"needs_rekey"`
 

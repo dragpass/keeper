@@ -469,8 +469,7 @@ pub unsafe extern "C" fn dpmls_session_set_next_commit_aad(
 }
 
 /// The group's roles: `u8` 0/1 for whether the group context carries the roles
-/// extension, a length-prefixed payload (empty when absent), and `u8` 0/1 for
-/// whether every leaf of the confirmed tree advertises it. Big-endian.
+/// extension, then a length-prefixed payload (empty when absent). Big-endian.
 ///
 /// # Safety
 /// `handle` as in `session_of`; `out` must point to a writable DpBuf.
@@ -479,7 +478,7 @@ pub unsafe extern "C" fn dpmls_group_authority(handle: *mut Session, out: *mut D
     guard(|| {
         // SAFETY: the caller promises `handle` came from dpmls_session_new and
         // is not used concurrently; the borrow ends with this statement.
-        let (roles, supported) = unsafe { session_of(handle)? }.authority()?;
+        let roles = unsafe { session_of(handle)? }.authority()?;
         let payload = roles.clone().unwrap_or_default();
         let mut framed = vec![u8::from(roles.is_some())];
         framed.extend_from_slice(
@@ -488,7 +487,6 @@ pub unsafe extern "C" fn dpmls_group_authority(handle: *mut Session, out: *mut D
                 .to_be_bytes(),
         );
         framed.extend_from_slice(&payload);
-        framed.push(u8::from(supported));
         // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
         // checks it for null and overwrites it without reading it.
         unsafe { put(out, framed)? };

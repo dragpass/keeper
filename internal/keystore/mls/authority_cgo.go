@@ -84,31 +84,27 @@ func decodeCollected(buf []byte) ([]Leaf, CommitShape, error) {
 }
 
 // decodeAuthority reads dpmls_group_authority's framing: u8 has, a
-// length-prefixed payload, u8 supported.
-func decodeAuthority(buf []byte) ([]byte, bool, error) {
+// length-prefixed payload.
+func decodeAuthority(buf []byte) ([]byte, error) {
 	bad := errors.New("mls: group authority framing is malformed")
 	r := leafReader{buf: buf}
 	has, ok := r.take(1)
 	if !ok || has[0] > 1 {
-		return nil, false, bad
+		return nil, bad
 	}
 	payload, ok := r.prefixed()
-	if !ok {
-		return nil, false, bad
-	}
-	supported, ok := r.take(1)
-	if !ok || supported[0] > 1 || r.at != len(r.buf) {
-		return nil, false, bad
+	if !ok || r.at != len(r.buf) {
+		return nil, bad
 	}
 	if has[0] == 0 {
 		if len(payload) != 0 {
-			return nil, false, bad
+			return nil, bad
 		}
 		payload = nil
 	} else if payload == nil {
 		payload = []byte{}
 	}
-	return payload, supported[0] == 1, nil
+	return payload, nil
 }
 
 // encodeRemovals frames leaves the way authority::decode_removals reads them:
