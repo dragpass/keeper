@@ -28,6 +28,8 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionGetDeviceKey:    wrap(handlers.HandleGetDeviceKey),
 		proto.ActionSaveDeviceKey:   wrap(handlers.HandleSaveDeviceKey),
 		proto.ActionDeleteDeviceKey: wrap(handlers.HandleDeleteDeviceKey),
+		proto.ActionDeviceKeyStatus: wrap(handlers.HandleDeviceKeyStatus),
+		proto.ActionDeviceKeyEnsure: wrap(handlers.HandleDeviceKeyEnsure),
 
 		// local self-recovery: wipe this device's account-scoped key material
 		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),

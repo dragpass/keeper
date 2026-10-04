@@ -30,9 +30,21 @@ const (
 	ActionAuthLoginPendingSignChallenge = "auth_login_pending_sign_challenge"
 
 	// Device key related actions
+	//
+	// GetDeviceKey and SaveDeviceKey carry the raw 32B deviceKey across the
+	// IPC boundary and are deprecated: they remain only for extensions built
+	// before DeviceKeyStatus / DeviceKeyEnsure, and go once the extension's
+	// minimum Keeper version includes those two.
 	ActionGetDeviceKey    = "getdevicekey"
 	ActionSaveDeviceKey   = "savedevicekey"
 	ActionDeleteDeviceKey = "deletedevicekey"
+	// DeviceKeyStatus reports whether a device key is stored ({ present }).
+	// DeviceKeyEnsure generates a CSPRNG 32B key inside Keeper and stores it
+	// in the same Keychain slot savedevicekey writes, only when none exists
+	// ({ created }). The check and the write run under the keychain process
+	// lock. Neither returns or accepts key bytes.
+	ActionDeviceKeyStatus = "device_key_status"
+	ActionDeviceKeyEnsure = "device_key_ensure"
 
 	// Device identity reset — local self-recovery action.
 	//

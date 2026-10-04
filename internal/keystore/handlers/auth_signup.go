@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
-	"errors"
 	"unicode/utf8"
 
 	"github.com/awnumar/memguard"
@@ -75,7 +73,7 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 		return answerStagedSignup(d, req.Alias, stagedPrivate, stagedPublic, passwordBuffer, recoveryAuthSeed, wrapKey)
 	}
 
-	if response := ensureSignupDeviceKey(d); !response.Success {
+	if _, response := ensureDeviceKey(d); !response.Success {
 		return response
 	}
 	accountID, err := newSignupAccountID(d)
@@ -140,32 +138,6 @@ func signupAllowed(d Deps) proto.BaseResponse {
 		return errs.CodeResponse(errs.ErrCodeValidation, "device already registered. this device has already been registered for signup")
 	case keyErr == nil:
 		return errs.CodeResponse(errs.ErrCodeInternal, "keypair exists without session. please contact support or use account recovery")
-	}
-	return proto.BaseResponse{Success: true}
-}
-
-func ensureSignupDeviceKey(d Deps) proto.BaseResponse {
-	stored, err := keychain.GetDeviceKey(d.Store)
-	if err == nil && stored != "" {
-		raw, decodeErr := base64.StdEncoding.DecodeString(stored)
-		if decodeErr != nil || len(raw) != 32 {
-			secure.Zeroize(raw)
-			return errs.CodeResponse(errs.ErrCodeStorageFailure, "stored device key is invalid")
-		}
-		secure.Zeroize(raw)
-		return proto.BaseResponse{Success: true}
-	}
-	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read device key")
-	}
-
-	raw := make([]byte, 32)
-	if err := d.FillRandom(raw); err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "failed to generate device key")
-	}
-	defer secure.Zeroize(raw)
-	if err := keychain.SaveDeviceKey(d.Store, base64.StdEncoding.EncodeToString(raw)); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to store device key")
 	}
 	return proto.BaseResponse{Success: true}
 }
