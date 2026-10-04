@@ -41,8 +41,8 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // credExecFixtureShell returns an absolute /bin/sh, or skips. Every fixture here
@@ -71,7 +71,7 @@ func credExecEnvBinary(t *testing.T) string {
 func credExecRoundTrip(
 	t *testing.T, executable string, args []string, cwd string,
 	mutate func(*proto.CredentialExecRequest),
-) (proto.CredentialExecResponseData, proto.BaseResponse, *logger.MemoryLogger) {
+) (proto.CredentialExecResponseData, proto.BaseResponse, *testdouble.MemoryLogger) {
 	t.Helper()
 	deps, log, _ := newTestDeps(t)
 	handle, groupRaw := openSessionForFreshKey(t, deps)

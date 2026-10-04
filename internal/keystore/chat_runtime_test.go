@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // countingStore records every keychain access, so a refused request can be
@@ -52,7 +53,7 @@ func (c *leaseClock) advance(d time.Duration) {
 func newLeaseApp(t *testing.T) (*App, *leaseClock, *countingStore) {
 	t.Helper()
 	clock := &leaseClock{now: time.Unix(1_800_000_000, 0)}
-	store := &countingStore{SecretStore: NewMemorySecretStore()}
+	store := &countingStore{SecretStore: testdouble.NewMemorySecretStore()}
 	return NewApp(Deps{Store: store, Clock: clock.Now}), clock, store
 }
 
@@ -128,7 +129,7 @@ func TestChatRuntimeAppLeaseRefusesExtensionGatedActionsAndRunsNothing(t *testin
 	}
 	for _, action := range []string{
 		"mls_group_create", "mls_encrypt", "mls_decrypt_batch_for_app_display",
-		"chat_state_reserve_send", "mls_leaf_declare", "mls_key_package_generate", "mls_leaf_abort",
+		"chat_state_read_outbox", "mls_leaf_declare", "mls_key_package_generate", "mls_leaf_abort",
 	} {
 		before := store.calls.Load()
 		response := app.HandleRequest([]byte(`{"action":"` + action + `","request_id":"x","payload":{}}`))
@@ -240,8 +241,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 // writer from going ungated by omission.
 func TestChatRuntimeGatedActionListIsPinned(t *testing.T) {
 	want := []string{
-		"chat_state_commit_outbox", "chat_state_mark_received", "chat_state_purge",
-		"chat_state_read_outbox", "chat_state_reserve_send",
+		"chat_state_purge", "chat_state_read_outbox",
 		"mls_commit_abandon", "mls_commit_build", "mls_commit_confirm",
 		"mls_conversation_forget_removed", "mls_decrypt_batch_for_app_display", "mls_encrypt",
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",

@@ -15,6 +15,7 @@ import (
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -26,13 +27,13 @@ const (
 
 var noWatermark = ServerWatermark{}
 
-func newTestStore(t *testing.T) (*Store, *keychain.MemorySecretStore) {
+func newTestStore(t *testing.T) (*Store, *testdouble.MemorySecretStore) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	secrets := keychain.NewMemorySecretStore()
+	secrets := testdouble.NewMemorySecretStore()
 	store, err := Open(secrets, testOwner)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -596,7 +597,7 @@ func TestPurgeWithoutAnySealKeyIsANoOp(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	removed, err := Purge(keychain.NewMemorySecretStore(), testOwner)
+	removed, err := Purge(testdouble.NewMemorySecretStore(), testOwner)
 	if err != nil || removed != 0 {
 		t.Fatalf("purge on an untouched account = %d, %v", removed, err)
 	}
@@ -725,7 +726,7 @@ func TestPurgeAllErasesEveryOwner(t *testing.T) {
 // opened a conversation, so an absent root is a success and not an error.
 func TestPurgeAllWithoutAnyStateIsANoOp(t *testing.T) {
 	t.Setenv(RootEnvVar, filepath.Join(t.TempDir(), "chat-state"))
-	removed, err := PurgeAll(keychain.NewMemorySecretStore())
+	removed, err := PurgeAll(testdouble.NewMemorySecretStore())
 	if err != nil || removed != 0 {
 		t.Fatalf("purge all on an untouched device = %d, %v", removed, err)
 	}

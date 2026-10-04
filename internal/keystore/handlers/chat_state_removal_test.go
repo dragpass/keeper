@@ -40,13 +40,13 @@ func TestChatState_AV3PermitIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Signature = base64.StdEncoding.EncodeToString(sig)
-	assertChatStateFailure(t, f.reserve(t, f.reserveRequest(p, 1)), proto.ChatStateErrorCodeNotAuthorized)
+	assertChatStateFailure(t, f.readOutbox(t, p), proto.ChatStateErrorCodeNotAuthorized)
 	f.assertStateRootAbsent(t)
 
 	// The same permit signed over the v4 bytes, then sent without the slot a
 	// v3 server does not know about.
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(chatMarshal(t, f.reserveRequest(f.sign(t, f.unsignedPermit()), 1)), &object); err != nil {
+	if err := json.Unmarshal(chatMarshal(t, f.readOutboxRequest(f.sign(t, f.unsignedPermit()))), &object); err != nil {
 		t.Fatal(err)
 	}
 	var permit map[string]json.RawMessage
@@ -55,7 +55,7 @@ func TestChatState_AV3PermitIsRefused(t *testing.T) {
 	}
 	delete(permit, "pending_leaf_replacements")
 	object["permit"] = chatMarshal(t, permit)
-	resp := HandleChatStateReserveSend(f.deps, chatMarshal(t, object))
+	resp := HandleChatStateReadOutbox(f.deps, chatMarshal(t, object))
 	assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
 	f.assertStateRootAbsent(t)
 }
@@ -78,7 +78,7 @@ func TestChatState_AMalformedPendingListIsRefused(t *testing.T) {
 			f := newChatStateFixture(t)
 			p := f.unsignedPermit()
 			p.PendingRemovalAccountIDs = ids
-			resp := f.reserve(t, f.reserveRequest(f.sign(t, p), 1))
+			resp := f.readOutbox(t, f.sign(t, p))
 			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
 			f.assertStateRootAbsent(t)
 		})
@@ -86,15 +86,13 @@ func TestChatState_AMalformedPendingListIsRefused(t *testing.T) {
 }
 
 // A well-formed list verifies, and a conversation with no MLS group has nothing
-// for it to latch: the pre-MLS reserve path carries on as before.
+// for it to latch: the request passes the gate and reaches the store, which
+// answers that it holds no such message.
 func TestChatState_ASignedListReachesAConversationWithoutAGroupHarmlessly(t *testing.T) {
 	f := newChatStateFixture(t)
 	p := f.unsignedPermit()
 	p.PendingRemovalAccountIDs = []string{chatRemovedA, chatRemovedB}
-	resp := f.reserve(t, f.reserveRequest(f.sign(t, p), 2))
-	if got := reservationData(t, resp); got.Count != 2 {
-		t.Fatalf("reservation = %+v", got)
-	}
+	assertChatStateFailure(t, f.readOutbox(t, f.sign(t, p)), proto.ChatStateErrorCodeNotFound)
 }
 
 // The replacement list is held to the same never-repaired rule at the edge.
@@ -114,7 +112,7 @@ func TestChatState_AMalformedLeafReplacementListIsRefused(t *testing.T) {
 			f := newChatStateFixture(t)
 			p := f.unsignedPermit()
 			p.PendingLeafReplacements = entries
-			resp := f.reserve(t, f.reserveRequest(f.sign(t, p), 1))
+			resp := f.readOutbox(t, f.sign(t, p))
 			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
 			f.assertStateRootAbsent(t)
 		})

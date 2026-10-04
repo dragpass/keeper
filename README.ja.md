@@ -443,29 +443,6 @@ OS のキーストアに保存されているサーバーの公開鍵を取得�
 
 ---
 
-#### `getsessioncode` - セッションコードの取得
-
-保存されているセッションコードを取得します。
-
-**リクエスト:**
-```json
-{
-  "action": "getsessioncode"
-}
-```
-
-**レスポンス:**
-```json
-{
-  "success": true,
-  "data": {
-    "session_code": "stored_session_code"
-  }
-}
-```
-
----
-
 ### サインアップフロー
 
 #### `signalias` - ユーザーエイリアスの署名

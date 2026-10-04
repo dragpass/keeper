@@ -25,9 +25,8 @@ import (
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -69,9 +68,9 @@ func TestMLSLeafProcessHelper(t *testing.T) {
 		return
 	}
 	deps := Deps{
-		Logger:            logger.NewMemoryLogger(),
+		Logger:            testdouble.NewMemoryLogger(),
 		Store:             slowLeafReadStore{},
-		ServerKeyVerifier: verifier.AlwaysOKVerifier{},
+		ServerKeyVerifier: testdouble.AlwaysOKVerifier{},
 	}
 	resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
 	if !resp.Success {

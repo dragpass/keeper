@@ -37,8 +37,8 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const credTestAAD = "org_9|entry_3|credential|1|1"
@@ -105,7 +105,7 @@ func hostOf(t *testing.T, rawURL string) string {
 // is trusted by installing it into the secure client. It returns the parsed
 // response data and the raw request the server observed.
 func credTestRoundTrip(t *testing.T, method string, serverHandler http.HandlerFunc,
-	headerTemplate map[string]string, allowedMethods []string) (proto.CredentialHTTPResponseData, *observedRequest, proto.BaseResponse, *logger.MemoryLogger) {
+	headerTemplate map[string]string, allowedMethods []string) (proto.CredentialHTTPResponseData, *observedRequest, proto.BaseResponse, *testdouble.MemoryLogger) {
 	t.Helper()
 
 	obs := &observedRequest{}

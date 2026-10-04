@@ -57,9 +57,6 @@ const (
 	// reachable via password / recovery key.
 	ActionResetDeviceIdentity = "reset_device_identity"
 
-	// Session code related actions
-	ActionGetSessionCode = "getsessioncode"
-
 	// related to signup flow
 	ActionSignAlias       = "signalias"
 	ActionSaveSessionCode = "savesessioncode"
@@ -129,14 +126,7 @@ const (
 	// RecoverySign: signs the challenge token with the temporarily-supplied
 	//               old private-key PEM, then disposes of it immediately.
 	//               Not stored in the Keychain.
-	// GenerateKeypairWithRecoveryWrap: generates a new RSA keypair → wraps
-	//                                  the private key with the supplied
-	//                                  wrap_key via AES-GCM → returns the
-	//                                  wrapped result + public key. Stores
-	//                                  the new keypair in the Keychain as
-	//                                  active.
-	ActionRecoverySign                    = "recoverysign"
-	ActionGenerateKeypairWithRecoveryWrap = "generatekeypairwithrecoverywrap"
+	ActionRecoverySign = "recoverysign"
 
 	// Master password change — admin SPA Settings · Security modal.
 	// Returns the device-wrapped DEK re-wrapped with the new
@@ -161,18 +151,6 @@ const (
 	// PEM bytes from the store.
 	ActionRecoverySessionOpen  = "recovery_session_open"
 	ActionRecoverySessionClose = "recovery_session_close"
-
-	// DEKGenerateAndWrapDual: dual wrap for the signup flow. Generates a
-	// new 32B DEK and AES-GCM-wraps it with both (1) the password-derived
-	// KEK and (2) the deviceKey raw bytes, returning both wraps in one
-	// shot. The Extension never sees plaintext DEK.
-	//   For server:  Base64(salt(16) || iv(12) || ciphertext) — the
-	//                Extension Braille-encodes it.
-	//   For local:   Base64(iv(12) || ciphertext)             — the
-	//                Extension Braille-encodes it.
-	// Replaces 3 calls (generateDEK + wrapDEKWithPassword +
-	// wrapDEKWithDeviceKey) with a single Keeper round-trip.
-	ActionDEKGenerateAndWrapDual = "dek_generate_and_wrap_dual"
 
 	// DEKRotateToDeviceKey: login flow. Unwraps the password-wrapped DEK
 	// received from the server using the password and re-wraps it with

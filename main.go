@@ -48,7 +48,6 @@ const e2eEnvVar = "KEEPER_E2E_MODE"
 // (deletedevicekey) delete device key request
 // (getdevicekey) fetch device key request
 // (generatekeypair) generate keypair request [Internal: delete session code, delete existing keypair, save new keypair]
-// (getsessioncode) fetch session code request
 // (getpublickey) fetch Keeper public key request
 
 // Signup:

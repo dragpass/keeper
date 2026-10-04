@@ -1,8 +1,8 @@
 // registry_chat_state.go — DragPass chat v2 conversation-state registrations.
 //
-// Mirrors proto/actions_chat_state.go. Its own fragment because these five are
-// their own security domain: the only actions that read or write conversation
-// state, and the only ones gated on a conversation-state permit.
+// Mirrors proto/actions_chat_state.go. Its own fragment because these are
+// their own security domain: outside the MLS actions, the only ones that read
+// or write conversation state.
 //
 // Like registry_message.go they register handlers directly rather than
 // through wrap(). wrap() routes through `process`, which decodes with plain
@@ -19,10 +19,7 @@ import (
 
 func chatStateActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ChatStateReserveSend:  handlers.HandleChatStateReserveSend,
-		proto.ChatStateCommitOutbox: handlers.HandleChatStateCommitOutbox,
-		proto.ChatStateReadOutbox:   handlers.HandleChatStateReadOutbox,
-		proto.ChatStateMarkReceived: handlers.HandleChatStateMarkReceived,
-		proto.ChatStatePurge:        handlers.HandleChatStatePurge,
+		proto.ChatStateReadOutbox: handlers.HandleChatStateReadOutbox,
+		proto.ChatStatePurge:      handlers.HandleChatStatePurge,
 	}
 }

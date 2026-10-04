@@ -3,6 +3,7 @@ package localrpc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,11 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/pbkdf2"
+
 	"github.com/dragpass/keeper/internal/keystore"
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const testOrigin = "https://app.dragpass.io"
@@ -40,7 +45,7 @@ func newTestServer(t *testing.T) *Server {
 
 func newTestServerWithSecret(t *testing.T, secret localsecret.Secret) *Server {
 	t.Helper()
-	server, err := New(keystore.NewApp(keystore.Deps{Store: keystore.NewMemorySecretStore()}), []string{testOrigin, NativeExtensionOrigin}, secret)
+	server, err := New(keystore.NewApp(keystore.Deps{Store: testdouble.NewMemorySecretStore()}), []string{testOrigin, NativeExtensionOrigin}, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,18 +668,15 @@ func TestLocalRPCRestoresDeviceMasterWithoutReturningWrappedMaterial(t *testing.
 	if err := keychain.SaveDeviceKey(server.app.Store, base64.StdEncoding.EncodeToString(deviceKey)); err != nil {
 		t.Fatal(err)
 	}
-	setup, err := json.Marshal(map[string]any{
-		"action":  proto.ActionDEKGenerateAndWrapDual,
-		"payload": map[string]string{"password": "correct-password"},
-	})
+	// The server's copy of a signup DEK: Base64(salt || iv || ciphertext)
+	// under the password-derived key.
+	salt := bytes.Repeat([]byte{0x11}, handlers.DekSaltLength)
+	kek := pbkdf2.Key([]byte("correct-password"), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
+	iv, ciphertext, err := handlers.AESGCMSealSplit(kek, bytes.Repeat([]byte{0x22}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	signup := server.app.HandleRequest(setup)
-	if !signup.Success {
-		t.Fatalf("generate password-wrapped DEK: %+v", signup)
-	}
-	wrapped := signup.Data.(proto.DEKGenerateAndWrapDualResponseData).PasswordWrappedDEKB64
+	wrapped := base64.StdEncoding.EncodeToString(append(append(salt, iv...), ciphertext...))
 	session, csrf := openTestSession(t, server)
 	body, err := json.Marshal(map[string]string{
 		"password":          "correct-password",

@@ -31,8 +31,8 @@ import (
 	"crypto/tls"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // credQuerySecret carries characters a query string must percent-encode, so the
@@ -52,7 +52,7 @@ func credQueryRoundTrip(
 	t *testing.T,
 	serverHandler http.HandlerFunc,
 	mutate func(*proto.CredentialHTTPRequest),
-) (proto.BaseResponse, *observedQuery, *logger.MemoryLogger) {
+) (proto.BaseResponse, *observedQuery, *testdouble.MemoryLogger) {
 	t.Helper()
 
 	obs := &observedQuery{}
@@ -101,7 +101,7 @@ func credQueryRoundTrip(
 
 // assertNoSecretAnywhere fails when the secret, its percent-encoded form, or the
 // injected parameter reaches the IPC response or the logger.
-func assertNoSecretAnywhere(t *testing.T, resp proto.BaseResponse, log *logger.MemoryLogger) {
+func assertNoSecretAnywhere(t *testing.T, resp proto.BaseResponse, log *testdouble.MemoryLogger) {
 	t.Helper()
 	serialized, err := json.Marshal(resp)
 	if err != nil {

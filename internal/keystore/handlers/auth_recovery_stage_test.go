@@ -14,7 +14,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
 	"github.com/dragpass/keeper/internal/keystore/secure"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 // already had in its keyring.
 type recoveryStage struct {
 	deps       Deps
-	store      *keychain.MemorySecretStore
+	store      *testdouble.MemorySecretStore
 	oldKey     trustKey
 	wrappedOld string
 }
@@ -76,8 +76,8 @@ func wrapUnderStageRK24(t *testing.T, privateKeyPEM string) string {
 	return wrapped
 }
 
-func failingVerifier() verifier.AlwaysFailVerifier {
-	return verifier.AlwaysFailVerifier{Err: errors.New("server signature verification failed: stub")}
+func failingVerifier() testdouble.AlwaysFailVerifier {
+	return testdouble.AlwaysFailVerifier{Err: errors.New("server signature verification failed: stub")}
 }
 
 func (s *recoveryStage) begin(t *testing.T, recoveryKey string) string {
@@ -138,7 +138,7 @@ func saveSessionCode(deps Deps, encrypted string) proto.BaseResponse {
 	})
 }
 
-func assertSnapshot(t *testing.T, store *keychain.MemorySecretStore, want map[string]string, what string) {
+func assertSnapshot(t *testing.T, store *testdouble.MemorySecretStore, want map[string]string, what string) {
 	t.Helper()
 	if got := store.Snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%s changed the keyring:\n got %v\nwant %v", what, keys(got), keys(want))

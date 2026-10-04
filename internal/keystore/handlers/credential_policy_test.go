@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func TestCanonicalCredentialPolicyMatchesServerFormat(t *testing.T) {
@@ -229,7 +229,7 @@ func TestVerifyCredentialPolicyRejectsAADBindingMismatch(t *testing.T) {
 
 func TestVerifyCredentialPolicyRejectsBadServerSignature(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	deps.ServerKeyVerifier = verifier.AlwaysFailVerifier{Err: errors.New("bad signature")}
+	deps.ServerKeyVerifier = testdouble.AlwaysFailVerifier{Err: errors.New("bad signature")}
 	p := credTestPolicy([]string{"api.example"}, []string{"GET"})
 	ok, resp := verifyCredentialPolicy(deps, []byte(credTestAAD), p)
 	if ok || resp.Success {

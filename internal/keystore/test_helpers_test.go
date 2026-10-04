@@ -5,7 +5,7 @@ package keystore
 // withTempRootPublicKey / generateRootKeypairForTest / signRootPayloadForTest
 // / setKeychainDeviceKey / resetServerKeySlots live in the handlers/ package
 // (refresh_server_keys_test / dek_rewrap_test / rotate_keypair_test). Root
-// facade tests use a fresh helper that builds NewApp + MemorySecretStore to
+// facade tests use a fresh helper that builds NewApp + testdouble.MemorySecretStore to
 // isolate dispatcher JSON scenarios.
 
 import (
@@ -13,6 +13,8 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func setupAppKeyPair(t *testing.T, app *App) (publicKeyPEM, privateKeyPEM string) {
@@ -21,10 +23,10 @@ func setupAppKeyPair(t *testing.T, app *App) (publicKeyPEM, privateKeyPEM string
 	if err != nil {
 		t.Fatalf("GenerateRSAKeyPair: %v", err)
 	}
-	if err := app.savePublicKey(kp.PublicKey); err != nil {
+	if err := keychain.SavePublicKey(app.Store, kp.PublicKey); err != nil {
 		t.Fatalf("savePublicKey: %v", err)
 	}
-	if err := app.savePrivateKey(kp.PrivateKey); err != nil {
+	if err := keychain.SavePrivateKey(app.Store, kp.PrivateKey); err != nil {
 		t.Fatalf("savePrivateKey: %v", err)
 	}
 	return kp.PublicKey, kp.PrivateKey
@@ -33,8 +35,8 @@ func setupAppKeyPair(t *testing.T, app *App) (publicKeyPEM, privateKeyPEM string
 func newFacadeTestApp() *App {
 	// Use an in-memory clipboard so tests behave consistently in headless CI.
 	return NewApp(Deps{
-		Store:     NewMemorySecretStore(),
-		Logger:    NewMemoryLogger(),
+		Store:     testdouble.NewMemorySecretStore(),
+		Logger:    testdouble.NewMemoryLogger(),
 		Clipboard: clipboard.NewMemoryClipboard(),
 	})
 }

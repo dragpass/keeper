@@ -51,7 +51,7 @@ func TestHandleDEKUnwrapAndDecryptToClipboard_RoundTrip(t *testing.T) {
 		t.Fatalf("save device key: %v", err)
 	}
 
-	signup := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: "test-pw"})
+	signup := signupDEKForTest(deps, "test-pw")
 	if !signup.Success {
 		t.Fatalf("signup setup: %s", signup.Error)
 	}

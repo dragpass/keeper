@@ -6,14 +6,13 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 )
 
 func TestEnsureServerPublicKey_FirstRun(t *testing.T) {
 	store := defaultKeyringStore()
 	resetServerKeySlots(t, store)
 
-	err := EnsureServerPublicKey(store, logger.NewMemoryLogger())
+	err := EnsureServerPublicKey(store, discardLogger{})
 	if err != nil {
 		t.Fatalf("EnsureServerPublicKey() error = %v", err)
 	}
@@ -32,7 +31,7 @@ func TestEnsureServerPublicKey_Idempotent(t *testing.T) {
 	store := defaultKeyringStore()
 	resetServerKeySlots(t, store)
 
-	log := logger.NewMemoryLogger()
+	log := discardLogger{}
 	// First call
 	_ = EnsureServerPublicKey(store, log)
 	key1, _ := GetActiveServerPublicKey(store)
@@ -49,7 +48,7 @@ func TestEnsureServerPublicKey_Idempotent(t *testing.T) {
 func TestEnsureServerPublicKey_ValidRSAKey(t *testing.T) {
 	store := defaultKeyringStore()
 	resetServerKeySlots(t, store)
-	_ = EnsureServerPublicKey(store, logger.NewMemoryLogger())
+	_ = EnsureServerPublicKey(store, discardLogger{})
 
 	key, _ := GetActiveServerPublicKey(store)
 

@@ -43,19 +43,3 @@ func (r GroupSessionCloseRequest) Validate() error {
 }
 
 type GroupSessionCloseResponseData struct{}
-
-// GroupSessionStatusRequest is for debugging / observability only. Returns
-// whether the handle exists and the remaining TTL in ms. Expired handles
-// are lazy-evicted.
-type GroupSessionStatusRequest struct {
-	GroupHandle string `json:"group_handle"`
-}
-
-func (r GroupSessionStatusRequest) Validate() error {
-	return requireHandle(r.GroupHandle, "group_handle")
-}
-
-type GroupSessionStatusResponseData struct {
-	Exists      bool  `json:"exists"`
-	RemainingMs int64 `json:"remaining_ms"`
-}

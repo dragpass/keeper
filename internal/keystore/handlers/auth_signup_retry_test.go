@@ -13,9 +13,10 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
-func stagedSignup(t *testing.T) (Deps, *keychain.MemorySecretStore, proto.AuthSignupPrepareResponseData) {
+func stagedSignup(t *testing.T) (Deps, *testdouble.MemorySecretStore, proto.AuthSignupPrepareResponseData) {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
 	setKeychainDeviceKey(t, store, bytes.Repeat([]byte{0x44}, 32))

@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // overlapStore records whether two keychain calls ever ran at once.
@@ -42,7 +44,7 @@ func (s *overlapStore) Delete(service, account string) error {
 // Messaging loop (a read-modify-write of the keychain, the e2e mock keyring's
 // plain map). HandleRequest therefore runs one request at a time.
 func TestHandleRequestRunsOneRequestAtATime(t *testing.T) {
-	store := &overlapStore{SecretStore: NewMemorySecretStore()}
+	store := &overlapStore{SecretStore: testdouble.NewMemorySecretStore()}
 	app := NewApp(Deps{Store: store})
 	var wait sync.WaitGroup
 	for range 16 {

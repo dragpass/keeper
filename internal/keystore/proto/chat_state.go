@@ -124,11 +124,6 @@ const (
 	// exists to refuse a hostile payload by length before parsing it.
 	ChatStateMaxRequestBytes = 32 * 1024
 
-	// ChatStateMaxReserveCount — the ceiling on one reservation. A caller
-	// asking for more positions than this is not composing a message. Kept in
-	// step with chatstate.MaxReserveCount by a test in the handlers package.
-	ChatStateMaxReserveCount = 64
-
 	// ChatStateContentTypeHandshake / ChatStateContentTypeApplication — which
 	// of a sender's two ratchets a received position sits on. Kept in step with
 	// the chatstate constants by a test in the handlers package.
@@ -394,84 +389,6 @@ func validateChatStateContext(p ChatStatePermit, orgID, conversationID string) e
 	return requireMessageUUID(conversationID, "conversation_id")
 }
 
-// ChatStateReserveSendRequest asks for Count chain positions.
-type ChatStateReserveSendRequest struct {
-	Permit         ChatStatePermit `json:"permit"`
-	OrgID          string          `json:"org_id"`
-	ConversationID string          `json:"conversation_id"`
-	Count          int             `json:"count"`
-}
-
-func (r ChatStateReserveSendRequest) ChatStateContext() (ChatStatePermit, string, string) {
-	return r.Permit, r.OrgID, r.ConversationID
-}
-
-func (r ChatStateReserveSendRequest) Validate() error {
-	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
-		return err
-	}
-	if r.Count < 1 || r.Count > ChatStateMaxReserveCount {
-		return newValidationError("count",
-			"must be an integer in 1.."+strconv.Itoa(ChatStateMaxReserveCount))
-	}
-	return nil
-}
-
-type ChatStateReserveSendResponseData struct {
-	Epoch           uint64 `json:"epoch"`
-	FirstChainIndex uint64 `json:"first_chain_index"`
-	Count           int    `json:"count"`
-	Generation      uint64 `json:"generation"`
-}
-
-// ChatStateCommitOutboxRequest hands the Keeper the ciphertext built for a
-// position it already reserved. The ciphertext is public material — it is what
-// goes on the wire — so nothing here is a raw-secret field.
-type ChatStateCommitOutboxRequest struct {
-	Permit          ChatStatePermit `json:"permit"`
-	OrgID           string          `json:"org_id"`
-	ConversationID  string          `json:"conversation_id"`
-	ClientMessageID string          `json:"client_message_id"`
-	Epoch           uint64          `json:"epoch"`
-	ChainIndex      uint64          `json:"chain_index"`
-	IVB64           string          `json:"iv_b64"`
-	CiphertextB64   string          `json:"ciphertext_b64"`
-}
-
-func (r ChatStateCommitOutboxRequest) ChatStateContext() (ChatStatePermit, string, string) {
-	return r.Permit, r.OrgID, r.ConversationID
-}
-
-func (r ChatStateCommitOutboxRequest) Validate() error {
-	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
-		return err
-	}
-	if err := requireMessageUUID(r.ClientMessageID, "client_message_id"); err != nil {
-		return err
-	}
-	if err := requireMessageBase64Len(
-		r.IVB64, "iv_b64", ConversationIVBytes, ConversationIVBytes,
-	); err != nil {
-		return err
-	}
-	return requireMessageBase64Len(
-		r.CiphertextB64, "ciphertext_b64",
-		ConversationCiphertextMinBytes, ConversationCiphertextMaxBytes,
-	)
-}
-
-// ChatStateCommitOutboxResponseData echoes the authoritative entry. Stored is
-// false when an entry for this client message id already existed, in which case
-// the other fields are what was already stored, not what the request carried —
-// that difference is the whole retransmission rule.
-type ChatStateCommitOutboxResponseData struct {
-	Stored        bool   `json:"stored"`
-	Epoch         uint64 `json:"epoch"`
-	ChainIndex    uint64 `json:"chain_index"`
-	IVB64         string `json:"iv_b64"`
-	CiphertextB64 string `json:"ciphertext_b64"`
-}
-
 type ChatStateReadOutboxRequest struct {
 	Permit          ChatStatePermit `json:"permit"`
 	OrgID           string          `json:"org_id"`
@@ -499,45 +416,10 @@ type ChatStateReadOutboxResponseData struct {
 	// LeafIndex and ContentType complete the position an mls_encrypt entry
 	// was sealed at (0.0.55), which is what POST /:id/messages declares. An
 	// app that lost mls_encrypt's answer and keeps no plaintext can only post
-	// the message from here. A chat_state_commit_outbox entry has neither.
+	// the message from here. An entry the removed chat_state_commit_outbox
+	// wrote has neither.
 	LeafIndex   uint32 `json:"leaf_index"`
 	ContentType string `json:"content_type,omitempty"`
-}
-
-// ChatStateMarkReceivedRequest names one inbound position. Four slots and not
-// two, because MLS gives every sender its own sender ratchet (RFC 9420 §9.1)
-// and gives each sender a handshake one and an application one (§6.3.1):
-// (epoch, generation) is not unique in a group, and two members' first messages
-// of an epoch would each be judged a redelivery of the other.
-type ChatStateMarkReceivedRequest struct {
-	Permit          ChatStatePermit `json:"permit"`
-	OrgID           string          `json:"org_id"`
-	ConversationID  string          `json:"conversation_id"`
-	Epoch           uint64          `json:"epoch"`
-	SenderLeafIndex uint32          `json:"sender_leaf_index"`
-	ContentType     string          `json:"content_type"`
-	Generation      uint64          `json:"generation"`
-}
-
-func (r ChatStateMarkReceivedRequest) ChatStateContext() (ChatStatePermit, string, string) {
-	return r.Permit, r.OrgID, r.ConversationID
-}
-
-func (r ChatStateMarkReceivedRequest) Validate() error {
-	if err := validateChatStateContext(r.Permit, r.OrgID, r.ConversationID); err != nil {
-		return err
-	}
-	if r.ContentType != ChatStateContentTypeHandshake &&
-		r.ContentType != ChatStateContentTypeApplication {
-		return newValidationError("content_type",
-			"must be "+ChatStateContentTypeHandshake+" or "+ChatStateContentTypeApplication)
-	}
-	return nil
-}
-
-type ChatStateMarkReceivedResponseData struct {
-	FirstDelivery bool   `json:"first_delivery"`
-	Generation    uint64 `json:"generation"`
 }
 
 // ChatStatePurgeRequest names the account whose state goes away. No permit: see

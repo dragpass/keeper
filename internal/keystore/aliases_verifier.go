@@ -12,5 +12,4 @@ import "github.com/dragpass/keeper/internal/keystore/verifier"
 type (
 	ServerKeyVerifier        = verifier.ServerKeyVerifier
 	DefaultServerKeyVerifier = verifier.DefaultServerKeyVerifier
-	AlwaysOKVerifier         = verifier.AlwaysOKVerifier
 )

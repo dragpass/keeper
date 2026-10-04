@@ -21,15 +21,15 @@ import (
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // newResetDeps is newTestDeps with the chat state root pointed at a temporary
 // directory. A reset erases chat state, so a test that skipped this would erase
 // the developer's own — which is why chatstate.Root is derived from
 // os.UserConfigDir and stays overridable.
-func newResetDeps(t *testing.T) (Deps, *logger.MemoryLogger, *keychain.MemorySecretStore) {
+func newResetDeps(t *testing.T) (Deps, *testdouble.MemoryLogger, *testdouble.MemorySecretStore) {
 	t.Helper()
 	t.Setenv(chatstate.RootEnvVar, filepath.Join(t.TempDir(), "chat-state"))
 	return newTestDeps(t)
@@ -198,7 +198,7 @@ func TestResetDeviceIdentity_ErasesChatStateOfEveryOwner(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %s: %v", owner, err)
 		}
-		if _, err := state.Reserve(chatConvID, 1, chatstate.ServerWatermark{}); err != nil {
+		if _, err := state.SaveGroupState(chatConvID, chatstate.ServerWatermark{}, []byte("group-state")); err != nil {
 			t.Fatalf("seed %s: %v", owner, err)
 		}
 		state.Close()

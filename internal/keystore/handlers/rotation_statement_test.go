@@ -8,7 +8,7 @@
 //     field-order or formatting change would move them together and stay
 //     green; feeding a real prepare response into the real state machine is
 //     what pins them to each other.
-//  2. The rotated_at bound holds at all three entry points, and holds before
+//  2. The rotated_at bound holds at both entry points, and holds before
 //     anything is signed or written. A recovery that refused the date after
 //     installing the new keypair would leave an account rotated with no
 //     statement anyone will accept, which is the failure the statement exists
@@ -18,9 +18,10 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/base64"
 	"testing"
 	"time"
+
+	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -123,13 +124,12 @@ func TestRotationStatement_RecoveryOutputRotatesAPin(t *testing.T) {
 	handle := openTestRecoverySession(t, deps, restored.pair.PrivateKey)
 
 	now := time.Now().Unix()
-	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
-		ChallengeToken: "recovery-challenge",
-		Signature:      "any",
-		WrapKeyB64:     base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x07}, 32)),
-		AccountID:      statementAccount,
-		RotatedAt:      now,
-		RecoveryHandle: handle,
+	wrapKey := memguard.NewBufferFromBytes(bytes.Repeat([]byte{0x07}, 32))
+	defer wrapKey.Destroy()
+	resp := generateKeypairWithRecoveryWrapKey(deps, wrapKey, recoveryStatementInput{
+		accountID:      statementAccount,
+		rotatedAt:      now,
+		recoveryHandle: handle,
 	})
 	if !resp.Success {
 		t.Fatalf("recovery wrap failed: %s", resp.Error)
@@ -178,7 +178,7 @@ func TestRotationStatement_RecoveryOutputRotatesAPin(t *testing.T) {
 	}
 }
 
-// ─── the rotated_at bound, all three entry points ───────────────────────
+// ─── the rotated_at bound, both entry points ────────────────────────────
 
 func TestRotatedAtBound_RotatePrepare(t *testing.T) {
 	deps, _, store := newTestDeps(t)
@@ -209,40 +209,6 @@ func TestRotatedAtBound_RotatePrepare(t *testing.T) {
 	// Backdating stays allowed: a slow clock must still be able to rotate.
 	if resp := request(1); !resp.Success {
 		t.Fatalf("backdated rotated_at refused: %s", resp.Error)
-	}
-}
-
-// The bound has to land before the new keypair reaches the Keychain, or a
-// refused date leaves the account rotated with no statement to explain it.
-func TestRotatedAtBound_RecoveryWrapLeavesKeychainAlone(t *testing.T) {
-	deps, _, store := newTestDeps(t)
-	activePubPEM, _ := setupHandlerKeyPair(t, store)
-	deps.Clock = func() time.Time { return time.Unix(1_000_000, 0) }
-
-	restored := newTrustKey(t)
-	handle := openTestRecoverySession(t, deps, restored.pair.PrivateKey)
-
-	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
-		ChallengeToken: "recovery-challenge",
-		Signature:      "any",
-		WrapKeyB64:     base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x07}, 32)),
-		AccountID:      statementAccount,
-		RotatedAt:      1_000_000 + proto.KeyRotationPrepareMaxFutureSeconds + 1,
-		RecoveryHandle: handle,
-	})
-	if resp.Success {
-		t.Fatal("recovery wrap accepted a rotated_at past the bound")
-	}
-	if resp.ErrorCode != string(errs.ErrCodeValidation) {
-		t.Fatalf("error_code = %q, want validation_error", resp.ErrorCode)
-	}
-
-	stillActive, err := keychain.GetPublicKey(store)
-	if err != nil {
-		t.Fatalf("GetPublicKey: %v", err)
-	}
-	if stillActive != activePubPEM {
-		t.Fatal("a refused recovery replaced the active keypair")
 	}
 }
 

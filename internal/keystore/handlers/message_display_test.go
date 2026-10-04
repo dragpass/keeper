@@ -29,8 +29,8 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
-	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -112,7 +112,7 @@ func (c *msgTestClock) advance(seconds int64) {
 
 type msgFixture struct {
 	deps   Deps
-	log    *logger.MemoryLogger
+	log    *testdouble.MemoryLogger
 	clock  *msgTestClock
 	handle string
 	key    *rsa.PrivateKey

@@ -81,18 +81,3 @@ func HandleGroupSessionClose(d Deps, req proto.GroupSessionCloseRequest) proto.B
 	d.Logger.Println("group session close successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupSessionCloseResponseData{}}
 }
-
-// HandleGroupSessionStatus returns handle existence + remaining TTL in ms.
-func HandleGroupSessionStatus(d Deps, req proto.GroupSessionStatusRequest) proto.BaseResponse {
-	d.Logger.Println("group session status request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	exists, remaining := d.GroupSessions.Status(req.GroupHandle)
-	return proto.BaseResponse{Success: true, Data: proto.GroupSessionStatusResponseData{
-		Exists:      exists,
-		RemainingMs: remaining,
-	}}
-}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 	formatlog "github.com/transparency-dev/formats/log"
 	formatnote "github.com/transparency-dev/formats/note"
 	"github.com/transparency-dev/merkle/rfc6962"
@@ -82,7 +83,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 		return CheckpointEvidence{Checkpoint: raw}
 	}
 	first := makeEvidence(1, leafA, witnessSigners[0], witnessSigners[1])
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	evidence := StatementEvidence{
 		StatementB64:  base64.StdEncoding.EncodeToString(statement),
 		SaltB64:       base64.StdEncoding.EncodeToString(salt),
@@ -125,7 +126,7 @@ func TestVerifyAndPersistRequiresQuorumAndMonotonicConsistency(t *testing.T) {
 	if _, err := VerifyCheckpoint(missingFreshnessPolicy, first, CheckpointAnchor{}); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("missing freshness policy error = %v, want ErrInvalidCheckpoint", err)
 	}
-	staleStore := keychain.NewMemorySecretStore()
+	staleStore := testdouble.NewMemorySecretStore()
 	if _, err := verifyAndPersist(staleStore, trust, first, nil, time.Now().Add(25*time.Hour)); !errors.Is(err, ErrCheckpointFreshness) {
 		t.Fatalf("persist stale checkpoint error = %v, want ErrCheckpointFreshness", err)
 	}

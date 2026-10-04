@@ -148,11 +148,6 @@ func krDelete(service, user string) error {
 	return err
 }
 
-// KrDelete is an exported variant used via alias from the keystore root so
-// existing white-box tests can continue to call krDelete without importing
-// this subpackage.
-func KrDelete(service, user string) error { return krDelete(service, user) }
-
 // LoadE2EKeyringFile is the entry point called from main.go init.
 // Loads the file into the mock keyring and also fills the snapshot map.
 // path is treated as read-only — every write dumps back to the same path.

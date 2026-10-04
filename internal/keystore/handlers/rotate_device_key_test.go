@@ -100,7 +100,7 @@ func rotateDualWrap(t *testing.T, deps Deps, store keychain.SecretStore, passwor
 	if err := keychain.SaveDeviceKey(store, base64.StdEncoding.EncodeToString(deviceKey)); err != nil {
 		t.Fatalf("SaveDeviceKey: %v", err)
 	}
-	resp := HandleDEKGenerateAndWrapDual(deps, proto.DEKGenerateAndWrapDualRequest{Password: password})
+	resp := signupDEKForTest(deps, password)
 	if !resp.Success {
 		t.Fatalf("dual wrap setup failed: %s", resp.Error)
 	}

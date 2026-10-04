@@ -158,16 +158,13 @@ func TestMLSChatActions_AreExactlyTheRegistered(t *testing.T) {
 	}
 }
 
-// TestChatStateActions_AreExactlyTheFiveRegistered keeps the set this guard
-// checks honest: a sixth conversation-state action added without a thought
+// TestChatStateActions_AreExactlyTheTwoRegistered keeps the set this guard
+// checks honest: a third conversation-state action added without a thought
 // about the boundary fails here rather than passing unnoticed.
-func TestChatStateActions_AreExactlyTheFiveRegistered(t *testing.T) {
+func TestChatStateActions_AreExactlyTheTwoRegistered(t *testing.T) {
 	want := map[string]bool{
-		proto.ChatStateReserveSend:  true,
-		proto.ChatStateCommitOutbox: true,
-		proto.ChatStateReadOutbox:   true,
-		proto.ChatStateMarkReceived: true,
-		proto.ChatStatePurge:        true,
+		proto.ChatStateReadOutbox: true,
+		proto.ChatStatePurge:      true,
 	}
 	got := chatStateActionNames(t)
 	if len(got) != len(want) {

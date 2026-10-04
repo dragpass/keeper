@@ -1,9 +1,8 @@
-// chat_state.go — the five conversation-state actions of DragPass chat v2.
+// chat_state.go — the conversation-state actions of DragPass chat v2 and the
+// permit gate the MLS actions share with them.
 //
-// None of these encrypts anything. They decide, durably and under a
-// per-conversation lock, which chain position a sender may use next and which
-// ciphertext a retransmission must reuse. Storage and its guarantees live in
-// internal/keystore/chatstate; this file is the protocol edge.
+// Storage and its guarantees live in internal/keystore/chatstate; this file is
+// the protocol edge.
 //
 // The order every permit-gated action runs, before the state directory is
 // touched at all:
@@ -42,60 +41,6 @@ import (
 // issued_at may sit. Ordinary server/client drift and nothing more.
 const chatStatePermitClockSkewSeconds = 5
 
-// HandleChatStateReserveSend consumes chain positions and returns them only
-// after the consumption is fsynced.
-func HandleChatStateReserveSend(d Deps, payload json.RawMessage) proto.BaseResponse {
-	var req proto.ChatStateReserveSendRequest
-	store, watermark, resp, ok := openChatState(d, payload, &req)
-	if !ok {
-		return resp
-	}
-	defer store.Close()
-
-	reservation, err := store.Reserve(req.ConversationID, req.Count, watermark)
-	if err != nil {
-		return chatStateFailure(d, "reserve", err)
-	}
-	return proto.BaseResponse{Success: true, Data: proto.ChatStateReserveSendResponseData{
-		Epoch:           reservation.Epoch,
-		FirstChainIndex: reservation.FirstChainIndex,
-		Count:           reservation.Count,
-		Generation:      reservation.Generation,
-	}}
-}
-
-// HandleChatStateCommitOutbox stores the ciphertext built for a reserved
-// position, or returns the one already stored under the same client message id.
-func HandleChatStateCommitOutbox(d Deps, payload json.RawMessage) proto.BaseResponse {
-	var req proto.ChatStateCommitOutboxRequest
-	store, watermark, resp, ok := openChatState(d, payload, &req)
-	if !ok {
-		return resp
-	}
-	defer store.Close()
-
-	iv, ciphertext, decodeErr := decodeSealedPair(req.IVB64, req.CiphertextB64)
-	if decodeErr != nil {
-		return chatStateInvalidInput(decodeErr.Error())
-	}
-	stored, created, err := store.CommitOutbox(req.ConversationID, watermark, chatstate.OutboxEntry{
-		ClientMessageID: req.ClientMessageID,
-		Position:        chatstate.Position{Epoch: req.Epoch, Generation: req.ChainIndex},
-		IV:              iv,
-		Ciphertext:      ciphertext,
-	})
-	if err != nil {
-		return chatStateFailure(d, "commit outbox", err)
-	}
-	return proto.BaseResponse{Success: true, Data: proto.ChatStateCommitOutboxResponseData{
-		Stored:        created,
-		Epoch:         stored.Position.Epoch,
-		ChainIndex:    stored.Position.Generation,
-		IVB64:         base64.StdEncoding.EncodeToString(stored.IV),
-		CiphertextB64: base64.StdEncoding.EncodeToString(stored.Ciphertext),
-	}}
-}
-
 // HandleChatStateReadOutbox returns the bytes a retransmission must send.
 func HandleChatStateReadOutbox(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.ChatStateReadOutboxRequest
@@ -119,35 +64,8 @@ func HandleChatStateReadOutbox(d Deps, payload json.RawMessage) proto.BaseRespon
 	}}
 }
 
-// HandleChatStateMarkReceived records an inbound position idempotently.
-func HandleChatStateMarkReceived(d Deps, payload json.RawMessage) proto.BaseResponse {
-	var req proto.ChatStateMarkReceivedRequest
-	store, watermark, resp, ok := openChatState(d, payload, &req)
-	if !ok {
-		return resp
-	}
-	defer store.Close()
-
-	first, generation, err := store.MarkReceived(
-		req.ConversationID, watermark,
-		chatstate.Position{
-			Epoch:           req.Epoch,
-			SenderLeafIndex: req.SenderLeafIndex,
-			ContentType:     chatstate.ContentType(req.ContentType),
-			Generation:      req.Generation,
-		},
-	)
-	if err != nil {
-		return chatStateFailure(d, "mark received", err)
-	}
-	return proto.BaseResponse{Success: true, Data: proto.ChatStateMarkReceivedResponseData{
-		FirstDelivery: first,
-		Generation:    generation,
-	}}
-}
-
-// HandleChatStatePurge erases one account's chat state. The only one of the
-// five with no permit; see actions_chat_state.go for why a deletion this local
+// HandleChatStatePurge erases one account's chat state. The only
+// conversation-state action with no permit; see actions_chat_state.go for why a deletion this local
 // is not worth a server round trip.
 func HandleChatStatePurge(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.ChatStatePurgeRequest
@@ -298,18 +216,6 @@ func chatStatePermitWindowHolds(p proto.ChatStatePermit, nowUnix int64) bool {
 	return p.ExpiresAt-p.IssuedAt == proto.ChatStatePermitTTLSeconds
 }
 
-func decodeSealedPair(ivB64, ciphertextB64 string) ([]byte, []byte, error) {
-	iv, err := base64.StdEncoding.DecodeString(ivB64)
-	if err != nil {
-		return nil, nil, errors.New("iv_b64 must be valid standard Base64")
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(ciphertextB64)
-	if err != nil {
-		return nil, nil, errors.New("ciphertext_b64 must be valid standard Base64")
-	}
-	return iv, ciphertext, nil
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // Failure responses. Fixed strings: no store paths, no request payload, and no
 // hint about which authorization check refused.
@@ -444,8 +350,6 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrPositionTaken):
 		code, message = proto.ChatStateErrorCodeConflict,
 			"that chain position already carries a message"
-	case errors.Is(err, chatstate.ErrPositionNotReserved):
-		code, message = proto.ChatStateErrorCodeConflict, "that chain position was not reserved"
 	case errors.Is(err, chatstate.ErrNotFound):
 		code, message = proto.ChatStateErrorCodeNotFound, "no stored message for that client message id"
 	}

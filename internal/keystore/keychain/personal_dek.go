@@ -55,18 +55,13 @@ func GetPendingSignupDeviceWrappedDEK(store SecretStore) (string, error) {
 	return store.Get(config.Service, config.PendingSignupPersonalDEK)
 }
 
-// PromotePendingSignupDEK finishes a signup's key state. keypairPromoted says
+// promotePendingSignupDEKLocked finishes a signup's key state under the
+// personal key bundle lock AcceptSessionCode holds. keypairPromoted says
 // whether this save_session_code just promoted the signup's pending keypair:
 // only then does the pending DEK become the personal DEK. Otherwise a pending
 // DEK is left over from an abandoned signup and is dropped, so an unrelated
 // login can never swap the personal DEK. A second call finds nothing pending
 // and changes nothing.
-func PromotePendingSignupDEK(store SecretStore, keypairPromoted bool) error {
-	return withPersonalKeyBundleLock(store, func() error {
-		return promotePendingSignupDEKLocked(store, keypairPromoted)
-	})
-}
-
 func promotePendingSignupDEKLocked(store SecretStore, keypairPromoted bool) error {
 	pending, err := store.Get(config.Service, config.PendingSignupPersonalDEK)
 	if errors.Is(err, ErrSecretNotFound) {

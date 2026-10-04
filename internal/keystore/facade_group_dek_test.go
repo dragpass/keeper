@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 // wrapGroupDEKForTest RSA-OAEP-SHA256 wraps a raw Group DEK to a public key
@@ -53,10 +55,10 @@ func TestHandleRequest_GroupSessionOpen_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateRSAKeyPair: %v", err)
 	}
-	if err := app.savePrivateKey(kp.PrivateKey); err != nil {
+	if err := keychain.SavePrivateKey(app.Store, kp.PrivateKey); err != nil {
 		t.Fatalf("savePrivateKey: %v", err)
 	}
-	if err := app.savePublicKey(kp.PublicKey); err != nil {
+	if err := keychain.SavePublicKey(app.Store, kp.PublicKey); err != nil {
 		t.Fatalf("savePublicKey: %v", err)
 	}
 
@@ -110,8 +112,8 @@ func TestHandleRequest_GroupSessionOpen_WrongCiphertext(t *testing.T) {
 	// Save keypair A to the Keychain.
 	kpA, _ := GenerateRSAKeyPair()
 	app := newFacadeTestApp()
-	app.savePrivateKey(kpA.PrivateKey)
-	app.savePublicKey(kpA.PublicKey)
+	keychain.SavePrivateKey(app.Store, kpA.PrivateKey)
+	keychain.SavePublicKey(app.Store, kpA.PublicKey)
 
 	// Don't save keypair B; wrap a ciphertext with its public key and then try to open.
 	kpB, _ := GenerateRSAKeyPair()

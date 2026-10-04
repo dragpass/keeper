@@ -1,4 +1,4 @@
-// session_code_models.go — SessionCode save/get payloads.
+// session_code_models.go — SessionCode save payloads.
 
 package proto
 
@@ -21,8 +21,4 @@ type SaveSessionCodeResponseData struct {
 	// "recovery" when this save made a staged key active, "active" when the
 	// key was already active (a login, or a repeated save).
 	Promoted string `json:"promoted"`
-}
-
-type GetSessionCodeResponseData struct {
-	SessionCode string `json:"session_code"`
 }

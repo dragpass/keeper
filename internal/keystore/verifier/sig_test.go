@@ -24,6 +24,7 @@ import (
 	"crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // signForVerifyTest returns the Base64 of a PSS-SHA256 signature over token,
@@ -56,7 +57,7 @@ func installServerKeyForTest(t *testing.T) (*rsa.PrivateKey, keychain.SecretStor
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
-	store := keychain.NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	if err := keychain.SaveServerPublicKeyForVersion(store, 1, string(pubPEM)); err != nil {
 		t.Fatalf("SaveServerPublicKeyForVersion: %v", err)
 	}

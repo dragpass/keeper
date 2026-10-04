@@ -5,10 +5,17 @@
 package keystore
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"golang.org/x/crypto/pbkdf2"
+
+	"github.com/dragpass/keeper/internal/keystore/handlers"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 // TestHandleRequest_GroupDEKGenerateAndOpen_JSONDispatch verifies that
@@ -78,30 +85,27 @@ func TestHandleRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 	}
 }
 
-// TestHandleRequest_DEKGenerateAndWrapDual_JSONDispatch verifies dual
-// wrap JSON envelope dispatch and the two response fields
-// (password_wrapped_dek_b64, device_wrapped_dek_b64).
-//
-// No device_key_b64 in the payload — the handler fetches from the Keychain,
-// so seed it ahead of time via saveDeviceKey.
-func TestHandleRequest_DEKGenerateAndWrapDual_JSONDispatch(t *testing.T) {
-	app := newFacadeTestApp()
-	if err := app.saveDeviceKey(base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
-		t.Fatalf("saveDeviceKey: %v", err)
+// signupWraps builds the two wraps signup produces for one new DEK: the
+// password wrap the server keeps and the device wrap this device keeps. The
+// dispatch tests below need them as input, and the action that used to hand
+// them out (dek_generate_and_wrap_dual) is gone.
+func signupWraps(t *testing.T, password string, deviceKey []byte) DEKGenerateAndWrapDualResponseData {
+	t.Helper()
+	dek := bytes.Repeat([]byte{0x5a}, 32)
+	salt := bytes.Repeat([]byte{0x11}, handlers.DekSaltLength)
+	kek := pbkdf2.Key([]byte(password), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
+	iv, ct, err := handlers.AESGCMSealSplit(kek, dek)
+	if err != nil {
+		t.Fatalf("password wrap: %v", err)
 	}
-	msg := `{"action":"dek_generate_and_wrap_dual","request_id":"r-dual","payload":{"password":"secret"}}`
-	resp := app.HandleRequest([]byte(msg))
-	if !resp.Success {
-		t.Fatalf("dispatch failed: %s", resp.Error)
+	deviceWrapped, err := handlers.AESGCMSeal(deviceKey, dek)
+	if err != nil {
+		t.Fatalf("device wrap: %v", err)
 	}
-	if resp.RequestID != "r-dual" {
-		t.Errorf("request_id echo: got %q", resp.RequestID)
-	}
-	raw, _ := json.Marshal(resp.Data)
-	var data DEKGenerateAndWrapDualResponseData
-	json.Unmarshal(raw, &data)
-	if data.PasswordWrappedDEKB64 == "" || data.DeviceWrappedDEKB64 == "" {
-		t.Error("both wrap outputs should be populated")
+	passwordWrapped := append(append(append([]byte{}, salt...), iv...), ct...)
+	return DEKGenerateAndWrapDualResponseData{
+		PasswordWrappedDEKB64: base64.StdEncoding.EncodeToString(passwordWrapped),
+		DeviceWrappedDEKB64:   deviceWrapped,
 	}
 }
 
@@ -110,18 +114,11 @@ func TestHandleRequest_DEKGenerateAndWrapDual_JSONDispatch(t *testing.T) {
 // layer.
 func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 	app := newFacadeTestApp()
-	if err := app.saveDeviceKey(base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
+	if err := keychain.SaveDeviceKey(app.Store, base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
 		t.Fatalf("saveDeviceKey: %v", err)
 	}
 
-	signupMsg := `{"action":"dek_generate_and_wrap_dual","payload":{"password":"p"}}`
-	signupResp := app.HandleRequest([]byte(signupMsg))
-	if !signupResp.Success {
-		t.Fatalf("signup: %s", signupResp.Error)
-	}
-	signupRaw, _ := json.Marshal(signupResp.Data)
-	var signupData DEKGenerateAndWrapDualResponseData
-	json.Unmarshal(signupRaw, &signupData)
+	signupData := signupWraps(t, "p", make([]byte, 32))
 
 	plaintextB64 := base64.StdEncoding.EncodeToString([]byte("hello"))
 	encMsg := fmt.Sprintf(
@@ -161,25 +158,18 @@ func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 // Replace the keychain deviceKey with a new value right before rotate.
 func TestHandleRequest_DEKRotateToDeviceKey_FullFlow(t *testing.T) {
 	app := newFacadeTestApp()
-	if err := app.saveDeviceKey(base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
+	if err := keychain.SaveDeviceKey(app.Store, base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
 		t.Fatalf("saveDeviceKey (1): %v", err)
 	}
 
-	signupMsg := `{"action":"dek_generate_and_wrap_dual","payload":{"password":"login-pw"}}`
-	signupResp := app.HandleRequest([]byte(signupMsg))
-	if !signupResp.Success {
-		t.Fatalf("signup: %s", signupResp.Error)
-	}
-	signupRaw, _ := json.Marshal(signupResp.Data)
-	var signupData DEKGenerateAndWrapDualResponseData
-	json.Unmarshal(signupRaw, &signupData)
+	signupData := signupWraps(t, "login-pw", make([]byte, 32))
 
 	// Replace the keychain deviceKey with a new value (simulates a different device).
 	deviceKey2 := make([]byte, 32)
 	for i := range deviceKey2 {
 		deviceKey2[i] = byte(0xAA)
 	}
-	if err := app.saveDeviceKey(base64.StdEncoding.EncodeToString(deviceKey2)); err != nil {
+	if err := keychain.SaveDeviceKey(app.Store, base64.StdEncoding.EncodeToString(deviceKey2)); err != nil {
 		t.Fatalf("saveDeviceKey (2): %v", err)
 	}
 

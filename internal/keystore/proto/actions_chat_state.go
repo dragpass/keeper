@@ -1,19 +1,19 @@
 // actions_chat_state.go — Wire-protocol Action* constants for DragPass chat
 // v2's conversation state.
 //
-// Its own domain fragment: these five actions are the only ones that touch the sealed chat
-// state directory, they are the only ones gated on a conversation-state permit,
-// and none of them exists to move a payload — they exist to make sure a chain
-// position is consumed exactly once. Storage: internal/keystore/chatstate.
-// Design: dragpass-control-plane docs/security/adr-ratchet-state-storage.md.
+// Its own domain fragment: these actions are the only ones that touch the
+// sealed chat state directory outside the MLS actions, and every one but the
+// purge is gated on a conversation-state permit. Storage:
+// internal/keystore/chatstate. Design: dragpass-control-plane
+// docs/security/adr-ratchet-state-storage.md.
 //
-// **What MLS will add and what is here now.** The state file already holds the
-// opaque group-state blob, but nothing on the wire reads or writes it, and
-// nothing here encrypts. These actions are the durability and mutual-exclusion
-// layer the ratchet will sit on. That is deliberate: getting "who writes what,
-// when" wrong breaks forward secrecy no matter which library lands on top.
+// The pre-MLS send and receive actions that consumed chain positions by hand
+// (chat_state_reserve_send, chat_state_commit_outbox, chat_state_mark_received)
+// are gone. mls_encrypt and the receive path now consume and mark positions
+// themselves; an old client that still sends those names gets the
+// dispatcher's unknown-action refusal.
 //
-// **Why every one of them demands a server-signed permit.** The dispatcher has
+// **Why the gated ones demand a server-signed permit.** The dispatcher has
 // one action registry and the Keeper cannot tell who launched it — extension
 // service worker, popup, `@dragpass/mcp`, or `dragpass-run` all speak the same
 // protocol to the same binary. So "MCP does not call these" is a convention
@@ -28,31 +28,6 @@
 package proto
 
 const (
-	// ChatStateReserveSend consumes chain positions for sending and returns
-	// them. The consumption is on disk and fsynced before the response leaves,
-	// which is the whole point: if this process dies between the answer and the
-	// encryption, the message is lost and the position stays spent. The other
-	// order would let the next send encrypt a different plaintext under the same
-	// (key, nonce), and that is the one failure in this design that cannot be
-	// undone once the ciphertext is out.
-	//
-	//   Inputs: permit, org_id, conversation_id, count (1..64)
-	//   Output: { epoch, first_chain_index, count, generation }
-	ChatStateReserveSend = "chat_state_reserve_send"
-
-	// ChatStateCommitOutbox stores the ciphertext built for a reserved position
-	// so a retransmission is a retransmission. Idempotent on
-	// `client_message_id`: a second call returns what is already stored and
-	// writes nothing, so a lost response cannot turn into a second encryption
-	// at a second position. A position that was never reserved, or one that
-	// already carries a different message, is refused.
-	//
-	//   Inputs: permit, org_id, conversation_id, client_message_id, epoch,
-	//           chain_index, iv_b64 (12B), ciphertext_b64 (17..8208B)
-	//   Output: { stored (false = an entry already existed), epoch,
-	//             chain_index, iv_b64, ciphertext_b64 }
-	ChatStateCommitOutbox = "chat_state_commit_outbox"
-
 	// ChatStateReadOutbox returns the stored ciphertext for a client message
 	// id. Everything it returns is public material the transport already
 	// carries; the permit is required because the set of conversations this
@@ -66,22 +41,6 @@ const (
 	//   Output: { epoch, chain_index, iv_b64, ciphertext_b64, leaf_index,
 	//             content_type? }
 	ChatStateReadOutbox = "chat_state_read_outbox"
-
-	// ChatStateMarkReceived records an inbound position and says whether this
-	// delivery was the first. Persisted before the answer, for the mirror of
-	// the reason ChatStateReserveSend persists first: a redelivery must advance
-	// the state once, not twice, and a key that forward secrecy says is gone
-	// must not come back because a crash replayed its deletion.
-	//
-	// The position takes four slots because MLS gives every sender its own
-	// sender ratchet (RFC 9420 §9.1) and two of them each (§6.3.1): on (epoch,
-	// generation) alone, two members' first messages of an epoch would each
-	// look like a redelivery of the other.
-	//
-	//   Inputs: permit, org_id, conversation_id, epoch, sender_leaf_index,
-	//           content_type ("handshake" | "application"), generation
-	//   Output: { first_delivery, generation }
-	ChatStateMarkReceived = "chat_state_mark_received"
 
 	// ChatStatePurge erases one account's chat state: the sealed files, the
 	// anchors, and the seal key. Logout calls it, because a logout knows whose

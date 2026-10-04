@@ -70,14 +70,3 @@ func HandleSaveSessionCode(d Deps, req proto.SaveSessionCodeRequest) proto.BaseR
 	d.Logger.Println("session code decryption and save successful")
 	return proto.BaseResponse{Success: true, Data: proto.SaveSessionCodeResponseData{SessionCode: sessionCode, Promoted: string(accepted)}}
 }
-
-// HandleGetSessionCode handles session code retrieval requests.
-func HandleGetSessionCode(d Deps, req proto.GetSessionCodeRequest) proto.BaseResponse {
-	d.Logger.Println("session code retrieval request processing...")
-	sessionCode, err := keychain.GetSessionCode(d.Store)
-	if err != nil {
-		d.Logger.Printf("session code retrieval error: %v", err)
-		return errs.Response(err) // ErrSecretNotFound → not_found
-	}
-	return proto.BaseResponse{Success: true, Data: proto.GetSessionCodeResponseData{SessionCode: sessionCode}}
-}

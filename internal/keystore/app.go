@@ -112,7 +112,7 @@ type App struct {
 // Unit test example:
 //
 //	app := keystore.NewApp(keystore.Deps{
-//	    Store: keystore.NewMemorySecretStore(),
+//	    Store: testdouble.NewMemorySecretStore(),
 //	    Clock: func() time.Time { return fakeNow },
 //	})
 func NewApp(deps Deps) *App {

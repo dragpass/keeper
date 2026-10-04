@@ -33,7 +33,6 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),
 
 		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
-		proto.ActionGetSessionCode:  wrap(handlers.HandleGetSessionCode),
 
 		proto.ActionGetPublicKey: wrap(handlers.HandleGetPublicKey),
 
@@ -52,15 +51,13 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionSignAliasWithTimestamp: wrap(handlers.HandleSignAliasWithTimestamp),
 		proto.ActionSignChallengeToken:     wrap(handlers.HandleSignChallengeToken),
 
-		proto.ActionRecoverySign:                    wrap(handlers.HandleRecoverySign),
-		proto.ActionGenerateKeypairWithRecoveryWrap: wrap(handlers.HandleGenerateKeypairWithRecoveryWrap),
+		proto.ActionRecoverySign: wrap(handlers.HandleRecoverySign),
 
 		proto.ActionRecoverySessionOpen:  wrap(handlers.HandleRecoverySessionOpen),
 		proto.ActionRecoverySessionClose: wrap(handlers.HandleRecoverySessionClose),
 
 		// personal (password-wrapped) DEK operations
-		proto.ActionDEKGenerateAndWrapDual: wrap(handlers.HandleDEKGenerateAndWrapDual),
-		proto.ActionDEKRotateToDeviceKey:   wrap(handlers.HandleDEKRotateToDeviceKey),
+		proto.ActionDEKRotateToDeviceKey: wrap(handlers.HandleDEKRotateToDeviceKey),
 		// Re-wrap DEK under a new password (deviceMaster / DEK itself unchanged).
 		proto.ActionDEKRotateToNewPassword:     wrap(handlers.HandleDEKRotateToNewPassword),
 		proto.ActionDEKUnwrapAndEncrypt:        wrap(handlers.HandleDEKUnwrapAndEncrypt),

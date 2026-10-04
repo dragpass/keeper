@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func TestDEKUnwrapAndDecryptMeta_Roundtrip(t *testing.T) {
@@ -80,4 +80,4 @@ func TestDEKUnwrapAndDecryptMeta_RejectsInvalid(t *testing.T) {
 	}
 }
 
-var _ = keychain.MemorySecretStore{}
+var _ = testdouble.MemorySecretStore{}

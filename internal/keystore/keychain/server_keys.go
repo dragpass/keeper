@@ -51,15 +51,6 @@ func GetServerPublicKeyByVersion(store SecretStore, version uint) (string, error
 	return pem, nil
 }
 
-// DeleteServerPublicKeyForVersion removes the Nth version slot. (Used for
-// revoked-key cleanup. Currently no callers — planned for future use.)
-func DeleteServerPublicKeyForVersion(store SecretStore, version uint) error {
-	if version == 0 {
-		return errors.New("version must be >= 1")
-	}
-	return store.Delete(config.Service, versionedServerKeyAccount(version))
-}
-
 // SaveActiveServerKeyVersion updates the active version pointer.
 func SaveActiveServerKeyVersion(store SecretStore, version uint) error {
 	if version == 0 {

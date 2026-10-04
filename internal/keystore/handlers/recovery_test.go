@@ -1,10 +1,8 @@
-// recovery_test.go — regression guard for recovery.go (HandleRecoverySign /
-// HandleGenerateKeypairWithRecoveryWrap).
+// recovery_test.go — regression guard for recovery.go (HandleRecoverySign).
 //
 // **Defects this test catches:**
 //   - regressions where the handler calls stdlib `log.*` directly (bypassing a.Logger)
 //   - regressions where verifier-using handlers call free `VerifyServerSig` directly
-//   - regressions where the wrap_key_b64 secret input is echoed to the logger
 package handlers
 
 import (
@@ -36,52 +34,6 @@ func TestApp_HandleRecoverySign_VerifyFailedShortCircuits(t *testing.T) {
 	}
 	if log.Contains("recovery sign successful") {
 		t.Fatalf("must not log success on verifier failure")
-	}
-}
-
-// TestApp_HandleGenerateKeypairWithRecoveryWrap_VerifyFailedShortCircuits:
-// must not enter the keypair-generation branch.
-func TestApp_HandleGenerateKeypairWithRecoveryWrap_VerifyFailedShortCircuits(t *testing.T) {
-	deps, log, _ := newTestDepsFailVerify(t, errors.New("server signature verification failed: stub"))
-
-	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
-		AccountID:      "11111111-1111-4111-8111-111111111111",
-		RotatedAt:      1758240000,
-		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		ChallengeToken: "any-challenge",
-		Signature:      "any-sig",
-		WrapKeyB64:     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // 32B Base64
-	})
-	if resp.Success {
-		t.Fatalf("expected failure when verifier rejects")
-	}
-	if !strings.Contains(resp.Error, "server signature verification failed") {
-		t.Fatalf("error must include verifier failure prefix, got %q", resp.Error)
-	}
-	if log.Contains("recovery keypair generated") {
-		t.Fatalf("must not log keypair generation on verifier failure")
-	}
-}
-
-// TestApp_HandleGenerateKeypairWithRecoveryWrap_DoesNotEchoWrapKey: the
-// wrap_key sentinel must not be echoed to the logger.
-func TestApp_HandleGenerateKeypairWithRecoveryWrap_DoesNotEchoWrapKey(t *testing.T) {
-	deps, log, _ := newTestDepsFailVerify(t, errors.New("server signature verification failed: stub"))
-
-	const wrapKeySentinel = "WRAP_KEY_SENTINEL_DO_NOT_LEAK_INTO_LOGS"
-	resp := HandleGenerateKeypairWithRecoveryWrap(deps, proto.GenerateKeypairWithRecoveryWrapRequest{
-		AccountID:      "11111111-1111-4111-8111-111111111111",
-		RotatedAt:      1758240000,
-		RecoveryHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-		ChallengeToken: "any",
-		Signature:      "any",
-		WrapKeyB64:     wrapKeySentinel,
-	})
-	if resp.Success {
-		t.Fatalf("expected failure")
-	}
-	if log.Contains(wrapKeySentinel) {
-		t.Fatalf("logger leaked wrap_key_b64: %v", log.Messages())
 	}
 }
 

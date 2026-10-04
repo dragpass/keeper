@@ -14,7 +14,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
-	"github.com/dragpass/keeper/internal/keystore/verifier"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -89,8 +89,8 @@ func openWith(t *testing.T, privateKeyPEM, wrappedB64 string) []byte {
 // DEK rewrap lands on this Keeper's promoted key.
 func TestAppRecoveryRoutesStageThenPromote(t *testing.T) {
 	server := newTestServer(t)
-	server.app.ServerKeyVerifier = verifier.AlwaysOKVerifier{}
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	server.app.ServerKeyVerifier = testdouble.AlwaysOKVerifier{}
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 
 	const alias, rk, newRK = "alice", "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ", "ZYXW-VUTS-RQPN-MLKJ-HGFE-DCBA"
@@ -182,8 +182,8 @@ func TestAppRecoveryRoutesStageThenPromote(t *testing.T) {
 // refused, both leave the keyring byte-identical.
 func TestAppRecoveryRoutesRefuseAndAbortWithoutAKeyringChange(t *testing.T) {
 	server := newTestServer(t)
-	server.app.ServerKeyVerifier = verifier.AlwaysOKVerifier{}
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	server.app.ServerKeyVerifier = testdouble.AlwaysOKVerifier{}
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	owner := routeKeypair(t)
 	if err := keychain.SavePrivateKey(store, owner.PrivateKey); err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestAppRecoveryRoutesRefuseAndAbortWithoutAKeyringChange(t *testing.T) {
 // The App reaches the group DEK wraps only in their pin-enforced form.
 func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 	server := newTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	own := routeKeypair(t)
 	_ = keychain.SavePrivateKey(store, own.PrivateKey)
 	_ = keychain.SavePublicKey(store, own.PublicKey)
@@ -345,7 +345,7 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 // far past the 8 KiB every other route keeps.
 func TestAppGroupDEKRoutesTakeTheirOwnSizeCap(t *testing.T) {
 	server := newTestServer(t)
-	store := server.app.Store.(*keychain.MemorySecretStore)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
 	own := routeKeypair(t)
 	_ = keychain.SavePrivateKey(store, own.PrivateKey)
 	_ = keychain.SavePublicKey(store, own.PublicKey)

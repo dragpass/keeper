@@ -4,7 +4,7 @@
 // **What this catches:**
 //   - Regressions in nil-Deps.Store/Clock/Rand → production-default
 //     fallback.
-//   - MemorySecretStore failing to return ErrSecretNotFound.
+//   - testdouble.MemorySecretStore failing to return ErrSecretNotFound.
 //   - KeyringSecretStore failing to translate keyring.ErrNotFound into
 //     ErrSecretNotFound.
 //   - App.HandleRequest regressing past the Logger boundary.
@@ -23,6 +23,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/dragpass/keeper/internal/keystore/sessions"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 func TestNewApp_FillsProductionDefaults(t *testing.T) {
@@ -62,11 +63,11 @@ func TestNewApp_FillsProductionDefaults(t *testing.T) {
 }
 
 func TestNewApp_RespectsInjection(t *testing.T) {
-	store := NewMemorySecretStore()
+	store := testdouble.NewMemorySecretStore()
 	frozen := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return frozen }
-	logger := NewMemoryLogger()
-	verifier := AlwaysOKVerifier{}
+	logger := testdouble.NewMemoryLogger()
+	verifier := testdouble.AlwaysOKVerifier{}
 	app := NewApp(Deps{
 		Store:             store,
 		Clock:             clock,
@@ -149,7 +150,7 @@ func TestApp_SessionStores_AreIsolated(t *testing.T) {
 }
 
 func TestMemorySecretStore_RoundTrip(t *testing.T) {
-	s := NewMemorySecretStore()
+	s := testdouble.NewMemorySecretStore()
 
 	if err := s.Set("svc", "user", "secret"); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -180,7 +181,7 @@ func TestMemorySecretStore_RoundTrip(t *testing.T) {
 }
 
 func TestMemorySecretStore_GetMissing(t *testing.T) {
-	s := NewMemorySecretStore()
+	s := testdouble.NewMemorySecretStore()
 	_, err := s.Get("svc", "missing")
 	if !errors.Is(err, ErrSecretNotFound) {
 		t.Fatalf("expected ErrSecretNotFound, got %v", err)
@@ -188,7 +189,7 @@ func TestMemorySecretStore_GetMissing(t *testing.T) {
 }
 
 func TestMemorySecretStore_DeleteMissing(t *testing.T) {
-	s := NewMemorySecretStore()
+	s := testdouble.NewMemorySecretStore()
 	err := s.Delete("svc", "missing")
 	if !errors.Is(err, ErrSecretNotFound) {
 		t.Fatalf("expected ErrSecretNotFound on Delete missing, got %v", err)
@@ -197,7 +198,7 @@ func TestMemorySecretStore_DeleteMissing(t *testing.T) {
 
 func TestMemorySecretStore_KeyIsolation(t *testing.T) {
 	// Same account name but different service must remain isolated.
-	s := NewMemorySecretStore()
+	s := testdouble.NewMemorySecretStore()
 	_ = s.Set("svc1", "user", "v1")
 	_ = s.Set("svc2", "user", "v2")
 	got1, _ := s.Get("svc1", "user")
@@ -271,9 +272,9 @@ func TestApp_ClockInjection_SessionStore(t *testing.T) {
 // TestApp_HandleRequest_LogsViaLogger: on a normal ping request both
 // "received action" and "ping request processing" lines must be captured
 // by the logger. If we regress to calling stdlib log.Printf directly,
-// MemoryLogger would not receive the messages.
+// testdouble.MemoryLogger would not receive the messages.
 func TestApp_HandleRequest_LogsViaLogger(t *testing.T) {
-	logger := NewMemoryLogger()
+	logger := testdouble.NewMemoryLogger()
 	app := NewApp(Deps{Logger: logger})
 
 	// Minimal ping request envelope.
@@ -295,7 +296,7 @@ func TestApp_HandleRequest_LogsViaLogger(t *testing.T) {
 // TestApp_HandleRequest_UnknownActionReturnsUnsupported: unknown actions
 // must return the unsupported code + log via a.Logger.
 func TestApp_HandleRequest_UnknownActionReturnsUnsupported(t *testing.T) {
-	logger := NewMemoryLogger()
+	logger := testdouble.NewMemoryLogger()
 	app := NewApp(Deps{Logger: logger})
 
 	resp := app.HandleRequest([]byte(`{"action":"bogus_action_xyz","request_id":"r2"}`))
@@ -314,7 +315,7 @@ func TestApp_HandleRequest_UnknownActionReturnsUnsupported(t *testing.T) {
 // fall into the unmarshal-failure branch — logs via a.Logger and returns
 // a response envelope.
 func TestApp_HandleRequest_InvalidJSONLoggedNotPanic(t *testing.T) {
-	logger := NewMemoryLogger()
+	logger := testdouble.NewMemoryLogger()
 	app := NewApp(Deps{Logger: logger})
 
 	resp := app.HandleRequest([]byte(`{not valid json`))
@@ -333,7 +334,7 @@ func TestApp_HandleRequest_InvalidJSONLoggedNotPanic(t *testing.T) {
 // App instance's logger explicitly
 // wrapper.
 func TestApp_NewMessenger_UsesAppLogger(t *testing.T) {
-	app := NewApp(Deps{Logger: NewMemoryLogger()})
+	app := NewApp(Deps{Logger: testdouble.NewMemoryLogger()})
 	msgr := app.NewMessenger(nil, nil)
 	if msgr == nil {
 		t.Fatal("NewMessenger returned nil")

@@ -33,16 +33,13 @@ const (
 	//                     The Extension never sees the raw bytes.
 	// GroupSessionClose:  destroys and removes the handle. Idempotent
 	//                     (missing handles are OK).
-	// GroupSessionStatus: whether the handle exists + remaining TTL in ms.
-	//                     Debugging / observability.
 	//
 	// Subsequent aes_* actions (4 of them) take group_handle instead of
 	// group_dek_b64 and run AES-GCM against the same key material. The raw
 	// Group DEK Base64 does not live in the Extension JS heap.
 	//
-	ActionGroupSessionOpen   = "group_session_open"
-	ActionGroupSessionClose  = "group_session_close"
-	ActionGroupSessionStatus = "group_session_status"
+	ActionGroupSessionOpen  = "group_session_open"
+	ActionGroupSessionClose = "group_session_close"
 
 	// Closes surfaces where admin actions (adminCreateOrg / adminCreateGroup
 	// / adminInviteMember / adminRotateDek) had the raw 32B Group DEK

@@ -19,12 +19,12 @@
 //   - input: 32B AES-256 key + plaintext bytes
 //   - output: Base64( IV(12B) || ciphertext_with_tag )
 //   - error: key length != 32 → "key must be 32 bytes (AES-256)"
-//   - usage: Recovery Wrap (PEM ↔ wrap_key), Item DEK envelope, etc.
+//   - usage: Recovery Wrap (PEM ↔ wrap_key), etc.
 //   - `AESGCMDecryptBase64(key, b64) ([]byte, error)`
 //   - input: 32B AES-256 key + Base64 envelope (same format as above)
 //   - output: plaintext bytes
 //   - error: key length / Base64 / IV length / GCM auth tag verification failure
-//   - usage: Recovery Unwrap, Item DEK decrypt, etc.
+//   - usage: Recovery Unwrap, etc.
 //
 // **RSA** (`keypair.go`)
 //
@@ -69,8 +69,8 @@
 //	↓
 //	├── input validation (validation.go: requireBase64Len, etc.)
 //	├── crypto primitive (aes.go / keypair.go / server_sig.go / root_pubkey.go)
-//	├── storage (storage.go / server_keys.go → SecretStore via app.Store)
-//	└── response envelope (errors.go: errorResponse / errorCodeResponse)
+//	├── storage (keychain/ → SecretStore via Deps.Store)
+//	└── response envelope (errs/errs.go: errs.Response / errs.CodeResponse)
 //
 // Each layer is small and independent. The crypto primitive is stateless
 // (no Keychain access — keys are taken as arguments). Key lookup is separated
@@ -97,9 +97,9 @@
 // Places where unit tests must use mocks:
 //
 //   - When handler unit tests want to stub only the verify step
-//     (`AlwaysOKVerifier` / `AlwaysFailVerifier` from server_key_verifier.go)
+//     (`AlwaysOKVerifier` / `AlwaysFailVerifier` from internal/keystore/testdouble)
 //   - Regression guards for secret-exposure surfaces (`MemoryLogger`,
-//     `MemorySecretStore`)
+//     `MemorySecretStore`, also from testdouble)
 //
 // These two cases verify "the orchestration that calls the primitive works
 // via dependency injection," not "the primitive itself."
@@ -129,7 +129,7 @@
 //   - Bundling everything into a giant "CryptoService" object. The P2 plan
 //     explicitly recommends "keeping small files/functions per feature."
 //   - Generic key wrap framework. Current wrap patterns are only (a)
-//     RSA-OAEP-SHA256 for Group DEK / Item DEK / Recovery PEM envelopes
+//     RSA-OAEP-SHA256 for Group DEK / Recovery PEM envelopes
 //     (b) AES-GCM for the Recovery wrap_key envelope — further generalization
 //     is over-engineering.
 package crypto

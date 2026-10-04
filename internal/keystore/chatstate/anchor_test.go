@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/config"
-	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 // legacyAnchorJSON is a real anchor as 0.0.35–0.0.40 wrote one: one watermark
@@ -19,7 +19,7 @@ const legacyAnchorJSON = `{"generation":9,"reserved_before":12,"epoch":3,` +
 	`"watermark_epoch":3,"watermark_next_index":7,"needs_rekey":false}`
 
 func TestALegacyAnchorFoldsItsWatermarkIntoTheApplicationAxis(t *testing.T) {
-	secrets := keychain.NewMemorySecretStore()
+	secrets := testdouble.NewMemorySecretStore()
 	const tag = "conversation-tag"
 	if err := secrets.Set(config.Service, anchorAccount(tag), legacyAnchorJSON); err != nil {
 		t.Fatal(err)

@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -22,23 +21,6 @@ const (
 	derivedKeyLength = 32
 	pbkdf2Iterations = 600_000
 )
-
-func Generate(random io.Reader) ([]byte, error) {
-	raw := make([]byte, Length)
-	if _, err := io.ReadFull(random, raw); err != nil {
-		return nil, err
-	}
-	defer zeroize(raw)
-
-	formatted := make([]byte, 0, Length+5)
-	for i, value := range raw {
-		if i > 0 && i%4 == 0 {
-			formatted = append(formatted, '-')
-		}
-		formatted = append(formatted, Charset[int(value)%len(Charset)])
-	}
-	return formatted, nil
-}
 
 func Normalize(input []byte) ([]byte, error) {
 	normalized := make([]byte, 0, Length)
