@@ -156,17 +156,17 @@ func TestAnApplicationMessageIsNotCollected(t *testing.T) {
 	}
 }
 
-func TestNewDeviceSession_RefusesAKeyWithNoStoredDeclaration(t *testing.T) {
+func TestNewDeviceSession_RefusesARetiredDevelopmentRecord(t *testing.T) {
 	store := testdouble.NewMemorySecretStore()
-	// What 0.0.43 wrote: a v1 record with no declaration.
+	// A v1 record from an unreleased development build: no declaration.
 	raw := `{"v":1,"account_id":"a","device_id":"d","secret_key":"` +
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7aie8zrakLWKjqNAqbw1zZTIVdx3iQ6Y6wEihi1naKQ==" +
 		`","public_key":"O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik="}`
 	if err := store.Set(config.Service, config.MLSLeafSignatureKey, raw); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := NewDeviceSession(store); !errors.Is(err, ErrNoLeafDeclaration) {
-		t.Fatalf("NewDeviceSession = %v; want ErrNoLeafDeclaration", err)
+	if _, _, err := NewDeviceSession(store); !errors.Is(err, ErrLeafKeyUnreadable) {
+		t.Fatalf("NewDeviceSession = %v; want ErrLeafKeyUnreadable", err)
 	}
 }
 

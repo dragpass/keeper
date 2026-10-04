@@ -117,7 +117,6 @@ var mlsChatActionNames = []string{
 	proto.MLSConversationStatus,
 	proto.MLSEpochComparison,
 	proto.MLSRejoinRequestSign,
-	proto.MLSCommitAbandon,
 	proto.MLSLeaveRequestSign,
 	proto.OrgMemberRemovalSign,
 	proto.MLSDeviceRevokeSign,

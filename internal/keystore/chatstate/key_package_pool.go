@@ -94,13 +94,10 @@ type KeyPackagePoolEntry struct {
 	NotAfter uint64 `json:"not_after"`
 
 	// Leaf is the lowercase hex signature key fingerprint of the leaf the
-	// KeyPackage was minted under. An entry written before 0.0.50 has none,
-	// and nothing can tell which leaf it belongs to: it is treated as
-	// belonging to no leaf, so the next promote drops it
-	// (DropKeyPackagesExcept). Keeping it instead could hand a join a
-	// KeyPackage of a leaf that is no longer active. omitempty is what keeps
-	// that old shape readable; this version never writes an empty one.
-	Leaf string `json:"leaf,omitempty"`
+	// KeyPackage was minted under. A promote drops every entry of another leaf
+	// (DropKeyPackagesExcept). A pool holding an entry without one, which only
+	// unreleased development builds wrote, is malformed.
+	Leaf string `json:"leaf"`
 
 	// Claim is the conversation a join is consuming this entry for, set just
 	// before the join writes its group state. Empty until then.
@@ -126,7 +123,7 @@ func (p *keyPackagePool) wipe() {
 // through. Expired entries are dropped on the same write.
 func (s *Store) AddKeyPackages(entries []KeyPackagePoolEntry, now time.Time) error {
 	for _, e := range entries {
-		if len(e.Ref) == 0 || len(e.Ref) > keyPackageRefMaxBytes || e.Leaf == "" || !validLeafFingerprint(e.Leaf) ||
+		if len(e.Ref) == 0 || len(e.Ref) > keyPackageRefMaxBytes || !validLeafFingerprint(e.Leaf) ||
 			len(e.Private) == 0 || len(e.Private) > MaxKeyPackageEntryBytes || e.NotAfter == 0 {
 			return errors.New("key package pool entry is unusable")
 		}
@@ -208,13 +205,13 @@ func (s *Store) DeleteKeyPackage(ref []byte, now time.Time) error {
 //
 // It keeps entries of leaf itself rather than deleting only the previous
 // leaf's: that is the same set on an ordinary promote, and it also drops
-// entries of no leaf and of any older one.
+// entries of any older one.
 //
 // An owner with no seal key has no pool that could be opened, and none is
 // created for it: a promote on a device that has never used chat does not
 // mint a seal key as a side effect.
 func DropKeyPackagesExcept(secrets keychain.SecretStore, ownerAccountID, leaf string, now time.Time) (int, error) {
-	if leaf == "" || !validLeafFingerprint(leaf) {
+	if !validLeafFingerprint(leaf) {
 		return 0, errors.New("key package pool leaf is not a fingerprint")
 	}
 	master, err := loadSealKey(secrets, ownerAccountID)
@@ -252,62 +249,6 @@ func DropKeyPackagesExcept(secrets keychain.SecretStore, ownerAccountID, leaf st
 	return dropped, nil
 }
 
-// DropKeyPackagesUnless deletes every entry keep refuses, or cannot judge, and
-// reports how many it dropped and how many entries remain. It is how a pool of
-// KeyPackages built by an older Keeper is replaced after an upgrade (Q11,
-// mls.SweepKeyPackagePool): keep reads the entry's own KeyPackage.
-//
-// An entry a join has claimed stays whatever keep says: that join already
-// holds the keys it needs, and a claim it never finished is resolved by the
-// sweep every pool open runs (sweepJoined), not here. Expired entries are
-// pruned as on every write but are not counted as dropped, since the server
-// no longer serves them either.
-//
-// It runs under the pool lock like every other change, so two processes that
-// sweep at once drop each entry once between them, and a sweep that finds
-// nothing to drop writes nothing: running it again is a no-op. An owner with
-// no seal key has no pool, and none is created (as DropKeyPackagesExcept).
-func DropKeyPackagesUnless(
-	secrets keychain.SecretStore, ownerAccountID string, now time.Time, keep func(private []byte) (bool, error),
-) (dropped, remaining int, err error) {
-	master, err := loadSealKey(secrets, ownerAccountID)
-	if errors.Is(err, keychain.ErrSecretNotFound) {
-		return 0, 0, nil
-	}
-	if err != nil {
-		return 0, 0, err
-	}
-	secure.Zeroize(master)
-	s, err := Open(secrets, ownerAccountID)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer s.Close()
-	err = s.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
-		before := len(pool.Entries)
-		pool.prune(now)
-		pruned := before - len(pool.Entries)
-		kept := pool.Entries[:0]
-		for _, e := range pool.Entries {
-			if e.Claim == "" {
-				if ok, err := keep(e.Private); err != nil || !ok {
-					secure.Zeroize(e.Private)
-					dropped++
-					continue
-				}
-			}
-			kept = append(kept, e)
-		}
-		pool.Entries = kept
-		remaining = len(kept)
-		return dropped > 0 || pruned > 0, nil
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return dropped, remaining, nil
-}
-
 // KeyPackagePoolSize reports how many unexpired entries the pool holds. It is
 // for tests and diagnostics; the count is not secret, the entries are.
 func (s *Store) KeyPackagePoolSize(now time.Time) (int, error) {
@@ -323,15 +264,10 @@ func (s *Store) KeyPackagePoolSize(now time.Time) (int, error) {
 	return n, err
 }
 
-// validLeafFingerprint accepts "" (no leaf recorded) or exactly 64 lowercase
-// hex digits, the only spelling crypto.MLSLeafSignatureKeyFingerprint makes,
-// so one leaf never has two spellings that compare unequal. An explicit
-// "leaf":"" reads the same as an absent one, which is the direction that
-// drops the entry.
+// validLeafFingerprint accepts exactly 64 lowercase hex digits, the only
+// spelling crypto.MLSLeafSignatureKeyFingerprint makes, so one leaf never has
+// two spellings that compare unequal.
 func validLeafFingerprint(leaf string) bool {
-	if leaf == "" {
-		return true
-	}
 	if len(leaf) != 64 {
 		return false
 	}

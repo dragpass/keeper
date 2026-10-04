@@ -6,31 +6,25 @@
 package chatstate
 
 import (
-	"bytes"
 	"errors"
 	"testing"
 )
 
-// seedSendPositionAtLeaf puts one outbox entry in the record under a position
-// that names its ratchet and its leaf, which is what the MLS send path writes
-// and what teaches the record whose leaf it is on.
-func seedSendPositionAtLeaf(t *testing.T, store *Store, leaf uint32) {
+// seedOwnLeaf records the leaf this device holds, which is what creating or
+// joining a group writes and what ownsChain judges a watermark's leaf against.
+func seedOwnLeaf(t *testing.T, store *Store, leaf uint32) {
 	t.Helper()
-	reservation, err := store.Reserve(testConvA, 1, noWatermark)
+	err := store.withConversation(testConvA, func(p convPaths) error {
+		rec, anchor, err := store.loadLocal(p, testConvA)
+		if err != nil {
+			return err
+		}
+		loaded := rec.Generation
+		rec.OwnLeaf = &OwnLeaf{Index: leaf}
+		return store.commit(p, rec, loaded, anchor)
+	})
 	if err != nil {
-		t.Fatalf("seed reserve: %v", err)
-	}
-	if _, _, err := store.CommitOutbox(testConvA, noWatermark, OutboxEntry{
-		ClientMessageID: testClientA,
-		Position: Position{
-			SenderLeafIndex: leaf,
-			ContentType:     ContentTypeApplication,
-			Generation:      reservation.FirstChainIndex,
-		},
-		IV:         bytes.Repeat([]byte{7}, ivBytes),
-		Ciphertext: bytes.Repeat([]byte{9}, 32),
-	}); err != nil {
-		t.Fatalf("seed outbox: %v", err)
+		t.Fatalf("seed own leaf: %v", err)
 	}
 }
 
@@ -49,7 +43,7 @@ func leafWatermark(leaf uint32, nextApplication uint64) ServerWatermark {
 // account.
 func TestAWatermarkNamingAnotherLeafIsIgnored(t *testing.T) {
 	store, _ := newTestStore(t)
-	seedSendPositionAtLeaf(t, store, 3)
+	seedOwnLeaf(t, store, 3)
 
 	if _, err := store.Reserve(testConvA, 1, leafWatermark(9, 5)); err != nil {
 		t.Fatalf("a watermark on another leaf was judged against this one: %v", err)
@@ -67,14 +61,14 @@ func TestAWatermarkNamingAnotherLeafIsIgnored(t *testing.T) {
 // where this device's leaf is non-zero and the watermark is all zeros.
 func TestAnEmptyWatermarkIgnoresItsLeafSlot(t *testing.T) {
 	store, _ := newTestStore(t)
-	seedSendPositionAtLeaf(t, store, 3)
+	seedOwnLeaf(t, store, 3)
 
 	if _, err := store.Reserve(testConvA, 1, leafWatermark(9, 0)); err != nil {
 		t.Fatalf("a watermark that has accepted nothing was judged on its leaf: %v", err)
 	}
 }
 
-// A conversation that has never sent has no leaf of its own to compare, which
+// A conversation that holds no group has no leaf of its own to compare, which
 // is the same answer as a conversation with no group state: the slot is not
 // invented and the call is not refused on it.
 func TestAWatermarkLeafIsIgnoredBeforeThisDeviceHasALeaf(t *testing.T) {

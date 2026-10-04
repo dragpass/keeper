@@ -75,14 +75,12 @@ var chatRuntimeGated = map[string]struct{}{
 	proto.MLSEncrypt:                   {},
 	proto.MLSMarkSent:                  {},
 	proto.MLSDecryptBatchForAppDisplay: {},
-	proto.MLSCommitAbandon:             {},
 	proto.ChatStateReadOutbox:          {},
 	proto.ChatStatePurge:               {},
 	proto.ActionMLSLeafDeclare:         {},
 	proto.ActionMLSLeafPromote:         {},
 	proto.ActionMLSLeafAbort:           {},
 	proto.MLSKeyPackageGenerate:        {},
-	proto.MLSKeyPackagePoolSweep:       {},
 	proto.ActionResetDeviceIdentity:    {},
 }
 

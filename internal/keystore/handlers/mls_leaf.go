@@ -25,8 +25,7 @@ import (
 // HandleMLSLeafDeclare mints a leaf key for this device and signs a
 // declaration for it, into the pending slot.
 //
-// enroll needs no usable active key (a record an older Keeper wrote does not
-// count). rotate is accepted with or without one: with none it is a takeover
+// enroll needs no active key. rotate is accepted with or without one: with none it is a takeover
 // (design M4.4), a new machine, a reinstall or a device after
 // reset_device_identity replacing whichever device holds the account's live
 // declaration. Either way the new key and its declaration are written to the
@@ -121,7 +120,7 @@ func declareLocked(d Deps, req proto.MLSLeafDeclareRequest) (proto.BaseResponse,
 	if req.NotAfter <= d.Now().Unix() {
 		return errs.CodeResponse(errs.ErrCodeValidation, "not_after has already passed"), false
 	}
-	if req.Reason == proto.MLSLeafReasonEnroll && active != nil && active.Usable() {
+	if req.Reason == proto.MLSLeafReasonEnroll && active != nil {
 		return errs.CodeResponse(errs.ErrCodeValidation, "an mls leaf key is already active; rotate to replace it"), false
 	}
 
@@ -282,7 +281,7 @@ func promoteLocked(d Deps, accepted proto.MLSLeafAccepted) proto.BaseResponse {
 			}}
 		}
 	}
-	if active != nil && active.Usable() {
+	if active != nil {
 		decl, err := storedMLSLeafDeclaration(*active)
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "active mls leaf declaration is unreadable")
@@ -357,7 +356,7 @@ func HandleMLSLeafStatus(d Deps, req proto.MLSLeafStatusRequest) proto.BaseRespo
 		}
 		defer wipeMLSLeafSlots(active, pending)
 		var data proto.MLSLeafStatusResponseData
-		if active != nil && active.Usable() {
+		if active != nil {
 			decl, err := storedMLSLeafDeclaration(*active)
 			if err != nil {
 				resp = errs.CodeResponse(errs.ErrCodeStorageFailure, "active mls leaf declaration is unreadable")
@@ -408,7 +407,7 @@ func loadMLSLeafSlots(d Deps) (active, pending *keychain.MLSLeafKey, resp proto.
 	if foundPending {
 		pending = &p
 	}
-	if active != nil && pending != nil && active.Usable() && bytes.Equal(active.PublicKey, pending.PublicKey) {
+	if active != nil && pending != nil && bytes.Equal(active.PublicKey, pending.PublicKey) {
 		if _, err := keychain.DeleteMLSLeafPending(d.Store); err != nil {
 			secure.Zeroize(a.SecretKey)
 			secure.Zeroize(p.SecretKey)

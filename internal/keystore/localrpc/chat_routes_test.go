@@ -123,7 +123,6 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
 	"/v1/chat/chat_state_read_outbox",
-	"/v1/chat/mls_commit_abandon",
 	"/v1/chat/mls_commit_build",
 	"/v1/chat/mls_commit_confirm",
 	"/v1/chat/mls_conversation_forget_removed",
@@ -136,7 +135,6 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_group_discard_unaccepted",
 	"/v1/chat/mls_join",
 	"/v1/chat/mls_key_package_generate",
-	"/v1/chat/mls_key_package_pool_sweep",
 	"/v1/chat/mls_leaf_abort",
 	"/v1/chat/mls_leaf_declare",
 	"/v1/chat/mls_leaf_handover_sign",
@@ -335,7 +333,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 28 {
+	if len(paths) != 26 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}

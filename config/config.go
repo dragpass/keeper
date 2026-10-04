@@ -105,7 +105,7 @@ const (
 	PeerKeyPinIndexPrefix = "peer-pin-index:"
 
 	// The newest MLS leaf declaration this owner has accepted for each peer
-	// account (chat v2 L2), next to the pins and just as durable. One entry
+	// account (design L2), next to the pins and just as durable. One entry
 	// per (owner, account): `mls-leaf-newest:<owner>:<account>`, assembled in
 	// keychain/mls_leaf_newest.go. It is what refuses a superseded
 	// declaration, whose account-key signature still verifies. Not key
@@ -142,7 +142,7 @@ const (
 	// lets a device change owners.
 	PeerKeyOwnerAccount = "peer-key-owner"
 
-	// Chat v2 conversation state (ADR S4).
+	// Chat conversation state (ADR S4).
 	//
 	// The keyring holds the two small things and none of the bulk. The seal
 	// key is the 32-byte AES key every chat-state file of one owner is sealed

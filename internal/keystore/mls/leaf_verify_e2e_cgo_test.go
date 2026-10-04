@@ -1253,15 +1253,3 @@ func TestAPoolEntryOfAnotherLeafIsRefusedAndKept(t *testing.T) {
 		t.Fatalf("pool holds %d after the refusal, want the entry kept", n)
 	}
 }
-
-// An entry with no leaf recorded, as a Keeper before 0.0.50 wrote it, is still
-// joined: the active leaf has not changed since it was minted.
-func TestAnUnlabelledPoolEntryIsStillJoined(t *testing.T) {
-	_, bob, bobStore, _, welcome, entry := invitedFromThePool(t)
-	entry.Leaf = ""
-	s := bob.session(t)
-	if err := s.JoinFromEntryForTest(bobStore, conv, noWatermark, welcome, entry, bob.verifier(), time.Now()); err != nil {
-		t.Fatalf("join from an unlabelled entry: %v", err)
-	}
-	assertJoinedAtEpochOne(t, s, bobStore)
-}

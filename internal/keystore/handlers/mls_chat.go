@@ -1,4 +1,4 @@
-// mls_chat.go — the MLS chat v2 actions at the protocol edge.
+// mls_chat.go — the MLS chat actions at the protocol edge.
 //
 // Every action here runs, in order:
 //
@@ -89,7 +89,7 @@ func mlsSessionFailure(d Deps, err error) proto.BaseResponse {
 	d.Logger.Println("mls chat: the device session could not be opened")
 	message := "mls device session could not be opened"
 	switch {
-	case errors.Is(err, mls.ErrNoLeafKey), errors.Is(err, mls.ErrNoLeafDeclaration):
+	case errors.Is(err, mls.ErrNoLeafKey):
 		message = "no active mls leaf key; mls_leaf_declare enroll and promote first"
 	case errors.Is(err, mls.ErrLeafKeyUnreadable):
 		message = "mls leaf key record is unreadable"
@@ -483,24 +483,6 @@ func HandleMLSCommitConfirm(d Deps, payload json.RawMessage) proto.BaseResponse 
 		data.WinnerRemovedAccountIDs = distinctAccounts(w.Removed)
 	}
 	return proto.BaseResponse{Success: true, Data: data}
-}
-
-// HandleMLSCommitAbandon drops a legacy pending Commit on the user's
-// confirmation (chatstate.AbandonLegacyPending).
-func HandleMLSCommitAbandon(d Deps, payload json.RawMessage) proto.BaseResponse {
-	var req proto.MLSCommitAbandonRequest
-	c, resp, ok := openMLSChat(d, payload, &req, proto.ChatStateMaxRequestBytes)
-	if !ok {
-		return resp
-	}
-	defer c.close()
-
-	generation, err := c.store.AbandonLegacyPending(c.conv, c.wm, req.ClientCommitID, mls.NewCipher(c.session, nil))
-	if err != nil {
-		return chatStateFailure(d, "mls commit abandon", err)
-	}
-	d.Logger.Println("mls commit abandon successful")
-	return proto.BaseResponse{Success: true, Data: proto.MLSCommitAbandonResponseData{Generation: generation}}
 }
 
 // HandleMLSProcess applies one handshake row: somebody else's Commit.

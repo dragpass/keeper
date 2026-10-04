@@ -455,8 +455,6 @@ func assertOldRuntimeFenced(t *testing.T, d *rvDeviceDir, client *testAppClient,
 		{"commit confirm", "/v1/chat/" + proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 			ClientCommitID: commitID, Outcome: proto.MLSCommitOutcomeAccepted}},
-		{"commit abandon", "/v1/chat/" + proto.MLSCommitAbandon, proto.MLSCommitAbandonRequest{
-			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, ClientCommitID: commitID}},
 		{"process", "/v1/chat/" + proto.MLSProcess, proto.MLSProcessRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, Seq: 3, Epoch: 1, CommitB64: "AAAA"}},
 		{"group create", "/v1/chat/" + proto.MLSGroupCreate, proto.MLSGroupCreateRequest{

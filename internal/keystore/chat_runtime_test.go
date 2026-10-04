@@ -242,10 +242,10 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 func TestChatRuntimeGatedActionListIsPinned(t *testing.T) {
 	want := []string{
 		"chat_state_purge", "chat_state_read_outbox",
-		"mls_commit_abandon", "mls_commit_build", "mls_commit_confirm",
+		"mls_commit_build", "mls_commit_confirm",
 		"mls_conversation_forget_removed", "mls_decrypt_batch_for_app_display", "mls_encrypt",
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",
-		"mls_key_package_generate", "mls_key_package_pool_sweep",
+		"mls_key_package_generate",
 		"mls_leaf_abort", "mls_leaf_declare", "mls_leaf_promote",
 		"mls_mark_sent", "mls_process", "reset_device_identity",
 	}

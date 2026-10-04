@@ -10,9 +10,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
-// AnchorVersion pins the anchor's field layout. Version 0 is an anchor written
-// before the watermark was split per axis, and loadAnchor folds it rather than
-// letting the renamed field read as zero.
+// AnchorVersion pins the anchor's field layout. Any other version, including
+// the unversioned layout of unreleased development builds, is unreadable.
 const AnchorVersion = 1
 
 // Anchor is what the state file is judged against. It is small enough for every
@@ -24,9 +23,7 @@ const AnchorVersion = 1
 // is what ServerWatermark is for, and the two together still leave the "backup
 // restore plus a cooperating server" gap the ADR records rather than hides.
 type Anchor struct {
-	// Version is the layout of the fields below. Absent in everything written
-	// before the watermark gained its axes, which is what makes zero mean
-	// "legacy" rather than "unset"; see loadAnchor.
+	// Version is the layout of the fields below; see loadAnchor.
 	Version int `json:"version"`
 
 	// Generation is the highest generation this device ever committed. A file
@@ -181,13 +178,6 @@ func anchorAccount(conversationTag string) string {
 	return config.ChatStateAnchorPrefix + conversationTag
 }
 
-// legacyAnchor reads the one field version 0 spelled differently. Decoded
-// separately rather than kept on Anchor so the current layout carries no field
-// that must be remembered to stay empty.
-type legacyAnchor struct {
-	WatermarkNextIndex uint64 `json:"watermark_next_index"`
-}
-
 func loadAnchor(secrets keychain.SecretStore, conversationTag string) (Anchor, error) {
 	value, err := secrets.Get(config.Service, anchorAccount(conversationTag))
 	if err != nil {
@@ -197,24 +187,11 @@ func loadAnchor(secrets keychain.SecretStore, conversationTag string) (Anchor, e
 		return Anchor{}, err
 	}
 	var a Anchor
-	if err := json.Unmarshal([]byte(value), &a); err != nil {
+	if err := json.Unmarshal([]byte(value), &a); err != nil || a.Version != AnchorVersion {
 		// An unreadable anchor is treated as a rewind rather than as an empty
 		// one: "cannot tell how far this chain got" must never resolve to
 		// "start again from zero".
 		return Anchor{Version: AnchorVersion, NeedsRekey: true, RekeyCause: RekeyCauseAnchorUnreadable}, nil
-	}
-	if a.Version == 0 {
-		// The single axis a version-0 anchor held is the application one. Not
-		// a guess: encrypt_control_messages is pinned false, so a sender has
-		// never advanced its handshake ratchet (see rewound). Folding it into
-		// the other axis, or dropping it because the field was renamed, would
-		// both lose the only position this anchor ever knew about.
-		var legacy legacyAnchor
-		if err := json.Unmarshal([]byte(value), &legacy); err != nil {
-			return Anchor{Version: AnchorVersion, NeedsRekey: true, RekeyCause: RekeyCauseAnchorUnreadable}, nil
-		}
-		a.WatermarkNextApplication = legacy.WatermarkNextIndex
-		a.Version = AnchorVersion
 	}
 	return a, nil
 }

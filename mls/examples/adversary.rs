@@ -22,7 +22,6 @@
 //
 //     identity <identity> <secret> <public> <declaration> <lifetime_secs> <roles 0|1>
 //     key-package                  -> ok <key package message>
-//     key-package-entry            -> ok <Keeper pool entry> <reference> <not_after>
 //     create <group_id> <roles>    -> ok       (a group of its own, roles "-" for none)
 //     join <welcome>               -> ok <epoch>
 //     process <message>            -> ok <epoch>
@@ -61,10 +60,8 @@ use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 const LEAF_DECLARATION_EXTENSION: u16 = 0xF0D0;
 const ROLES_EXTENSION: u16 = 0xF0D1;
 const CIPHER_SUITE: CipherSuite = CipherSuite::CURVE25519_AES128;
-const KEY_PACKAGE_MAGIC: &[u8; 8] = b"DPMLSKP1";
 
-/// The key package store: the one this client joins from, and where
-/// `key-package-entry` reads the entry it frames for a Keeper pool.
+/// The key package store: the one this client joins from.
 #[derive(Clone, Default)]
 struct Repo(Arc<Mutex<BTreeMap<Vec<u8>, KeyPackageData>>>);
 
@@ -97,7 +94,6 @@ type Cfg = WithKeyPackageRepo<
 
 struct Adversary {
     client: Client<Cfg>,
-    repo: Repo,
     leaf_extensions: ExtensionList,
     group: Option<Group<Cfg>>,
 }
@@ -137,13 +133,6 @@ fn e(context: &str, err: impl std::fmt::Display) -> String {
     format!("{context}: {err}")
 }
 
-fn put_bytes(out: &mut Vec<u8>, b: &[u8]) -> Res<()> {
-    let len = u32::try_from(b.len()).map_err(|_| "entry field too long".to_string())?;
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(b);
-    Ok(())
-}
-
 impl Adversary {
     fn new(args: &[&str]) -> Res<Self> {
         let [identity, secret, public, declaration, lifetime, roles] = args else {
@@ -152,11 +141,10 @@ impl Adversary {
         let lifetime: u64 = lifetime.parse().map_err(|_| "bad lifetime".to_string())?;
         let credential = BasicCredential::new(unhex(identity)?);
         let signing = SigningIdentity::new(credential.into_credential(), unhex(public)?.into());
-        let repo = Repo::default();
         let mut builder = Client::builder()
             .crypto_provider(RustCryptoProvider::default())
             .identity_provider(BasicIdentityProvider::new())
-            .key_package_repo(repo.clone())
+            .key_package_repo(Repo::default())
             .extension_type(ExtensionType::new(LEAF_DECLARATION_EXTENSION));
         if *roles == "1" {
             builder = builder.extension_type(ExtensionType::new(ROLES_EXTENSION));
@@ -172,7 +160,6 @@ impl Adversary {
         ));
         Ok(Self {
             client,
-            repo,
             leaf_extensions,
             group: None,
         })
@@ -188,37 +175,6 @@ impl Adversary {
             .map_err(|err| e("key package", err))?
             .to_bytes()
             .map_err(|err| e("key package encode", err))
-    }
-
-    /// One key package, framed as a Keeper pool entry the way storage.rs
-    /// frames one: magic, then length-prefixed reference, key package, init
-    /// key and leaf key, then the expiration.
-    fn key_package_entry(&self) -> Res<String> {
-        if let Ok(mut inner) = self.repo.0.lock() {
-            inner.clear();
-        }
-        self.key_package()?;
-        let inner = self
-            .repo
-            .0
-            .lock()
-            .map_err(|_| "repo poisoned".to_string())?;
-        let (reference, data) = inner
-            .iter()
-            .next()
-            .ok_or_else(|| "no key package entry".to_string())?;
-        let mut out = KEY_PACKAGE_MAGIC.to_vec();
-        put_bytes(&mut out, reference)?;
-        put_bytes(&mut out, &data.key_package_bytes)?;
-        put_bytes(&mut out, &data.init_key)?;
-        put_bytes(&mut out, &data.leaf_node_key)?;
-        out.extend_from_slice(&data.expiration.to_be_bytes());
-        Ok(format!(
-            "{} {} {}",
-            hex(&out),
-            hex(reference),
-            data.expiration
-        ))
     }
 
     /// A group of this client's own, with the required capabilities a Keeper
@@ -372,7 +328,6 @@ fn answer(adversary: &mut Option<Adversary>, line: &str) -> Res<String> {
         .ok_or_else(|| "identity first".to_string())?;
     match (op, args.as_slice()) {
         ("key-package", []) => Ok(hex(&a.key_package()?)),
-        ("key-package-entry", []) => a.key_package_entry(),
         ("create", [group_id, roles]) => a.create(group_id, roles).map(|()| String::new()),
         ("join", [welcome]) => Ok(a.join(welcome)?.to_string()),
         ("process", [message]) => Ok(a.process(message)?.to_string()),

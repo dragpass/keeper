@@ -1,4 +1,4 @@
-// registry_chat_state.go — DragPass chat v2 conversation-state registrations.
+// registry_chat_state.go — DragPass chat conversation-state registrations.
 //
 // Mirrors proto/actions_chat_state.go. Its own fragment because these are
 // their own security domain: outside the MLS actions, the only ones that read

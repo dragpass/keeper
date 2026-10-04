@@ -91,7 +91,6 @@ func chatRoutes() map[string]appRoute {
 		{proto.MLSConversationStatus, func() any { return &proto.MLSConversationStatusRequest{} }, stateCap},
 		{proto.MLSEpochComparison, func() any { return &proto.MLSEpochComparisonRequest{} }, stateCap},
 		{proto.MLSRejoinRequestSign, func() any { return &proto.MLSRejoinRequestSignRequest{} }, stateCap},
-		{proto.MLSCommitAbandon, func() any { return &proto.MLSCommitAbandonRequest{} }, stateCap},
 		{proto.MLSLeaveRequestSign, func() any { return &proto.MLSLeaveRequestSignRequest{} }, stateCap},
 		{proto.ChatStateReadOutbox, func() any { return &proto.ChatStateReadOutboxRequest{} }, stateCap},
 		{proto.ChatStatePurge, func() any { return &proto.ChatStatePurgeRequest{} }, stateCap},
@@ -104,7 +103,6 @@ func chatRoutes() map[string]appRoute {
 		{proto.ActionMLSLeafAbort, func() any { return &proto.MLSLeafAbortRequest{} }, stateCap},
 		{proto.ActionMLSLeafHandoverSign, func() any { return &proto.MLSLeafHandoverSignRequest{} }, stateCap},
 		{proto.MLSKeyPackageGenerate, func() any { return &proto.MLSKeyPackageGenerateRequest{} }, stateCap},
-		{proto.MLSKeyPackagePoolSweep, func() any { return &proto.MLSKeyPackagePoolSweepRequest{} }, stateCap},
 		{proto.OrgMemberRemovalSign, func() any { return &proto.OrgMemberRemovalSignRequest{} }, stateCap},
 		{proto.MLSDeviceRevokeSign, func() any { return &proto.MLSDeviceRevokeSignRequest{} }, stateCap},
 	} {
