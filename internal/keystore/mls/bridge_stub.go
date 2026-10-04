@@ -29,7 +29,7 @@ func (s *Session) setNextRoles(payload []byte) error { return ErrUnavailable }
 
 func (s *Session) setNextCommitAAD(aad []byte) error { return ErrUnavailable }
 
-func (s *Session) groupAuthority() ([]byte, bool, error) { return nil, false, ErrUnavailable }
+func (s *Session) groupAuthority() ([]byte, error) { return nil, ErrUnavailable }
 
 func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
 	return nil, CommitShape{}, ErrUnavailable
@@ -45,7 +45,7 @@ func WireFormOf(message []byte) (WireForm, error) { return WireFormOther, ErrUna
 
 func (s *Session) Close() {}
 
-func (s *Session) CreateGroup(groupID []byte) error { return ErrUnavailable }
+func (s *Session) CreateGroup(groupID, roles []byte) error { return ErrUnavailable }
 
 func (s *Session) keyPackage(notAfterCap uint64) (message, reference, private []byte, err error) {
 	return nil, nil, nil, ErrUnavailable

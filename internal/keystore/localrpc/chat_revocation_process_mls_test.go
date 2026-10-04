@@ -165,6 +165,10 @@ func (d *rvDeviceDir) sign(t *testing.T, token string) string {
 	return base64.StdEncoding.EncodeToString(sig)
 }
 
+// rvOwnerRoles is the room's roles with this device's account as owner.
+var rvOwnerRoles = &proto.MLSRoleSet{Kind: proto.MLSRolesKindRoom,
+	Entries: []proto.MLSRoleEntry{{AccountID: rvAccount, Role: proto.MLSRoleOwner}}}
+
 func (d *rvDeviceDir) permit(t *testing.T) proto.ChatStatePermit {
 	now := time.Now().Unix()
 	p := proto.ChatStatePermit{
@@ -416,7 +420,7 @@ func setUpRoom(t *testing.T, d *rvDeviceDir, client *testAppClient, bob proto.ML
 	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafPromote, d.promotion(t, declared), nil)
 	create := "a1111111-7777-4777-8777-700000000001"
 	rvMust(t, client, "/v1/chat/"+proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
+		Permit: d.permit(t), Roles: rvOwnerRoles, OrgID: rvOrg, ConversationID: rvConv,
 		ClientCommitID: create, Members: []proto.MLSMemberKeyPackage{bob},
 	}, nil)
 	rvMust(t, client, "/v1/chat/"+proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
@@ -458,7 +462,7 @@ func assertOldRuntimeFenced(t *testing.T, d *rvDeviceDir, client *testAppClient,
 		{"process", "/v1/chat/" + proto.MLSProcess, proto.MLSProcessRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, Seq: 3, Epoch: 1, CommitB64: "AAAA"}},
 		{"group create", "/v1/chat/" + proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
+			Permit: d.permit(t), Roles: rvOwnerRoles, OrgID: rvOrg, ConversationID: rvConv,
 			ClientCommitID: "a1111111-7777-4777-8777-700000000009", Members: []proto.MLSMemberKeyPackage{bob}}},
 		{"sign message send", "/v1/request-signature", rvSignature(client, "POST", conversation+"/messages", 101)},
 		{"sign commit post", "/v1/request-signature", rvSignature(client, "POST", conversation+"/mls/commit", 201)},

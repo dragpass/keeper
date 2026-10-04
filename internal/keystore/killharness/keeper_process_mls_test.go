@@ -120,13 +120,6 @@ type device struct {
 	account string
 	dir     string
 	commits int
-
-	// binary, when set, is another Keeper build to run on this device, and
-	// v4Permit says it speaks the chat state permit of canonical version 4
-	// (a Keeper before wave 5), which send rewrites every permit into
-	// (mixed_version_mls_test.go).
-	binary   string
-	v4Permit bool
 	// env is added to the Keeper's environment on every start.
 	env []string
 }
@@ -210,11 +203,7 @@ type keeperProc struct {
 // point, "" for none; skip lets that many earlier passes through it go by.
 func (d *device) start(crashAt string, skip int) *keeperProc {
 	d.t.Helper()
-	bin := binaryPath
-	if d.binary != "" {
-		bin = d.binary
-	}
-	cmd := exec.Command(bin)
+	cmd := exec.Command(binaryPath)
 	mark := filepath.Join(d.dir, fmt.Sprintf("crash-mark-%d", time.Now().UnixNano()))
 	cmd.Env = []string{
 		"KEEPER_E2E_MODE=1",
@@ -260,9 +249,6 @@ type response struct {
 
 func (p *keeperProc) send(action string, payload any) {
 	p.t.Helper()
-	if p.d.v4Permit {
-		payload = p.d.withV4Permit(payload)
-	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		p.t.Fatal(err)
@@ -375,6 +361,13 @@ func (p *keeperProc) killAndAssertKilled() {
 // ────────────────────────────────────────────────────────────────────────
 // The requests, signed the way ariadne would sign them.
 // ────────────────────────────────────────────────────────────────────────
+
+// ownerRoles is a room's roles with account as its owner, as every group
+// create names them.
+func ownerRoles(account string) *proto.MLSRoleSet {
+	return &proto.MLSRoleSet{Kind: proto.MLSRolesKindRoom,
+		Entries: []proto.MLSRoleEntry{{AccountID: account, Role: proto.MLSRoleOwner}}}
+}
 
 func (d *device) permit() proto.ChatStatePermit {
 	now := time.Now().Unix()
@@ -543,7 +536,7 @@ func newConversation(t *testing.T) *conversation {
 	id := alice.nextCommitID()
 	var built proto.MLSCommitResponseData
 	a.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: hOrg, ConversationID: hConv,
+		Permit: alice.permit(), Roles: ownerRoles(alice.account), OrgID: hOrg, ConversationID: hConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{b.keyPackage()},
 	}, &built)
 	a.must(proto.MLSCommitConfirm, alice.confirmRequest(id), nil)

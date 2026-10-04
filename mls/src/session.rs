@@ -398,21 +398,14 @@ impl Session {
         Ok(builder)
     }
 
-    /// The group's roles payload, and whether every leaf of the confirmed tree
-    /// advertises the roles extension (a group can only take roles once they
-    /// all do).
-    pub fn authority(&mut self) -> Res<(Option<Vec<u8>>, bool)> {
-        let group = self.group_mut()?;
-        let roles = group
+    /// The group's roles payload, None when its context carries none.
+    pub fn authority(&mut self) -> Res<Option<Vec<u8>>> {
+        Ok(self
+            .group_mut()?
             .context()
             .extensions
             .get(roles_extension_type())
-            .map(|e| e.extension_data().to_vec());
-        let supported = group
-            .roster()
-            .members_iter()
-            .all(|m| m.capabilities.extensions.contains(&roles_extension_type()));
-        Ok((roles, supported))
+            .map(|e| e.extension_data().to_vec()))
     }
 
     /// One single-use KeyPackage carrying this device's declaration, ending no
@@ -1451,6 +1444,36 @@ mod tests {
         a.process(&commit).unwrap();
     }
 
+    // A room group made without roles (by a dev build, or an admin's create
+    // before 0.0.58) takes no Commit from its creator either: not an Add, not
+    // an update, and not a migration that would set roles now.
+    #[test]
+    fn a_group_without_roles_takes_no_commit_from_its_creator() {
+        let mut a = room_member(ROOM_A);
+        a.create_group(b"room").unwrap();
+        let b = room_member(ROOM_B);
+        let b_kp = kp(&b);
+        a.approve(vec![approval(&key_package_leaf(&b_kp).unwrap())]);
+        let Err(refused) = a.commit_add_members(&[&b_kp]) else {
+            panic!("the creator added a member to a group without roles");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert!(!a.has_pending_commit().unwrap());
+
+        a.set_next_roles(&room_roles(ROOM_A, &[])).unwrap();
+        let Err(refused) = a.commit_update() else {
+            panic!("the creator set roles on a group without them");
+        };
+        assert!(
+            refused.contains(crate::authority::NOT_AUTHORIZED),
+            "{refused}"
+        );
+        assert_eq!(a.epoch().unwrap(), 0);
+    }
+
     #[test]
     fn only_the_owner_changes_the_roles() {
         let (mut a, mut b, _c) = roles_room();
@@ -1471,10 +1494,7 @@ mod tests {
             crate::authority::RolesChange::Set(room_roles(ROOM_B, &[ROOM_A]))
         );
         b.process(&commit).unwrap();
-        assert_eq!(
-            b.authority().unwrap(),
-            (Some(room_roles(ROOM_B, &[ROOM_A])), true)
-        );
+        assert_eq!(b.authority().unwrap(), Some(room_roles(ROOM_B, &[ROOM_A])));
     }
 
     fn room_device(account: &str, device: &str) -> Session {

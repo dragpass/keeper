@@ -235,11 +235,7 @@ func (c *Cipher) SetCreateRoles(payload []byte) { c.createRoles = payload }
 // CreateGroup starts the conversation's group, for chatstate.Store.CreateGroup,
 // with the roles SetCreateRoles set in its context.
 func (c *Cipher) CreateGroup(groupID []byte) error {
-	if err := c.session.setNextRoles(c.createRoles); err != nil {
-		return err
-	}
-	defer func() { _ = c.session.setNextRoles(nil) }()
-	return c.session.CreateGroup(groupID)
+	return c.session.CreateGroup(groupID, c.createRoles)
 }
 
 // BuildCommit builds a Commit and leaves it pending. mls-rs refuses a second
@@ -404,7 +400,7 @@ func (c *Cipher) PlanChange(plan chatstate.CommitPlan) (chatstate.CommitChange, 
 	if err != nil {
 		return chatstate.CommitChange{}, err
 	}
-	rolesBefore, _, err := c.session.groupAuthority()
+	rolesBefore, err := c.session.groupAuthority()
 	if err != nil {
 		return chatstate.CommitChange{}, err
 	}
@@ -424,9 +420,6 @@ func (c *Cipher) PlanChange(plan chatstate.CommitPlan) (chatstate.CommitChange, 
 		}
 		tree = append(tree, held{leaf: l, account: account, device: device})
 		change.Before = append(change.Before, account)
-		if l.Index == 0 {
-			change.CreatorAccountID = account
-		}
 		if l.Index == own {
 			change.CommitterAccountID, change.CommitterDeviceID = account, device
 		}
@@ -489,15 +482,13 @@ func (c *Cipher) PlanChange(plan chatstate.CommitPlan) (chatstate.CommitChange, 
 	return change, nil
 }
 
-// Authority reads the group's roles and whether every confirmed leaf
-// advertises the roles extension (chatstate.AuthorityReader).
-func (c *Cipher) Authority() (*chatstate.Roles, bool, error) {
-	payload, supported, err := c.session.groupAuthority()
+// Authority reads the group's roles, nil when its context carries none.
+func (c *Cipher) Authority() (*chatstate.Roles, error) {
+	payload, err := c.session.groupAuthority()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	roles, err := parseRolesOrNil(payload)
-	return roles, supported, err
+	return parseRolesOrNil(payload)
 }
 
 func leafIndices(leaves []Leaf) []uint32 {
@@ -560,18 +551,11 @@ func (c *Cipher) commitRejoinAccounts(members []chatstate.RejoinMember) (commit,
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	roles, _, err := c.Authority()
+	roles, err := c.Authority()
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	creator := ""
-	if roles == nil {
-		creator, err = creatorAccount(leaves)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-	}
-	if err := judgeSuccession(removed, entering, committer, creator, nil, roles, true, false); err != nil {
+	if err := judgeSuccession(removed, entering, committer, nil, roles, true, false); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
@@ -691,18 +675,11 @@ func (c *Cipher) commitReplaceAccounts(
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	roles, _, err := c.Authority()
+	roles, err := c.Authority()
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	creator := ""
-	if roles == nil {
-		creator, err = creatorAccount(leaves)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-	}
-	if err := judgeSuccession(removed, entering, committer, creator, carried, roles, true, userInitiated); err != nil {
+	if err := judgeSuccession(removed, entering, committer, carried, roles, true, userInitiated); err != nil {
 		return nil, nil, 0, err
 	}
 	if err := c.session.approveRemovals(removed); err != nil {
@@ -1367,7 +1344,7 @@ func (s *Session) requireCreatorOwnsNewRoom() error {
 	if err != nil || epoch != 1 {
 		return err
 	}
-	payload, _, err := s.groupAuthority()
+	payload, err := s.groupAuthority()
 	if err != nil {
 		return err
 	}

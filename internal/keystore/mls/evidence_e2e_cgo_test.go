@@ -150,7 +150,7 @@ func TestEvidence_EachRuleStillNeedsItsOwnPart(t *testing.T) {
 			_, err := e.carolReceivesWithEvidence(e.craftBoth(t, ev(t, e)))
 			if name == "handover without the leave" {
 				if err != nil {
-					t.Fatalf("creator-authorized removal = %v; want allowed", err)
+					t.Fatalf("owner-authorized removal = %v; want allowed", err)
 				}
 				return
 			}

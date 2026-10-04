@@ -83,10 +83,10 @@ func latchedData(t *testing.T, resp proto.BaseResponse) proto.ChatStateRekeyLatc
 	return data
 }
 
-// A legacy member cannot build a Remove by claiming the app asked for it.
-// Receipt-side attacks are exercised using a permissive MLS client below in
-// TestMLSAdversary_LegacyRoomRejectsMemberAddAndRemove.
-func TestMLSAuthority_ALegacyMemberCannotBuildARemoveOfAnotherMember(t *testing.T) {
+// A plain member cannot build a Remove by claiming the app asked for it.
+// Receipt-side attacks are exercised with a permissive MLS client in
+// mls_adversary_e2e_cgo_test.go.
+func TestMLSAuthority_APlainMemberCannotBuildARemoveOfAnotherMember(t *testing.T) {
 	r := newRoom(t)
 	assertCode(t, r.bob.call(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r.bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
@@ -101,7 +101,7 @@ func TestMLSAuthority_ALegacyMemberCannotBuildARemoveOfAnotherMember(t *testing.
 // never moved the confirmed state: the valid Commit applies to the epoch the
 // refused one was built on.
 func TestMLSAuthority_AValidCommitForTheBlockedEpochClearsTheBlock(t *testing.T) {
-	r := newAdvRoomWithLegacy(t, false, true)
+	r := newAdvRoom(t, false)
 	lawfulSeq, lawfulB64 := r.lawfulRow()
 	bad, _ := r.adv.Build(mlsadversary.Commit{Removes: []uint32{r.adv.IndexOf(e2eCarol, r.carol.device)}})
 	badSeq := r.nextSeq()
@@ -123,9 +123,9 @@ func TestMLSAuthority_AValidCommitForTheBlockedEpochClearsTheBlock(t *testing.T)
 	r.alice.must(proto.MLSEncrypt, r.alice.encryptRequest(messageID(1), 3, "back in step"))
 }
 
-// A legacy room's creator may request membership changes. Other members
-// cannot gain that authority from user_initiated; signed statements still let
-// any member carry an authorized removal.
+// The room's owner may request membership changes. Other members cannot gain
+// that authority from user_initiated; signed statements still let any member
+// carry an authorized removal.
 func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	r := newRoom(t)
 	resp := r.bob.buildRemove(2, e2eCarol)
@@ -162,8 +162,8 @@ func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	})
 }
 
-// In a legacy room the creator may remove members. Any member may also carry
-// an org-admin-signed removal statement, independent of the server's roster.
+// The room's owner may remove members. Any member may also carry an
+// org-admin-signed removal statement, independent of the server's roster.
 func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	r := newRoom(t)
 	built := r.alice.userRemove(2, e2eCarol)
@@ -195,11 +195,10 @@ func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	}
 }
 
-// 임시, 정책 미충족 (Q3): a received Add stands on its leaf and trust checks
-// alone. Neither the row's attestation nor its absence is authority for it,
-// so a server that signs a member set without the account changes nothing.
-// This pins the stated limit: any member may Add an account whose leaf
-// verifies, until room roles live in the authenticated group context.
+// A received Add by the room's owner stands on the group's roles and its
+// leaf and trust checks. Neither the row's attestation nor its absence is
+// authority for it, so a server that signs a member set without the account
+// changes nothing.
 func TestMLSAuthority_AReceivedAddStandsOnItsLeafAlone(t *testing.T) {
 	c := newDM(t)
 	carol := newKeeper(t, e2eCarol)
@@ -277,7 +276,7 @@ func TestMLSAuthority_ALostRaceReportsWhatTheWinnerDid(t *testing.T) {
 	// A winner the rules refuse is not applied (N3): the loser's own pending
 	// Commit, which lost the epoch either way, is dropped, the confirmed state
 	// stays, and the conversation stops at the winner's epoch.
-	r2 := newAdvRoomWithLegacy(t, false, true)
+	r2 := newAdvRoom(t, false)
 	lawfulSeq, lawfulB64 := r2.lawfulRow()
 	lost := r2.alice.buildUpdate(2)
 	bad, _ := r2.adv.Build(mlsadversary.Commit{Removes: []uint32{r2.adv.IndexOf(e2eCarol, r2.carol.device)}})

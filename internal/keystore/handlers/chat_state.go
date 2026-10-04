@@ -336,6 +336,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, chatstate.ErrHandoverInvalid):
 		code, message = proto.ChatMLSErrorCodeHandoverInvalid,
 			"the leaf handover is not the removed leaf's signed approval of this key package's leaf; nothing was built"
+	case errors.Is(err, chatstate.ErrGroupWithoutRoles):
+		code, message = proto.ChatMLSErrorCodeRoomRecreateRequired,
+			"the group carries no roles and takes no commit; the room must be recreated; nothing was built"
 	case errors.Is(err, chatstate.ErrCommitUnauthorized):
 		code, message = proto.ChatMLSErrorCodeCommitUnauthorized,
 			"the commit carries an add or a remove this device is not authorized to make; nothing was built"

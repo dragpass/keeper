@@ -5,14 +5,18 @@
 //
 // Only from the authenticated group state and from signatures by accounts
 // whose keys this device holds pinned. Nothing the server says or signs is
-// authority for an Add or a Remove on its own (policy 5), with the one
-// labelled exception below for groups made before 0.0.55.
+// authority for an Add or a Remove on its own (policy 5).
 //
 //   - Room roles live in the group context (roles.go): an owner and admins.
 //     The owner alone changes them; an owner or admin adds members; an owner
 //     removes anybody and an admin anybody but the owner and the admins.
 //   - A DM is marked as one in the group context and never adds anybody after
 //     its create.
+//   - A group whose context carries no roles (made by a dev build before
+//     0.0.55, or by an admin's create before 0.0.58) takes no Commit at all.
+//     Built here it is refused with ErrGroupWithoutRoles; received, it is
+//     refused like any unauthorized Commit and the conversation stops at its
+//     epoch. The room must be recreated.
 //   - Signed statements, carried inside the Commit's own authenticated data so
 //     every receiver checks the same bytes, catch-up included:
 //     an org admin's removal statement (Q5 (b)), the member's own signed leave
@@ -31,15 +35,12 @@
 //	R2  the same Commit adds a leaf of A (a replace, or a rejoin).
 //	S   a verified statement the Commit carries covers that leaf.
 //	RR  C's role lets it remove A (roles.go roleMayRemove).
-//	L   the creator of a legacy room temporarily holds owner authority until
-//	    the room's roles are migrated.
 //
 // # Adds and roles
 //
-// roles.go: in a room an Add needs the committer to be owner or admin, in a
-// DM there is none after the create, and a legacy room temporarily trusts its
-// creator as owner. In every group an account holds one leaf (Q14,
-// N1), judged on the whole candidate tree after the Commit: a Commit that
+// roles.go: in a room an Add needs the committer to be owner or admin, and
+// in a DM there is none after the create. In every group an account holds one
+// leaf (Q14, N1), judged on the whole candidate tree after the Commit: a Commit that
 // leaves any account with two leaves is refused, whether they come in with
 // it or were already there. Only Add, Remove and a roles-only group
 // context change are allowed at all.
@@ -49,10 +50,9 @@
 // A Commit this device builds is judged by the same rules before anything is
 // built, over the change the plan would make (PlanJudge). On top of them,
 // user_initiated gates the app's intent and nothing else: a local Add, a
-// role-based or legacy-creator Remove, and a roles change need a person to
-// have asked;
-// a Remove resting on a signed statement, a migration and an ownerless claim
-// do not. It is never authority on its own.
+// role-based Remove, and a roles change need a person to have asked; a Remove
+// resting on a signed statement and an ownerless claim do not. It is never
+// authority on its own.
 //
 // # What the client cannot know on its own, stated so it is not hidden
 //
@@ -68,15 +68,6 @@
 //     back can have it removed again (availability, not confidentiality),
 //     for as long as the statement is inside its 30-day window
 //     (proto.MLSStatementMaxAgeSeconds, Q10).
-//
-// A legacy_temporary group has no roles until its creator migrates them. Until
-// then, only the authenticated creator has temporary owner authority. Other
-// members must rely on signed statements for removals or create a new room if
-// the creator is no longer available. The creator is whoever holds leaf 0, and
-// an Add lands in the leftmost blank leaf, so once leaf 0 is blank (or the
-// Commit removes the creator) no Add of another account is accepted, a
-// re-seat (R2) included: otherwise it would hand that account the creator's
-// authority from the next Commit on (roles.go judgeRoles).
 //
 // # A refusal
 //
@@ -120,6 +111,11 @@ func (e *UnauthorizedCommitError) Error() string {
 
 func (e *UnauthorizedCommitError) Unwrap() error { return ErrCommitUnauthorized }
 
+// ErrGroupWithoutRoles — this device was asked to build a Commit on a group
+// whose context carries no roles. Nothing is built: every Keeper refuses such
+// a Commit, and the room must be recreated.
+var ErrGroupWithoutRoles = errors.New("chat state refused a commit on a group without roles; the room must be recreated")
+
 // RemovedLeaf is one leaf a Commit removes: whose it is, and the declaration
 // payload it carried, which holds the account key its own statements verify
 // under.
@@ -158,10 +154,6 @@ type CommitChange struct {
 	// against. Empty when the caller had nothing to check.
 	RemovedLeaves []RemovedLeaf
 
-	// CreatorAccountID is the account holding leaf 0 before the Commit: the
-	// leaf of whoever created the group.
-	CreatorAccountID string
-
 	Epoch             uint64
 	Before            []string
 	RolesBefore       *Roles
@@ -188,6 +180,9 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 			Reason:             reason,
 		}
 	}
+	if change.RolesBefore == nil && plan != nil {
+		return 0, ErrGroupWithoutRoles
+	}
 	if change.OtherProposals > 0 {
 		return 0, refuse("the commit carries a proposal other than add, remove and a roles change")
 	}
@@ -206,7 +201,7 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 		}
 		invalid = bad
 	}
-	roles := change.effectiveRoles()
+	roles := change.RolesBefore
 	asked := plan != nil && plan.UserInitiated
 	for i, account := range change.Removed {
 		switch {
@@ -214,8 +209,6 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 		case slices.Contains(change.Added, account): // R2
 		case authorized[i]: // S
 		case roleMayRemove(roles, change.CommitterAccountID, account) && (plan == nil || asked): // RR
-		case roles == nil && change.CreatorAccountID != "" &&
-			change.CommitterAccountID == change.CreatorAccountID && (plan == nil || asked): // L
 		default:
 			return invalid, refuse("a remove is not the committer's own, not paired with an add, not signed, and not the committer's role to make")
 		}
@@ -228,7 +221,7 @@ func judge(change CommitChange, auth CommitAuthority, plan *CommitPlan) (int, er
 			return invalid, refuse("an add needs a person on this device to ask for it")
 		}
 	}
-	if change.RolesChange == RolesSet && change.RolesBefore != nil && !asked &&
+	if change.RolesChange == RolesSet && !asked &&
 		!change.isOwnerlessClaim(*change.RolesBefore, *change.RolesAfter) {
 		return invalid, refuse("a roles change needs a person on this device to ask for it")
 	}

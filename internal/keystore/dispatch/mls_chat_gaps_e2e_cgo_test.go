@@ -144,11 +144,11 @@ func TestMLSChatE2E_ALostDMCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
 	// conversation id; the server takes Alice's.
 	aliceID, bobID := alice.nextCommitID(), bob.nextCommitID()
 	aliceCreate := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: aliceID, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}))
 	bobCreate := commitOf(bob.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: bob.permit(), Roles: roleSet(bob.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: bobID, Members: []proto.MLSMemberKeyPackage{alice.keyPackage()},
 	}))
 	alice.confirm(aliceID, proto.MLSCommitOutcomeAccepted, "")
@@ -244,7 +244,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 	// stores at room creation is sealed while the create is pending.
 	id := alice.nextCommitID()
 	createReq := proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 		RoomNamePlaintextB64: b64(name),
 	}

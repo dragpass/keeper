@@ -98,7 +98,7 @@ func TestMLSStrict_AJoinWaitsForTheMembersToBeVerified(t *testing.T) {
 	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
 	id := alice.nextCommitID()
 	created := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: id, Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}))
 	alice.confirm(id, proto.MLSCommitOutcomeAccepted, "")

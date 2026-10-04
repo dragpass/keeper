@@ -213,14 +213,25 @@ func (s *Session) live() (*C.DpSession, error) {
 	return s.handle, nil
 }
 
-func (s *Session) CreateGroup(groupID []byte) error {
+// CreateGroup starts a group at epoch 0 with roles, a chatstate roles
+// payload, in its context. Roles are required: a group without them takes no
+// Commit (chatstate/roles.go), so making one would only make a dead room.
+func (s *Session) CreateGroup(groupID, roles []byte) error {
+	if len(roles) == 0 {
+		return failed("a group is created with its roles")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
 		return err
 	}
-	rc := C.dpmls_group_create(h, bytePtr(groupID), C.size_t(len(groupID)))
+	rc := C.dpmls_session_set_next_roles(h, bytePtr(roles), C.size_t(len(roles)))
+	runtime.KeepAlive(roles)
+	if err := statusError(rc); err != nil {
+		return err
+	}
+	rc = C.dpmls_group_create(h, bytePtr(groupID), C.size_t(len(groupID)))
 	runtime.KeepAlive(groupID)
 	return statusError(rc)
 }
@@ -618,17 +629,17 @@ func (s *Session) setNextCommitAAD(aad []byte) error {
 }
 
 // groupAuthority reads the group context's roles payload (nil when it has
-// none) and whether every confirmed leaf advertises the roles extension.
-func (s *Session) groupAuthority() ([]byte, bool, error) {
+// none).
+func (s *Session) groupAuthority() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	var buf C.DpBuf
 	if rc := C.dpmls_group_authority(h, &buf); rc != 0 {
-		return nil, false, statusError(rc)
+		return nil, statusError(rc)
 	}
 	return decodeAuthority(takeBuf(&buf))
 }

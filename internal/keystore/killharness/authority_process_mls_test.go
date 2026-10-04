@@ -63,7 +63,7 @@ func newThreeParty(t *testing.T) *threeParty {
 	id := alice.nextCommitID()
 	var built proto.MLSCommitResponseData
 	a.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: hOrg, ConversationID: hConv, ClientCommitID: id,
+		Permit: alice.permit(), Roles: ownerRoles(alice.account), OrgID: hOrg, ConversationID: hConv, ClientCommitID: id,
 		Members: []proto.MLSMemberKeyPackage{
 			c.keyPackage(),
 			{AccountID: hBob, DeviceID: hDevice, KeyPackageB64: base64.StdEncoding.EncodeToString(bobAdv.KeyPackage())},

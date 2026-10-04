@@ -190,9 +190,6 @@ pub fn same_except_roles(a: &ExtensionList, b: &ExtensionList) -> bool {
 /// "had one of two leaves removed".
 pub struct Change<'a> {
     pub committer: Option<String>,
-    /// The account holding leaf 0, the leaf of whoever created the group.
-    /// `check` keeps any other account from entering it in a legacy room.
-    pub creator: Option<String>,
     pub epoch: u64,
     pub before: &'a [Option<String>],
     pub removed: Vec<Option<String>>,
@@ -243,26 +240,22 @@ impl Change<'_> {
 /// Why a Commit breaks the rules, as a condition and never a value.
 pub type Refusal = &'static str;
 
-/// The roles a Commit's Adds and Removes are judged against: the group's, or
-/// for the Commit that first sets a room's roles on a legacy group, the ones
-/// it sets (the migration, design §0.3 Q3).
-pub fn effective_roles(change: &Change<'_>) -> Option<Roles> {
-    match (&change.roles_before, &change.roles_after) {
-        (Some(r), _) => Some(r.clone()),
-        (None, Some(Some(r @ Roles::Room { owner, .. })))
-            if change.committer.as_deref() == Some(owner.as_str())
-                && change.creator == change.committer =>
-        {
-            Some(r.clone())
-        }
-        _ => None,
-    }
-}
-
 /// The role rules on Adds and on the roles themselves (the file comment).
+///
+/// A group whose context carries no roles takes no Commit from a DragPass
+/// account: no rule here can say who may change it, and the room must be
+/// recreated (chatstate/roles.go refuses the same). A committer that is no
+/// DragPass account is a generic test session; Go's preflight rejects such
+/// identities before anything reaches these rules.
 pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
+    let Some(roles) = &change.roles_before else {
+        return match change.committer {
+            Some(_) => Err("the group carries no roles; the room must be recreated"),
+            None => Ok(()),
+        };
+    };
     if let Some(after) = &change.roles_after {
-        check_roles_change(change, after.as_ref())?;
+        check_roles_change(change, roles, after.as_ref())?;
     }
     // One active device per account (Q14, N1), judged on the whole candidate
     // tree the Commit leaves behind: every account in it holds at most one
@@ -278,43 +271,19 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
     {
         return Err("an account holds more than one leaf after the commit");
     }
-    let roles = effective_roles(change);
-    // Go's preflight rejects identities outside the DragPass account format,
-    // so a committer without an account is a generic test session.
-    if roles.is_none() && change.committer.is_some() && vacates_creator_leaf(change) {
-        // RFC 9420 puts an Add in the leftmost blank leaf, and the next
-        // Commit reads leaf 0 as the creator. Only the creator's own account
-        // may come back into it; once it has left, nobody does, so a legacy
-        // room without its creator never gains another one.
-        if change
-            .added
-            .iter()
-            .any(|a| a.is_none() || *a != change.creator)
-        {
-            return Err("a legacy room's creator leaf takes no other account");
-        }
-    }
     for added in &change.added {
         let account = added.as_deref();
         // R2: the account is also removed here — a replace or a rejoin.
         if account.is_some_and(|a| change.is_removed(a)) {
             continue;
         }
-        match &roles {
-            None => {
-                // Go's preflight rejects identities outside the DragPass account format.
-                if change.committer.is_some() && change.committer != change.creator {
-                    return Err(
-                        "only the room's creator may add members before roles are migrated",
-                    );
-                }
-            }
-            Some(Roles::Dm) => {
+        match roles {
+            Roles::Dm => {
                 if change.epoch != 0 {
                     return Err("a DM adds nobody after it is created");
                 }
             }
-            Some(r @ Roles::Room { .. }) => {
+            r @ Roles::Room { .. } => {
                 let by = change.committer.as_deref().and_then(|c| r.role_of(c));
                 if by.is_none() {
                     return Err("only the room's owner or an admin adds a member");
@@ -330,64 +299,32 @@ pub fn check(change: &Change<'_>) -> Result<(), Refusal> {
             }
         }
     }
-    if matches!(roles, Some(Roles::Dm)) && change.accounts_after() > 2 {
+    if matches!(roles, Roles::Dm) && change.accounts_after() > 2 {
         return Err("a DM holds two accounts at most");
     }
     Ok(())
 }
 
-/// Whether leaf 0 may be blank once the Commit's Removes are applied: it is
-/// blank already, or a leaf of the creator's account is removed. Judged by
-/// account, as Go judges it (chatstate/roles.go judgeRoles), so a Remove of
-/// another leaf of the creator's account counts too.
-fn vacates_creator_leaf(change: &Change<'_>) -> bool {
-    match change.creator.as_deref() {
-        None => true,
-        Some(creator) => change.is_removed(creator),
-    }
-}
-
-fn check_roles_change(change: &Change<'_>, after: Option<&Roles>) -> Result<(), Refusal> {
-    let committer = change.committer.as_deref();
+fn check_roles_change(
+    change: &Change<'_>,
+    before: &Roles,
+    after: Option<&Roles>,
+) -> Result<(), Refusal> {
     let Some(after) = after else {
-        return match change.roles_before {
-            Some(_) => Err("a group's roles are never dropped"),
-            None => Ok(()),
-        };
+        return Err("a group's roles are never dropped");
     };
-    match (&change.roles_before, after) {
-        (None, Roles::Room { owner, .. }) => {
-            // A legacy room has no roles to ask, so the migration rests on the
-            // one thing its authenticated state says about ownership: leaf 0
-            // is the leaf of the account that created the room, and rooms were
-            // created by their owner. The server's check that the committer is
-            // its owner is the other half, taken once (수용한 한계).
-            if committer != Some(owner.as_str()) || change.creator.as_deref() != committer {
-                return Err("only the room's creator, as its owner, sets its first roles");
-            }
-        }
-        (None, Roles::Dm) => {
-            let mut accounts: Vec<&str> =
-                change.before.iter().filter_map(|a| a.as_deref()).collect();
-            accounts.sort_unstable();
-            accounts.dedup();
-            if accounts.len() > 2 {
-                return Err("a group of more than two accounts is not a DM");
-            }
-        }
-        (Some(Roles::Dm), _) => return Err("a DM's roles never change"),
-        (Some(Roles::Room { .. }), Roles::Dm) => return Err("a room never becomes a DM"),
-        (Some(before @ Roles::Room { owner, admins }), next @ Roles::Room { .. }) => {
-            let by = committer.and_then(|c| before.role_of(c));
+    match (before, after) {
+        (Roles::Dm, _) => return Err("a DM's roles never change"),
+        (Roles::Room { .. }, Roles::Dm) => return Err("a room never becomes a DM"),
+        (Roles::Room { owner, admins }, next @ Roles::Room { .. }) => {
+            let by = change.committer.as_deref().and_then(|c| before.role_of(c));
             if by != Some(Role::Owner) && !is_ownerless_claim(change, owner, admins, next) {
                 return Err("only the room's owner changes its roles");
             }
         }
     }
-    if let Roles::Room { .. } = after {
-        if after.listed().iter().any(|a| !change.holds_after(a)) {
-            return Err("a role entry names an account with no leaf after the commit");
-        }
+    if after.listed().iter().any(|a| !change.holds_after(a)) {
+        return Err("a role entry names an account with no leaf after the commit");
     }
     Ok(())
 }
@@ -461,13 +398,8 @@ pub fn change_of<'a>(
             Some(roles_in(&g.proposal)?)
         }
     };
-    let creator = roster
-        .member_with_index(0)
-        .ok()
-        .and_then(|m| identity_account(&m.signing_identity));
     Ok(Change {
         committer,
-        creator,
         epoch: context.epoch,
         before,
         removed,
@@ -555,7 +487,6 @@ mod tests {
     ) -> Change<'a> {
         Change {
             committer: acct(committer),
-            creator: before.first().cloned().flatten(),
             epoch: 5,
             before,
             removed: Vec::new(),
@@ -615,76 +546,25 @@ mod tests {
         assert!(check(&rejoin).is_ok(), "R2 re-seat");
     }
 
+    // A group without roles takes no Commit from an account: no Add, no
+    // Remove, no update, and no roles set on it either (no migration).
     #[test]
-    fn a_legacy_room_migrates_only_by_its_creator_as_owner() {
+    fn a_group_without_roles_takes_no_commit() {
         let before = [acct(A), acct(B)];
-        let mut c = change(&before, B, None);
-        c.roles_after = Some(Some(room(A, &[])));
-        assert!(check(&c).is_err(), "not the one it names");
-        c.roles_after = Some(Some(room(B, &[])));
-        assert!(check(&c).is_err(), "not the creator");
-        c.committer = acct(A);
-        c.roles_after = Some(Some(room(A, &[])));
-        assert!(check(&c).is_ok());
-        assert_eq!(effective_roles(&c), Some(room(A, &[])));
-    }
-
-    #[test]
-    fn a_legacy_room_allows_adds_only_from_its_creator() {
-        let before = [acct(A), acct(B)];
-        let mut c = change(&before, B, None);
-        c.added = vec![acct(C)];
-        assert!(check(&c).is_err(), "a legacy member must not add");
-
-        c.committer = acct(A);
-        assert!(
-            check(&c).is_ok(),
-            "the creator retains temporary owner authority"
-        );
-    }
-
-    // An Add lands in the leftmost blank leaf, and leaf 0 names the creator.
-    // Once the creator's leaf is blank, or removed by the same Commit, no
-    // other account may enter it, not even through a re-seat (R2).
-    #[test]
-    fn a_legacy_room_never_seats_another_account_in_its_creator_leaf() {
-        let without_creator = [acct(B), acct(C)];
-        let mut reseat = change(&without_creator, B, None);
-        reseat.creator = None;
-        reseat.removed = vec![acct(C)];
-        reseat.added = vec![acct(C)];
-        assert!(check(&reseat).is_err(), "a re-seat after the creator left");
-
-        let with_creator = [acct(A), acct(B), acct(C)];
-        let mut same_commit = change(&with_creator, B, None);
-        same_commit.removed = vec![acct(A), acct(C)];
-        same_commit.added = vec![acct(C)];
-        assert!(
-            check(&same_commit).is_err(),
-            "a re-seat beside the creator's removal"
-        );
-
-        let mut creator_replaced = change(&with_creator, B, None);
-        creator_replaced.removed = vec![acct(A)];
-        creator_replaced.added = vec![acct(A)];
-        assert!(
-            check(&creator_replaced).is_ok(),
-            "the creator's own leaf in its place"
-        );
-
-        let mut reseat_beside_creator = change(&with_creator, B, None);
-        reseat_beside_creator.removed = vec![acct(C)];
-        reseat_beside_creator.added = vec![acct(C)];
-        assert!(
-            check(&reseat_beside_creator).is_ok(),
-            "a re-seat while the creator holds leaf 0"
-        );
-
-        let mut migrated = change(&without_creator, B, Some(room(B, &[])));
-        migrated.creator = None;
-        migrated.removed = vec![acct(C)];
-        migrated.added = vec![acct(C)];
-        assert!(check(&migrated).is_ok(), "a room with roles");
+        let update = change(&before, A, None);
+        assert!(check(&update).is_err(), "an update");
+        let mut add = change(&before, A, None);
+        add.added = vec![acct(C)];
+        assert!(check(&add).is_err(), "an add by leaf 0");
+        let mut remove = change(&before, A, None);
+        remove.removed = vec![acct(B)];
+        assert!(check(&remove).is_err(), "a remove by leaf 0");
+        let mut migrate = change(&before, A, None);
+        migrate.roles_after = Some(Some(room(A, &[])));
+        assert!(check(&migrate).is_err(), "a migration by leaf 0");
+        let mut dm = change(&before, A, None);
+        dm.roles_after = Some(Some(Roles::Dm));
+        assert!(check(&dm).is_err(), "a DM marking");
     }
 
     #[test]
@@ -733,7 +613,7 @@ mod tests {
     #[test]
     fn an_account_that_holds_a_leaf_is_added_again_only_in_its_place() {
         let before = [acct(A), acct(B)];
-        for roles in [None, Some(room(A, &[])), Some(Roles::Dm)] {
+        for roles in [Some(room(A, &[])), Some(Roles::Dm)] {
             let mut c = change(&before, A, roles);
             c.epoch = 0;
             c.added = vec![acct(B)];
@@ -747,7 +627,7 @@ mod tests {
     // on the add list alone.
     #[test]
     fn an_account_holds_one_leaf_after_the_commit() {
-        for roles in [None, Some(room(A, &[])), Some(Roles::Dm)] {
+        for roles in [Some(room(A, &[])), Some(Roles::Dm)] {
             let before = [acct(A)];
             let mut two_new = change(&before, A, roles.clone());
             two_new.epoch = 0;
@@ -774,12 +654,12 @@ mod tests {
     #[test]
     fn a_tree_that_already_holds_two_leaves_of_an_account_takes_no_commit_that_keeps_them() {
         let before = [acct(A), acct(B), acct(B)];
-        let update = change(&before, A, None);
+        let update = change(&before, A, Some(room(A, &[])));
         assert!(check(&update).is_err(), "an update over the duplicate");
-        let mut add = change(&before, A, None);
+        let mut add = change(&before, A, Some(room(A, &[])));
         add.added = vec![acct(C)];
         assert!(check(&add).is_err(), "an unrelated add");
-        let mut fix = change(&before, A, None);
+        let mut fix = change(&before, A, Some(room(A, &[])));
         fix.removed = vec![acct(B)];
         assert!(check(&fix).is_ok(), "removing one of the two");
     }

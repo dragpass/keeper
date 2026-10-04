@@ -41,9 +41,10 @@ const (
 	AuthorityRoles = "roles"
 	// AuthorityDM — a DM marked as one in the group context.
 	AuthorityDM = "dm"
-	// AuthorityLegacyTemporary — a group created before 0.0.55 carries no
-	// roles. Its creator temporarily holds owner authority until migration.
-	AuthorityLegacyTemporary = "legacy_temporary"
+	// AuthorityRoleless — a group whose context carries no roles (dev builds
+	// before 0.0.55, or an admin's create before 0.0.58). It takes no Commit;
+	// the room must be recreated.
+	AuthorityRoleless = "roleless"
 )
 
 var errRolesMalformed = errors.New("chat state roles payload is malformed")
@@ -240,36 +241,21 @@ func (c CommitChange) accountsAfter() int {
 	return len(seen)
 }
 
-// effectiveRoles is what the Commit's Adds and Removes are judged against:
-// the group's roles, or for the Commit that first sets a room's roles on a
-// legacy group, the ones it sets (the migration).
-func (c CommitChange) effectiveRoles() *Roles {
-	return c.EffectiveRoles()
-}
-
-// EffectiveRoles is effectiveRoles for the rules outside this file (the
-// succession rule, succession.go).
-func (c CommitChange) EffectiveRoles() *Roles {
-	if c.RolesBefore != nil {
-		return c.RolesBefore
-	}
-	if c.RolesChange == RolesSet && c.RolesAfter != nil && c.RolesAfter.Kind == RolesKindRoom &&
-		c.RolesAfter.Owner == c.CommitterAccountID && c.CreatorAccountID == c.CommitterAccountID {
-		return c.RolesAfter
-	}
-	return nil
-}
+// reasonNoRoles is why every Commit on a group without roles is refused.
+const reasonNoRoles = "the group carries no roles; the room must be recreated"
 
 // judgeRoles is roles::check: the rules on Adds and on the roles themselves.
 // "" means the Commit passes them.
 func judgeRoles(c CommitChange) string {
+	roles := c.RolesBefore
+	if roles == nil {
+		return reasonNoRoles
+	}
 	switch c.RolesChange {
 	case RolesOtherExtension:
 		return "the commit changes a group context extension other than the roles"
 	case RolesDropped:
-		if c.RolesBefore != nil {
-			return "the commit drops the group's roles"
-		}
+		return "the commit drops the group's roles"
 	case RolesSet:
 		if reason := judgeRolesChange(c); reason != "" {
 			return reason
@@ -283,26 +269,11 @@ func judgeRoles(c CommitChange) string {
 			return "an account holds more than one leaf after the commit"
 		}
 	}
-	roles := c.effectiveRoles()
-	if roles == nil && c.vacatesCreatorLeaf() {
-		// RFC 9420 puts an Add in the leftmost blank leaf, and the next
-		// Commit reads leaf 0 as the creator. Only the creator's own account
-		// may come back into it; once it has left, nobody does, so a legacy
-		// room without its creator never gains another one.
-		for _, account := range c.Added {
-			if account == "" || account != c.CreatorAccountID {
-				return "a legacy room's creator leaf takes no other account"
-			}
-		}
-	}
 	for _, account := range c.Added {
 		if slices.Contains(c.Removed, account) {
 			continue // R2
 		}
 		switch {
-		case roles == nil && c.CommitterAccountID == c.CreatorAccountID && c.CreatorAccountID != "":
-		case roles == nil:
-			return "only the legacy room's creator may add a member before roles are migrated"
 		case roles.Kind == RolesKindDM:
 			if c.Epoch != 0 {
 				return "a DM adds nobody after it is created"
@@ -318,52 +289,28 @@ func judgeRoles(c CommitChange) string {
 			}
 		}
 	}
-	if roles != nil && roles.Kind == RolesKindDM && c.accountsAfter() > 2 {
+	if roles.Kind == RolesKindDM && c.accountsAfter() > 2 {
 		return "a DM holds two accounts at most"
 	}
 	return ""
 }
 
-// vacatesCreatorLeaf is roles::vacates_creator_leaf: leaf 0 is blank already,
-// or a leaf of the creator's account is removed. Judged by account, as Rust
-// judges it.
-func (c CommitChange) vacatesCreatorLeaf() bool {
-	return c.CreatorAccountID == "" || slices.Contains(c.Removed, c.CreatorAccountID)
-}
-
 func judgeRolesChange(c CommitChange) string {
 	after := *c.RolesAfter
-	before := c.RolesBefore
+	before := *c.RolesBefore
 	switch {
-	case before == nil && after.Kind == RolesKindRoom:
-		// roles::check_roles_change: leaf 0 is the room's creator, which is
-		// the one thing a legacy room's authenticated state says about who
-		// owns it; the server's owner check is the other half (수용한 한계).
-		if c.CommitterAccountID != after.Owner || c.CreatorAccountID != c.CommitterAccountID {
-			return "only the room's creator, as its owner, sets its first roles"
-		}
-	case before == nil && after.Kind == RolesKindDM:
-		distinct := map[string]bool{}
-		for _, a := range c.Before {
-			distinct[a] = true
-		}
-		if len(distinct) > 2 {
-			return "a group of more than two accounts is not a DM"
-		}
 	case before.Kind == RolesKindDM:
 		return "a DM's roles never change"
 	case after.Kind == RolesKindDM:
 		return "a room never becomes a DM"
 	default:
-		if before.RoleOf(c.CommitterAccountID) != RoleOwner && !c.isOwnerlessClaim(*before, after) {
+		if before.RoleOf(c.CommitterAccountID) != RoleOwner && !c.isOwnerlessClaim(before, after) {
 			return "only the room's owner changes its roles"
 		}
 	}
-	if after.Kind == RolesKindRoom {
-		for _, e := range after.Entries() {
-			if !c.holdsAfter(e.AccountID) {
-				return "a role entry names an account with no leaf after the commit"
-			}
+	for _, e := range after.Entries() {
+		if !c.holdsAfter(e.AccountID) {
+			return "a role entry names an account with no leaf after the commit"
 		}
 	}
 	return ""
@@ -416,7 +363,7 @@ func roleMayRemove(roles *Roles, committer, account string) bool {
 func AuthorityOf(roles *Roles) string {
 	switch {
 	case roles == nil:
-		return AuthorityLegacyTemporary
+		return AuthorityRoleless
 	case roles.Kind == RolesKindDM:
 		return AuthorityDM
 	}

@@ -2,7 +2,7 @@
 
 // Wave 5a end to end (chatstate/authority.go, chatstate/roles.go): room roles
 // in the group context, the admin-signed org removal, the signed leave and
-// device revocation, and the legacy groups that carry no roles. Several
+// device revocation, and that every group create carries roles. Several
 // Keepers in one process, and this test standing in for ariadne — including a
 // server that omits, replays and tampers with what it serves.
 
@@ -154,14 +154,25 @@ func TestMLSRoles_StatusReportsTheAuthority(t *testing.T) {
 	r := newRolesRoom(t, e2eBob)
 	for _, k := range []*keeper{r.alice, r.bob, r.carol} {
 		got := k.status()
-		if got.Authority != "roles" || !got.RolesMigratable ||
+		if got.Authority != "roles" ||
 			!slices.Equal(got.Roles, roleEntries(roleSet(e2eAlice, e2eBob))) {
 			t.Fatalf("%s status = %+v", k.id[:8], got)
 		}
 	}
-	legacy := newRoom(t)
-	if got := legacy.carol.status(); got.Authority != "legacy_temporary" || len(got.Roles) != 0 || !got.RolesMigratable {
-		t.Fatalf("a legacy room's status = %+v", got)
+}
+
+// mls_group_create needs roles: omitted, it is refused and nothing is made.
+// A group without them would take no Commit, so it would only be a dead room.
+func TestMLSRoles_ACreateWithoutRolesIsRefused(t *testing.T) {
+	e2eStateRoot(t)
+	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
+	resp := alice.call(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: alice.nextCommitID(),
+		Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
+	})
+	assertCode(t, resp, proto.ChatStateErrorCodeInvalidInput)
+	if got := alice.status(); got.HasGroupState || got.CommitPending {
+		t.Fatalf("a refused create left %+v", got)
 	}
 }
 
@@ -194,30 +205,6 @@ func TestMLSRoles_OwnershipTransferIsARolesCommit(t *testing.T) {
 	req.SetRoles, req.UserInitiated = roleSet(e2eCarol, e2eAlice, e2eBob), true
 	grant := r.carol.accepted(req)
 	r.alice.process(r.nextSeq(), 3, grant.CommitB64)
-}
-
-// A legacy room's owner sets its roles on its first Commit; a member cannot,
-// and until then the room is legacy_temporary.
-func TestMLSRoles_ALegacyRoomMigratesOnTheOwnersCommit(t *testing.T) {
-	r := newRoom(t)
-	req := r.bob.buildRequest(2)
-	req.SetRoles = roleSet(e2eBob)
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
-
-	req = r.alice.buildRequest(2)
-	req.SetRoles = roleSet(e2eAlice, e2eCarol)
-	migrate := r.alice.accepted(req)
-	for _, k := range []*keeper{r.bob, r.carol} {
-		k.process(r.nextSeq(), 3, migrate.CommitB64)
-		if got := k.status(); got.Authority != "roles" {
-			t.Fatalf("%s after the migration = %+v", k.id[:8], got)
-		}
-	}
-	// Now a plain member's Add is refused where the legacy room took it.
-	dave := newKeeper(t, e2eDave)
-	add := r.bob.buildRequest(3)
-	add.Add, add.UserInitiated = []proto.MLSMemberKeyPackage{dave.keyPackage()}, true
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, add), proto.ChatMLSErrorCodeCommitUnauthorized)
 }
 
 // A DM carries the DM marker and adds nobody after its create.

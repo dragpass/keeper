@@ -31,7 +31,7 @@ func TestMLSChatE2E_TrustStateComesFromTheKeeperThatJudgedTheLeaf(t *testing.T) 
 	e2eStateRoot(t)
 	alice, bob := newKeeper(t, e2eAlice), newKeeper(t, e2eBob)
 	created := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
+		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	}))
 	assertTrust(t, "group create", created.LeafTrust, trustOf(e2eBob, keychain.PeerKeyPinStateTOFU))
