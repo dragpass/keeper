@@ -268,56 +268,6 @@ DragPass Keeper が稼働中で応答可能かどうかを確認します。
 
 ---
 
-#### `savedevicekey` - デバイス鍵の保存
-
-デバイス暗号化鍵を OS のキーストアに保存します。
-
-> **非推奨。** 鍵が IPC 境界を越えます。`device_key_ensure` を使ってください。それ以前の拡張機能のためだけに残っています。
-
-**リクエスト:**
-```json
-{
-  "action": "savedevicekey",
-  "payload": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
-**レスポンス:**
-```json
-{
-  "success": true
-}
-```
-
----
-
-#### `getdevicekey` - デバイス鍵の取得
-
-保存されているデバイス暗号化鍵を取得します。
-
-> **非推奨。** 生の鍵を呼び出し元に返します。`device_key_status` を使ってください。それ以前の拡張機能のためだけに残っています。
-
-**リクエスト:**
-```json
-{
-  "action": "getdevicekey"
-}
-```
-
-**レスポンス:**
-```json
-{
-  "success": true,
-  "data": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
----
-
 #### `deletedevicekey` - デバイス鍵の削除
 
 デバイス暗号化鍵をキーストアから削除します。

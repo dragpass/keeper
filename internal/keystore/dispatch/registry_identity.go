@@ -25,8 +25,6 @@ func identityActions() map[string]actionHandlerFunc {
 
 		proto.ActionGenerateKeypair: wrap(handlers.HandleGenerateKeypair),
 
-		proto.ActionGetDeviceKey:    wrap(handlers.HandleGetDeviceKey),
-		proto.ActionSaveDeviceKey:   wrap(handlers.HandleSaveDeviceKey),
 		proto.ActionDeleteDeviceKey: wrap(handlers.HandleDeleteDeviceKey),
 		proto.ActionDeviceKeyStatus: wrap(handlers.HandleDeviceKeyStatus),
 		proto.ActionDeviceKeyEnsure: wrap(handlers.HandleDeviceKeyEnsure),

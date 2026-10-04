@@ -267,56 +267,6 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 
 ---
 
-#### `savedevicekey` - Save Device Key
-
-기기 암호화 키를 OS 키스토어에 저장합니다.
-
-> **Deprecated.** 키가 IPC 경계를 넘습니다. `device_key_ensure` 를 쓰세요. 이 액션은 그보다 오래된 확장을 위해서만 남아 있습니다.
-
-**Request:**
-```json
-{
-  "action": "savedevicekey",
-  "payload": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true
-}
-```
-
----
-
-#### `getdevicekey` - Get Device Key
-
-저장된 기기 암호화 키를 가져옵니다.
-
-> **Deprecated.** 원본 키를 호출자에게 돌려줍니다. `device_key_status` 를 쓰세요. 이 액션은 그보다 오래된 확장을 위해서만 남아 있습니다.
-
-**Request:**
-```json
-{
-  "action": "getdevicekey"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
----
-
 #### `deletedevicekey` - Delete Device Key
 
 키스토어에서 기기 암호화 키를 삭제합니다.

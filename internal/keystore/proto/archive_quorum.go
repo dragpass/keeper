@@ -123,30 +123,14 @@ type RewrappedShareInput struct {
 //	                 public key (unwrappable with the session private slot).
 //	WrappedOldDEKB64: OLD Group DEK RSA-OAEP-wrapped to the archive public key
 //	                 (the org_owner_archive grant's encrypted_group_dek).
-//	RecipientPublicKeys: target members' Keeper public keys — the re-grant
-//	                 recipients.
-//	Recipients / OwnerAccountID (0.0.56): the pin-carrying shape of the
-//	                 same list, as on dek_unwrap_and_rewrap_for_many; exactly
-//	                 one of the two shapes per call.
+//	Recipients / OwnerAccountID: the re-grant recipients in the pin-carrying
+//	                 shape of dek_unwrap_and_rewrap_for_many. The flat
+//	                 recipient_public_keys list was removed in 0.0.58.
 type ArchiveQuorumCombineAndRewrapRequest struct {
-	RewrappedShares     []RewrappedShareInput `json:"rewrapped_shares"`
-	WrappedOldDEKB64    string                `json:"wrapped_old_dek_b64"`
-	RecipientPublicKeys []string              `json:"recipient_public_keys,omitempty"`
-	Recipients          []DEKRewrapRecipient  `json:"recipients,omitempty"`
-	OwnerAccountID      string                `json:"owner_account_id,omitempty"`
-}
-
-// RecipientList reads both shapes as one list; a flat entry carries no
-// account id and so is exempt from the pin.
-func (r ArchiveQuorumCombineAndRewrapRequest) RecipientList() []DEKRewrapRecipient {
-	if len(r.Recipients) > 0 {
-		return r.Recipients
-	}
-	out := make([]DEKRewrapRecipient, len(r.RecipientPublicKeys))
-	for i, key := range r.RecipientPublicKeys {
-		out[i] = DEKRewrapRecipient{PublicKey: key}
-	}
-	return out
+	RewrappedShares  []RewrappedShareInput `json:"rewrapped_shares"`
+	WrappedOldDEKB64 string                `json:"wrapped_old_dek_b64"`
+	Recipients       []DEKRewrapRecipient  `json:"recipients"`
+	OwnerAccountID   string                `json:"owner_account_id,omitempty"`
 }
 
 func (r ArchiveQuorumCombineAndRewrapRequest) Validate() error {
@@ -167,21 +151,10 @@ func (r ArchiveQuorumCombineAndRewrapRequest) Validate() error {
 	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
 		return err
 	}
-	if len(r.Recipients) > 0 {
-		if len(r.RecipientPublicKeys) > 0 {
-			return newValidationError("recipients", "must not be sent together with recipient_public_keys")
-		}
-		return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
+	if len(r.Recipients) == 0 {
+		return newValidationError("recipients", "must not be empty")
 	}
-	if len(r.RecipientPublicKeys) == 0 {
-		return newValidationError("recipient_public_keys", "must not be empty")
-	}
-	for i, pem := range r.RecipientPublicKeys {
-		if err := requirePEM(pem, fmt.Sprintf("recipient_public_keys[%d]", i)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
 }
 
 // QuorumRewrapGrant — one re-grant produced by combine, parallel to a recipient.

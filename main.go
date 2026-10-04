@@ -44,9 +44,7 @@ const e2eEnvVar = "KEEPER_E2E_MODE"
 
 // API Actions:
 // (ping) health check
-// (savedevicekey) save device key request (deprecated)
 // (deletedevicekey) delete device key request
-// (getdevicekey) fetch device key request (deprecated)
 // (device_key_status) report whether a device key is stored
 // (device_key_ensure) generate and store a device key inside Keeper when absent
 // (generatekeypair) generate keypair request [Internal: delete session code, delete existing keypair, save new keypair]

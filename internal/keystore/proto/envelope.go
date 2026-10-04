@@ -1,8 +1,7 @@
 // envelope_models.go — Shared request/response envelopes + empty payload
-// structs. BaseRequest / BaseResponse + 7 empty payloads (PingRequest,
-// GetDeviceKeyRequest, DeleteDeviceKeyRequest,
-// GetPublicKeyRequest, GetServerPublicKeyRequest,
-// SaveDeviceKeyResponseData, DeleteDeviceKeyResponseData).
+// structs. BaseRequest / BaseResponse + 5 empty payloads (PingRequest,
+// DeleteDeviceKeyRequest, GetPublicKeyRequest, GetServerPublicKeyRequest,
+// DeleteDeviceKeyResponseData).
 
 package proto
 
@@ -24,11 +23,9 @@ type BaseRequest struct {
 }
 
 type PingRequest struct{}
-type GetDeviceKeyRequest struct{}
 type DeleteDeviceKeyRequest struct{}
 type GetPublicKeyRequest struct{}
 type GetServerPublicKeyRequest struct{}
-type SaveDeviceKeyResponseData struct{}
 type DeleteDeviceKeyResponseData struct{}
 
 // BaseResponse is the response envelope corresponding to BaseRequest.

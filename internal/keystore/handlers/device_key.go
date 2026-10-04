@@ -1,7 +1,7 @@
 // device_key.go — DeviceKey handlers. Manages the 32B AES-GCM deviceKey in
 // the OS Keychain. HandleDeviceKeyStatus / HandleDeviceKeyEnsure keep the key
-// inside Keeper; HandleGetDeviceKey / HandleSaveDeviceKey move it across the
-// IPC boundary and remain only for extensions that predate the other two.
+// inside Keeper. The raw key never crosses the IPC boundary; the old
+// getdevicekey / savedevicekey actions were removed in 0.0.58.
 
 package handlers
 
@@ -14,35 +14,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// HandleGetDeviceKey handles device key retrieval requests.
-//
-// Deprecated: returns the raw deviceKey to the caller. Use
-// HandleDeviceKeyStatus to learn whether a key exists.
-func HandleGetDeviceKey(d Deps, req proto.GetDeviceKeyRequest) proto.BaseResponse {
-	d.Logger.Println("key retrieval request processing...")
-	key, err := keychain.GetDeviceKey(d.Store)
-	if err != nil {
-		d.Logger.Printf("key retrieval error: %v", err)
-		// ErrSecretNotFound → not_found; other keychain errors → internal_error.
-		// Uses CodeForError mapping.
-		return errs.Response(err)
-	}
-	return proto.BaseResponse{Success: true, Data: proto.GetDeviceKeyResponseData{Key: key}}
-}
-
-// HandleSaveDeviceKey handles device key save requests.
-//
-// Deprecated: accepts a deviceKey the caller generated. Use
-// HandleDeviceKeyEnsure, which generates it inside Keeper.
-func HandleSaveDeviceKey(d Deps, req proto.SaveDeviceKeyRequest) proto.BaseResponse {
-	d.Logger.Println("key save request processing...")
-	if err := keychain.SaveDeviceKey(d.Store, req.Key); err != nil {
-		d.Logger.Printf("key save error: %v", err)
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "key save failed: "+err.Error())
-	}
-	return proto.BaseResponse{Success: true}
-}
 
 // HandleDeleteDeviceKey handles device key deletion requests.
 func HandleDeleteDeviceKey(d Deps, req proto.DeleteDeviceKeyRequest) proto.BaseResponse {

@@ -39,7 +39,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 		return errs.Response(err)
 	}
 
-	recipients := req.RecipientList()
+	recipients := req.Recipients
 	pubs := make([]*rsa.PublicKey, len(recipients))
 	checks := make([]peerKeyPinCheck, len(recipients))
 	for i, recipient := range recipients {
@@ -59,10 +59,8 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	}
 	// Every recipient is judged before the archive key is reassembled, so a
 	// refusal leaves nothing half granted and no key material ever opened.
-	if len(req.Recipients) > 0 {
-		if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, checks); !ok {
-			return pinResp
-		}
+	if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, checks); !ok {
+		return pinResp
 	}
 
 	wrappedOldDEK, err := base64.StdEncoding.DecodeString(req.WrappedOldDEKB64)

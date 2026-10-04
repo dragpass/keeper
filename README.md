@@ -340,56 +340,6 @@ Generates a random 32-byte device key inside Keeper and stores it when none exis
 
 ---
 
-#### `savedevicekey` - Save Device Key
-
-Stores the device encryption key in the OS keystore.
-
-> **Deprecated.** The key crosses the IPC boundary. Use `device_key_ensure`; kept only for extensions that predate it.
-
-**Request:**
-```json
-{
-  "action": "savedevicekey",
-  "payload": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true
-}
-```
-
----
-
-#### `getdevicekey` - Get Device Key
-
-Retrieves the stored device encryption key.
-
-> **Deprecated.** Returns the raw key to the caller. Use `device_key_status`; kept only for extensions that predate it.
-
-**Request:**
-```json
-{
-  "action": "getdevicekey"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "key": "base64_encoded_device_key"
-  }
-}
-```
-
----
-
 #### `deletedevicekey` - Delete Device Key
 
 Removes the device encryption key from the keystore.

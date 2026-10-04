@@ -189,19 +189,14 @@ type DEKRewrapForMemberResponseData struct {
 // the org archive key in one round-trip, replacing the per-member
 // unwrap→JS→wrap loop so the raw never enters the Extension JS heap.
 //
-// Two request shapes, exactly one per call. `recipients` is the shape that
-// carries account ids and therefore gets pin enforcement;
-// `recipient_public_keys` is the original flat list, still accepted and still
-// unenforced. Sending both is refused rather than resolved, because a caller
-// that populated both has a bug and picking one for it would hide which.
+// `recipients` carries account ids and therefore gets pin enforcement. The
+// flat, unenforced `recipient_public_keys` list was removed in 0.0.58; a
+// payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
 	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
-	// Recipients is the enforced path. A recipient with no account_id is
-	// pin-exempt — the org archive key is a resource, not an account.
-	Recipients []DEKRewrapRecipient `json:"recipients,omitempty"`
-	// RecipientPublicKeys is the pre-0.0.31 path. Kept working, never
-	// enforced.
-	RecipientPublicKeys []string `json:"recipient_public_keys,omitempty"`
+	// A recipient with no account_id is pin-exempt — the org archive key is
+	// a resource, not an account.
+	Recipients []DEKRewrapRecipient `json:"recipients"`
 	// OwnerAccountID scopes the pins. Required as soon as any recipient
 	// names an account.
 	OwnerAccountID string `json:"owner_account_id,omitempty"`
@@ -230,31 +225,11 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
 		return err
 	}
-	if len(r.Recipients) > 0 && len(r.RecipientPublicKeys) > 0 {
-		return newValidationError(
-			"recipients",
-			"must not be sent together with recipient_public_keys",
-		)
-	}
-	if len(r.Recipients) == 0 && len(r.RecipientPublicKeys) == 0 {
-		return newValidationError(
-			"recipients",
-			"must not be empty (or send the legacy recipient_public_keys)",
-		)
+	if len(r.Recipients) == 0 {
+		return newValidationError("recipients", "must not be empty")
 	}
 	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
 		return err
-	}
-	if len(r.RecipientPublicKeys) > 0 {
-		if len(r.RecipientPublicKeys) > DEKRewrapMaxRecipients {
-			return newValidationError("recipient_public_keys", "must hold at most 64 recipients")
-		}
-		for _, pem := range r.RecipientPublicKeys {
-			if err := requirePEM(pem, "recipient_public_keys"); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
 	return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
 }
@@ -307,20 +282,6 @@ func validateRewrapRecipients(recipients []DEKRewrapRecipient, ownerAccountID st
 		}
 	}
 	return nil
-}
-
-// RecipientList renders either request shape as the enforced one, so the
-// handler has a single path. A legacy entry becomes a recipient with no
-// account id, which is exactly how it is treated: wrapped, not pinned.
-func (r DEKUnwrapAndRewrapForManyRequest) RecipientList() []DEKRewrapRecipient {
-	if len(r.Recipients) > 0 {
-		return r.Recipients
-	}
-	recipients := make([]DEKRewrapRecipient, len(r.RecipientPublicKeys))
-	for i, pem := range r.RecipientPublicKeys {
-		recipients[i] = DEKRewrapRecipient{PublicKey: pem}
-	}
-	return recipients
 }
 
 // DEKUnwrapAndRewrapForManyResponseData carries the new wraps in the same

@@ -41,10 +41,10 @@ func TestHandleRequest_RequestID_EchoedOnUnknownAction(t *testing.T) {
 // the internal-error path of process).
 func TestHandleRequest_RequestID_EchoedOnValidationError(t *testing.T) {
 	app := newFacadeTestApp()
-	msg := `{"action":"savedevicekey","request_id":"req-validate-777","payload":{"key":""}}`
+	msg := `{"action":"savesessioncode","request_id":"req-validate-777","payload":{"encrypted_session_code":"","signature":""}}`
 	resp := app.HandleRequest([]byte(msg))
 	if resp.Success {
-		t.Error("expected validation failure for empty key")
+		t.Error("expected validation failure for empty session code")
 	}
 	if resp.RequestID != "req-validate-777" {
 		t.Errorf("request_id echo on validation error mismatch: got %q, want %q", resp.RequestID, "req-validate-777")
