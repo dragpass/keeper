@@ -34,9 +34,9 @@ func TestHandleDEKUnwrapAndRewrapForMany_Validation(t *testing.T) {
 		name string
 		req  proto.DEKUnwrapAndRewrapForManyRequest
 	}{
-		{"missing wrapped", proto.DEKUnwrapAndRewrapForManyRequest{RecipientPublicKeys: []string{validPEM}}},
-		{"empty recipients", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: validWrap, RecipientPublicKeys: nil}},
-		{"non-pem recipient", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: validWrap, RecipientPublicKeys: []string{validPEM, "not-a-pem"}}},
+		{"missing wrapped", proto.DEKUnwrapAndRewrapForManyRequest{Recipients: exemptRecipients(validPEM)}},
+		{"empty recipients", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: validWrap, Recipients: nil}},
+		{"non-pem recipient", proto.DEKUnwrapAndRewrapForManyRequest{WrappedForMeB64: validWrap, Recipients: exemptRecipients(validPEM, "not-a-pem")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,8 +54,8 @@ func TestHandleDEKUnwrapAndRewrapForMany_MissingPrivateKey(t *testing.T) {
 
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64:     base64.StdEncoding.EncodeToString([]byte("doesnt-matter")),
-		RecipientPublicKeys: []string{recipientKP.PublicKey},
+		WrappedForMeB64: base64.StdEncoding.EncodeToString([]byte("doesnt-matter")),
+		Recipients:      exemptRecipients(recipientKP.PublicKey),
 	})
 	if resp.Success {
 		t.Fatal("expected failure when identity private key slot is absent")
@@ -96,8 +96,8 @@ func TestHandleDEKUnwrapAndRewrapForMany_RoundTrip(t *testing.T) {
 	}
 
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64:     base64.StdEncoding.EncodeToString(wrappedForMe),
-		RecipientPublicKeys: pems,
+		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
+		Recipients:      exemptRecipients(pems...),
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKUnwrapAndRewrapForMany failed: %s", resp.Error)
@@ -151,8 +151,8 @@ func TestHandleDEKUnwrapAndRewrapForMany_NoRawInResponse(t *testing.T) {
 
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64:     base64.StdEncoding.EncodeToString(wrappedForMe),
-		RecipientPublicKeys: []string{recipientKP.PublicKey},
+		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
+		Recipients:      exemptRecipients(recipientKP.PublicKey),
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKUnwrapAndRewrapForMany failed: %s", resp.Error)
@@ -165,4 +165,14 @@ func TestHandleDEKUnwrapAndRewrapForMany_NoRawInResponse(t *testing.T) {
 	if strings.Contains(strings.ToUpper(string(respJSON)), "DEADBEEF") {
 		t.Errorf("raw group DEK hex pattern leaked into response: %s", string(respJSON))
 	}
+}
+
+// exemptRecipients builds a recipient list that names no account, so every
+// entry is wrapped and reported exempt rather than pinned.
+func exemptRecipients(pems ...string) []proto.DEKRewrapRecipient {
+	out := make([]proto.DEKRewrapRecipient, len(pems))
+	for i, pem := range pems {
+		out[i] = proto.DEKRewrapRecipient{PublicKey: pem}
+	}
+	return out
 }

@@ -31,25 +31,6 @@ const (
 // Identity / Signup / Login
 // ────────────────────────────────────────────────────────────────────────
 
-func TestSaveDeviceKey_Validate_RejectsNon32BLength(t *testing.T) {
-	// Only 16B in the Base64 — requireBase64Len(32) rejects.
-	r := SaveDeviceKeyRequest{Key: "AAAAAAAAAAAAAAAAAAAAAg=="}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-32B device key")
-	}
-	if !strings.Contains(err.Error(), "key") {
-		t.Fatalf("error must mention field, got %q", err.Error())
-	}
-}
-
-func TestSaveDeviceKey_Validate_AcceptsValid32B(t *testing.T) {
-	r := SaveDeviceKeyRequest{Key: testValid32BKey}
-	if err := r.Validate(); err != nil {
-		t.Fatalf("valid 32B key rejected: %v", err)
-	}
-}
-
 func TestSaveSessionCode_Validate_RejectsInvalidBase64(t *testing.T) {
 	r := SaveSessionCodeRequest{
 		EncryptedSessionCode: testInvalidB64,

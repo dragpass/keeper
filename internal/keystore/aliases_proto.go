@@ -13,7 +13,6 @@ type (
 	DEKUnwrapAndEncryptResponseData     = proto.DEKUnwrapAndEncryptResponseData
 	DeviceKeyEnsureResponseData         = proto.DeviceKeyEnsureResponseData
 	DeviceKeyStatusResponseData         = proto.DeviceKeyStatusResponseData
-	GetDeviceKeyResponseData            = proto.GetDeviceKeyResponseData
 	GetPublicKeyResponseData            = proto.GetPublicKeyResponseData
 	GetServerPublicKeyResponseData      = proto.GetServerPublicKeyResponseData
 	GroupDEKGenerateAndOpenResponseData = proto.GroupDEKGenerateAndOpenResponseData
