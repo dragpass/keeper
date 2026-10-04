@@ -309,15 +309,6 @@ func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf, now int64) (map[strin
 		if err != nil {
 			return nil, errors.New("mls leaf verify: failed to read the newest leaf declaration record")
 		}
-		// A record 0.0.44–0.0.47 wrote has no first_seen_at. Taking it as seen
-		// now starts the grace period on upgrade instead of refusing at once:
-		// the rule did not exist when the rotation was seen, so nobody has had
-		// the window to move their groups to the new leaf yet. The value is
-		// written back on success, so the clock starts once and not on every read.
-		backfilled := found && stored.FirstSeenAt == 0
-		if backfilled {
-			stored.FirstSeenAt = now
-		}
 		top, have := stored, found
 		for _, j := range js {
 			if j.entering && (!have || j.notBefore > top.NotBefore) {
@@ -343,7 +334,7 @@ func (v *MLSLeafVerifier) checkNewest(judged []judgedLeaf, now int64) (map[strin
 				}
 			}
 		}
-		if have && (!found || backfilled || !top.SameDeclaration(stored)) {
+		if have && (!found || !top.SameDeclaration(stored)) {
 			advanced[accountID] = top
 		}
 	}
@@ -357,8 +348,8 @@ func supersededBy(j judgedLeaf, rec keychain.MLSLeafNewest) bool {
 }
 
 // Commit writes what the last successful VerifyLeaves staged: first-use and
-// refreshed pins, and newest-declaration records that moved forward or had
-// their first_seen_at filled in from a version 1 record. The mls session calls
+// refreshed pins, and newest-declaration records that moved forward. The mls
+// session calls
 // it once the MLS operation the verification was for has succeeded, and before
 // chatstate writes the group state. A crash between the two leaves a pin whose
 // state was never written; the retry of the same operation stages the same

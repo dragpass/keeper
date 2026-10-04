@@ -102,41 +102,22 @@ func TestALatchedConversationAnswersAnEvictedSeqAsUnavailable(t *testing.T) {
 func TestOpenedSeqsMergeAndStayBounded(t *testing.T) {
 	var rec Record
 	for _, seq := range []uint64{1, 2, 3, 5, 4} {
-		rec.markOpened(seq, HistoryPolicy{})
+		rec.markOpened(seq)
 	}
 	if len(rec.OpenedSeqs) != 1 || rec.OpenedSeqs[0] != (SeqRange{1, 5}) {
 		t.Fatalf("in-order seqs = %+v", rec.OpenedSeqs)
 	}
 	var sparse Record
 	for i := range MaxOpenedSeqRanges + 5 {
-		sparse.markOpened(uint64(10+2*i), HistoryPolicy{})
+		sparse.markOpened(uint64(10 + 2*i))
 	}
 	if len(sparse.OpenedSeqs) != MaxOpenedSeqRanges {
 		t.Fatalf("ranges = %d, want the bound", len(sparse.OpenedSeqs))
 	}
-	if !sparse.opened(11, HistoryPolicy{}) || sparse.opened(9, HistoryPolicy{}) {
+	if !sparse.opened(11) || sparse.opened(9) {
 		t.Fatal("the overflow did not fill the lowest gap, or reached below the lowest seq")
 	}
 	if last := sparse.OpenedSeqs[len(sparse.OpenedSeqs)-1]; last.Through != uint64(10+2*(MaxOpenedSeqRanges+4)) {
 		t.Fatalf("the newest seq was lost: %+v", last)
-	}
-}
-
-// A record written before OpenedSeqs existed, whose ring is full, reads every
-// seq below its oldest held copy as opened; one whose ring never filled
-// evicted nothing and reads none.
-func TestALegacyRecordInfersItsOpenedSeqsOnlyFromAFullRing(t *testing.T) {
-	full := Record{History: []HistoryEntry{{Seq: 70}, {Seq: 71}, {Seq: 72}}}
-	policy := HistoryPolicy{MaxEntries: 3}
-	if !full.opened(69, policy) || full.opened(73, policy) {
-		t.Fatal("a full legacy ring did not read the seqs below it as opened")
-	}
-	full.markOpened(73, policy)
-	if !full.opened(1, policy) || !full.opened(73, policy) {
-		t.Fatalf("the first mark dropped the inferred floor: %+v", full.OpenedSeqs)
-	}
-	partial := Record{History: []HistoryEntry{{Seq: 70}}}
-	if partial.opened(69, policy) {
-		t.Fatal("a legacy ring that never filled inferred an opened seq")
 	}
 }

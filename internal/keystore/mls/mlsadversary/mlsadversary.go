@@ -171,18 +171,6 @@ func (c *Client) KeyPackage() []byte {
 	return c.unhex(c.do("key-package")[0])
 }
 
-// KeyPackageEntry is one KeyPackage framed as a Keeper pool entry, with its
-// reference and not_after, for a test that puts it in a pool.
-func (c *Client) KeyPackageEntry() (entry, ref []byte, notAfter uint64) {
-	c.t.Helper()
-	f := c.do("key-package-entry")
-	n, err := strconv.ParseUint(f[2], 10, 64)
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	return c.unhex(f[0]), c.unhex(f[1]), n
-}
-
 // Create makes a group of the adversary's own with the roles payload given
 // (nil for none), at epoch 0.
 func (c *Client) Create(groupID, roles []byte) {

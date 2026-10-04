@@ -33,17 +33,6 @@ func (s *Session) KeyPackage() ([]byte, error) {
 // to, so a test can find the pool entry a join would take.
 var WelcomeKeyPackageRefsForTest = welcomeKeyPackageRefs
 
-// JoinFromEntryForTest is JoinFromPool from the pool entry on, for an entry
-// the test hands in. It is how a test joins from an entry with no leaf
-// recorded, which only a Keeper before 0.0.50 wrote and AddKeyPackages
-// refuses to write.
-func (s *Session) JoinFromEntryForTest(
-	store *chatstate.Store, conversationID string, wm chatstate.ServerWatermark,
-	welcome []byte, entry chatstate.KeyPackagePoolEntry, v LeafVerifier, now time.Time,
-) error {
-	return s.joinFromEntry(store, conversationID, wm, welcome, entry, v, now)
-}
-
 // StopAfterJoinedStateSavedForTest makes the next joins return err right
 // after their group state is written and before the pool entry is deleted,
 // which is where a crash would leave them, until restore is called.

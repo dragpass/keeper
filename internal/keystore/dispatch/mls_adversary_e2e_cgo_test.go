@@ -420,50 +420,6 @@ func TestMLSAdversary_AnExpiredStatementCarriesNoRemove(t *testing.T) {
 	}
 }
 
-// Q11 end to end: a KeyPackage built by a client without the roles extension,
-// as a Keeper before wave 5 built them, sits in Carol's pool. The sweep drops
-// it and keeps the one this Keeper built; a second sweep drops nothing.
-func TestMLSAdversary_ThePoolSweepDropsAnOldKeepersKeyPackage(t *testing.T) {
-	e2eStateRoot(t)
-	carol := newKeeper(t, e2eCarol)
-	carol.keyPackage()
-	old := mlsadversary.Start(t, leafKeyOf(t, carol), false)
-	entry, ref, notAfter := old.KeyPackageEntry()
-	store, err := chatstate.Open(carol.store, carol.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	leaf := leafKeyOf(t, carol)
-	var decl struct {
-		Declaration proto.MLSLeafDeclaration `json:"declaration"`
-	}
-	if err := json.Unmarshal(leaf.Declaration, &decl); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AddKeyPackages([]chatstate.KeyPackagePoolEntry{{
-		Ref: ref, NotAfter: notAfter, Leaf: decl.Declaration.SignatureKeyFingerprint, Private: entry,
-	}}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if n := carol.poolSize(); n != 2 {
-		t.Fatalf("pool size before the sweep = %d", n)
-	}
-	sweep := func() proto.MLSKeyPackagePoolSweepResponseData {
-		return carol.must(proto.MLSKeyPackagePoolSweep, proto.MLSKeyPackagePoolSweepRequest{AccountID: carol.id}).
-			Data.(proto.MLSKeyPackagePoolSweepResponseData)
-	}
-	if got := sweep(); got.Dropped != 1 || got.Remaining != 1 {
-		t.Fatalf("sweep = %+v; want the old KeyPackage dropped and one left", got)
-	}
-	if got := sweep(); got.Dropped != 0 || got.Remaining != 1 {
-		t.Fatalf("a repeated sweep = %+v", got)
-	}
-	if _, err := store.LookupKeyPackage([][]byte{ref}, time.Now()); err == nil {
-		t.Fatal("the old KeyPackage survived the sweep")
-	}
-}
-
 // P1-2: a Commit carrying a genuine org removal statement for Carol and an
 // unauthorized removal of Alice beside it. The statement's admin is not yet
 // pinned by either receiver. The whole Commit is refused, and no pin for the

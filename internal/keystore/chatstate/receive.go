@@ -369,7 +369,7 @@ func (s *Store) ReceiveBatch(
 			}
 			for _, req := range reqs {
 				stored, ok := rec.findHistory(req.Seq)
-				if !ok && rec.opened(req.Seq, s.HistoryPolicy) {
+				if !ok && rec.opened(req.Seq) {
 					out = append(out, ReceiveResult{Application: true, HistoryUnavailable: true, Generation: rec.Generation})
 					continue
 				}
@@ -522,7 +522,7 @@ func (s *Store) receiveOne(
 	}
 	// Opened here before and no copy left: the key was consumed at that
 	// delivery, and handing the ciphertext to MLS again can only fail.
-	if !req.Handshake && rec.opened(req.Seq, s.HistoryPolicy) {
+	if !req.Handshake && rec.opened(req.Seq) {
 		return ReceiveResult{}, false, errOpenedWithoutCopy
 	}
 	if !req.Handshake && rec.beforeJoin(req.FramedEpoch) {
@@ -635,7 +635,7 @@ func (s *Store) receiveOne(
 		}
 		rec.noteConfirmedRemoval(req.Seq, req.ProducedEpoch, req.Message, removed)
 	}
-	rec.markOpened(req.Seq, s.HistoryPolicy)
+	rec.markOpened(req.Seq)
 	if opened.Removed {
 		rec.RemovedFromGroup = true
 	}

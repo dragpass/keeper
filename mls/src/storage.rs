@@ -17,8 +17,8 @@ use zeroize::Zeroizing;
 /// only bytes we can ever hold are the ones handed to `write`, and those arrive
 /// as a state plus a set of prior epochs rather than as one serialized object.
 /// Framing them ourselves is what lets `Record.GroupState` stay a single field.
-const MAGIC_V1: &[u8; 8] = b"DPMLSGS1";
 const MAGIC: &[u8; 8] = b"DPMLSGS2";
+const RETIRED_MAGIC_V1: &[u8; 8] = b"DPMLSGS1";
 const MAX_PRIOR_EPOCHS: usize = 16;
 const PRIOR_EPOCH_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 
@@ -107,21 +107,25 @@ impl RecordStorage {
     pub fn decode_into(&self, blob: &[u8]) -> Result<Vec<u8>, &'static str> {
         let mut cur = Cursor::new(blob);
         let magic = cur.take(MAGIC.len())?;
-        if magic != MAGIC && magic != MAGIC_V1 {
+        if magic == RETIRED_MAGIC_V1 {
+            // DPMLSGS1 only ever existed in unreleased development builds;
+            // its prior epochs carry no insertion time, so it is refused
+            // rather than guessed at.
+            return Err(
+                "chat state MLS blob uses a retired development format; reset local chat state",
+            );
+        }
+        if magic != MAGIC {
             return Err("chat state MLS blob has an unknown magic");
         }
         let group_id = cur.take_prefixed()?.to_vec();
         let state = Zeroizing::new(cur.take_prefixed()?.to_vec());
-        let max_epoch_id_seen = if magic == MAGIC {
-            Some(cur.take_u64()?)
-        } else {
-            None
-        };
+        let max_epoch_id_seen = cur.take_u64()?;
         let count = cur.take_u32()?;
         let mut epochs = BTreeMap::new();
         for _ in 0..count {
             let id = cur.take_u64()?;
-            let inserted_at = if magic == MAGIC { cur.take_u64()? } else { 0 };
+            let inserted_at = cur.take_u64()?;
             epochs.insert(
                 id,
                 StoredEpoch {
@@ -138,9 +142,7 @@ impl RecordStorage {
         inner.group_id = group_id.clone();
         inner.state = Some(state);
         inner.epochs = epochs;
-        inner.max_epoch_id_seen = max_epoch_id_seen
-            .filter(|id| *id != u64::MAX)
-            .or_else(|| inner.epochs.keys().next_back().copied());
+        inner.max_epoch_id_seen = Some(max_epoch_id_seen).filter(|id| *id != u64::MAX);
         inner.prune(now_seconds());
         Ok(group_id)
     }
@@ -325,13 +327,6 @@ fn encode_key_package_entry(reference: &[u8], data: &KeyPackageData) -> Zeroizin
     out
 }
 
-/// The public KeyPackage a pool entry holds. The private keys it also holds
-/// are dropped (and zeroized) here and never leave.
-pub fn key_package_of_entry(entry: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let (_, data) = decode_key_package_entry(entry)?;
-    Ok(data.key_package_bytes.clone())
-}
-
 // The messages never describe the entry's contents or size: it carries two
 // private keys.
 fn decode_key_package_entry(entry: &[u8]) -> Result<(Vec<u8>, KeyPackageData), &'static str> {
@@ -481,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_blob_does_not_grandfather_secrets_with_unknown_age() {
+    fn retired_v1_blob_is_refused_rather_than_misparsed() {
         let mut blob = Vec::new();
-        blob.extend_from_slice(MAGIC_V1);
+        blob.extend_from_slice(RETIRED_MAGIC_V1);
         put_bytes(&mut blob, b"gid");
         put_bytes(&mut blob, b"body");
         blob.extend_from_slice(&1u32.to_be_bytes());
@@ -491,10 +486,9 @@ mod tests {
         put_bytes(&mut blob, b"unknown age");
 
         let loaded = RecordStorage::new();
-        loaded.decode_into(&blob).unwrap();
-        assert_eq!(loaded.state(b"gid").unwrap().unwrap().to_vec(), b"body");
-        assert!(loaded.epoch(b"gid", 7).unwrap().is_none());
-        assert_eq!(loaded.max_epoch_id(b"gid").unwrap(), Some(7));
+        let err = loaded.decode_into(&blob).unwrap_err();
+        assert!(err.contains("retired development format"), "{err}");
+        assert!(loaded.state(b"gid").unwrap().is_none());
     }
 
     #[test]

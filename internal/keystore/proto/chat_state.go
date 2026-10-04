@@ -1,4 +1,4 @@
-// chat_state.go — payload models for the chat v2 conversation-state actions.
+// chat_state.go — payload models for the chat conversation-state actions.
 //
 // Like the chat reveal path, the caller describes *which* conversation it
 // means and never *how* anything is bound: there is no AAD field, no canonical
@@ -416,8 +416,7 @@ type ChatStateReadOutboxResponseData struct {
 	// LeafIndex and ContentType complete the position an mls_encrypt entry
 	// was sealed at (0.0.55), which is what POST /:id/messages declares. An
 	// app that lost mls_encrypt's answer and keeps no plaintext can only post
-	// the message from here. An entry the removed chat_state_commit_outbox
-	// wrote has neither.
+	// the message from here.
 	LeafIndex   uint32 `json:"leaf_index"`
 	ContentType string `json:"content_type,omitempty"`
 }

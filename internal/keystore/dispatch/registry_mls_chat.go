@@ -1,4 +1,4 @@
-// registry_mls_chat.go — DragPass chat v2 MLS action registrations.
+// registry_mls_chat.go — DragPass chat MLS action registrations.
 //
 // Mirrors proto/actions_mls_chat.go. Its own fragment because these are the
 // only actions that read and write the MLS group state inside the chat state
@@ -30,7 +30,6 @@ func mlsChatActions() map[string]actionHandlerFunc {
 		proto.MLSConversationStatus:        handlers.HandleMLSConversationStatus,
 		proto.MLSEpochComparison:           handlers.HandleMLSEpochComparison,
 		proto.MLSRejoinRequestSign:         handlers.HandleMLSRejoinRequestSign,
-		proto.MLSCommitAbandon:             handlers.HandleMLSCommitAbandon,
 		proto.MLSLeaveRequestSign:          handlers.HandleMLSLeaveRequestSign,
 		proto.OrgMemberRemovalSign:         wrap(handlers.HandleOrgMemberRemovalSign),
 		proto.MLSDeviceRevokeSign:          wrap(handlers.HandleMLSDeviceRevokeSign),

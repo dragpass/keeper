@@ -855,12 +855,6 @@ func (c *Cipher) senderOf(leafIndex uint32) (accountID, deviceID string, err err
 // ErrNoLeafKey — the device has not enrolled a leaf key (mls_leaf_declare).
 var ErrNoLeafKey = errors.New("mls: this device has no leaf signature key")
 
-// ErrNoLeafDeclaration — the device's active leaf record was written by an
-// older Keeper: 0.0.43 kept no declaration, and 0.0.44's is signed over the
-// version 1 canonical every verifier now refuses. Neither is used. `enroll`
-// mints a new key and, once promoted, replaces the record.
-var ErrNoLeafDeclaration = errors.New("mls: this device's leaf key has no current declaration; enroll again")
-
 // ErrLeafKeyUnreadable — the active leaf record is there but cannot be read.
 var ErrLeafKeyUnreadable = errors.New("mls: this device's leaf key record is unreadable")
 
@@ -943,9 +937,6 @@ func NewDeviceSession(store keychain.SecretStore) (*Session, DeviceLeaf, error) 
 	defer secure.Zeroize(key.SecretKey)
 	if !found {
 		return nil, DeviceLeaf{}, ErrNoLeafKey
-	}
-	if !key.Usable() {
-		return nil, DeviceLeaf{}, ErrNoLeafDeclaration
 	}
 	fingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(key.PublicKey)
 	if err != nil {
@@ -1032,20 +1023,6 @@ func (s *Session) KeyPackages(n int, notAfterCap uint64) ([]KeyPackage, []chatst
 // identity, its signature key and its declaration payload. The index is 0.
 func KeyPackageLeaf(keyPackage []byte) (Leaf, error) { return keyPackageLeaf(keyPackage) }
 
-// SweepKeyPackagePool drops the owner's pool entries whose KeyPackage does not
-// advertise the room roles extension, and reports how many it dropped and how
-// many remain (Q11). A KeyPackage built by a Keeper before 0.0.55's wave 5
-// lacks it, and such a KeyPackage can never be added to a room that carries
-// roles: mls-rs requires every leaf to support the group context's
-// extensions, so the adder would see CHAT_MLS_ROLES_UNSUPPORTED for a member
-// that has in fact upgraded. An entry whose KeyPackage cannot be read is
-// dropped too; it could not be joined from either. Idempotent, and safe under
-// several Keeper processes (chatstate.DropKeyPackagesUnless). The server still
-// holds the matching KeyPackages; the caller discards those and refills.
-func SweepKeyPackagePool(secrets keychain.SecretStore, ownerAccountID string, now time.Time) (dropped, remaining int, err error) {
-	return chatstate.DropKeyPackagesUnless(secrets, ownerAccountID, now, keyPackageEntrySupportsRoles)
-}
-
 // KeyPackageIdentity reads the account and device a KeyPackage's leaf claims,
 // without a group. It is how a caller that asked the server for one member's
 // KeyPackage checks it was handed that member's and not some other account's:
@@ -1116,16 +1093,8 @@ func (s *Session) JoinFromPool(
 	return s.joinFromEntry(store, conversationID, wm, welcome, entry, v, now)
 }
 
-// joinFromEntry is JoinFromPool from the pool entry on.
-//
-// An entry with no leaf recorded was written before 0.0.50 and is still
-// used. If the active leaf has not changed since it was minted it is a valid
-// KeyPackage, and refusing it would make every invitation in flight across
-// the upgrade unjoinable. The cost is the one case the label exists for: a
-// device that promoted a rotation under 0.0.49 still holds unlabelled
-// entries of its old leaf, and a Welcome to one of them is joined with the
-// new leaf's session. That window closes at the device's next promote, which
-// drops every unlabelled entry.
+// joinFromEntry is JoinFromPool from the pool entry on. An entry minted under
+// another leaf than the active one is refused.
 func (s *Session) joinFromEntry(
 	store *chatstate.Store,
 	conversationID string,
@@ -1135,7 +1104,7 @@ func (s *Session) joinFromEntry(
 	v LeafVerifier,
 	now time.Time,
 ) error {
-	if entry.Leaf != "" && entry.Leaf != s.leafFingerprint {
+	if entry.Leaf != s.leafFingerprint {
 		return ErrNoKeyPackageForWelcome
 	}
 	if err := s.installKeyPackage(entry.Private); err != nil {

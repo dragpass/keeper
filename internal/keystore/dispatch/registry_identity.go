@@ -88,7 +88,5 @@ func identityActions() map[string]actionHandlerFunc {
 		// KeyPackages for the active leaf, gated by the purpose-bound
 		// KeyPackage challenge; their private keys go to the sealed pool.
 		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate),
-		// drops pool entries built before the roles extension (Q11)
-		proto.MLSKeyPackagePoolSweep: wrap(handlers.HandleMLSKeyPackagePoolSweep),
 	}
 }

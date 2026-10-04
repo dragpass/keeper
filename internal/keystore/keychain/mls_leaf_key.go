@@ -19,11 +19,9 @@ package keychain
 // mls_leaf_promote copies it over active once ariadne's signed acceptance names
 // it.
 //
-// Records written by an older Keeper still read, so the identity check and the
-// reset see them, but they are not usable: v1 (0.0.43) has no declaration and
-// v2 (0.0.44) carries one signed over the version 1 canonical, which every
-// verifier now refuses. GetMLSLeafKey hands such a record back with no key
-// material in it. secret_key is the 64-byte Ed25519 keypair (seed || public) —
+// Only version 3 reads. The v1 and v2 records of unreleased development builds
+// are unreadable like any other foreign record, and reset_device_identity
+// clears them. secret_key is the 64-byte Ed25519 keypair (seed || public) —
 // the layout crypto/ed25519 and mls-rs's SigningKey::from_keypair_bytes both
 // use — so it reaches the MLS library without conversion.
 //
@@ -43,10 +41,6 @@ import (
 
 const (
 	MLSLeafKeyVersion = 3
-
-	// What 0.0.43 and 0.0.44 wrote.
-	mlsLeafKeyVersionWithoutDeclaration = 1
-	mlsLeafKeyVersionWithV1Declaration  = 2
 
 	// MLSLeafDeclarationMaxBytes bounds the stored declaration payload. Kept
 	// equal to proto.MLSLeafExtensionMaxBytes by a test in the handlers
@@ -68,10 +62,6 @@ type MLSLeafKey struct {
 	Declaration []byte `json:"declaration,omitempty"`
 }
 
-// Usable is false for a record an older Keeper wrote. Such a record carries
-// the identity it was declared for and nothing else.
-func (k MLSLeafKey) Usable() bool { return k.V == MLSLeafKeyVersion }
-
 // WithMLSLeafLock runs fn under the lock the personal key bundle already uses:
 // an in-process mutex in front of a cross-process file lock. Keeper runs one
 // process per native-messaging connection, so two declares at once are two
@@ -87,16 +77,15 @@ func WithMLSLeafLock(store SecretStore, fn func() error) error {
 // GetMLSLeafKey reads the active record. Absence is reported by the bool, not
 // as an error: a device that has never enrolled is the ordinary first state.
 func GetMLSLeafKey(store SecretStore) (MLSLeafKey, bool, error) {
-	return getMLSLeafRecord(store, config.MLSLeafSignatureKey, true)
+	return getMLSLeafRecord(store, config.MLSLeafSignatureKey)
 }
 
-// GetMLSLeafPending reads the pending record. There was no pending slot before
-// v3, so an older version here is unreadable rather than legacy.
+// GetMLSLeafPending reads the pending record.
 func GetMLSLeafPending(store SecretStore) (MLSLeafKey, bool, error) {
-	return getMLSLeafRecord(store, config.MLSLeafSignatureKeyPending, false)
+	return getMLSLeafRecord(store, config.MLSLeafSignatureKeyPending)
 }
 
-func getMLSLeafRecord(store SecretStore, account string, allowLegacy bool) (MLSLeafKey, bool, error) {
+func getMLSLeafRecord(store SecretStore, account string) (MLSLeafKey, bool, error) {
 	raw, err := store.Get(config.Service, account)
 	if err != nil {
 		if errors.Is(err, ErrSecretNotFound) {
@@ -114,14 +103,6 @@ func getMLSLeafRecord(store SecretStore, account string, allowLegacy bool) (MLSL
 	if err := dec.Decode(&key); err != nil || dec.More() {
 		secure.Zeroize(key.SecretKey)
 		return MLSLeafKey{}, false, errors.New("mls leaf key record is not readable")
-	}
-	if allowLegacy && (key.V == mlsLeafKeyVersionWithoutDeclaration || key.V == mlsLeafKeyVersionWithV1Declaration) {
-		err := key.checkLegacy()
-		secure.Zeroize(key.SecretKey)
-		if err != nil {
-			return MLSLeafKey{}, false, err
-		}
-		return MLSLeafKey{V: key.V, AccountID: key.AccountID, DeviceID: key.DeviceID}, true, nil
 	}
 	if err := key.check(); err != nil {
 		secure.Zeroize(key.SecretKey)
@@ -170,21 +151,6 @@ func deleteMLSLeafRecord(store SecretStore, account string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// checkLegacy validates what an older record is still read for.
-func (k MLSLeafKey) checkLegacy() error {
-	switch k.V {
-	case mlsLeafKeyVersionWithoutDeclaration:
-		if k.Declaration != nil {
-			return errors.New("mls leaf key record has a declaration its version cannot carry")
-		}
-	case mlsLeafKeyVersionWithV1Declaration:
-		if err := k.checkDeclarationSize(); err != nil {
-			return err
-		}
-	}
-	return k.checkKey()
 }
 
 // check never names a field's value: the record holds a private key.

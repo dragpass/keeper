@@ -605,60 +605,26 @@ func TestMLSLeafVerifier_FirstSeenAtStaysWhenTheSameDeclarationEntersAgain(t *te
 	}
 }
 
-// A record 0.0.44–0.0.47 wrote has no first_seen_at. The first read takes it
-// as seen now, refuses nothing, and writes that time back, which is what makes
-// the grace period end.
-func TestMLSLeafVerifier_ALegacyRecordStartsTheGracePeriodOnFirstRead(t *testing.T) {
-	f := newVerifyFixture(t)
-	peer := newTrustKey(t)
-	old := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
-	newer := goodLeafSpec(t, verifyPeer, verifyDevice, peer)
-	newer.notBefore = verifyNB + 60
-	fp, err := crypto.MLSLeafSignatureKeyFingerprint(newer.declKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := `{"v":1,"not_before":` + strconv.FormatInt(newer.notBefore, 10) + `,"fingerprint":"` + fp + `"}`
-	if err := f.store.Set(config.Service, keychain.MLSLeafNewestAccount(verifyOwner, verifyPeer), legacy); err != nil {
-		t.Fatal(err)
-	}
-
-	upgradedAt := verifyNow + 100*proto.MLSLeafTreeGraceSeconds
-	*f.now = upgradedAt
-	acceptLeaf(t, f, treeLeaf(t, old))
-	rec, _ := f.newest(t, verifyPeer)
-	if rec.V != keychain.MLSLeafNewestVersion || rec.FirstSeenAt != upgradedAt ||
-		rec.NotBefore != newer.notBefore || rec.Fingerprint != fp {
-		t.Fatalf("record after the first read = %+v; want the same declaration first seen at %d", rec, upgradedAt)
-	}
-
-	*f.now = upgradedAt + proto.MLSLeafTreeGraceSeconds
-	acceptLeaf(t, f, treeLeaf(t, old))
-	*f.now = upgradedAt + proto.MLSLeafTreeGraceSeconds + 1
-	requireUntrusted(t, f.verifier().VerifyLeaves([]mls.Leaf{treeLeaf(t, old)}), "grace period")
-}
-
-// A refused operation does not backfill a legacy record either.
-func TestMLSLeafVerifier_ARefusedOperationDoesNotBackfillALegacyRecord(t *testing.T) {
+// The version 1 record of unreleased development builds is not read as a
+// record without a clock: verification fails rather than guessing when the
+// declaration was first seen.
+func TestMLSLeafVerifier_ARetiredVersion1RecordFailsVerification(t *testing.T) {
 	f := newVerifyFixture(t)
 	spec := goodLeafSpec(t, verifyPeer, verifyDevice, newTrustKey(t))
 	fp, err := crypto.MLSLeafSignatureKeyFingerprint(spec.declKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := `{"v":1,"not_before":` + strconv.FormatInt(spec.notBefore, 10) + `,"fingerprint":"` + fp + `"}`
-	if err := f.store.Set(config.Service, keychain.MLSLeafNewestAccount(verifyOwner, verifyPeer), legacy); err != nil {
+	retired := `{"v":1,"not_before":` + strconv.FormatInt(spec.notBefore, 10) + `,"fingerprint":"` + fp + `"}`
+	account := keychain.MLSLeafNewestAccount(verifyOwner, verifyPeer)
+	if err := f.store.Set(config.Service, account, retired); err != nil {
 		t.Fatal(err)
 	}
-	bad := goodLeafSpec(t, verifyOther, verifyDevice2, newTrustKey(t)).leaf(t)
-	bad.Declaration = nil
 
-	v := f.verifier()
-	requireUntrusted(t, v.VerifyLeaves([]mls.Leaf{treeLeaf(t, spec), bad}), "")
-	if err := v.Commit(); err != nil {
-		t.Fatal(err)
+	if err := f.verifier().VerifyLeaves([]mls.Leaf{treeLeaf(t, spec)}); err == nil {
+		t.Fatal("verification read a retired version 1 record")
 	}
-	if rec, _ := f.newest(t, verifyPeer); rec.FirstSeenAt != 0 {
-		t.Fatalf("a refused operation backfilled first_seen_at: %+v", rec)
+	if raw, err := f.store.Get(config.Service, account); err != nil || raw != retired {
+		t.Fatalf("the retired record was rewritten: %q, %v", raw, err)
 	}
 }

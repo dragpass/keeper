@@ -1,17 +1,11 @@
-// actions_chat_state.go — Wire-protocol Action* constants for DragPass chat
-// v2's conversation state.
+// actions_chat_state.go — Wire-protocol Action* constants for DragPass
+// chat's conversation state.
 //
 // Its own domain fragment: these actions are the only ones that touch the
 // sealed chat state directory outside the MLS actions, and every one but the
 // purge is gated on a conversation-state permit. Storage:
 // internal/keystore/chatstate. Design: dragpass-control-plane
 // docs/security/adr-ratchet-state-storage.md.
-//
-// The pre-MLS send and receive actions that consumed chain positions by hand
-// (chat_state_reserve_send, chat_state_commit_outbox, chat_state_mark_received)
-// are gone. mls_encrypt and the receive path now consume and mark positions
-// themselves; an old client that still sends those names gets the
-// dispatcher's unknown-action refusal.
 //
 // **Why the gated ones demand a server-signed permit.** The dispatcher has
 // one action registry and the Keeper cannot tell who launched it — extension

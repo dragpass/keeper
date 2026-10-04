@@ -33,7 +33,7 @@ func TestAReceiveBatchAnswersAMessageFromBeforeTheJoinWithoutOpeningIt(t *testin
 	if in.opens != 2 {
 		t.Fatalf("MLS opened %d messages; want the two with no pre-join claim", in.opens)
 	}
-	if readRecordForTest(t, store, testConvA).opened(1, store.HistoryPolicy) {
+	if readRecordForTest(t, store, testConvA).opened(1) {
 		t.Fatal("the pre-join seq was marked opened")
 	}
 

@@ -240,33 +240,22 @@ func writeRawPool(t *testing.T, s *Store, body string) {
 	}
 }
 
-// A promote keeps the new leaf's entries and nothing else: the previous
-// leaf's, and an entry written before the pool recorded leaves.
+// A promote keeps the new leaf's entries and nothing else.
 func TestKeyPackagePool_DropExceptKeepsOnlyTheNewLeaf(t *testing.T) {
 	store, secrets := newTestStore(t)
 	old1, old2 := poolEntryOf(poolLeafA, 1, poolNow.Add(time.Hour)), poolEntryOf(poolLeafA, 2, poolNow.Add(time.Hour))
 	if err := store.AddKeyPackages([]KeyPackagePoolEntry{old1, old2}, poolNow); err != nil {
 		t.Fatal(err)
 	}
-	// An entry with no leaf, as 0.0.49 wrote it: the field is absent.
-	legacy := poolEntryOf("", 3, poolNow.Add(time.Hour))
-	if err := store.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
-		pool.Entries = append(pool.Entries, KeyPackagePoolEntry{
-			Ref: legacy.Ref, NotAfter: legacy.NotAfter, Private: bytes.Clone(legacy.Private),
-		})
-		return true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if n, _ := store.KeyPackagePoolSize(poolNow); n != 3 {
+	if n, _ := store.KeyPackagePoolSize(poolNow); n != 2 {
 		t.Fatalf("pool size before the promote = %d", n)
 	}
 
 	dropped, err := DropKeyPackagesExcept(secrets, testOwner, poolLeafB, poolNow)
-	if err != nil || dropped != 3 {
-		t.Fatalf("drop = %d, %v; want 3", dropped, err)
+	if err != nil || dropped != 2 {
+		t.Fatalf("drop = %d, %v; want 2", dropped, err)
 	}
-	for _, e := range []KeyPackagePoolEntry{old1, old2, legacy} {
+	for _, e := range []KeyPackagePoolEntry{old1, old2} {
 		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); !errors.Is(err, ErrKeyPackageNotInPool) {
 			t.Fatalf("an entry of another leaf survived the promote: %v", err)
 		}
@@ -297,9 +286,12 @@ func TestKeyPackagePool_ALeafIsDecodedStrictly(t *testing.T) {
 	if got, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); err != nil || got.Leaf != poolLeafA {
 		t.Fatalf("a canonical leaf = %q, %v", got.Leaf, err)
 	}
-	writeRawPool(t, store, entry(""))
-	if got, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); err != nil || got.Leaf != "" {
-		t.Fatalf("an entry with no leaf = %q, %v", got.Leaf, err)
+	// An entry with no leaf is what unreleased development builds wrote.
+	for _, bad := range []string{"", `"leaf":"",`} {
+		writeRawPool(t, store, entry(bad))
+		if _, err := store.LookupKeyPackage([][]byte{bytes.Repeat([]byte{1}, 32)}, poolNow); !errors.Is(err, errKeyPackagePoolMalformed) {
+			t.Fatalf("an entry with no leaf (%q) read as %v; want malformed", bad, err)
+		}
 	}
 	for _, bad := range []string{strings.ToUpper(poolLeafA), poolLeafA[:63], poolLeafA + "0", "zz" + poolLeafA[2:]} {
 		writeRawPool(t, store, entry(`"leaf":"`+bad+`",`))
@@ -324,82 +316,5 @@ func TestKeyPackagePool_DropMintsNoSealKey(t *testing.T) {
 	}
 	if _, err := DropKeyPackagesExcept(secrets, testOwner, "", poolNow); err == nil {
 		t.Fatal("a drop for no leaf was accepted")
-	}
-}
-
-// Q11: the sweep drops what keep refuses or cannot judge, keeps a claimed
-// entry whatever keep says, prunes expired entries without counting them, and
-// a second run drops nothing and writes nothing.
-func TestKeyPackagePool_SweepDropsUnsupportedEntriesOnce(t *testing.T) {
-	store, secrets := newTestStore(t)
-	supported := poolEntry(2, poolNow.Add(time.Hour))
-	unsupported := poolEntry(3, poolNow.Add(time.Hour))
-	unreadable := poolEntry(4, poolNow.Add(time.Hour))
-	claimed := poolEntry(5, poolNow.Add(time.Hour))
-	expired := poolEntry(6, poolNow.Add(-time.Hour))
-	if err := store.AddKeyPackages([]KeyPackagePoolEntry{supported, unsupported, unreadable, claimed}, poolNow); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ClaimKeyPackage(claimed.Ref, "c0000000-0000-4000-8000-000000000001"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.withKeyPackagePool(func(pool *keyPackagePool) (bool, error) {
-		pool.Entries = append(pool.Entries, expired)
-		return true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	keep := func(private []byte) (bool, error) {
-		switch {
-		case bytes.Equal(private, unsupported.Private), bytes.Equal(private, claimed.Private):
-			return false, nil
-		case bytes.Equal(private, unreadable.Private):
-			return false, errors.New("not a key package")
-		}
-		return true, nil
-	}
-
-	dropped, remaining, err := DropKeyPackagesUnless(secrets, testOwner, poolNow, keep)
-	if err != nil || dropped != 2 || remaining != 2 {
-		t.Fatalf("sweep = %d dropped, %d remaining, %v; want 2, 2", dropped, remaining, err)
-	}
-	for _, e := range []KeyPackagePoolEntry{unsupported, unreadable, expired} {
-		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); !errors.Is(err, ErrKeyPackageNotInPool) {
-			t.Fatalf("entry %x survived the sweep: %v", e.Ref[0], err)
-		}
-	}
-	for _, e := range []KeyPackagePoolEntry{supported, claimed} {
-		if _, err := store.LookupKeyPackage([][]byte{e.Ref}, poolNow); err != nil {
-			t.Fatalf("entry %x was dropped: %v", e.Ref[0], err)
-		}
-	}
-
-	before, err := os.ReadFile(poolPath(store))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dropped, remaining, err = DropKeyPackagesUnless(secrets, testOwner, poolNow, keep)
-	if err != nil || dropped != 0 || remaining != 2 {
-		t.Fatalf("a repeated sweep = %d, %d, %v", dropped, remaining, err)
-	}
-	after, err := os.ReadFile(poolPath(store))
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("a sweep with nothing to drop rewrote the pool (%v)", err)
-	}
-}
-
-func TestKeyPackagePool_SweepMintsNoSealKey(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("APPDATA", filepath.Join(dir, "appdata"))
-	secrets := testdouble.NewMemorySecretStore()
-	dropped, remaining, err := DropKeyPackagesUnless(secrets, testOwner, poolNow,
-		func([]byte) (bool, error) { return false, nil })
-	if err != nil || dropped != 0 || remaining != 0 {
-		t.Fatalf("sweep without a seal key = %d, %d, %v", dropped, remaining, err)
-	}
-	if _, err := loadSealKey(secrets, testOwner); !errors.Is(err, keychain.ErrSecretNotFound) {
-		t.Fatalf("the sweep minted a seal key: %v", err)
 	}
 }

@@ -1,5 +1,5 @@
-// Package chatstate holds one sealed file per conversation for DragPass chat
-// v2's cipher state (the MLS group state and its send / receive counters).
+// Package chatstate holds one sealed file per conversation for DragPass
+// chat's cipher state (the MLS group state and its send / receive counters).
 //
 // It exists because `keychain.SecretStore` cannot hold this. Its whole
 // interface is Get / Set / Delete, so there is no primitive that changes the

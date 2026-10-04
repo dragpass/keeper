@@ -65,10 +65,7 @@ func (c ContentType) valid() bool {
 // loses an ordinary message rather than a repeated one.
 //
 // The MLS send path fills all four, because SendCipher.Peek reads this
-// device's own leaf and axis off the group state. The pre-MLS commit_outbox
-// path fills only Epoch and Generation and leaves the other two at zero, which
-// is what localLeafIndex reads a named axis as: proof that the position came
-// from a peek and its leaf is real, rather than a default.
+// device's own leaf and axis off the group state.
 type Position struct {
 	Epoch           uint64      `json:"epoch"`
 	SenderLeafIndex uint32      `json:"sender_leaf_index"`
@@ -127,7 +124,7 @@ type PendingCommit struct {
 	// (the member set it declares, which flow built it) once its own note of
 	// the Commit is gone. Without it an app that lost that note cannot tell
 	// the server what the Commit is, and the conversation stays pending.
-	// Absent on a Commit built before 0.0.55.
+	// Absent when the build was given none.
 	AppContext []byte `json:"app_context,omitempty"`
 
 	// Name is the room name the first build sealed for ExpectedEpoch+1, kept
@@ -224,11 +221,8 @@ type Record struct {
 	// the group state when this device entered it. It names the only chain a
 	// server watermark can describe for this device (Record.ownsChain).
 	//
-	// Absent in a record written before it existed, and in one whose group
-	// was created or joined before it: ownLeaf falls back to the send path's
-	// positions, and then to "unknown", which judges a watermark as before.
-	// SchemaVersion is not raised for it: a Keeper that drops it on rewrite
-	// leaves exactly that fallback.
+	// Absent until a group is created or joined, and cleared with the group:
+	// ownLeaf then reports "unknown", which judges a watermark as before.
 	OwnLeaf *OwnLeaf `json:"own_leaf,omitempty"`
 
 	// JoinedKeyPackageRef is the KeyPackage the last join into this record
@@ -248,16 +242,13 @@ type Record struct {
 
 	// ConfirmedCommits is the fork ring (authority.go): which Commit produced
 	// each of the last epochs this device confirmed from a Commit it held.
-	// Absent in a record written before it existed, which only means nothing
-	// can be compared yet. SchemaVersion is not raised for it: a Keeper that
-	// drops it on rewrite leaves an empty ring, which compares nothing and
-	// latches nothing, the direction that loses detection rather than state.
+	// Empty until the first such confirmation, which only means nothing can
+	// be compared yet.
 	ConfirmedCommits []ConfirmedCommit `json:"confirmed_commits,omitempty"`
 
 	// OpenedSeqs is every server seq MLS has opened on this device, sorted
 	// and merged. It outlives the History ring on purpose: the ring evicts the
-	// copy, and this is what still knows the key behind it is gone. Absent in
-	// a record written before it existed; see legacyOpenedFloor.
+	// copy, and this is what still knows the key behind it is gone.
 	OpenedSeqs []SeqRange `json:"opened_seqs,omitempty"`
 }
 
@@ -338,40 +329,10 @@ func (r *Record) appendOutbox(e OutboxEntry) {
 	}
 }
 
-// localLeafIndex reports this device's own leaf in the group as the send path
-// last wrote it, and whether it ever did. It is ownLeaf's fallback for a record
-// without OwnLeaf.
-//
-// The authoritative copy is inside GroupState, which this package treats as
-// opaque; OwnLeaf is that copy as it was read when the group was entered.
-// What is readable here without it is the positions this device's own send
-// path wrote: those come from SendCipher.Peek, so they carry the real leaf and
-// name the ratchet they sit on. The positions the pre-MLS
-// commit_outbox path writes name neither, and that is what separates "never
-// learned" from "leaf 0" — a distinction a bare uint32 cannot carry, and the
-// one a watermark's leaf slot has to be judged against.
-func (r *Record) localLeafIndex() (uint32, bool) {
-	if r.PendingSend != nil && r.PendingSend.ContentType.valid() {
-		return r.PendingSend.SenderLeafIndex, true
-	}
-	for i := len(r.Outbox) - 1; i >= 0; i-- {
-		if r.Outbox[i].Position.ContentType.valid() {
-			return r.Outbox[i].Position.SenderLeafIndex, true
-		}
-	}
-	return 0, false
-}
-
-// ownLeaf is OwnLeaf, or for a record that predates it the leaf the send
-// path last wrote, which this device has held since some epoch it cannot
-// name. Zero is the safe answer for that epoch: SinceEpoch never exceeds
-// Record.Epoch, and a watermark below Record.Epoch cannot latch anything.
+// ownLeaf is OwnLeaf, and whether the record knows it.
 func (r *Record) ownLeaf() (OwnLeaf, bool) {
 	if r.OwnLeaf != nil {
 		return *r.OwnLeaf, true
-	}
-	if index, ok := r.localLeafIndex(); ok {
-		return OwnLeaf{Index: index}, true
 	}
 	return OwnLeaf{}, false
 }

@@ -126,14 +126,9 @@ type SeqRange struct {
 // On overflow the lowest gap is filled. The seqs in it then read as opened,
 // so the direction of the error is a message shown as unavailable, never a
 // consumed key handed back to MLS.
-func (r *Record) markOpened(seq uint64, policy HistoryPolicy) {
+func (r *Record) markOpened(seq uint64) {
 	if seq == 0 {
 		return
-	}
-	if len(r.OpenedSeqs) == 0 {
-		if floor := r.legacyOpenedFloor(policy); floor > 0 {
-			r.OpenedSeqs = []SeqRange{{From: 1, Through: floor}}
-		}
 	}
 	ranges := append(r.OpenedSeqs, SeqRange{From: seq, Through: seq})
 	slices.SortFunc(ranges, func(a, b SeqRange) int { return cmp.Compare(a.From, b.From) })
@@ -154,39 +149,13 @@ func (r *Record) markOpened(seq uint64, policy HistoryPolicy) {
 }
 
 // opened reports whether MLS already opened seq on this device.
-func (r *Record) opened(seq uint64, policy HistoryPolicy) bool {
-	if len(r.OpenedSeqs) == 0 {
-		return seq > 0 && seq <= r.legacyOpenedFloor(policy)
-	}
+func (r *Record) opened(seq uint64) bool {
 	for _, run := range r.OpenedSeqs {
 		if seq >= run.From && seq <= run.Through {
 			return true
 		}
 	}
 	return false
-}
-
-// legacyOpenedFloor stands in for OpenedSeqs in a record written before it
-// existed: everything below the oldest delivered copy still held, and only
-// when the ring is full, since a ring that never evicted still holds every
-// message it was given. It is an inference and not a record — a seq below
-// that copy that this device skipped reads as opened too — and it errs in the
-// direction markOpened's overflow does: shown as unavailable, never handed
-// back to MLS.
-func (r *Record) legacyOpenedFloor(policy HistoryPolicy) uint64 {
-	if len(r.History) < policy.maxEntries() {
-		return 0
-	}
-	oldest := uint64(0)
-	for _, e := range r.History {
-		if e.ClientMessageID == "" && e.Seq > 0 && (oldest == 0 || e.Seq < oldest) {
-			oldest = e.Seq
-		}
-	}
-	if oldest == 0 {
-		return 0
-	}
-	return oldest - 1
 }
 
 // findHistory never matches seq 0: that is a sent entry the server has not

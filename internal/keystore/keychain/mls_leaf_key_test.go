@@ -56,31 +56,29 @@ func TestMLSLeafKey_RefusesAKeyWithoutADeclaration(t *testing.T) {
 	}
 }
 
-// Records from 0.0.43 (v1, no declaration) and 0.0.44 (v2, a declaration
-// signed over the version 1 canonical) still read, so the identity check and
-// the reset see them, but they come back with no key material: nothing can
-// sign with them again.
-func TestMLSLeafKey_LegacyRecordsReadAsIdentityOnly(t *testing.T) {
-	for _, legacy := range []map[string]any{
-		{"v": 1},
-		{"v": 2, "declaration": []byte("v1 declaration")},
-	} {
-		store := NewMemorySecretStore()
-		public, secret, _ := ed25519.GenerateKey(nil)
-		legacy["account_id"], legacy["device_id"], legacy["secret_key"], legacy["public_key"] = "a", "d", secret, public
-		raw, _ := json.Marshal(legacy)
-		if err := store.Set(config.Service, config.MLSLeafSignatureKey, string(raw)); err != nil {
-			t.Fatal(err)
-		}
-		got, found, err := GetMLSLeafKey(store)
-		if err != nil || !found {
-			t.Fatalf("v%v record: found=%v err=%v", legacy["v"], found, err)
-		}
-		if got.Usable() || got.SecretKey != nil || got.PublicKey != nil || got.Declaration != nil {
-			t.Fatalf("v%v record came back usable or with key material", legacy["v"])
-		}
-		if got.AccountID != "a" || got.DeviceID != "d" {
-			t.Fatalf("v%v record lost its identity", legacy["v"])
+// The v1 and v2 records of unreleased development builds are refused in either
+// slot, never read back as an identity.
+func TestMLSLeafKey_RetiredDevelopmentVersionsAreUnreadable(t *testing.T) {
+	for _, slot := range []string{config.MLSLeafSignatureKey, config.MLSLeafSignatureKeyPending} {
+		for _, retired := range []map[string]any{
+			{"v": 1},
+			{"v": 2, "declaration": []byte("v1 declaration")},
+		} {
+			store := NewMemorySecretStore()
+			public, secret, _ := ed25519.GenerateKey(nil)
+			retired["account_id"], retired["device_id"], retired["secret_key"], retired["public_key"] = "a", "d", secret, public
+			raw, _ := json.Marshal(retired)
+			if err := store.Set(config.Service, slot, string(raw)); err != nil {
+				t.Fatal(err)
+			}
+			get := GetMLSLeafKey
+			if slot == config.MLSLeafSignatureKeyPending {
+				get = GetMLSLeafPending
+			}
+			got, found, err := get(store)
+			if err == nil || found || got.SecretKey != nil || got.AccountID != "" {
+				t.Fatalf("%s v%v record: found=%v err=%v", slot, retired["v"], found, err)
+			}
 		}
 	}
 }
@@ -96,7 +94,7 @@ func TestMLSLeafPending_IsItsOwnSlotAndCurrentVersionOnly(t *testing.T) {
 		t.Fatal("a pending save wrote the active slot")
 	}
 	got, found, err := GetMLSLeafPending(store)
-	if err != nil || !found || !got.Usable() || string(got.PublicKey) != string(public) {
+	if err != nil || !found || string(got.PublicKey) != string(public) {
 		t.Fatalf("pending round trip: found=%v err=%v", found, err)
 	}
 	if removed, err := DeleteMLSLeafPending(store); !removed || err != nil {

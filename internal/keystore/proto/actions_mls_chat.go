@@ -1,5 +1,5 @@
 // actions_mls_chat.go — Wire-protocol Action* constants for the MLS half of
-// DragPass chat v2.
+// DragPass chat.
 //
 // These sit on top of the chat_state_* actions rather than beside them: the
 // same sealed state directory, the same per-conversation lock, the same
@@ -223,13 +223,6 @@ const (
 	// requested_at, signature}, the account key's signature over
 	// dragpass.mls.rejoin|1|<conversation_id>|<account_id>|<device_id>|<signature_key_fp>|<requested_at>.
 	MLSRejoinRequestSign = "mls_rejoin_request_sign"
-
-	// MLSCommitAbandon drops a pending Commit built before 0.0.55 (no
-	// app_context_b64) on the user's confirmation (0.0.55, design Q23).
-	// permit-gated. Request: permit, org_id, conversation_id,
-	// client_commit_id. Response: generation. A pending Commit that carries
-	// an app context is CHAT_STATE_CONFLICT: it can be reposted.
-	MLSCommitAbandon = "mls_commit_abandon"
 
 	// MLSLeaveRequestSign signs this device's request to leave a conversation
 	// (0.0.55, design Q13). permit-gated. Request: permit, org_id,

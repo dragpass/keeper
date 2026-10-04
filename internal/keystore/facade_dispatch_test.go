@@ -48,6 +48,7 @@ func TestHandleRequest_RemovedActionsAnswerUnsupported(t *testing.T) {
 		"chat_state_reserve_send", "chat_state_commit_outbox", "chat_state_mark_received",
 		"dek_generate_and_wrap_dual", "generatekeypairwithrecoverywrap",
 		"group_session_status", "getsessioncode",
+		"mls_key_package_pool_sweep", "mls_commit_abandon",
 	} {
 		resp := app.HandleRequest([]byte(`{"action":"` + action + `","request_id":"old","payload":{}}`))
 		if resp.Success || resp.ErrorCode != string(ErrCodeUnsupported) ||

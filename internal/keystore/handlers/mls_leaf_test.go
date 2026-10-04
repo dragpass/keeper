@@ -356,8 +356,7 @@ func TestHandleMLSLeafDeclare_ARotateWithoutALocalLeafIsATakeover(t *testing.T) 
 	if got := promoteLeaf(t, deps, d); !got.Promoted || got.Fingerprint != d.SignatureKeyFingerprint {
 		t.Fatalf("takeover promote = %+v", got)
 	}
-	if key := storedLeafKey(t, store); !key.Usable() ||
-		base64.StdEncoding.EncodeToString(key.PublicKey) != d.SignatureKey {
+	if key := storedLeafKey(t, store); base64.StdEncoding.EncodeToString(key.PublicKey) != d.SignatureKey {
 		t.Fatal("the promoted takeover key is not the active one")
 	}
 	resp := HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
@@ -496,30 +495,29 @@ func TestHandleMLSLeafDeclare_RefusedChallengeCreatesNoKey(t *testing.T) {
 	}
 }
 
-// 0.0.44 stored its active record as v2, with a declaration signed over the
-// version 1 canonical. That record is not a key any session uses, and enroll
-// replaces it with a new key rather than re-signing the old one.
-func TestHandleMLSLeafDeclare_AVersionTwoRecordDoesNotComeBackToLife(t *testing.T) {
+// A v2 record from an unreleased development build is unreadable rather than
+// a key anything signs with, and reset_device_identity is the way out of it.
+func TestHandleMLSLeaf_ARetiredVersionTwoRecordIsUnreadableUntilReset(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	seedActiveKeypairForRotateTest(t, store)
 	public, secret, _ := ed25519.GenerateKey(nil)
-	legacy, _ := json.Marshal(map[string]any{
+	retired, _ := json.Marshal(map[string]any{
 		"v": 2, "account_id": leafTestAccountID, "device_id": leafTestDeviceID,
 		"secret_key": secret, "public_key": public, "declaration": []byte(`{"v":1}`),
 	})
-	if err := store.Set(config.Service, config.MLSLeafSignatureKey, string(legacy)); err != nil {
+	if err := store.Set(config.Service, config.MLSLeafSignatureKey, string(retired)); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := leafStatus(t, deps); got.HasActive || got.HasPending {
-		t.Fatalf("status over a v2 record = %+v, want no usable entry", got)
+	if resp := HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{}); resp.Success ||
+		resp.ErrorCode != string(errs.ErrCodeStorageFailure) {
+		t.Fatalf("status over a v2 record = %+v, want storage_failure", resp)
 	}
-	fresh := enrollLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
-	if fresh.SignatureKey == base64.StdEncoding.EncodeToString(public) {
-		t.Fatal("enroll re-declared the key a v2 record held")
+	if resp := HandleResetDeviceIdentity(deps, proto.ResetDeviceIdentityRequest{}); !resp.Success {
+		t.Fatalf("reset_device_identity: %s", resp.Error)
 	}
-	if key := storedLeafKey(t, store); !key.Usable() || string(key.PublicKey) == string(public) {
-		t.Fatal("the v2 record survived the enroll that replaced it")
+	if _, found, err := keychain.GetMLSLeafKey(store); found || err != nil {
+		t.Fatalf("after reset: found=%v err=%v", found, err)
 	}
 }
 

@@ -71,7 +71,7 @@ func HandleMLSLeafHandoverSign(d Deps, req proto.MLSLeafHandoverSignRequest) pro
 			return nil
 		}
 		defer wipeMLSLeafSlots(active, pending)
-		if active == nil || !active.Usable() || active.AccountID != req.AccountID {
+		if active == nil || active.AccountID != req.AccountID {
 			resp = errs.CodeResponse(errs.ErrCodeNotFound, "this device holds no active mls leaf for the account")
 			return nil
 		}

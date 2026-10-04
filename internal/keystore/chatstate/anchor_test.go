@@ -1,6 +1,5 @@
-// anchor_test.go — the keyring anchor's two jobs: surviving the rename of the
-// watermark it was storing, and judging only the axis a sender can actually
-// advance.
+// anchor_test.go — the keyring anchor's two jobs: refusing a layout it does
+// not know, and judging only the axis a sender can actually advance.
 
 package chatstate
 
@@ -13,9 +12,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
-// legacyAnchorJSON is a real anchor as 0.0.35–0.0.40 wrote one: one watermark
-// counter under the old name, and no version field at all.
-const legacyAnchorJSON = `{"generation":9,"reserved_before":12,"epoch":3,` +
+// retiredAnchorJSON is an anchor as unreleased development builds wrote one:
+// one watermark counter under an old name, and no version field at all.
+const retiredAnchorJSON = `{"generation":9,"reserved_before":12,"epoch":3,` +
 	`"watermark_epoch":3,"watermark_next_index":7,"needs_rekey":false}`
 
 // rewound reports whether the record has fallen behind either axis: the
@@ -24,37 +23,22 @@ func (a Anchor) rewound(rec *Record, wm ServerWatermark) bool {
 	return a.rewoundLocally(rec) || a.watermarkAhead(rec, wm)
 }
 
-func TestALegacyAnchorFoldsItsWatermarkIntoTheApplicationAxis(t *testing.T) {
+// The unversioned anchor of unreleased development builds kept one watermark
+// under an old name. It is not folded into the current layout; it reads as an
+// unreadable anchor, which latches a rekey rather than starting from zero.
+func TestARetiredUnversionedAnchorIsUnreadable(t *testing.T) {
 	secrets := testdouble.NewMemorySecretStore()
 	const tag = "conversation-tag"
-	if err := secrets.Set(config.Service, anchorAccount(tag), legacyAnchorJSON); err != nil {
+	if err := secrets.Set(config.Service, anchorAccount(tag), retiredAnchorJSON); err != nil {
 		t.Fatal(err)
 	}
 
 	anchor, err := loadAnchor(secrets, tag)
 	if err != nil {
-		t.Fatalf("load legacy anchor: %v", err)
+		t.Fatalf("load retired anchor: %v", err)
 	}
-	if anchor.Version != AnchorVersion {
-		t.Fatalf("folded anchor version = %d, want %d", anchor.Version, AnchorVersion)
-	}
-	if anchor.WatermarkNextApplication != 7 {
-		t.Fatalf("watermark_next_index landed on the application axis as %d, want 7",
-			anchor.WatermarkNextApplication)
-	}
-	if anchor.WatermarkNextHandshake != 0 {
-		t.Fatalf("the handshake axis invented a value: %d", anchor.WatermarkNextHandshake)
-	}
-	if anchor.Generation != 9 || anchor.ReservedBefore != 12 || anchor.Epoch != 3 {
-		t.Fatalf("the rest of the legacy anchor did not survive: %+v", anchor)
-	}
-
-	// The fold is not cosmetic. A record this device rewound to position 5 is
-	// caught only because the folded 7 is still there; read as zero, the axis
-	// would quietly accept it.
-	rewoundRecord := &Record{Generation: 9, NextIndex: 5, Epoch: 3}
-	if !anchor.rewound(rewoundRecord, ServerWatermark{}) {
-		t.Fatal("a folded legacy watermark stopped catching the rewind it was written for")
+	if !anchor.NeedsRekey || anchor.RekeyCause != RekeyCauseAnchorUnreadable {
+		t.Fatalf("retired anchor = %+v, want an unreadable-anchor rekey", anchor)
 	}
 }
 
@@ -126,39 +110,6 @@ func TestWithWatermarkNeverLowersASlot(t *testing.T) {
 	if next.WatermarkEpoch != 5 || next.WatermarkNextApplication != 1 ||
 		next.WatermarkNextHandshake != 0 {
 		t.Fatalf("a new epoch carried the old epoch's counters: %+v", next)
-	}
-}
-
-// A record without OwnLeaf falls back to the positions this device's own send
-// path wrote, and only those name their ratchet. An entry that names none is
-// not a device that sends from leaf 0; it is a device whose leaf this record
-// has never learned.
-func TestLocalLeafIsUnknownUntilTheSendPathWritesOne(t *testing.T) {
-	store, _ := newTestStore(t)
-
-	reservation, err := store.Reserve(testConvA, 1, noWatermark)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if _, known := readRecordForTest(t, store, testConvA).ownLeaf(); known {
-		t.Fatal("a record with nothing sent claimed a leaf")
-	}
-	if _, _, err := store.CommitOutbox(testConvA, noWatermark, sampleEntry(reservation.FirstChainIndex)); err != nil {
-		t.Fatalf("commit outbox: %v", err)
-	}
-	if _, known := readRecordForTest(t, store, testConvA).ownLeaf(); known {
-		t.Fatal("an axis-less outbox entry read as leaf 0")
-	}
-
-	seedGroupState(t, store, testConvB, 0, 6, 0)
-	if _, err := store.Send(testConvB, noWatermark, SendRequest{
-		ClientMessageID: testClientA, Plaintext: []byte("hello"),
-	}, &fakeCipher{}); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	own, known := readRecordForTest(t, store, testConvB).ownLeaf()
-	if !known || own != (OwnLeaf{Index: 6}) {
-		t.Fatalf("own leaf after a send = %+v, known=%v; want leaf 6 since 0", own, known)
 	}
 }
 
