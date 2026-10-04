@@ -72,7 +72,11 @@
 // A legacy_temporary group has no roles until its creator migrates them. Until
 // then, only the authenticated creator has temporary owner authority. Other
 // members must rely on signed statements for removals or create a new room if
-// the creator is no longer available.
+// the creator is no longer available. The creator is whoever holds leaf 0, and
+// an Add lands in the leftmost blank leaf, so once leaf 0 is blank (or the
+// Commit removes the creator) no Add of another account is accepted, a
+// re-seat (R2) included: otherwise it would hand that account the creator's
+// authority from the next Commit on (roles.go judgeRoles).
 //
 // # A refusal
 //

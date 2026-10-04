@@ -71,8 +71,8 @@ func TestRoles_OwnerlessClaim(t *testing.T) {
 // receipt as on build, whoever commits it.
 func TestRoles_AnAccountThatHoldsALeafIsAddedAgainOnlyInItsPlace(t *testing.T) {
 	for name, roles := range map[string]*Roles{"legacy": nil, "room": room(rolesA), "dm": {Kind: RolesKindDM}} {
-		add := CommitChange{CommitterAccountID: rolesA, Before: []string{rolesA, rolesB}, RolesBefore: roles,
-			Added: []string{rolesB}}
+		add := CommitChange{CommitterAccountID: rolesA, CreatorAccountID: rolesA, Before: []string{rolesA, rolesB},
+			RolesBefore: roles, Added: []string{rolesB}}
 		if err := JudgeReceived(add, CommitAuthority{}); !errors.Is(err, ErrCommitUnauthorized) {
 			t.Errorf("%s: a second leaf of an account in the tree = %v; want refused", name, err)
 		}

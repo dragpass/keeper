@@ -1143,7 +1143,11 @@ or set the first roles, and local builds still require `user_initiated` for
 those actions. Other members cannot gain authority from that flag or from a
 server-signed roster. A member's own leave, a signed organization-removal
 statement, and a signed device revocation remain valid. Seating a recovered
-identity is also creator-only until roles are migrated. If the creator is no
+identity is also creator-only until roles are migrated. An Add lands in the
+leftmost blank leaf, so leaf 0 never passes to another account: once it is
+blank, or the Commit removes the creator's account, an Add of any other
+account is refused on receipt as on build, a rejoin or a device replacement
+(the paired Add of R2) included. If the creator is no
 longer available, recover the conversation as a new room. This rule supersedes
 the earlier `legacy_temporary` behavior described in the 0.0.55 history entry.
 
