@@ -66,6 +66,27 @@ const (
 	// reachable via password / recovery key.
 	ActionResetDeviceIdentity = "reset_device_identity"
 
+	// Device identity and account binding (0.0.58), so the App and the
+	// Extension share one server device and the Extension can sign itself in.
+	// None of these reads or returns key material.
+	//
+	// DeviceIDEnsure returns this machine's device id, choosing it on the
+	// first call: the stored id, else the device id of an existing MLS leaf
+	// record (so the leaf never has to move), else the caller's candidate,
+	// else a new UUID. It never changes a stored id; reset_device_identity is
+	// the only way to clear it.
+	//
+	// AccountBindingSet records which account the App signed in to
+	// ({ account_id, alias }) as a hint. DeviceAccountStatus reports the
+	// device id, the binding, the active account key's fingerprint and
+	// whether a device master is stored. DeviceSignout deletes the device
+	// master only, marks the binding signed out and closes this process's
+	// group session handles; the account key stays.
+	ActionDeviceIDEnsure      = "device_id_ensure"
+	ActionAccountBindingSet   = "account_binding_set"
+	ActionDeviceAccountStatus = "device_account_status"
+	ActionDeviceSignout       = "device_signout"
+
 	// related to signup flow
 	ActionSignAlias       = "signalias"
 	ActionSaveSessionCode = "savesessioncode"

@@ -61,7 +61,7 @@ func slotPresent(get func(keychain.SecretStore) (string, error)) func(keychain.S
 
 // resetIdentitySlots lists the account-scoped slots wiped by a reset, in a
 // stable order: active keypair, pending keypair, session code, device key,
-// MLS leaf key.
+// device id, account binding, MLS leaf key.
 // server_public_key is deliberately absent (account-independent trust anchor).
 var resetIdentitySlots = []resetIdentitySlot{
 	{config.DragPassKeeperPrivateKey, slotPresent(keychain.GetPrivateKey), keychain.DeletePrivateKey},
@@ -76,9 +76,25 @@ var resetIdentitySlots = []resetIdentitySlot{
 	{config.PendingSignupPersonalDEK, slotPresent(keychain.GetPendingSignupDeviceWrappedDEK), keychain.DeletePendingSignupDeviceWrappedDEK},
 	{config.PersonalDeviceWrappedDEK, slotPresent(keychain.GetPersonalDeviceWrappedDEK), keychain.DeletePersonalDeviceWrappedDEK},
 	{config.DeviceKey, slotPresent(keychain.GetDeviceKey), keychain.DeleteDeviceKey},
+	// A reset device is a new device to the server and to MLS: the next
+	// device_id_ensure chooses a new id, and the App writes a new binding.
+	{config.DeviceID, deviceIDPresent, keychain.DeleteDeviceID},
+	{config.AccountBinding, accountBindingPresent, keychain.DeleteAccountBinding},
 	// The leaf key's declaration is signed by the account key this reset
 	// destroys, and names the account being re-enrolled away from, so the key
 	// is account-scoped however device-scoped its record looks.
+}
+
+// An unreadable device id or binding counts as present so the reset still
+// removes it.
+func deviceIDPresent(store keychain.SecretStore) bool {
+	_, found, err := keychain.GetDeviceID(store)
+	return found || err != nil
+}
+
+func accountBindingPresent(store keychain.SecretStore) bool {
+	_, found, err := keychain.GetAccountBinding(store)
+	return found || err != nil
 }
 
 // An unreadable record counts as present so the reset still removes it.

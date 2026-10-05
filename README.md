@@ -364,7 +364,7 @@ Removes the device encryption key from the keystore.
 
 Wipes this device's account-scoped key material so the user can re-enroll after
 a server-side account/DB reset. Clears the active keypair, pending keypair,
-session code, and device key. `server_public_key` is an account-independent
+session code, device key, device id and account binding. `server_public_key` is an account-independent
 trust anchor and is preserved. Idempotent (succeeds even when nothing is
 present) and returns no key material — only the names of the slots removed.
 
@@ -382,6 +382,100 @@ present) and returns no key material — only the names of the slots removed.
   "data": {
     "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
   }
+}
+```
+
+---
+
+#### `device_id_ensure` - Ensure Device ID
+
+Returns this machine's device id (0.0.58), choosing it on the first call: an id already stored, else the device id of an existing MLS leaf record, else `candidate_device_id`, else a new UUID. A stored id never changes; only `reset_device_identity` clears it. Not a secret.
+
+**Request:**
+```json
+{
+  "action": "device_id_ensure",
+  "payload": { "candidate_device_id": "33333333-3333-4333-8333-333333333333" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "device_id": "33333333-3333-4333-8333-333333333333", "source": "candidate" }
+}
+```
+
+---
+
+#### `account_binding_set` - Set Account Binding
+
+Records which account the App signed in to on this device (0.0.58), so the Extension can sign itself in. Needs an active account key. `generation` moves whenever the record changes. A hint, not an identity: the server and the active account key decide every sign-in.
+
+**Request:**
+```json
+{
+  "action": "account_binding_set",
+  "payload": { "account_id": "11111111-1111-4111-8111-111111111111", "alias": "alice" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "changed": true, "generation": 1 }
+}
+```
+
+---
+
+#### `device_account_status` - Device Account Status
+
+Reports the device id, the account binding, the active account key fingerprint and whether a device master is stored (0.0.58). Read-only; returns no key material.
+
+**Request:**
+```json
+{
+  "action": "device_account_status"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "device_id": "33333333-3333-4333-8333-333333333333",
+    "account_id": "11111111-1111-4111-8111-111111111111",
+    "alias": "alice",
+    "generation": 1,
+    "account_key_fingerprint": "<sha256 hex of the account public key PEM>",
+    "device_master_present": true,
+    "signed_out": false
+  }
+}
+```
+
+---
+
+#### `device_signout` - Sign Out This Device
+
+Deletes the device master and marks the binding signed out (0.0.58). The account key, device key, request-signing key and MLS leaf stay, so a password sign-in on the App restores the device. Idempotent.
+
+**Request:**
+```json
+{
+  "action": "device_signout"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "device_master_removed": true, "closed_group_sessions": 0, "generation": 2 }
 }
 ```
 

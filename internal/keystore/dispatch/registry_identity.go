@@ -32,6 +32,12 @@ func identityActions() map[string]actionHandlerFunc {
 		// local self-recovery: wipe this device's account-scoped key material
 		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),
 
+		// one device id per machine and the account binding hint (0.0.58)
+		proto.ActionDeviceIDEnsure:      wrap(handlers.HandleDeviceIDEnsure),
+		proto.ActionAccountBindingSet:   wrap(handlers.HandleAccountBindingSet),
+		proto.ActionDeviceAccountStatus: wrap(handlers.HandleDeviceAccountStatus),
+		proto.ActionDeviceSignout:       wrap(handlers.HandleDeviceSignout),
+
 		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
 
 		proto.ActionGetPublicKey: wrap(handlers.HandleGetPublicKey),

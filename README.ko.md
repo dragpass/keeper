@@ -291,7 +291,7 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
 
 서버에서 계정이나 DB가 초기화된 뒤, 사용자가 이 기기로 다시 가입할 수 있도록
 기기에 남은 계정 관련 키 자료를 모두 지웁니다. 활성 키페어, 대기 키페어, 세션
-코드, 디바이스 키를 삭제합니다. `server_public_key`는 계정과 무관한 신뢰 앵커라
+코드, 디바이스 키, 기기 id, 계정 바인딩을 삭제합니다. `server_public_key`는 계정과 무관한 신뢰 앵커라
 그대로 둡니다. 멱등이라 지울 게 없어도 성공하며, 키 자료는 반환하지 않고 삭제된
 슬롯 이름만 돌려줍니다.
 
@@ -309,6 +309,100 @@ DragPass Keeper가 실행 중이며 정상적으로 응답하는지 확인합니
   "data": {
     "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
   }
+}
+```
+
+---
+
+#### `device_id_ensure` - Ensure Device ID
+
+이 기기의 기기 id 를 돌려줍니다 (0.0.58). 첫 호출에서 정합니다. 저장된 id 가 있으면 그것을, 없으면 기존 MLS leaf 기록의 기기 id 를, 그것도 없으면 `candidate_device_id` 를, 셋 다 없으면 새 UUID 를 씁니다. 저장된 id 는 바뀌지 않고 `reset_device_identity` 만 지웁니다. 비밀이 아닙니다.
+
+**Request:**
+```json
+{
+  "action": "device_id_ensure",
+  "payload": { "candidate_device_id": "33333333-3333-4333-8333-333333333333" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "device_id": "33333333-3333-4333-8333-333333333333", "source": "candidate" }
+}
+```
+
+---
+
+#### `account_binding_set` - Set Account Binding
+
+App 이 이 기기에서 로그인한 계정을 기록합니다 (0.0.58). Extension 이 스스로 로그인할 때 씁니다. 활성 계정 키가 있어야 합니다. 기록이 바뀔 때마다 `generation` 이 오릅니다. 신원이 아니라 힌트이고, 로그인 판정은 서버와 활성 계정 키가 합니다.
+
+**Request:**
+```json
+{
+  "action": "account_binding_set",
+  "payload": { "account_id": "11111111-1111-4111-8111-111111111111", "alias": "alice" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "changed": true, "generation": 1 }
+}
+```
+
+---
+
+#### `device_account_status` - Device Account Status
+
+기기 id, 계정 바인딩, 활성 계정 키 지문, 기기 master 보관 여부를 알려 줍니다 (0.0.58). 읽기 전용이고 키 자료는 돌려주지 않습니다.
+
+**Request:**
+```json
+{
+  "action": "device_account_status"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "device_id": "33333333-3333-4333-8333-333333333333",
+    "account_id": "11111111-1111-4111-8111-111111111111",
+    "alias": "alice",
+    "generation": 1,
+    "account_key_fingerprint": "<sha256 hex of the account public key PEM>",
+    "device_master_present": true,
+    "signed_out": false
+  }
+}
+```
+
+---
+
+#### `device_signout` - Sign Out This Device
+
+기기 master 를 지우고 바인딩을 로그아웃 상태로 표시합니다 (0.0.58). 계정 키, 디바이스 키, 요청 서명 키, MLS leaf 는 남으므로 App 에서 비밀번호로 로그인하면 기기가 복원됩니다. 멱등입니다.
+
+**Request:**
+```json
+{
+  "action": "device_signout"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "device_master_removed": true, "closed_group_sessions": 0, "generation": 2 }
 }
 ```
 
