@@ -136,7 +136,8 @@ const (
 	// DeviceKey voluntary rotation (single composite action).
 	//
 	// RotateDeviceKey: takes the current device-wrapped personal DEK
-	//   Base64(iv||ct) and:
+	//   Base64(iv||ct), or (0.0.58) none to rotate the one in the
+	//   personal_device_wrapped_dek slot, and:
 	//   - fetches the current deviceKey from the Keychain (memguard)
 	//   - unwraps the input wrap with the OLD deviceKey → raw 32B DEK
 	//     (memguard)

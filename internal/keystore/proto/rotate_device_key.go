@@ -13,11 +13,16 @@ package proto
 
 // RotateDeviceKeyRequest — Base64 of the raw bytes the Extension decoded
 // from the current device-wrapped DEK in deviceMasterStorage Braille.
+// Empty (0.0.58) rotates the device-wrapped DEK this Keeper keeps in its
+// personal_device_wrapped_dek slot.
 type RotateDeviceKeyRequest struct {
-	DeviceWrappedDEKB64 string `json:"device_wrapped_dek_b64"`
+	DeviceWrappedDEKB64 string `json:"device_wrapped_dek_b64,omitempty"`
 }
 
 func (r RotateDeviceKeyRequest) Validate() error {
+	if r.DeviceWrappedDEKB64 == "" {
+		return nil
+	}
 	_, err := requireBase64(r.DeviceWrappedDEKB64, "device_wrapped_dek_b64")
 	return err
 }
