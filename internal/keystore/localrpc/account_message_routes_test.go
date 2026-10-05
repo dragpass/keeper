@@ -129,14 +129,18 @@ func TestAppAccountKeyRotationRewrapsOnlyToThePendingKey(t *testing.T) {
 	}
 }
 
-func TestAppDeviceForgetDeletesTheDeviceKey(t *testing.T) {
+func TestAppDeviceForgetDeletesTheDeviceKeyOnce(t *testing.T) {
 	server, store, _, session, csrf := newKeyedRouteServer(t)
 	_ = keychain.SaveDeviceKey(store, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)))
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/device/forget", map[string]any{"scope": "all"}); code != http.StatusBadRequest {
 		t.Fatalf("forget took a field: %d", code)
 	}
-	if code, result, body := callRoute(t, server, session, csrf, "/v1/device/forget", map[string]any{}); code != http.StatusOK || !result.Success {
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/device/forget", map[string]any{}); code != http.StatusOK || !result.Success || string(result.Data) != `{"forgotten":true}` {
 		t.Fatalf("forget: %d %s", code, body)
+	}
+	// A retry after the server revocation failed finds nothing to delete.
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/device/forget", map[string]any{}); code != http.StatusOK || !result.Success || string(result.Data) != `{"forgotten":false}` {
+		t.Fatalf("forget again: %d %s", code, body)
 	}
 	if present, _ := keychain.DeviceKeyPresent(store); present {
 		t.Fatal("the device key is still there")

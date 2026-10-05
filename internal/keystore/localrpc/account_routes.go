@@ -36,9 +36,30 @@ var accountRoutes = map[string]appRoute{
 	// else: the device-wrapped personal DEK left behind cannot be opened
 	// without it, and the next password login writes a new one.
 	"/v1/device/forget": {
-		action: proto.ActionDeleteDeviceKey,
-		input:  func() any { return &proto.DeleteDeviceKeyRequest{} },
+		input: func() any { return &proto.DeleteDeviceKeyRequest{} },
+		run:   runDeviceForget,
 	},
+}
+
+// runDeviceForget deletes the device key only when one is stored. The delete
+// action refuses a missing key, and the App retries a forget whose server
+// revocation failed after the local wipe went through.
+func runDeviceForget(s *Server, request appRequest, _ any) (proto.BaseResponse, error) {
+	status, err := s.handleRequest(request, proto.ActionDeviceKeyStatus, nil)
+	if err != nil || !status.Success {
+		return status, err
+	}
+	var data proto.DeviceKeyStatusResponseData
+	if err := remarshal(status.Data, &data); err != nil {
+		return proto.BaseResponse{}, err
+	}
+	if data.Present {
+		deleted, err := s.handleRequest(request, proto.ActionDeleteDeviceKey, nil)
+		if err != nil || !deleted.Success {
+			return deleted, err
+		}
+	}
+	return proto.BaseResponse{Success: true, Data: map[string]bool{"forgotten": data.Present}}, nil
 }
 
 type appRotationRewrap struct {

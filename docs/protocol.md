@@ -2227,7 +2227,7 @@ rotation and the device wipe the Extension's admin bridge runs:
 |`/v1/account-key/rotate/prepare`|`rotate_user_keypair_prepare`||
 |`/v1/account-key/rotate/rewrap-group-dek`|`dek_rewrap_for_member`|Only `{ wrapped_for_me_b64 }`. The target is the pending key of the rotation in progress, which Keeper reads itself (400 when nothing is pending); a self-wrap names no accounts, so no pin applies, as on Native Messaging.|
 |`/v1/account-key/rotate/promote`|`rotate_user_keypair_promote`||
-|`/v1/device/forget`|`deletedevicekey`|`{}`. The device-wrapped personal DEK left behind cannot be opened without the device key; the next password login writes a new one.|
+|`/v1/device/forget`|`device_key_status`, then `deletedevicekey`|`{}` → `{ forgotten }`. Deletes the device key only when one is stored, so a retry (the server revocation failed after the local wipe) succeeds with `forgotten: false`. The device-wrapped personal DEK left behind cannot be opened without the device key; the next password login writes a new one.|
 
 **Group handle routes.** The Secure Message and the external share, as the
 Extension background runs them. No route takes an AAD or answers a key:
