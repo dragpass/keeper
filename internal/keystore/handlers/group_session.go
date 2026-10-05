@@ -50,7 +50,7 @@ func HandleGroupSessionOpen(d Deps, req proto.GroupSessionOpenRequest) proto.Bas
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "unexpected group dek length (want 32)")
 	}
 
-	handle, expiresAt, err := d.GroupSessions.Open(rawDEK)
+	handle, expiresAt, err := d.GroupSessions.OpenLabeled(rawDEK, req.OrgID)
 	if err != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group session open error: store.Open failed: %v", err)

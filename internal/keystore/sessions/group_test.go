@@ -255,3 +255,21 @@ func mustRandKey(t *testing.T) []byte {
 	}
 	return key
 }
+
+func TestGroupSessionLabelStaysWithTheHandle(t *testing.T) {
+	store := NewGroupSessionStore(time.Minute)
+	labeled, _, err := store.OpenLabeled(make([]byte, 32), "org-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := store.Open(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for handle, want := range map[string]string{labeled: "org-a", plain: ""} {
+		var got string
+		if err := store.UseLabeled(handle, func(_ []byte, label string) error { got = label; return nil }); err != nil || got != want {
+			t.Fatalf("label = %q err=%v, want %q", got, err, want)
+		}
+	}
+}

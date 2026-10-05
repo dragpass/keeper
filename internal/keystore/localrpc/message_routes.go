@@ -41,8 +41,20 @@ var groupHandleRoutes = map[string]appRoute{
 	"/v1/guest-share/transcrypt": {
 		action:     proto.ActionGroupTranscryptForGuest,
 		input:      func() any { return &proto.GroupTranscryptForGuestRequest{} },
+		bind:       bindGuestTranscrypt,
 		plainLimit: guestTranscryptMaxRequestBytes,
 	},
+}
+
+// bindGuestTranscrypt requires the org the App applied the external-share
+// policy for. The App can paste any token, so the route never transcrypts one
+// without naming the org its handle must have been opened for.
+func bindGuestTranscrypt(_ *Server, input any) (any, error) {
+	in := input.(*proto.GroupTranscryptForGuestRequest)
+	if !validUUID(in.ExpectedOrgID) || in.ExpectedOrgID == nilUUID {
+		return nil, errAppRouteRefused
+	}
+	return *in, nil
 }
 
 // appMessageSeal names the message, never its AAD, so the route cannot seal
