@@ -120,6 +120,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_session_end",
 	"/v1/archive/archive_share_rewrap",
 	"/v1/archive/archive_unwrap_and_rewrap",
+	"/v1/auth/password/rewrap",
 	"/v1/auth/recovery/abort",
 	"/v1/auth/recovery/begin",
 	"/v1/auth/recovery/close",

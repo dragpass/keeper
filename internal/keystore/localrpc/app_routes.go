@@ -32,7 +32,7 @@ var errAppRouteRefused = errors.New("request refused by the App route")
 
 // appRoutes is every fixed App route. The table is split by domain; a path
 // registered twice is a programming error caught at start-up.
-var appRoutes = mergeAppRoutes(authAndGroupRoutes, chatRoutes(), peerKeyRoutes, archiveRoutes, accountRoutes, groupHandleRoutes, deviceIdentityRoutes)
+var appRoutes = mergeAppRoutes(authAndGroupRoutes, chatRoutes(), peerKeyRoutes, archiveRoutes, accountRoutes, groupHandleRoutes, passwordRoutes, deviceIdentityRoutes)
 
 func mergeAppRoutes(tables ...map[string]appRoute) map[string]appRoute {
 	merged := map[string]appRoute{}
