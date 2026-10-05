@@ -2040,7 +2040,8 @@ The challenge is consumed whether or not the proof verifies. The app must check
 `owner_proof` before it sends a password or recovery key. The session routes
 are typed (`POST /v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
 `/v1/auth/signup/*`, `/v1/auth/recovery-key/reissue-prepare`, and the recovery
-and group DEK, chat, key-trust and archive routes below); there is no generic
+and group DEK, chat, key-trust, archive, account, device and group handle
+routes below); there is no generic
 action route. `auth_signup_prepare` checks every precondition (a
 registered device, password, recovery key) before it writes anything, and
 keeps the new device-wrapped DEK in a pending slot that `save_session_code`
@@ -2215,6 +2216,34 @@ Accepted gap (threat model §4.11): the handoff target, the split recipients
 (account archive keys) and the share rewrap target (the ephemeral key of a
 recovery session) are keys no pin tracks, so they stay caller-chosen, as on
 the Extension path.
+
+**Account and device routes.** The App's settings run the account key
+rotation and the device wipe the Extension's admin bridge runs:
+
+|Route|Action|Route rule|
+|---|---|---|
+|`/v1/account-key/rotate/status`|`rotate_user_keypair_status`|`{}`|
+|`/v1/account-key/rotate/abort`|`rotate_user_keypair_abort`|`{}`|
+|`/v1/account-key/rotate/prepare`|`rotate_user_keypair_prepare`||
+|`/v1/account-key/rotate/rewrap-group-dek`|`dek_rewrap_for_member`|Only `{ wrapped_for_me_b64 }`. The target is the pending key of the rotation in progress, which Keeper reads itself (400 when nothing is pending); a self-wrap names no accounts, so no pin applies, as on Native Messaging.|
+|`/v1/account-key/rotate/promote`|`rotate_user_keypair_promote`||
+|`/v1/device/forget`|`deletedevicekey`|`{}`. The device-wrapped personal DEK left behind cannot be opened without the device key; the next password login writes a new one.|
+
+**Group handle routes.** The Secure Message and the external share, as the
+Extension background runs them. No route takes an AAD or answers a key:
+
+|Route|Action|Route rule|
+|---|---|---|
+|`/v1/group-dek/open`|`group_session_open`|Opens a grant wrapped to this Keeper's active key into a handle; close it with `/v1/group-dek/close`.|
+|`/v1/message/seal`|`group_encrypt_with_aad`|`{ group_handle, org_id, group_id, dek_version, token_expires_at, plaintext_b64 }` (lowercase non-nil UUIDs, 1..512 plaintext bytes). Keeper builds the AAD `dragpass.message\|1\|<org_id>\|<group_id>\|<dek_version>\|<token_expires_at>`; there is no `aad_b64`, so the route cannot seal under another domain.|
+|`/v1/message/display-prepare`|`message_display_prepare`|The action's own request; 16 KiB cap.|
+|`/v1/message/display`|`group_decrypt_with_aad_for_app_display`|The action's own request; 16 KiB cap. The approved display carve-out: the only App route besides the chat display batch that answers plaintext.|
+|`/v1/guest-share/transcrypt`|`group_transcrypt_for_guest`|The action's own request; 512 KiB cap (the server keeps at most 256 KiB of guest ciphertext). Answers only the guest ciphertext and the one-time guest key; an AAD-bound message does not open here.|
+
+The App reaches no capability here that its origin did not already reach
+through the Extension's admin bridge (`ADMIN_ROTATE_USER_KEYPAIR`,
+`ADMIN_FORGET_DEVICE`, `ADMIN_MESSAGE_*`, `GUEST_SHARE_TRANSCRYPT`); the
+App-origin limit is threat model §4.12.
 
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,
