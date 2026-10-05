@@ -410,6 +410,28 @@ App がこのデバイスでサインインしたアカウントを記録しま�
 
 ---
 
+#### `personal_dek_adopt` - 拡張機能のデバイスマスターのコピーを取り込む
+
+拡張機能が保持していたデバイスマスター (device-wrapped 個人 DEK) のコピーを Keeper のスロットへ移します (0.0.58)。keychain のプロセスロックを一度保持したまま、サインアウト状態でなく、スロットが空で、コピーが保存済みのデバイス鍵で開けるときだけ書き込みます。それ以外は `adopted` が false で、`reason` は `signed_out` または `slot_occupied` です。開けないコピーは `crypto_failure` です。呼び出し側が送った wrap をスロットに保存する唯一のアクションで、Native Messaging でのみ受け付けます。
+
+**リクエスト:**
+```json
+{
+  "action": "personal_dek_adopt",
+  "payload": { "device_wrapped_dek_b64": "<Base64 iv(12) || ciphertext || tag, 60 bytes>" }
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": { "adopted": false, "reason": "slot_occupied" }
+}
+```
+
+---
+
 ### 鍵ペアの管理
 
 #### `generatekeypair` - RSA 鍵ペアの生成

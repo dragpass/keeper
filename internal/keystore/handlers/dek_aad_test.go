@@ -9,6 +9,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,9 +63,10 @@ func TestHandleDEKUnwrapAndEncryptWithAAD_RoundTrip(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("seal failed: %s", resp.Error)
 	}
-	stored, err := keychain.GetPersonalDeviceWrappedDEK(deps.Store)
-	if err != nil || stored != encryptedDEKB64 {
-		t.Fatalf("synced personal DEK = %q, err = %v", stored, err)
+	// A supplied wrap serves this call only (0.0.58); personal_dek_adopt is
+	// the one action that stores a caller's wrap in the slot.
+	if stored, err := keychain.GetPersonalDeviceWrappedDEK(deps.Store); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatalf("a supplied wrap was written to the slot: %q, err = %v", stored, err)
 	}
 	data := resp.Data.(proto.DEKUnwrapAndEncryptResponseData)
 

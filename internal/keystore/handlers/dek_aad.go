@@ -10,6 +10,10 @@
 //
 // Personal-scope sibling of HandleGroupEncryptWithAAD — same AAD contract,
 // different key source (device-wrapped personal DEK vs Group DEK handle).
+//
+// A supplied wrap is used for this call only and never stored (0.0.58):
+// storing it raced device_signout and logins, so personal_dek_adopt is the
+// one action that writes a caller's wrap into the slot.
 
 package handlers
 
@@ -19,7 +23,6 @@ import (
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -34,7 +37,7 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	encryptedDEK, fromSlot, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
 	if !ok {
 		return resp
 	}
@@ -68,11 +71,6 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	iv, ciphertext, err := aesGCMSealSplitWithAAD(dek, plaintext, aad)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
-	}
-	if !fromSlot {
-		if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, encryptedDEK); err != nil {
-			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
-		}
 	}
 
 	d.Logger.Println("dek unwrap and encrypt with aad successful")

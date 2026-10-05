@@ -231,6 +231,16 @@ const (
 	// (security/keeper-plaintext-command-api-plan.md).
 	ActionDEKUnwrapAndDecryptToClipboard = "dek_unwrap_and_decrypt_to_clipboard"
 
+	// PersonalDEKAdopt (0.0.58): stores the Extension's old copy of the
+	// device-wrapped personal DEK in personal_device_wrapped_dek, only when
+	// the slot is empty, the device is not signed out and the copy opens
+	// with the stored device key, all under the keychain process lock.
+	//   Inputs: device_wrapped_dek_b64(iv(12)||ct)
+	//   Output: adopted, reason? (signed_out | slot_occupied)
+	// The only action that writes a caller-supplied wrap into the slot.
+	// Native Messaging only: the App never held a copy.
+	ActionPersonalDEKAdopt = "personal_dek_adopt"
+
 	// per-device request-signing key actions.
 	//
 	// RequestKeyGenerate: generate an Ed25519 keypair. If an active key
