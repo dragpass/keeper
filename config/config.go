@@ -171,4 +171,15 @@ const (
 	// recovery session — never the archive key itself.
 	OrgArchiveSessionPrivateKey = "org_archive_session_private_key"
 	OrgArchiveSessionPublicKey  = "org_archive_session_public_key"
+
+	// This machine's device id (lowercase UUID), the X-Device-ID the App and
+	// the Extension both send once they adopt it. Written once by
+	// device_id_ensure; only reset_device_identity removes it. Not a secret.
+	DeviceID = "device_id"
+
+	// Which account the App last signed in to on this device, as a hint the
+	// Extension uses to sign itself in: {v, account_id, alias, generation,
+	// signed_out}. Not a secret and not an identity: every sign-in is still
+	// judged by the server's answer and this Keeper's active account key.
+	AccountBinding = "account_binding"
 )

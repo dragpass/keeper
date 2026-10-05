@@ -101,6 +101,7 @@ func claimLease(t *testing.T, server *Server, session, csrf, holder string) rout
 // here on purpose.
 var pinnedAppRoutes = []string{
 	"/v1/account-key/public",
+	"/v1/account/binding",
 	"/v1/archive/account_archive_key_generate",
 	"/v1/archive/account_archive_key_status",
 	"/v1/archive/archive_key_generate",
@@ -150,6 +151,9 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/room_row_name_seal",
 	"/v1/chat/runtime/claim",
 	"/v1/chat/runtime/release",
+	"/v1/device/id",
+	"/v1/device/signout",
+	"/v1/device/status",
 	"/v1/group-dek/close",
 	"/v1/group-dek/generate",
 	"/v1/group-dek/rewrap-for-many",

@@ -292,7 +292,7 @@ DragPass Keeper が稼働中で応答可能かどうかを確認します。
 
 サーバー側でアカウントや DB がリセットされた後、ユーザーがこのデバイスで再登録
 できるように、デバイスに残るアカウント関連の鍵素材をすべて消去します。アクティブ
-鍵ペア、保留中の鍵ペア、セッションコード、デバイス鍵を削除します。
+鍵ペア、保留中の鍵ペア、セッションコード、デバイス鍵、デバイス ID、アカウントバインディングを削除します。
 `server_public_key` はアカウントに依存しない信頼アンカーのため保持されます。冪等
 であり（対象が何もなくても成功します）、鍵素材は返さず、削除したスロット名のみを
 返します。
@@ -311,6 +311,100 @@ DragPass Keeper が稼働中で応答可能かどうかを確認します。
   "data": {
     "cleared": ["keeper_private_key", "keeper_public_key", "session_code", "device_key"]
   }
+}
+```
+
+---
+
+#### `device_id_ensure` - デバイス ID の確定
+
+このマシンのデバイス ID を返します (0.0.58)。最初の呼び出しで決めます。保存済みの ID があればそれを、なければ既存の MLS leaf レコードのデバイス ID を、それもなければ `candidate_device_id` を、どれもなければ新しい UUID を使います。保存済みの ID は変わらず、`reset_device_identity` だけが消去します。秘密ではありません。
+
+**リクエスト:**
+```json
+{
+  "action": "device_id_ensure",
+  "payload": { "candidate_device_id": "33333333-3333-4333-8333-333333333333" }
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": { "device_id": "33333333-3333-4333-8333-333333333333", "source": "candidate" }
+}
+```
+
+---
+
+#### `account_binding_set` - アカウントバインディングの設定
+
+App がこのデバイスでサインインしたアカウントを記録します (0.0.58)。Extension が自分でサインインするときに使います。アクティブなアカウント鍵が必要です。記録が変わるたびに `generation` が増えます。身元ではなくヒントであり、サインインの判定はサーバーとアクティブなアカウント鍵が行います。
+
+**リクエスト:**
+```json
+{
+  "action": "account_binding_set",
+  "payload": { "account_id": "11111111-1111-4111-8111-111111111111", "alias": "alice" }
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": { "changed": true, "generation": 1 }
+}
+```
+
+---
+
+#### `device_account_status` - デバイスアカウント状態
+
+デバイス ID、アカウントバインディング、アクティブなアカウント鍵のフィンガープリント、デバイスマスターの有無を返します (0.0.58)。読み取り専用で、鍵素材は返しません。
+
+**リクエスト:**
+```json
+{
+  "action": "device_account_status"
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": {
+    "device_id": "33333333-3333-4333-8333-333333333333",
+    "account_id": "11111111-1111-4111-8111-111111111111",
+    "alias": "alice",
+    "generation": 1,
+    "account_key_fingerprint": "<sha256 hex of the account public key PEM>",
+    "device_master_present": true,
+    "signed_out": false
+  }
+}
+```
+
+---
+
+#### `device_signout` - このデバイスからのサインアウト
+
+デバイスマスターを削除し、バインディングをサインアウト状態にします (0.0.58)。アカウント鍵、デバイス鍵、リクエスト署名鍵、MLS leaf は残るため、App でパスワードでサインインするとデバイスが復元されます。冪等です。
+
+**リクエスト:**
+```json
+{
+  "action": "device_signout"
+}
+```
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "data": { "device_master_removed": true, "closed_group_sessions": 0, "generation": 2 }
 }
 ```
 

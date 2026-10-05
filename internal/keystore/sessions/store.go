@@ -167,6 +167,19 @@ func (s *Store) Close(handleID string) {
 	}
 }
 
+// CloseAll destroys and deletes every handle and returns how many there
+// were. A device sign-out uses it: no handle opened before it may outlive it.
+func (s *Store) CloseAll() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	closed := len(s.entries)
+	for id, entry := range s.entries {
+		entry.secret.Destroy()
+		delete(s.entries, id)
+	}
+	return closed
+}
+
 // Use runs fn over the raw bytes pointed to by the handle. fn runs while the
 // mutex is held, so it must finish quickly and must not re-enter the store.
 // Expired handles are immediately destroy + delete + ErrExpired.
