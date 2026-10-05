@@ -2060,6 +2060,7 @@ route-specific request shape; unknown fields are 400.
 |`/v1/auth/login/pending/sign-alias`|`auth_login_pending_sign_alias`||
 |`/v1/auth/login/pending/sign-challenge`|`auth_login_pending_sign_challenge`|No stage or key field: the key is the staged one the server-signed binding names.|
 |`/v1/auth/recovery/rewrap-group-dek`|`dek_rewrap_with_old_key_to_self`|No `new_public_key`: the target is always this Keeper's active key.|
+|`/v1/auth/password/rewrap`|`dek_rotate_to_device_key`, then `dek_rotate_to_new_password`|`{ password, encrypted_dek_b64, new_password }` → `{ encrypted_dek_b64 }`. The current password must open the server's password wrap (a wrong one is the first action's `crypto_failure`); the answer is the same DEK under the new password. The device-wrapped DEK between the steps is never answered.|
 |`/v1/account-key/public`|`getpublickey`||
 |`/v1/key-transparency/status`|`key_transparency_status`||
 |`/v1/key-transparency/monitor`|App-only Keeper handler|Strict body; 8 MiB cap; verifies up to 100 event proofs; 60 s write deadline.|
