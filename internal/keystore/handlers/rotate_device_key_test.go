@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -23,11 +24,11 @@ func TestApp_HandleRotateDeviceKey_ValidationFailedLogged(t *testing.T) {
 	deps, log, _ := newTestDeps(t)
 
 	resp := HandleRotateDeviceKey(deps, proto.RotateDeviceKeyRequest{
-		DeviceWrappedDEKB64: "", // empty → validation fail
+		DeviceWrappedDEKB64: "!!not-base64!!",
 	})
 
-	if resp.Success {
-		t.Fatalf("expected validation failure for empty input")
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("expected validation failure for non-Base64 input, got %+v", resp)
 	}
 
 	// the "processing..." log must appear, but success log must not.
@@ -258,12 +259,16 @@ func TestRotateDeviceKey_InvalidWrap_KeychainUntouched(t *testing.T) {
 	}
 }
 
-// TestRotateDeviceKey_Validation: reject empty input.
+// TestRotateDeviceKey_Validation: empty input reads the slot (0.0.58), so
+// with no slot it is not_found; non-Base64 input is validation_error.
 func TestRotateDeviceKey_Validation(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	seedKeychainDeviceKeyForRotate(t, store, 0x60)
-	if resp := HandleRotateDeviceKey(deps, proto.RotateDeviceKeyRequest{DeviceWrappedDEKB64: ""}); resp.Success {
-		t.Error("expected failure for empty input")
+	if resp := HandleRotateDeviceKey(deps, proto.RotateDeviceKeyRequest{DeviceWrappedDEKB64: ""}); resp.Success || resp.ErrorCode != string(errs.ErrCodeNotFound) {
+		t.Errorf("empty input without a slot: want not_found, got %+v", resp)
+	}
+	if resp := HandleRotateDeviceKey(deps, proto.RotateDeviceKeyRequest{DeviceWrappedDEKB64: "%%%"}); resp.Success || resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Errorf("non-Base64 input: want validation_error, got %+v", resp)
 	}
 }
 

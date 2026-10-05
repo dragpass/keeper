@@ -17,12 +17,13 @@ import (
 // HandleRotateDeviceKey is the voluntary DeviceKey rotation composite action.
 //
 // Steps:
-//  1. decode input device-wrapped DEK (iv(12) || ciphertext(>=32+16))
+//  1. take the current device-wrapped DEK (iv(12) || ciphertext(>=32+16)):
+//     the caller's, or when it sent none, the personal_device_wrapped_dek slot
 //  2. fetch OLD deviceKey from the Keychain (memguard)
 //  3. unwrap with OLD deviceKey → raw 32B personal DEK (memguard)
 //  4. generate new 32B deviceKey (memguard)
 //  5. AES-GCM wrap raw DEK with the new deviceKey → new wrap bytes
-//  6. commit the new deviceKey and wrapped DEK behind a recovery journal
+//  6. commit the new deviceKey and wrapped DEK (the slot) behind a recovery journal
 //  7. zeroize all plaintext buffers, return the response
 func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseResponse {
 	d.Logger.Println("rotate_device_key request processing...")
@@ -31,13 +32,25 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 		return errs.Response(err)
 	}
 
-	// 1) decode input
-	rawWrapped, err := base64.StdEncoding.DecodeString(req.DeviceWrappedDEKB64)
+	// 1) current wrap
+	currentWrapped, fromSlot, resp, ok := deviceWrappedDEK(d, req.DeviceWrappedDEKB64)
+	if !ok {
+		return resp
+	}
+	// A slot value that does not open is this Keeper's own state gone bad,
+	// not a bad request.
+	inputFailure := func(code errs.ErrorCode, msg string) proto.BaseResponse {
+		if fromSlot {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "stored personal DEK is unreadable: "+msg)
+		}
+		return errs.CodeResponse(code, msg)
+	}
+	rawWrapped, err := base64.StdEncoding.DecodeString(currentWrapped)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode device_wrapped_dek_b64: "+err.Error())
+		return inputFailure(errs.ErrCodeValidation, "failed to decode device_wrapped_dek_b64: "+err.Error())
 	}
 	if len(rawWrapped) < 12+32+16 { // iv + 32B DEK + GCM tag
-		return errs.CodeResponse(errs.ErrCodeValidation, "device_wrapped_dek_b64 too short")
+		return inputFailure(errs.ErrCodeValidation, "device_wrapped_dek_b64 too short")
 	}
 
 	// 2) fetch OLD deviceKey
@@ -49,9 +62,9 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 	defer oldBuf.Destroy()
 
 	// 3) unwrap with OLD
-	dek, err := unwrapDeviceWrappedDEK(oldBuf.Bytes(), req.DeviceWrappedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(oldBuf.Bytes(), currentWrapped)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "unwrap with old device key failed: "+err.Error())
+		return inputFailure(errs.ErrCodeCryptoFailure, "unwrap with old device key failed: "+err.Error())
 	}
 	defer secure.Zeroize(dek)
 	if len(dek) != 32 {
@@ -81,7 +94,7 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 	if err := keychain.CommitPersonalKeyBundleRotation(
 		d.Store,
 		base64.StdEncoding.EncodeToString(oldBuf.Bytes()),
-		req.DeviceWrappedDEKB64,
+		currentWrapped,
 		base64.StdEncoding.EncodeToString(newBuf.Bytes()),
 		newWrappedB64,
 	); err != nil {
