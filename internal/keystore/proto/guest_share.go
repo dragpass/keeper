@@ -28,12 +28,17 @@ package proto
 //     generates the salt and sends it as standard Base64. Both must be
 //     supplied together or neither — a passphrase without its salt (or vice
 //     versa) is rejected. When omitted, K alone is the guest AES key.
+//   - ExpectedOrgID (0.0.58, optional): the org whose external-share policy
+//     the caller applied. When set, the handle must have been opened with the
+//     same org_id, so a token decrypted under org A's grant is never re-shared
+//     under org B's policy. The App route requires it.
 type GroupTranscryptForGuestRequest struct {
 	GroupHandle    string `json:"group_handle"`
 	IVB64          string `json:"iv_b64"`
 	CiphertextB64  string `json:"ciphertext_b64"`
 	Passphrase     string `json:"passphrase,omitempty"`
 	PassphraseSalt string `json:"passphrase_salt,omitempty"`
+	ExpectedOrgID  string `json:"expected_org_id,omitempty"`
 }
 
 func (r GroupTranscryptForGuestRequest) Validate() error {
@@ -59,7 +64,7 @@ func (r GroupTranscryptForGuestRequest) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return validateOptionalOrgID(r.ExpectedOrgID, "expected_org_id")
 }
 
 // GroupTranscryptForGuestResponseData carries only the guest-viewer-consumable

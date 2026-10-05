@@ -69,7 +69,14 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 	}
 
 	var guestCiphertext, guestKey string
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
+	var orgMismatch bool
+	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, handleOrg string) error {
+		// Checked before anything is decrypted: the org whose grant opened the
+		// handle must be the org whose policy the caller applied.
+		if req.ExpectedOrgID != "" && handleOrg != req.ExpectedOrgID {
+			orgMismatch = true
+			return nil
+		}
 		plaintext, err := aesGCMOpen(groupDEK, iv, ciphertext)
 		if err != nil {
 			return errors.New("decrypt failed: " + err.Error())
@@ -86,6 +93,11 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 	})
 	if useErr != nil {
 		return sessionUseError(useErr, "group transcrypt for guest")
+	}
+	if orgMismatch {
+		secure.WipeString(&req.Passphrase)
+		d.Logger.Println("group transcrypt for guest refused: handle org differs from expected_org_id")
+		return errs.CodeResponse(errs.ErrCodeValidation, "expected_org_id: the group handle was not opened for this org")
 	}
 
 	// Best-effort wipe of the passphrase now that derivation is done.

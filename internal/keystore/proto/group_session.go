@@ -16,11 +16,25 @@ package proto
 // in the response — only the handle ID.
 type GroupSessionOpenRequest struct {
 	EncryptedGroupDEK string `json:"encrypted_group_dek"`
+	// OrgID (0.0.58, optional) names the org whose grant this is. Keeper cannot
+	// check it against the wrapped DEK; it stays on the handle so a later
+	// group_transcrypt_for_guest with expected_org_id refuses a handle opened
+	// for another org (or for none).
+	OrgID string `json:"org_id,omitempty"`
 }
 
 func (r GroupSessionOpenRequest) Validate() error {
-	_, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek")
-	return err
+	if _, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek"); err != nil {
+		return err
+	}
+	return validateOptionalOrgID(r.OrgID, "org_id")
+}
+
+func validateOptionalOrgID(orgID, field string) error {
+	if orgID == "" {
+		return nil
+	}
+	return requireMessageUUID(orgID, field)
 }
 
 type GroupSessionOpenResponseData struct {

@@ -36,6 +36,9 @@ const handleByteLen = 32
 type secretEntry struct {
 	secret    *memguard.LockedBuffer
 	expiresAt time.Time
+	// label is a non-secret tag fixed at Open (a group handle's org id) that
+	// later calls can require; empty when the opener named none.
+	label string
 }
 
 // Store is the shared base for opaque-handle session stores. The two existing
@@ -134,6 +137,11 @@ func (s *Store) Reap() int {
 // raw is taken zero-copy by memguard.NewBufferFromBytes and wiped — from the
 // caller's perspective, the raw bytes are no longer valid.
 func (s *Store) Open(raw []byte) (string, time.Time, error) {
+	return s.OpenLabeled(raw, "")
+}
+
+// OpenLabeled is Open with a label that stays with the handle for its life.
+func (s *Store) OpenLabeled(raw []byte, label string) (string, time.Time, error) {
 	if err := s.validate(raw); err != nil {
 		return "", time.Time{}, err
 	}
@@ -151,6 +159,7 @@ func (s *Store) Open(raw []byte) (string, time.Time, error) {
 	s.entries[handleID] = &secretEntry{
 		secret:    buf,
 		expiresAt: expiresAt,
+		label:     label,
 	}
 	s.mu.Unlock()
 
@@ -184,6 +193,11 @@ func (s *Store) CloseAll() int {
 // mutex is held, so it must finish quickly and must not re-enter the store.
 // Expired handles are immediately destroy + delete + ErrExpired.
 func (s *Store) Use(handleID string, fn func(raw []byte) error) error {
+	return s.UseLabeled(handleID, func(raw []byte, _ string) error { return fn(raw) })
+}
+
+// UseLabeled is Use that also hands fn the label the handle was opened with.
+func (s *Store) UseLabeled(handleID string, fn func(raw []byte, label string) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -196,7 +210,7 @@ func (s *Store) Use(handleID string, fn func(raw []byte) error) error {
 		delete(s.entries, handleID)
 		return s.errExpired
 	}
-	return fn(entry.secret.Bytes())
+	return fn(entry.secret.Bytes(), entry.label)
 }
 
 // Status returns handle existence + remaining TTL (ms). Expired handles are
