@@ -101,6 +101,11 @@ func claimLease(t *testing.T, server *Server, session, csrf, holder string) rout
 // here on purpose.
 var pinnedAppRoutes = []string{
 	"/v1/account-key/public",
+	"/v1/account-key/rotate/abort",
+	"/v1/account-key/rotate/prepare",
+	"/v1/account-key/rotate/promote",
+	"/v1/account-key/rotate/rewrap-group-dek",
+	"/v1/account-key/rotate/status",
 	"/v1/account/binding",
 	"/v1/archive/account_archive_key_generate",
 	"/v1/archive/account_archive_key_status",
@@ -151,15 +156,21 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/room_row_name_seal",
 	"/v1/chat/runtime/claim",
 	"/v1/chat/runtime/release",
+	"/v1/device/forget",
 	"/v1/device/id",
 	"/v1/device/signout",
 	"/v1/device/status",
 	"/v1/group-dek/close",
 	"/v1/group-dek/generate",
+	"/v1/group-dek/open",
 	"/v1/group-dek/rewrap-for-many",
 	"/v1/group-dek/rewrap-for-member",
+	"/v1/guest-share/transcrypt",
 	"/v1/key-transparency/monitor",
 	"/v1/key-transparency/status",
+	"/v1/message/display",
+	"/v1/message/display-prepare",
+	"/v1/message/seal",
 	"/v1/peer-key/chain-evaluate",
 	"/v1/peer-key/pin",
 	"/v1/peer-key/pin-list",
@@ -180,16 +191,27 @@ func TestAppRouteAllowlistIsPinned(t *testing.T) {
 	}
 }
 
-// The only App routes that answer plaintext are the two chat display
-// actions already carved out of the no-raw-secret rule.
+// The only App routes that answer plaintext are the chat display actions and
+// the secure message display, all carved out of the no-raw-secret rule. The
+// one encrypt route seals under the message AAD it builds itself.
 func TestAppRoutesAddNoPlaintextAnswer(t *testing.T) {
 	plaintextActions := map[string]bool{
 		proto.MLSDecryptBatchForAppDisplay: true,
 		proto.MLSRoomNameOpen:              true,
 	}
+	carvedOut := map[string]string{
+		"/v1/message/display": proto.ActionGroupDecryptWithAadForAppDisplay,
+		"/v1/message/seal":    proto.ActionGroupEncryptWithAAD,
+	}
+	if appRoutes["/v1/message/seal"].bind == nil {
+		t.Fatal("/v1/message/seal must build its AAD, not take one")
+	}
 	for path, route := range appRoutes {
 		if plaintextActions[route.action] && path != "/v1/chat/"+route.action {
 			t.Fatalf("%s reaches a plaintext action", path)
+		}
+		if carvedOut[path] == route.action {
+			continue
 		}
 		switch route.action {
 		case proto.ActionGroupDecryptToClipboard, proto.ActionGroupDecryptMeta, proto.ActionGroupDecryptWithAadForAppDisplay,
