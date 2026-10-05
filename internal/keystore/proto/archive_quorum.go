@@ -36,11 +36,17 @@ type WrappedShare struct {
 // Each recipient PEM is an admin's account archive public key (the coordinator
 // may include their own).
 type ArchiveKeySplitRequest struct {
+	// OrgID (0.0.58, optional) splits the org's own archive key when it has
+	// one, and wipes only that slot; otherwise the device-wide key, as before.
+	OrgID               string   `json:"org_id,omitempty"`
 	ThresholdN          int      `json:"threshold_n"`
 	RecipientPublicKeys []string `json:"recipient_public_keys"`
 }
 
 func (r ArchiveKeySplitRequest) Validate() error {
+	if err := validateArchiveOrgID(r.OrgID); err != nil {
+		return err
+	}
 	if r.ThresholdN < 2 {
 		return newValidationError("threshold_n", "must be >= 2")
 	}

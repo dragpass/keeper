@@ -42,13 +42,16 @@ func GetPendingPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuf
 	return buf, nil
 }
 
-// GetArchivePrivateKeySecure is the same as GetPrivateKeySecure but for the
-// per-org archive private key slot. Returns keychain.ErrSecretNotFound (→
-// not_found) when the archive slot is empty.
-func GetArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
-	pemStr, err := keychain.GetArchivePrivateKey(store)
+// getArchiveSlotPrivateKeySecure is the same as GetPrivateKeySecure but for an
+// org archive slot, device-wide or org-scoped. Returns keychain.ErrSecretNotFound
+// (→ not_found) when the slot is empty.
+func getArchiveSlotPrivateKeySecure(store keychain.SecretStore, slot keychain.ArchiveKeySlot) (*memguard.LockedBuffer, error) {
+	pemStr, err := slot.GetPrivate(store)
 	if err != nil {
 		return nil, err
+	}
+	if pemStr == "" {
+		return nil, keychain.ErrSecretNotFound
 	}
 
 	buf := memguard.NewBufferFromBytes([]byte(pemStr))
@@ -57,7 +60,7 @@ func GetArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuf
 	return buf, nil
 }
 
-// GetAccountArchivePrivateKeySecure is the same as GetArchivePrivateKeySecure
+// GetAccountArchivePrivateKeySecure is the same as getArchiveSlotPrivateKeySecure
 // but for the per-account archive receiving-key slot. Returns
 // keychain.ErrSecretNotFound (→ not_found) when the account slot is empty.
 func GetAccountArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
@@ -72,7 +75,7 @@ func GetAccountArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.Lo
 	return buf, nil
 }
 
-// GetArchiveSessionPrivateKeySecure is the same as GetArchivePrivateKeySecure
+// GetArchiveSessionPrivateKeySecure is the same as getArchiveSlotPrivateKeySecure
 // but for the archive quorum recovery-session ephemeral slot. Returns
 // keychain.ErrSecretNotFound (→ not_found) when no session is open.
 func GetArchiveSessionPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {

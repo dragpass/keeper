@@ -80,6 +80,18 @@ const (
 	OrgArchivePrivateKeyStaging = "org_archive_private_key_staging"
 	OrgArchivePublicKeyStaging  = "org_archive_public_key_staging"
 
+	// Org-scoped archive slots (0.0.58): the four names above with ":" and the
+	// org id appended. The unsuffixed names are one keypair and one stage for
+	// the whole device, which every org on it shared: committing one org's
+	// rotation wiped the key the other orgs' grants were wrapped to, and
+	// beginning one org's rotation overwrote another org's stage. A request
+	// that names its org_id uses these; the device-wide slots stay readable
+	// as the fallback for keys created before.
+	OrgArchivePrivateKeyPrefix        = OrgArchivePrivateKey + ":"
+	OrgArchivePublicKeyPrefix         = OrgArchivePublicKey + ":"
+	OrgArchivePrivateKeyStagingPrefix = OrgArchivePrivateKeyStaging + ":"
+	OrgArchivePublicKeyStagingPrefix  = OrgArchivePublicKeyStaging + ":"
+
 	// Per-account Archive / Recovery receiving keypair (RSA-2048).
 	//
 	// The key whose PUBLIC half this account publishes to the server-side

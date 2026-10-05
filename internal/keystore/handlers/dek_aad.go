@@ -34,6 +34,10 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	encryptedDEK, fromSlot, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	if !ok {
+		return resp
+	}
 
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
@@ -55,7 +59,7 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode aad_b64: "+err.Error())
 	}
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
 	}
@@ -65,8 +69,10 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
 	}
-	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, req.EncryptedDEKB64); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
+	if !fromSlot {
+		if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, encryptedDEK); err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
+		}
 	}
 
 	d.Logger.Println("dek unwrap and encrypt with aad successful")

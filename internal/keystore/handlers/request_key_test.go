@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -146,5 +148,61 @@ func TestHandleSignRequest_EmptyCanonical(t *testing.T) {
 	resp := HandleSignRequest(deps, proto.SignRequestRequest{CanonicalRequest: ""})
 	if resp.Success {
 		t.Error("empty canonical_request should be rejected")
+	}
+}
+
+func canonicalForDevice(deviceID string) string {
+	return strings.Join([]string{
+		"dp-req-v1", "POST", "/api/v1/x", "", "1700000000", "bm9uY2Vub25jZW5vbmNl",
+		strings.Repeat("0", 64), "11111111-1111-4111-8111-111111111111",
+		"22222222-2222-4222-8222-222222222222", deviceID,
+	}, "\n")
+}
+
+// Once the device id is stored, only a canonical naming it is signed.
+func TestHandleSignRequest_DeviceIDMustMatchStoredID(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	if r := HandleRequestKeyGenerate(deps, proto.RequestKeyGenerateRequest{}); !r.Success {
+		t.Fatalf("generate: %s", r.Error)
+	}
+	const other = "33333333-3333-4333-8333-333333333333"
+
+	// No stored id yet: any canonical is signed, as before 0.0.58.
+	if r := HandleSignRequest(deps, proto.SignRequestRequest{CanonicalRequest: canonicalForDevice(other)}); !r.Success {
+		t.Fatalf("sign before a device id is stored: %s", r.Error)
+	}
+
+	ensured := HandleDeviceIDEnsure(deps, proto.DeviceIDEnsureRequest{})
+	if !ensured.Success {
+		t.Fatalf("ensure: %s", ensured.Error)
+	}
+	own := ensured.Data.(proto.DeviceIDEnsureResponseData).DeviceID
+
+	if r := HandleSignRequest(deps, proto.SignRequestRequest{CanonicalRequest: canonicalForDevice(own)}); !r.Success {
+		t.Fatalf("sign with own device id: %s", r.Error)
+	}
+	refused := []string{
+		canonicalForDevice(other),
+		canonicalForDevice(own) + "\nextra",
+		strings.Replace(canonicalForDevice(own), "dp-req-v1", "dp-req-v2", 1),
+		own,
+	}
+	for i, canonical := range refused {
+		r := HandleSignRequest(deps, proto.SignRequestRequest{CanonicalRequest: canonical})
+		if r.Success || r.ErrorCode != string(errs.ErrCodeValidation) {
+			t.Errorf("case %d: want validation_error, got success=%v code=%s", i, r.Success, r.ErrorCode)
+		}
+		if r.Data != nil {
+			t.Errorf("case %d: a refused request must carry no signature", i)
+		}
+	}
+
+	// A stored id that is not a UUID refuses rather than skipping the check.
+	if err := store.Set(config.Service, config.DeviceID, "not-a-uuid"); err != nil {
+		t.Fatalf("seed invalid id: %v", err)
+	}
+	r := HandleSignRequest(deps, proto.SignRequestRequest{CanonicalRequest: canonicalForDevice(own)})
+	if r.Success || r.ErrorCode != string(errs.ErrCodeStorageFailure) {
+		t.Fatalf("invalid stored id: want storage_failure, got %+v", r)
 	}
 }

@@ -30,6 +30,10 @@ func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptT
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	if !ok {
+		return resp
+	}
 
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
@@ -47,7 +51,7 @@ func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptT
 		return resp
 	}
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
 	}

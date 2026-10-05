@@ -21,6 +21,10 @@ func HandleDEKUnwrapAndDecryptMeta(d Deps, req proto.DEKUnwrapAndDecryptMetaRequ
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	if !ok {
+		return resp
+	}
 
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
@@ -29,7 +33,7 @@ func HandleDEKUnwrapAndDecryptMeta(d Deps, req proto.DEKUnwrapAndDecryptMetaRequ
 	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 	defer deviceKeyBuf.Destroy()
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
 	}

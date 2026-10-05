@@ -51,7 +51,17 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		pubs[i] = pk
 	}
 
-	privKeyBuf, err := GetArchivePrivateKeySecure(d.Store)
+	// The slot holding the org's public key owns its key. Once a split has
+	// wiped that slot's private half, the device-wide key is another key and
+	// must not be split in its place.
+	slot, _, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+	}
+	if !found {
+		slot = keychain.OrgArchiveActiveSlot("")
+	}
+	privKeyBuf, err := getArchiveSlotPrivateKeySecure(d.Store, slot)
 	if err != nil {
 		return errs.Response(err) // ErrSecretNotFound → not_found
 	}
@@ -95,7 +105,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 
 	// Success — delete the whole archive private key. It now exists only as the
 	// shares just returned.
-	if err := keychain.DeleteArchivePrivateKey(d.Store); err != nil {
+	if err := slot.DeletePrivate(d.Store); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure,
 			"delete archive private key after split failed: "+err.Error())
 	}

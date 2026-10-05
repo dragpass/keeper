@@ -18,6 +18,14 @@
 //
 // Private material is held only in memguard buffers during the save window and
 // never crosses into a response — responses expose only public key + fingerprint.
+//
+// org_id (0.0.58) scopes the stage and the committed key to one org. The
+// device-wide stage of an older Keeper is never overwritten or aborted by an
+// org-scoped call, since it may belong to another org's rotation whose
+// outcome is unknown; an org-scoped commit or rewrap still finds it when the
+// org has no stage of its own, so a rotation begun before the upgrade can
+// finish. An org-scoped commit never writes the device-wide active slot: the
+// other orgs on this device may still have grants wrapped to it.
 
 package handlers
 
@@ -31,24 +39,36 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// HandleArchiveKeyRotateBegin generates a new archive keypair into the staging
-// slot without touching the active slot. Requires an active key (rotation, not
-// first-time enable). Any existing staging is wiped and replaced.
+// HandleArchiveKeyRotateBegin generates a new archive keypair into the org's
+// staging slot without touching any active slot. Requires an active key for
+// the org (rotation, not first-time enable). The org's own stage is wiped and
+// replaced; no other stage is touched.
 func HandleArchiveKeyRotateBegin(d Deps, req proto.ArchiveKeyRotateBeginRequest) proto.BaseResponse {
 	d.Logger.Println("archive key rotate begin processing...")
+
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
 
 	// Rotation requires an existing active key. First-time enable is
 	// archive_key_generate — signal that with a validation error, not a silent
 	// bootstrap.
-	if active, err := keychain.GetArchivePublicKey(d.Store); err != nil || active == "" {
+	_, _, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+	if err != nil {
+		d.Logger.Printf("archive key rotate begin: read active key failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read active archive key failed")
+	}
+	if !found {
 		d.Logger.Println("archive key rotate begin: no active key to rotate")
 		return errs.CodeResponse(errs.ErrCodeValidation, "no active archive key to rotate (use archive_key_generate for first-time enable)")
 	}
 
-	// Overwrite any abandoned staging: reusing it would bind this rotation to a
-	// fingerprint the caller never saw. Wipe both halves before regenerating.
-	_ = keychain.DeleteArchiveStagingPrivateKey(d.Store)
-	_ = keychain.DeleteArchiveStagingPublicKey(d.Store)
+	// Overwrite any abandoned stage of this org: reusing it would bind this
+	// rotation to a fingerprint the caller never saw. Wipe both halves before
+	// regenerating.
+	staging := keychain.OrgArchiveStagingSlot(req.OrgID)
+	_ = staging.DeletePrivate(d.Store)
+	_ = staging.DeletePublic(d.Store)
 
 	keyPair, err := crypto.GenerateRSAKeyPair()
 	if err != nil {
@@ -61,40 +81,54 @@ func HandleArchiveKeyRotateBegin(d Deps, req proto.ArchiveKeyRotateBeginRequest)
 	secure.WipeString(&keyPair.PrivateKey)
 	defer privKeyBuf.Destroy()
 
-	if err := keychain.SaveArchiveStagingPrivateKey(d.Store, string(privKeyBuf.Bytes())); err != nil {
+	if err := staging.SavePrivate(d.Store, string(privKeyBuf.Bytes())); err != nil {
 		d.Logger.Printf("archive key rotate begin: save staging priv failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save staging archive priv key failed: "+err.Error())
 	}
-	if err := keychain.SaveArchiveStagingPublicKey(d.Store, keyPair.PublicKey); err != nil {
+	if err := staging.SavePublic(d.Store, keyPair.PublicKey); err != nil {
 		d.Logger.Printf("archive key rotate begin: save staging pub failed: %v", err)
 		// Partial failure — only priv staged. The next begin call wipes and
 		// regenerates, so it never gets stuck.
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save staging archive pub key failed: "+err.Error())
 	}
 
-	d.Logger.Println("archive key rotate begin: new rsa keypair staged (active key untouched)")
+	d.Logger.Printf("archive key rotate begin: new rsa keypair staged (scope=%s, active key untouched)", staging.Scope)
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyRotateBeginResponseData{
 		PublicKey:   keyPair.PublicKey,
 		Fingerprint: fingerprintBase64Public(keyPair.PublicKey),
+		Scope:       staging.Scope,
 	}}
 }
 
-// HandleArchiveKeyRotateCommit promotes the staged keypair to the active slot.
-// Saving the staged private key over the active slot replaces (wipes) the old
-// active private key at rest. Requires a staging key to be present.
+// HandleArchiveKeyRotateCommit promotes the org's staged keypair to the org's
+// active slot. Saving over the active slot replaces (wipes) the key it held
+// at rest. Requires a stage to be present, and when expected_fingerprint is
+// set, a stage with that fingerprint.
 func HandleArchiveKeyRotateCommit(d Deps, req proto.ArchiveKeyRotateCommitRequest) proto.BaseResponse {
 	d.Logger.Println("archive key rotate commit processing...")
 
-	stagingPriv, err := keychain.GetArchiveStagingPrivateKey(d.Store)
-	if err != nil || stagingPriv == "" {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+
+	staging, stagingPub, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveStagingCandidates(req.OrgID))
+	if err != nil {
+		d.Logger.Printf("archive key rotate commit: read staging key failed: %v", err)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read staging archive key failed")
+	}
+	if !found {
 		d.Logger.Println("archive key rotate commit: no staging key to commit")
 		return errs.CodeResponse(errs.ErrCodeNotFound, "no staging archive key to commit (call archive_key_rotate_begin first)")
 	}
-	stagingPub, pubErr := keychain.GetArchiveStagingPublicKey(d.Store)
-	if pubErr != nil || stagingPub == "" {
+	if req.ExpectedFingerprint != "" && fingerprintBase64Public(stagingPub) != req.ExpectedFingerprint {
+		d.Logger.Printf("archive key rotate commit: staged key (scope=%s) is not the expected one", staging.Scope)
+		return errs.CodeResponse(errs.ErrCodeValidation, "staged archive key does not match expected_fingerprint")
+	}
+	stagingPriv, err := staging.GetPrivate(d.Store)
+	if err != nil || stagingPriv == "" {
 		secure.WipeString(&stagingPriv)
-		d.Logger.Println("archive key rotate commit: staging public key missing")
-		return errs.CodeResponse(errs.ErrCodeNotFound, "staging archive public key not found")
+		d.Logger.Println("archive key rotate commit: staging private key missing")
+		return errs.CodeResponse(errs.ErrCodeNotFound, "staging archive private key not found")
 	}
 
 	// Move the staged private half through memguard while overwriting the active
@@ -103,39 +137,47 @@ func HandleArchiveKeyRotateCommit(d Deps, req proto.ArchiveKeyRotateCommitReques
 	secure.WipeString(&stagingPriv)
 	defer privKeyBuf.Destroy()
 
-	if err := keychain.SaveArchivePrivateKey(d.Store, string(privKeyBuf.Bytes())); err != nil {
+	active := keychain.OrgArchiveActiveSlot(req.OrgID)
+	if err := active.SavePrivate(d.Store, string(privKeyBuf.Bytes())); err != nil {
 		d.Logger.Printf("archive key rotate commit: save active priv failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "promote staging archive priv key failed: "+err.Error())
 	}
-	if err := keychain.SaveArchivePublicKey(d.Store, stagingPub); err != nil {
+	if err := active.SavePublic(d.Store, stagingPub); err != nil {
 		d.Logger.Printf("archive key rotate commit: save active pub failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "promote staging archive pub key failed: "+err.Error())
 	}
 
-	// Clear the staging slot (best-effort — the active slot is now the source of
-	// truth).
-	_ = keychain.DeleteArchiveStagingPrivateKey(d.Store)
-	_ = keychain.DeleteArchiveStagingPublicKey(d.Store)
+	// Clear the stage that was promoted (best-effort — the active slot is now
+	// the source of truth).
+	_ = staging.DeletePrivate(d.Store)
+	_ = staging.DeletePublic(d.Store)
 
-	d.Logger.Println("archive key rotate commit: staging promoted to active (old active key wiped)")
+	d.Logger.Printf("archive key rotate commit: %s stage promoted to %s active slot", staging.Scope, active.Scope)
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyRotateCommitResponseData{
 		Fingerprint: fingerprintBase64Public(stagingPub),
+		Scope:       active.Scope,
 	}}
 }
 
-// HandleArchiveKeyRotateAbort discards the staging slot. no-op success when no
-// staging is present.
+// HandleArchiveKeyRotateAbort discards the org's own stage. no-op success when
+// it has none. An org-scoped abort leaves the device-wide stage alone: which
+// org it belongs to is unknown.
 func HandleArchiveKeyRotateAbort(d Deps, req proto.ArchiveKeyRotateAbortRequest) proto.BaseResponse {
 	d.Logger.Println("archive key rotate abort processing...")
 
-	staging, err := keychain.GetArchiveStagingPrivateKey(d.Store)
-	hadStaging := err == nil && staging != ""
-	secure.WipeString(&staging)
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
 
-	_ = keychain.DeleteArchiveStagingPrivateKey(d.Store)
-	_ = keychain.DeleteArchiveStagingPublicKey(d.Store)
+	staging := keychain.OrgArchiveStagingSlot(req.OrgID)
+	stagedPriv, err := staging.GetPrivate(d.Store)
+	hadStaging := err == nil && stagedPriv != ""
+	secure.WipeString(&stagedPriv)
 
-	d.Logger.Printf("archive key rotate abort: staging cleared (had_staging=%v)", hadStaging)
+	_ = staging.DeletePrivate(d.Store)
+	_ = staging.DeletePublic(d.Store)
+
+	d.Logger.Printf("archive key rotate abort: staging cleared (scope=%s, had_staging=%v)", staging.Scope, hadStaging)
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyRotateAbortResponseData{
 		Aborted: hadStaging,
 	}}

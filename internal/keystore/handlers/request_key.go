@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -114,13 +115,46 @@ func HandleRequestKeyStatus(d Deps, req proto.RequestKeyStatusRequest) proto.Bas
 // responsibility.
 //
 // If there is no active key → not_found, the caller triggers the enroll flow.
+//
+// Once this Keeper owns a device id (device_id_ensure), it signs only a
+// dp-req-v1 canonical whose device field is that id, so no caller gets a
+// request signed as another device. Before that there is nothing to compare
+// with and any canonical is signed, as before.
 func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse {
 	d.Logger.Println("sign request processing...")
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	if resp, ok := checkCanonicalDeviceID(d, req.CanonicalRequest); !ok {
+		return resp
+	}
 	return signRequestCanonical(d, req.CanonicalRequest)
+}
+
+// canonicalRequestFields is the dp-req-v1 layout ariadne verifies: version,
+// method, path, query, timestamp, nonce, body hash, account id, token id,
+// device id, one per line.
+const canonicalRequestFields = 10
+
+// checkCanonicalDeviceID refuses a canonical request whose device field is not
+// the stored device id. A stored id that cannot be read refuses too: signing
+// then would skip the check exactly when it is in doubt.
+func checkCanonicalDeviceID(d Deps, canonical string) (proto.BaseResponse, bool) {
+	deviceID, found, err := keychain.GetDeviceID(d.Store)
+	if err != nil {
+		d.Logger.Printf("sign request: device id unreadable: %v", err)
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "device id is unreadable"), false
+	}
+	if !found {
+		return proto.BaseResponse{}, true
+	}
+	fields := strings.Split(canonical, "\n")
+	if len(fields) != canonicalRequestFields || fields[0] != "dp-req-v1" || fields[canonicalRequestFields-1] != deviceID {
+		d.Logger.Println("sign request: refused, canonical device id is not this Keeper's")
+		return errs.CodeResponse(errs.ErrCodeValidation, "canonical_request device id does not match this device"), false
+	}
+	return proto.BaseResponse{}, true
 }
 
 func signRequestCanonical(d Deps, canonical string) proto.BaseResponse {

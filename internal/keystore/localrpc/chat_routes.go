@@ -322,12 +322,12 @@ func runKeyTransparencyMonitor(s *Server, _ appRequest, input any) (proto.BaseRe
 // knows itself, the staged key of a rotation, is bound here.
 var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_generate":         archiveEmptyRoute(proto.ActionArchiveKeyGenerate),
-	"/v1/archive/archive_key_status":           archiveEmptyRoute(proto.ActionArchiveKeyStatus),
+	"/v1/archive/archive_key_status":           {action: proto.ActionArchiveKeyStatus, input: func() any { return &proto.ArchiveKeyStatusRequest{} }},
 	"/v1/archive/account_archive_key_generate": archiveEmptyRoute(proto.ActionAccountArchiveKeyGenerate),
 	"/v1/archive/account_archive_key_status":   archiveEmptyRoute(proto.ActionAccountArchiveKeyStatus),
-	"/v1/archive/archive_key_rotate_begin":     archiveEmptyRoute(proto.ActionArchiveKeyRotateBegin),
-	"/v1/archive/archive_key_rotate_commit":    archiveEmptyRoute(proto.ActionArchiveKeyRotateCommit),
-	"/v1/archive/archive_key_rotate_abort":     archiveEmptyRoute(proto.ActionArchiveKeyRotateAbort),
+	"/v1/archive/archive_key_rotate_begin":     {action: proto.ActionArchiveKeyRotateBegin, input: func() any { return &proto.ArchiveKeyRotateBeginRequest{} }},
+	"/v1/archive/archive_key_rotate_commit":    {action: proto.ActionArchiveKeyRotateCommit, input: func() any { return &proto.ArchiveKeyRotateCommitRequest{} }},
+	"/v1/archive/archive_key_rotate_abort":     {action: proto.ActionArchiveKeyRotateAbort, input: func() any { return &proto.ArchiveKeyRotateAbortRequest{} }},
 	"/v1/archive/archive_session_begin":        archiveEmptyRoute(proto.ActionArchiveSessionBegin),
 	"/v1/archive/archive_session_end":          archiveEmptyRoute(proto.ActionArchiveSessionEnd),
 	"/v1/archive/archive_unwrap_and_rewrap": {
@@ -363,6 +363,7 @@ func archiveEmptyRoute(action string) appRoute {
 // for a break-glass re-grant, with both account ids so the pin is enforced;
 // or the new owner's account archive key for an ownership handoff.
 type appArchiveRewrap struct {
+	OrgID                   string                       `json:"org_id,omitempty"`
 	WrappedForArchiveB64    string                       `json:"wrapped_for_archive_b64"`
 	ToStagedArchiveKey      bool                         `json:"to_staged_archive_key,omitempty"`
 	RecipientPublicKey      string                       `json:"recipient_public_key,omitempty"`
@@ -388,6 +389,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 	}
 	if member {
 		return proto.ArchiveUnwrapAndRewrapRequest{
+			OrgID:                in.OrgID,
 			WrappedForArchiveB64: in.WrappedForArchiveB64,
 			RecipientPublicKey:   in.RecipientPublicKey,
 			OwnerAccountID:       in.OwnerAccountID,
@@ -401,13 +403,16 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 		// lands in between restages, and this grant goes to the key the App
 		// no longer holds a fingerprint for. The App's rotation already
 		// fails in that case, since its begin answer named the old one.
-		staged, err := keychain.GetArchiveStagingPublicKey(s.app.Store)
-		if err != nil || staged == "" {
+		// The stage is the org's own, else the device-wide one commit would
+		// also fall back to.
+		_, staged, found, err := keychain.FindArchiveKey(s.app.Store, keychain.OrgArchiveStagingCandidates(in.OrgID))
+		if err != nil || !found {
 			return nil, errAppRouteRefused
 		}
 		target = staged
 	}
 	return proto.ArchiveUnwrapAndRewrapRequest{
+		OrgID:                in.OrgID,
 		WrappedForArchiveB64: in.WrappedForArchiveB64,
 		RecipientPublicKey:   target,
 	}, nil

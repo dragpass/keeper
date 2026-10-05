@@ -617,7 +617,7 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	}
 	var data proto.ArchiveUnwrapAndRewrapResponseData
 	_ = json.Unmarshal(result.Data, &data)
-	staged, _ := keychain.GetArchiveStagingPrivateKey(store)
+	staged, _ := keychain.OrgArchiveStagingSlot("").GetPrivate(store)
 	if !bytes.Equal(openWith(t, staged, data.EncryptedForOtherB64), groupDEK) {
 		t.Fatal("the rotation rewrap is not to the staged archive key")
 	}
@@ -704,6 +704,72 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	}
 	for _, path := range []string{"/v1/archive/archive_share_rewrap", "/v1/archive/archive_quorum_combine_and_rewrap", "/v1/archive/archive_key_split"} {
 		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"session_private_key": "x"}); code != http.StatusBadRequest {
+			t.Fatalf("%s took an unknown field: %d", path, code)
+		}
+	}
+}
+
+// The App rotation routes take org_id and keep each org's stage apart; the
+// rotation rewrap targets the named org's stage.
+func TestArchiveRotationRoutesAreOrgScoped(t *testing.T) {
+	server, _ := newChatTestServer(t)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
+	session, csrf := openTestSession(t, server)
+	const orgA, orgB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	code, generated, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_generate", map[string]any{})
+	if code != http.StatusOK || !generated.Success {
+		t.Fatalf("generate: %d %s", code, body)
+	}
+	var archive proto.ArchiveKeyGenerateResponseData
+	_ = json.Unmarshal(generated.Data, &archive)
+	groupDEK := bytes.Repeat([]byte{0x66}, 32)
+	wrapped := wrapTo(t, archive.PublicKey, groupDEK)
+
+	stages := map[string]proto.ArchiveKeyRotateBeginResponseData{}
+	for _, org := range []string{orgA, orgB} {
+		code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_begin", map[string]any{"org_id": org})
+		if code != http.StatusOK || !begun.Success {
+			t.Fatalf("begin %s: %d %s", org, code, body)
+		}
+		var stage proto.ArchiveKeyRotateBeginResponseData
+		_ = json.Unmarshal(begun.Data, &stage)
+		stages[org] = stage
+	}
+
+	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_unwrap_and_rewrap", map[string]any{
+		"org_id": orgA, "wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true,
+	})
+	if code != http.StatusOK || !result.Success {
+		t.Fatalf("rotation rewrap A: %d %s", code, body)
+	}
+	var data proto.ArchiveUnwrapAndRewrapResponseData
+	_ = json.Unmarshal(result.Data, &data)
+	stagedA, _ := keychain.OrgArchiveStagingSlot(orgA).GetPrivate(store)
+	if !bytes.Equal(openWith(t, stagedA, data.EncryptedForOtherB64), groupDEK) {
+		t.Fatal("the rotation rewrap is not to org A's stage")
+	}
+
+	code, committed, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_commit", map[string]any{
+		"org_id": orgB, "expected_fingerprint": stages[orgB].Fingerprint,
+	})
+	if code != http.StatusOK || !committed.Success {
+		t.Fatalf("commit B: %d %s", code, body)
+	}
+	code, status, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_status", map[string]any{"org_id": orgA})
+	if code != http.StatusOK || !status.Success {
+		t.Fatalf("status A: %d %s", code, body)
+	}
+	var statusA proto.ArchiveKeyStatusResponseData
+	_ = json.Unmarshal(status.Data, &statusA)
+	if statusA.StagingFingerprint != stages[orgA].Fingerprint || statusA.Fingerprint != archive.Fingerprint {
+		t.Fatalf("org A after B's commit: %+v", statusA)
+	}
+	if code, aborted, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_abort", map[string]any{"org_id": orgA}); code != http.StatusOK || !aborted.Success {
+		t.Fatalf("abort A: %d %s", code, body)
+	}
+	for _, path := range []string{"/v1/archive/archive_key_rotate_begin", "/v1/archive/archive_key_rotate_commit"} {
+		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"org_id": orgA, "public_key": "x"}); code != http.StatusBadRequest {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
 	}

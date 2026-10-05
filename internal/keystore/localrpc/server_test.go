@@ -795,6 +795,47 @@ func TestLocalRPCSignsStructuredRequestOnce(t *testing.T) {
 	}
 }
 
+// Once Keeper owns a device id, the App route signs only for that id.
+func TestLocalRPCSignatureRequiresKeeperDeviceID(t *testing.T) {
+	server := newTestServer(t)
+	for _, action := range []string{"request_key_generate", "device_id_ensure"} {
+		payload, _ := json.Marshal(map[string]string{"action": action})
+		if response := server.app.HandleRequest(payload); !response.Success {
+			t.Fatalf("%s failed: %+v", action, response)
+		}
+	}
+	deviceID, found, err := keychain.GetDeviceID(server.app.Store)
+	if err != nil || !found {
+		t.Fatalf("device id not stored: %v", err)
+	}
+	session, csrf := openTestSession(t, server)
+	sign := func(nonce, device string) bool {
+		t.Helper()
+		body := fmt.Sprintf(`{"method":"POST","path":"/api/v1/account/devices","query":"","timestamp":"%d","nonce":"%s","body_sha256":"%064d","account_id":"11111111-1111-4111-8111-111111111111","token_id":"22222222-2222-4222-8222-222222222222","device_id":"%s"}`, server.now().Unix(), nonce, 0, device)
+		response := localRequest(server, http.MethodPost, "/v1/request-signature", body, session, csrf)
+		if response.Code != http.StatusOK {
+			t.Fatalf("sign request: status=%d body=%s", response.Code, response.Body.String())
+		}
+		var result struct {
+			Success bool            `json:"success"`
+			Data    json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Success && len(result.Data) > 0 && string(result.Data) != "null" {
+			t.Fatalf("refused signature carries data: %s", result.Data)
+		}
+		return result.Success
+	}
+	if !sign("AAAAAAAAAAAAAAAAAAAAAA", deviceID) {
+		t.Fatal("own device id must be signed")
+	}
+	if sign("BBBBBBBBBBBBBBBBBBBBBB", "33333333-3333-4333-8333-333333333333") {
+		t.Fatal("another device id must be refused")
+	}
+}
+
 func TestLocalRPCRejectsOversizedAndNonCanonicalInputs(t *testing.T) {
 	server := newTestServer(t)
 	session, csrf := openTestSession(t, server)
