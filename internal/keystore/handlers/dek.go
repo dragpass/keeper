@@ -22,6 +22,10 @@ func HandleDEKUnwrapAndEncrypt(d Deps, req proto.DEKUnwrapAndEncryptRequest) pro
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	if !ok {
+		return resp
+	}
 
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
@@ -36,7 +40,7 @@ func HandleDEKUnwrapAndEncrypt(d Deps, req proto.DEKUnwrapAndEncryptRequest) pro
 	}
 	defer secure.Zeroize(plaintext)
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
 	}
@@ -159,13 +163,18 @@ func HandleDEKRotateToNewPassword(d Deps, req proto.DEKRotateToNewPasswordReques
 	secure.WipeString(&req.NewPassword)
 	defer pwBuf.Destroy()
 
+	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
+	if !ok {
+		return resp
+	}
+
 	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
 	}
 	defer secure.Zeroize(deviceKey)
 
-	dek, err := unwrapDeviceWrappedDEK(deviceKey, req.EncryptedDEKB64)
+	dek, err := unwrapDeviceWrappedDEK(deviceKey, encryptedDEK)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure,
 			"unwrap device-wrapped DEK failed: "+err.Error())

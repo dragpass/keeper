@@ -12,7 +12,9 @@ import (
 	"encoding/base64"
 	"errors"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
@@ -72,4 +74,24 @@ func unwrapDeviceWrappedDEK(deviceKey []byte, encryptedDekB64 string) ([]byte, e
 		return nil, errors.New("unwrapped dek must be 32 bytes")
 	}
 	return dek, nil
+}
+
+// deviceWrappedDEK returns the device-wrapped personal DEK a personal dek_*
+// action opens: the one the caller sent, or when it sent none, the one this
+// Keeper keeps in personal_device_wrapped_dek (written at login and signup,
+// removed by device_signout). fromSlot tells the caller not to write the
+// value back.
+func deviceWrappedDEK(d Deps, supplied string) (wrapped string, fromSlot bool, resp proto.BaseResponse, ok bool) {
+	if supplied != "" {
+		return supplied, false, proto.BaseResponse{}, true
+	}
+	wrapped, err := keychain.GetPersonalDeviceWrappedDEK(d.Store)
+	if errors.Is(err, keychain.ErrSecretNotFound) || (err == nil && wrapped == "") {
+		return "", false, errs.CodeResponse(errs.ErrCodeNotFound, "personal DEK not found on this device"), false
+	}
+	if err != nil {
+		d.Logger.Printf("personal DEK slot read failed: %v", err)
+		return "", false, errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read personal DEK"), false
+	}
+	return wrapped, true, proto.BaseResponse{}, true
 }

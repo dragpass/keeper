@@ -23,13 +23,13 @@ package proto
 // deviceKey is fetched internally from the Keeper Keychain, never via the IPC
 // payload — same as the non-AAD variant.
 type DEKUnwrapAndEncryptWithAADRequest struct {
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
-	PlaintextB64    string `json:"plaintext_b64"` // secret in REQUEST only; must never be logged
-	AADB64          string `json:"aad_b64"`       // canonical AAD bytes, Base64; public context material
+	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"` // empty: the Keeper's own slot
+	PlaintextB64    string `json:"plaintext_b64"`               // secret in REQUEST only; must never be logged
+	AADB64          string `json:"aad_b64"`                     // canonical AAD bytes, Base64; public context material
 }
 
 func (r DEKUnwrapAndEncryptWithAADRequest) Validate() error {
-	if _, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
+	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
 		return err
 	}
 	if _, err := requireBase64(r.PlaintextB64, "plaintext_b64"); err != nil {

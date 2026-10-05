@@ -90,7 +90,7 @@ func TestHandleArchiveKeyRotate_BeginCommitHappyPath(t *testing.T) {
 	if pub, err := keychain.GetArchivePublicKey(store); err != nil || pub != beginData.PublicKey {
 		t.Fatalf("active public key must be the staged key after commit: %v", err)
 	}
-	if staged, err := keychain.GetArchiveStagingPrivateKey(store); err == nil && staged != "" {
+	if staged, err := keychain.OrgArchiveStagingSlot("").GetPrivate(store); err == nil && staged != "" {
 		t.Error("staging private slot must be cleared after commit")
 	}
 
@@ -139,7 +139,7 @@ func TestHandleArchiveKeyRotate_BeginAbortKeepsActive(t *testing.T) {
 	if pub, err := keychain.GetArchivePublicKey(store); err != nil || pub != active.PublicKey {
 		t.Fatalf("active key must survive abort: %v", err)
 	}
-	if staged, err := keychain.GetArchiveStagingPrivateKey(store); err == nil && staged != "" {
+	if staged, err := keychain.OrgArchiveStagingSlot("").GetPrivate(store); err == nil && staged != "" {
 		t.Error("staging must be cleared after abort")
 	}
 

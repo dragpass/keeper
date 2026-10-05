@@ -23,40 +23,76 @@ type ArchiveKeyGenerateResponseData struct {
 	Fingerprint string `json:"fingerprint"` // hex(sha256(public key PEM))
 }
 
-type ArchiveKeyStatusRequest struct{}
+// ArchiveKeyStatusRequest reports the org's archive key when org_id is set:
+// its own slot, else the device-wide one an org that never rotated on 0.0.58
+// still uses. Without org_id it reports the device-wide slot, as before.
+type ArchiveKeyStatusRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveKeyStatusRequest) Validate() error { return nil }
+func (r ArchiveKeyStatusRequest) Validate() error { return validateArchiveOrgID(r.OrgID) }
 
 type ArchiveKeyStatusResponseData struct {
 	HasActive   bool   `json:"has_active"`
 	PublicKey   string `json:"publickey,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// Scope says which slot holds the active key: "org" or "device". Absent
+	// when there is none. A Keeper older than 0.0.58 never sends it.
+	Scope string `json:"scope,omitempty"`
+	// StagingFingerprint is the staged key of a rotation not yet committed or
+	// aborted, looked up the way commit would find it.
+	StagingFingerprint string `json:"staging_fingerprint,omitempty"`
 }
 
 // Same-device org archive key rotation (staging-slot pattern). begin stages a
-// new keypair, commit promotes it, abort discards it. All three carry an empty
-// request; responses expose only public material.
+// new keypair, commit promotes it, abort discards it. Responses expose only
+// public material.
+//
+// org_id (0.0.58, optional) scopes the stage and the committed key to one
+// org, so rotating one org neither overwrites another org's stage nor wipes
+// the key another org's grants are wrapped to. Without it the device-wide
+// slots are used, as before.
 
-type ArchiveKeyRotateBeginRequest struct{}
+type ArchiveKeyRotateBeginRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveKeyRotateBeginRequest) Validate() error { return nil }
+func (r ArchiveKeyRotateBeginRequest) Validate() error { return validateArchiveOrgID(r.OrgID) }
 
 type ArchiveKeyRotateBeginResponseData struct {
-	PublicKey   string `json:"publickey"`   // NEW (staged) RSA public key PEM
-	Fingerprint string `json:"fingerprint"` // hex(sha256(public key PEM))
+	PublicKey   string `json:"publickey"`       // NEW (staged) RSA public key PEM
+	Fingerprint string `json:"fingerprint"`     // hex(sha256(public key PEM))
+	Scope       string `json:"scope,omitempty"` // "org" or "device": where the key was staged
 }
 
-type ArchiveKeyRotateCommitRequest struct{}
+// ArchiveKeyRotateCommitRequest promotes the org's stage. ExpectedFingerprint,
+// when set, must equal the staged key's fingerprint, or nothing changes: a
+// caller resuming a rotation names the key the server was given.
+type ArchiveKeyRotateCommitRequest struct {
+	OrgID               string `json:"org_id,omitempty"`
+	ExpectedFingerprint string `json:"expected_fingerprint,omitempty"`
+}
 
-func (r ArchiveKeyRotateCommitRequest) Validate() error { return nil }
+func (r ArchiveKeyRotateCommitRequest) Validate() error {
+	if err := validateArchiveOrgID(r.OrgID); err != nil {
+		return err
+	}
+	if r.ExpectedFingerprint != "" {
+		return requireKeyFingerprint(r.ExpectedFingerprint, "expected_fingerprint")
+	}
+	return nil
+}
 
 type ArchiveKeyRotateCommitResponseData struct {
-	Fingerprint string `json:"fingerprint"` // promoted (now active) key fingerprint
+	Fingerprint string `json:"fingerprint"`     // promoted (now active) key fingerprint
+	Scope       string `json:"scope,omitempty"` // "org" or "device": where the key is now active
 }
 
-type ArchiveKeyRotateAbortRequest struct{}
+type ArchiveKeyRotateAbortRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveKeyRotateAbortRequest) Validate() error { return nil }
+func (r ArchiveKeyRotateAbortRequest) Validate() error { return validateArchiveOrgID(r.OrgID) }
 
 type ArchiveKeyRotateAbortResponseData struct {
 	Aborted bool `json:"aborted"` // true if a staging key was discarded, false if none
@@ -108,6 +144,9 @@ type AccountArchiveKeyStatusResponseData struct {
 // recipient is unchecked (the Native Messaging shape, and an ownership
 // handoff, whose target is an account archive key no pin tracks).
 type ArchiveUnwrapAndRewrapRequest struct {
+	// OrgID (0.0.58, optional) tries the org's own archive slot before the
+	// device-wide one.
+	OrgID                string                   `json:"org_id,omitempty"`
 	WrappedForArchiveB64 string                   `json:"wrapped_for_archive_b64"`
 	RecipientPublicKey   string                   `json:"recipient_public_key"`
 	OwnerAccountID       string                   `json:"owner_account_id,omitempty"`
@@ -117,6 +156,9 @@ type ArchiveUnwrapAndRewrapRequest struct {
 }
 
 func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
+	if err := validateArchiveOrgID(r.OrgID); err != nil {
+		return err
+	}
 	if _, err := requireBase64(r.WrappedForArchiveB64, "wrapped_for_archive_b64"); err != nil {
 		return err
 	}
@@ -146,4 +188,13 @@ func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 
 type ArchiveUnwrapAndRewrapResponseData struct {
 	EncryptedForOtherB64 string `json:"encrypted_for_other_b64"`
+}
+
+// validateArchiveOrgID accepts an absent org id (the device-wide slots) and
+// otherwise requires the lowercase UUID the slot name is built from.
+func validateArchiveOrgID(orgID string) error {
+	if orgID == "" {
+		return nil
+	}
+	return requireMessageUUID(orgID, "org_id")
 }

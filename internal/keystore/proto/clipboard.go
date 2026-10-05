@@ -18,14 +18,14 @@ const (
 // OS clipboard. The input signature matches the original
 // DEKUnwrapAndDecryptRequest plus clipboard_ttl_ms.
 type DEKUnwrapAndDecryptToClipboardRequest struct {
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
+	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"` // empty: the Keeper's own slot
 	IVB64           string `json:"iv_b64"`
 	CiphertextB64   string `json:"ciphertext_b64"`
 	ClipboardTTLMs  int64  `json:"clipboard_ttl_ms"`
 }
 
 func (r DEKUnwrapAndDecryptToClipboardRequest) Validate() error {
-	if _, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
+	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
 		return err
 	}
 	if _, err := requireBase64Len(r.IVB64, "iv_b64", 12); err != nil {

@@ -49,18 +49,19 @@ type DEKRotateToDeviceKeyResponseData struct {
 // AES-GCM encrypts plaintext with it.
 //   - EncryptedDEKB64: Base64(iv(12) || ciphertext_with_tag) — the raw
 //     bytes the Extension decoded from the deviceMasterStorage Braille
-//     value, Base64-encoded.
+//     value, Base64-encoded. Empty (0.0.58) uses the device-wrapped DEK
+//     this Keeper keeps in its personal_device_wrapped_dek slot.
 //   - PlaintextB64: Base64 of the plaintext to encrypt.
 //
 // deviceKey is fetched internally from the Keeper Keychain, never via the
 // IPC payload.
 type DEKUnwrapAndEncryptRequest struct {
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
+	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"`
 	PlaintextB64    string `json:"plaintext_b64"`
 }
 
 func (r DEKUnwrapAndEncryptRequest) Validate() error {
-	if _, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
+	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
 		return err
 	}
 	_, err := requireBase64(r.PlaintextB64, "plaintext_b64")
@@ -85,12 +86,12 @@ type DEKUnwrapAndEncryptResponseData struct {
 //
 // deviceKey is fetched internally from the Keeper Keychain.
 type DEKUnwrapAndDecryptMetaRequest struct {
-	EncryptedDEKB64 string            `json:"encrypted_dek_b64"`
+	EncryptedDEKB64 string            `json:"encrypted_dek_b64,omitempty"`
 	MetaFields      map[string]string `json:"meta_fields"`
 }
 
 func (r DEKUnwrapAndDecryptMetaRequest) Validate() error {
-	if _, err := requireBase64(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
+	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
 		return err
 	}
 	if len(r.MetaFields) == 0 {
@@ -121,12 +122,12 @@ type DEKUnwrapAndDecryptMetaResponseData struct {
 // password. The deviceMaster itself does not change — the caller keeps
 // the same raw bytes.
 type DEKRotateToNewPasswordRequest struct {
-	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
+	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"`
 	NewPassword     string `json:"new_password"`
 }
 
 func (r DEKRotateToNewPasswordRequest) Validate() error {
-	if err := requireString(r.EncryptedDEKB64, "encrypted_dek_b64"); err != nil {
+	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
 		return err
 	}
 	return requireString(r.NewPassword, "new_password")
@@ -137,4 +138,15 @@ func (r DEKRotateToNewPasswordRequest) Validate() error {
 // `accounts.encrypted_dek` column, so it can be PUT as-is.
 type DEKRotateToNewPasswordResponseData struct {
 	EncryptedDEKB64 string `json:"encrypted_dek_b64"`
+}
+
+// optionalDeviceWrappedDEK checks the encrypted_dek_b64 of a personal dek_*
+// action. Empty (0.0.58) means "the one in this Keeper's slot", which the
+// handler reads; anything else must be Base64.
+func optionalDeviceWrappedDEK(encryptedDEKB64 string) error {
+	if encryptedDEKB64 == "" {
+		return nil
+	}
+	_, err := requireBase64(encryptedDEKB64, "encrypted_dek_b64")
+	return err
 }
