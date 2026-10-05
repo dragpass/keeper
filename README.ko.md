@@ -408,6 +408,28 @@ App 이 이 기기에서 로그인한 계정을 기록합니다 (0.0.58). Extens
 
 ---
 
+#### `personal_dek_adopt` - Adopt the Extension's Device Master Copy
+
+확장이 따로 갖고 있던 기기 master(device-wrapped 개인 DEK) 사본을 Keeper 슬롯으로 옮깁니다 (0.0.58). keychain 프로세스 락을 한 번 잡은 채로, 로그아웃 상태가 아니고 슬롯이 비어 있으며 사본이 저장된 디바이스 키로 열릴 때만 씁니다. 그렇지 않으면 `adopted` 가 false 이고 `reason` 은 `signed_out` 또는 `slot_occupied` 입니다. 열리지 않는 사본은 `crypto_failure` 입니다. 호출자가 보낸 wrap 을 슬롯에 저장하는 유일한 액션이며 Native Messaging 에서만 받습니다.
+
+**Request:**
+```json
+{
+  "action": "personal_dek_adopt",
+  "payload": { "device_wrapped_dek_b64": "<Base64 iv(12) || ciphertext || tag, 60 bytes>" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "adopted": false, "reason": "slot_occupied" }
+}
+```
+
+---
+
 ### Keypair Management
 
 #### `generatekeypair` - Generate RSA Keypair

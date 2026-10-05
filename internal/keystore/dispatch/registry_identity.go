@@ -71,6 +71,8 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionDEKUnwrapAndDecryptMeta:    wrap(handlers.HandleDEKUnwrapAndDecryptMeta),
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
+		// the Extension's old device master copy into the empty slot (0.0.58)
+		proto.ActionPersonalDEKAdopt: wrap(handlers.HandlePersonalDEKAdopt),
 
 		// per-device request-signing key actions
 		proto.ActionRequestKeyGenerate: wrap(handlers.HandleRequestKeyGenerate),

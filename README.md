@@ -481,6 +481,28 @@ Deletes the device master and marks the binding signed out (0.0.58). The account
 
 ---
 
+#### `personal_dek_adopt` - Adopt the Extension's Device Master Copy
+
+Moves the Extension's old copy of the device-wrapped personal DEK into the Keeper slot (0.0.58). In one hold of the keychain process lock it writes the copy only when the device is not signed out, the slot is empty and the copy opens with the stored device key; otherwise `adopted` is false and `reason` is `signed_out` or `slot_occupied`. A copy that does not open is `crypto_failure`. The only action that stores a caller-supplied wrap. Native Messaging only.
+
+**Request:**
+```json
+{
+  "action": "personal_dek_adopt",
+  "payload": { "device_wrapped_dek_b64": "<Base64 iv(12) || ciphertext || tag, 60 bytes>" }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "adopted": false, "reason": "slot_occupied" }
+}
+```
+
+---
+
 ### Keypair Management
 
 #### `generatekeypair` - Generate RSA Keypair

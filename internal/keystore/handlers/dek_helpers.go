@@ -79,8 +79,9 @@ func unwrapDeviceWrappedDEK(deviceKey []byte, encryptedDekB64 string) ([]byte, e
 // deviceWrappedDEK returns the device-wrapped personal DEK a personal dek_*
 // action opens: the one the caller sent, or when it sent none, the one this
 // Keeper keeps in personal_device_wrapped_dek (written at login and signup,
-// removed by device_signout). fromSlot tells the caller not to write the
-// value back.
+// removed by device_signout). fromSlot tells the caller the value is this
+// Keeper's own state rather than the request's. No caller stores a supplied
+// value in the slot; personal_dek_adopt is the only path for that.
 func deviceWrappedDEK(d Deps, supplied string) (wrapped string, fromSlot bool, resp proto.BaseResponse, ok bool) {
 	if supplied != "" {
 		return supplied, false, proto.BaseResponse{}, true
