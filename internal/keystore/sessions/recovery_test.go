@@ -2,7 +2,7 @@
 //
 // **Defects this test catches:**
 //   - Open failing to retain PEM bytes → subsequent Use fails → both
-//     recoverysign and dek_rewrap_with_old_key break
+//     recoverysign and dek_rewrap_with_old_key_to_self break
 //   - Missing expiry check → a 5-minute-old handle is still usable →
 //     opaque-handle surface regression
 //   - Close becoming non-idempotent → double-free panic

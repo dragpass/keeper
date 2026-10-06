@@ -44,18 +44,6 @@ func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 		t.Fatal("clipboard was not written")
 	}
 
-	iv, _ := base64.StdEncoding.DecodeString(encData.IVB64)
-	ct, _ := base64.StdEncoding.DecodeString(encData.CiphertextB64)
-	meta := HandleDEKUnwrapAndDecryptMeta(deps, proto.DEKUnwrapAndDecryptMetaRequest{
-		MetaFields: map[string]string{"title": base64.StdEncoding.EncodeToString(append(iv, ct...))},
-	})
-	if !meta.Success {
-		t.Fatalf("decrypt meta from slot: %s", meta.Error)
-	}
-	if got := meta.Data.(proto.DEKUnwrapAndDecryptMetaResponseData).Fields["title"]; got != sentinel {
-		t.Fatalf("meta from slot = %q", got)
-	}
-
 	before, _ := keychain.GetPersonalDeviceWrappedDEK(store)
 	aad := HandleDEKUnwrapAndEncryptWithAAD(deps, proto.DEKUnwrapAndEncryptWithAADRequest{
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte(sentinel)),
@@ -83,7 +71,6 @@ func TestPersonalDEKActions_EmptyEncryptedDEKWithoutSlotIsNotFound(t *testing.T)
 	cases := map[string]proto.BaseResponse{
 		"encrypt":     HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{PlaintextB64: pt}),
 		"encrypt_aad": HandleDEKUnwrapAndEncryptWithAAD(deps, proto.DEKUnwrapAndEncryptWithAADRequest{PlaintextB64: pt, AADB64: pt}),
-		"meta":        HandleDEKUnwrapAndDecryptMeta(deps, proto.DEKUnwrapAndDecryptMetaRequest{MetaFields: map[string]string{"a": ""}}),
 		"clipboard": HandleDEKUnwrapAndDecryptToClipboard(deps, proto.DEKUnwrapAndDecryptToClipboardRequest{
 			IVB64: iv, CiphertextB64: pt, ClipboardTTLMs: 10_000,
 		}),

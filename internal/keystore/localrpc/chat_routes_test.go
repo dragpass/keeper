@@ -215,8 +215,8 @@ func TestAppRoutesAddNoPlaintextAnswer(t *testing.T) {
 			continue
 		}
 		switch route.action {
-		case proto.ActionGroupDecryptToClipboard, proto.ActionGroupDecryptMeta, proto.ActionGroupDecryptWithAadForAppDisplay,
-			proto.ActionGroupEncrypt, proto.ActionGroupEncryptWithAAD, proto.ActionGroupEncryptMeta:
+		case proto.ActionGroupDecryptToClipboard, proto.ActionGroupDecryptWithAadForAppDisplay,
+			proto.ActionGroupEncrypt, proto.ActionGroupEncryptWithAAD:
 			t.Fatalf("%s exposes %s", path, route.action)
 		}
 	}
