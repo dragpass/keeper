@@ -16,10 +16,12 @@ package handlers
 import (
 	"crypto/hkdf"
 	"crypto/pbkdf2"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"io"
+
+	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -77,13 +79,13 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 			orgMismatch = true
 			return nil
 		}
-		plaintext, err := aesGCMOpen(groupDEK, iv, ciphertext)
+		plaintext, err := keepercrypto.OpenAESGCM(groupDEK, iv, ciphertext, nil)
 		if err != nil {
 			return errors.New("decrypt failed: " + err.Error())
 		}
 		defer secure.Zeroize(plaintext)
 
-		ct, key, err := encryptForGuest(plaintext, req.Passphrase, salt)
+		ct, key, err := encryptForGuest(d.Random(), plaintext, req.Passphrase, salt)
 		if err != nil {
 			return errors.New("guest re-encrypt failed: " + err.Error())
 		}
@@ -118,10 +120,11 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 //   - keyB64url:  Base64URL (no padding) of the raw K (the link fragment)
 //
 // Mirrors encryptForGuest in guest-share-crypto.ts (new random K + IV per
-// call). K is zeroized before returning; only its Base64URL form escapes.
-func encryptForGuest(plaintext []byte, passphrase string, salt []byte) (ciphertext string, keyB64url string, err error) {
+// call, both from random). K is zeroized before returning; only its Base64URL
+// form escapes.
+func encryptForGuest(random io.Reader, plaintext []byte, passphrase string, salt []byte) (ciphertext string, keyB64url string, err error) {
 	k := make([]byte, guestKeyLen)
-	if _, err := rand.Read(k); err != nil {
+	if _, err := io.ReadFull(random, k); err != nil {
 		return "", "", err
 	}
 	defer secure.Zeroize(k)
@@ -132,10 +135,9 @@ func encryptForGuest(plaintext []byte, passphrase string, salt []byte) (cipherte
 	}
 	defer secure.Zeroize(aesKey)
 
-	// aesGCMSealSplit generates a fresh 12B IV via crypto/rand and returns the
-	// ciphertext with the 128-bit GCM tag appended — matching WebCrypto
+	// The ciphertext carries the 128-bit GCM tag appended, matching WebCrypto
 	// AES-GCM defaults.
-	iv, ct, err := aesGCMSealSplit(aesKey, plaintext)
+	iv, ct, err := keepercrypto.SealAESGCM(random, aesKey, plaintext, nil)
 	if err != nil {
 		return "", "", err
 	}

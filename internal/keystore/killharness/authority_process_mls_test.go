@@ -14,6 +14,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -106,8 +107,8 @@ func (g *threeParty) bobRemovesCarol(t *testing.T) proto.MLSCommitResponseData {
 // blockDetail is the sync block a CHAT_MLS_ROW_REFUSED answer carries (N3).
 func blockDetail(t *testing.T, r response) proto.MLSSyncBlock {
 	t.Helper()
-	if r.Success || r.ErrorCode != proto.ChatMLSErrorCodeRowRefused {
-		t.Fatalf("response = %+v; want %s", r, proto.ChatMLSErrorCodeRowRefused)
+	if r.Success || r.ErrorCode != string(errs.ErrCodeChatMLSRowRefused) {
+		t.Fatalf("response = %+v; want %s", r, string(errs.ErrCodeChatMLSRowRefused))
 	}
 	var d proto.MLSSyncBlock
 	if err := json.Unmarshal(r.Data, &d); err != nil {
@@ -118,8 +119,8 @@ func blockDetail(t *testing.T, r response) proto.MLSSyncBlock {
 
 func latchDetail(t *testing.T, r response) proto.ChatStateRekeyLatchedData {
 	t.Helper()
-	if r.Success || r.ErrorCode != proto.ChatStateErrorCodeRekeyRequired {
-		t.Fatalf("response = %+v; want %s", r, proto.ChatStateErrorCodeRekeyRequired)
+	if r.Success || r.ErrorCode != string(errs.ErrCodeChatStateRekeyRequired) {
+		t.Fatalf("response = %+v; want %s", r, string(errs.ErrCodeChatStateRekeyRequired))
 	}
 	var d proto.ChatStateRekeyLatchedData
 	if err := json.Unmarshal(r.Data, &d); err != nil {
@@ -140,7 +141,7 @@ func TestKeeperProcessRefusesAnUnauthorizedCommitAndTheBlockSurvivesAKill(t *tes
 	a := g.alice.start("", 0)
 	tampered := g.alice.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol)
 	tampered.CommitAttestation = attestation(t, 3, built.CommitB64, hAlice, hBob, hCarol)
-	a.refused(proto.MLSProcess, tampered, proto.ChatStateErrorCodeNotAuthorized)
+	a.refused(proto.MLSProcess, tampered, string(errs.ErrCodeChatStateNotAuthorized))
 	assertReady(t, a, 1)
 
 	got := blockDetail(t, a.call(proto.MLSProcess, g.alice.attestedProcess(seq, 2, built.CommitB64, hAlice, hBob, hCarol)))
@@ -155,7 +156,7 @@ func TestKeeperProcessRefusesAnUnauthorizedCommitAndTheBlockSurvivesAKill(t *tes
 		status.SyncBlocked.CommitterAccountID != hBob || status.SyncBlocked.CommitterDeviceID != hDevice || status.Epoch != 1 {
 		t.Fatalf("status after the kill = %+v", status)
 	}
-	a.refused(proto.MLSEncrypt, g.alice.encryptRequest(messageID(1), 1, "never"), proto.ChatMLSErrorCodeSyncBlocked)
+	a.refused(proto.MLSEncrypt, g.alice.encryptRequest(messageID(1), 1, "never"), string(errs.ErrCodeChatMLSSyncBlocked))
 	// Where it is kept: the anchor's sync_block, nothing else of it moved.
 	if anchor := g.alice.anchor(); anchor.NeedsRekey || anchor.RekeyCause != "" || anchor.SyncBlock == nil ||
 		anchor.SyncBlock.Epoch != 2 || anchor.Epoch != 1 {
@@ -185,7 +186,7 @@ func TestTwoKeeperProcessesRefuseTheSameUnauthorizedCommitOnce(t *testing.T) {
 		if err != nil {
 			t.Fatalf("no answer: %v\n%s", err, p.stderr.String())
 		}
-		if r.Success || r.ErrorCode != proto.ChatMLSErrorCodeRowRefused {
+		if r.Success || r.ErrorCode != string(errs.ErrCodeChatMLSRowRefused) {
 			t.Fatalf("a process answered %+v", r)
 		}
 	}
@@ -207,7 +208,7 @@ func TestKeeperProcessLatchesAForkAndTheLatchSurvivesAKill(t *testing.T) {
 
 	b := c.bob.start("", 0)
 	b.must(proto.MLSProcess, c.bob.attestedProcess(c.nextSeq(), 2, first.CommitB64, hAlice, hBob), nil)
-	b.refused(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, first.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	b.refused(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, first.CommitB64), string(errs.ErrCodeChatMLSEpochStale))
 	got := latchDetail(t, b.call(proto.MLSProcess, c.bob.attestedProcess(c.nextSeq(), 2, second.CommitB64, hAlice, hBob)))
 	if got.RekeyCause != proto.ChatStateRekeyCauseFork || got.RekeyEpoch != 2 {
 		t.Fatalf("fork detail = %+v", got)

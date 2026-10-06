@@ -6,10 +6,12 @@ package keystore
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"testing"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -94,11 +96,11 @@ func signupWraps(t *testing.T, password string, deviceKey []byte) DEKGenerateAnd
 	dek := bytes.Repeat([]byte{0x5a}, 32)
 	salt := bytes.Repeat([]byte{0x11}, handlers.DekSaltLength)
 	kek := pbkdf2.Key([]byte(password), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
-	iv, ct, err := handlers.AESGCMSealSplit(kek, dek)
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, kek, dek, nil)
 	if err != nil {
 		t.Fatalf("password wrap: %v", err)
 	}
-	deviceWrapped, err := handlers.AESGCMSeal(deviceKey, dek)
+	deviceWrapped, err := crypto.AESGCMEncryptBase64(rand.Reader, deviceKey, dek)
 	if err != nil {
 		t.Fatalf("device wrap: %v", err)
 	}

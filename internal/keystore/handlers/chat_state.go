@@ -222,26 +222,26 @@ func chatStatePermitWindowHolds(p proto.ChatStatePermit, nowUnix int64) bool {
 // ────────────────────────────────────────────────────────────────────────
 
 func chatStateInvalidInput(message string) proto.BaseResponse {
-	return errs.CodeResponse(errs.ErrorCode(proto.ChatStateErrorCodeInvalidInput), message)
+	return errs.CodeResponse(errs.ErrCodeChatStateInvalidInput, message)
 }
 
 func chatStateNotAuthorized(d Deps, stage string) proto.BaseResponse {
 	d.Logger.Printf("chat state not authorized (%s check)", stage)
 	return errs.CodeResponse(
-		errs.ErrorCode(proto.ChatStateErrorCodeNotAuthorized),
+		errs.ErrCodeChatStateNotAuthorized,
 		"chat state permit is not authorized",
 	)
 }
 
 func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
-	code, message := proto.ChatStateErrorCodeStorageFailure, "chat state could not be read or written"
+	code, message := errs.ErrCodeChatStateStorageFailure, "chat state could not be read or written"
 	var unverified *MLSPeerUnverifiedError
 	var blocked *chatstate.SyncBlockedError
 	switch {
 	case errors.As(err, &blocked) && blocked.Block.Cause == chatstate.SyncBlockUnauthorizedCommit:
 		return rowRefusedResponse(d, stage, blocked.Block)
 	case errors.Is(err, chatstate.ErrSyncBlocked):
-		code, message = proto.ChatMLSErrorCodeSyncBlocked,
+		code, message = errs.ErrCodeChatMLSSyncBlocked,
 			"the conversation is stopped at a commit this device refused; nothing new may be sent"
 	case errors.As(err, &unverified):
 		return peerUnverifiedResponse(d, stage, unverified)
@@ -250,55 +250,55 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, errAttestationRefused):
 		return chatStateNotAuthorized(d, "commit attestation")
 	case errors.Is(err, mls.ErrUnavailable):
-		code, message = proto.ChatMLSErrorCodeCapabilityRequired,
+		code, message = errs.ErrCodeChatMLSCapabilityRequired,
 			"this Keeper was built without the MLS library"
 	case errors.Is(err, chatstate.ErrCommitPending):
-		code, message = proto.ChatMLSErrorCodeCommitPending,
+		code, message = errs.ErrCodeChatMLSCommitPending,
 			"a commit from this device is waiting for its outcome; confirm it first"
 	case errors.Is(err, chatstate.ErrEpochStale):
-		code, message = proto.ChatMLSErrorCodeEpochStale,
+		code, message = errs.ErrCodeChatMLSEpochStale,
 			"the request was built for another epoch than the one this device is on"
 	case errors.Is(err, chatstate.ErrHandshakeApplied):
-		code, message = proto.ChatMLSErrorCodeEpochStale,
+		code, message = errs.ErrCodeChatMLSEpochStale,
 			"that handshake is already applied on this device"
 	case errors.Is(err, chatstate.ErrHandshakeSkipped):
-		code, message = proto.ChatMLSErrorCodeEpochStale,
+		code, message = errs.ErrCodeChatMLSEpochStale,
 			"an earlier handshake has not been applied on this device"
 	case errors.Is(err, chatstate.ErrNoGroupState):
-		code, message = proto.ChatMLSErrorCodeFailed,
+		code, message = errs.ErrCodeChatMLSFailed,
 			"this device holds no group for this conversation"
 	case errors.Is(err, chatstate.ErrGroupExists):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"this device already holds a group for this conversation"
 	case errors.Is(err, chatstate.ErrNoPendingCommit):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"this device has no pending commit to settle"
 	case errors.Is(err, chatstate.ErrCommitMismatch):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"the pending commit on this device has another client_commit_id"
 	case errors.Is(err, mls.ErrNoKeyPackageForWelcome):
-		code, message = proto.ChatMLSErrorCodeWelcomeUnusable,
+		code, message = errs.ErrCodeChatMLSWelcomeUnusable,
 			"this device holds no key package the welcome is addressed to; it has to be invited again"
 	case errors.Is(err, mls.ErrCreatorNotOwner):
-		code, message = proto.ChatMLSErrorCodeFailed,
+		code, message = errs.ErrCodeChatMLSFailed,
 			"the new room's roles do not name its creator as owner; nothing was joined"
 	case errors.Is(err, mls.ErrGroupMismatch):
-		code, message = proto.ChatMLSErrorCodeFailed,
+		code, message = errs.ErrCodeChatMLSFailed,
 			"the welcome is for a different conversation"
 	case errors.Is(err, chatstate.ErrHistoryUnavailable):
-		code, message = proto.ChatMLSErrorCodeFailed,
+		code, message = errs.ErrCodeChatMLSFailed,
 			"this device has no usable local copy of that message"
 	case errors.Is(err, chatstate.ErrNotUnacceptedCreate):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"the group on this device is not an unaccepted create of this device"
 	case errors.Is(err, chatstate.ErrNotRemoved):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"this device was not removed from the group it holds for this conversation"
 	case errors.Is(err, chatstate.ErrSeqBound):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"that seq or that message is already bound to another one"
 	case errors.Is(err, chatstate.ErrRoomNameUnopenable):
-		code, message = proto.ChatMLSErrorCodeFailed,
+		code, message = errs.ErrCodeChatMLSFailed,
 			"the room name does not open under this epoch's key"
 	case errors.Is(err, chatstate.ErrNotHandshake),
 		errors.Is(err, chatstate.ErrOwnMessage),
@@ -307,54 +307,54 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 		errors.Is(err, chatstate.ErrGenerationUnknown),
 		errors.Is(err, chatstate.ErrBurnForward),
 		errors.Is(err, mls.ErrFailed):
-		code, message = proto.ChatMLSErrorCodeFailed, "the mls operation failed; nothing was applied"
+		code, message = errs.ErrCodeChatMLSFailed, "the mls operation failed; nothing was applied"
 	case errors.Is(err, chatstate.ErrRotationPending):
-		code, message = proto.ChatMLSErrorCodeRotationPending,
+		code, message = errs.ErrCodeChatMLSRotationPending,
 			"a member removal is not yet applied on this device; new messages cannot be encrypted"
 	case errors.Is(err, chatstate.ErrDeviceRevocationPending):
-		code, message = proto.ChatMLSErrorCodeRotationPending,
+		code, message = errs.ErrCodeChatMLSRotationPending,
 			"a revoked device's leaf is not yet removed on this device; new messages cannot be encrypted"
 	case errors.Is(err, chatstate.ErrStatementUnverified):
-		code, message = proto.ChatMLSErrorCodeStatementUnverified,
+		code, message = errs.ErrCodeChatMLSStatementUnverified,
 			"a signed statement does not verify; nothing was built"
 	case errors.Is(err, mls.ErrRolesUnsupported):
-		code, message = proto.ChatMLSErrorCodeRolesUnsupported,
+		code, message = errs.ErrCodeChatMLSRolesUnsupported,
 			"a member's keeper does not support room roles; nothing was built"
 	case errors.Is(err, chatstate.ErrLeafReplacementPending):
-		code, message = proto.ChatMLSErrorCodeLeafReplacementPending,
+		code, message = errs.ErrCodeChatMLSLeafReplacementPending,
 			"a device takeover is not yet applied on this device; new messages cannot be encrypted"
 	case errors.Is(err, chatstate.ErrReplacementNotListed):
-		code, message = proto.ChatStateErrorCodeInvalidInput,
+		code, message = errs.ErrCodeChatStateInvalidInput,
 			"the replace names a replacement this permit does not list"
 	case errors.Is(err, chatstate.ErrRekeyRequired):
 		var latched *chatstate.RekeyLatchedError
 		if errors.As(err, &latched) {
 			return rekeyLatchedResponse(d, stage, latched.Detail)
 		}
-		code, message = proto.ChatStateErrorCodeRekeyRequired,
+		code, message = errs.ErrCodeChatStateRekeyRequired,
 			"chat state is behind its anchor; the conversation needs a new epoch"
 	case errors.Is(err, chatstate.ErrHandoverInvalid):
-		code, message = proto.ChatMLSErrorCodeHandoverInvalid,
+		code, message = errs.ErrCodeChatMLSHandoverInvalid,
 			"the leaf handover is not the removed leaf's signed approval of this key package's leaf; nothing was built"
 	case errors.Is(err, chatstate.ErrGroupWithoutRoles):
-		code, message = proto.ChatMLSErrorCodeRoomRecreateRequired,
+		code, message = errs.ErrCodeChatMLSRoomRecreateRequired,
 			"the group carries no roles and takes no commit; the room must be recreated; nothing was built"
 	case errors.Is(err, chatstate.ErrCommitUnauthorized):
-		code, message = proto.ChatMLSErrorCodeCommitUnauthorized,
+		code, message = errs.ErrCodeChatMLSCommitUnauthorized,
 			"the commit carries an add or a remove this device is not authorized to make; nothing was built"
 	case errors.Is(err, chatstate.ErrLockTimeout):
-		code, message = proto.ChatStateErrorCodeLockTimeout,
+		code, message = errs.ErrCodeChatStateLockTimeout,
 			"another process is holding this conversation"
 	case errors.Is(err, chatstate.ErrConflict):
-		code, message = proto.ChatStateErrorCodeConflict, "chat state changed under the lock"
+		code, message = errs.ErrCodeChatStateConflict, "chat state changed under the lock"
 	case errors.Is(err, chatstate.ErrPositionTaken):
-		code, message = proto.ChatStateErrorCodeConflict,
+		code, message = errs.ErrCodeChatStateConflict,
 			"that chain position already carries a message"
 	case errors.Is(err, chatstate.ErrNotFound):
-		code, message = proto.ChatStateErrorCodeNotFound, "no stored message for that client message id"
+		code, message = errs.ErrCodeChatStateNotFound, "no stored message for that client message id"
 	}
 	d.Logger.Printf("chat state %s failed: %s", stage, code)
-	return errs.CodeResponse(errs.ErrorCode(code), message)
+	return errs.CodeResponse(code, message)
 }
 
 // rekeyLatchedResponse is CHAT_STATE_REKEY_REQUIRED from the operation that
@@ -362,8 +362,8 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 // app can say why without a second call. Later operations answer the bare
 // code, and mls_conversation_status carries the same detail.
 func rekeyLatchedResponse(d Deps, stage string, detail chatstate.RekeyDetail) proto.BaseResponse {
-	d.Logger.Printf("chat state %s failed: %s (%s)", stage, proto.ChatStateErrorCodeRekeyRequired, detail.Cause)
-	resp := errs.CodeResponse(errs.ErrorCode(proto.ChatStateErrorCodeRekeyRequired),
+	d.Logger.Printf("chat state %s failed: %s (%s)", stage, errs.ErrCodeChatStateRekeyRequired, detail.Cause)
+	resp := errs.CodeResponse(errs.ErrCodeChatStateRekeyRequired,
 		"this device refused what the server served for the conversation and latched it read-only; nothing was applied")
 	resp.Data = proto.ChatStateRekeyLatchedData{
 		RekeyCause:              string(detail.Cause),
@@ -376,8 +376,8 @@ func rekeyLatchedResponse(d Deps, stage string, detail chatstate.RekeyDetail) pr
 
 // rowRefusedResponse is CHAT_MLS_ROW_REFUSED with the block it recorded.
 func rowRefusedResponse(d Deps, stage string, b chatstate.SyncBlock) proto.BaseResponse {
-	d.Logger.Printf("chat state %s failed: %s (%s)", stage, proto.ChatMLSErrorCodeRowRefused, b.Cause)
-	resp := errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeRowRefused),
+	d.Logger.Printf("chat state %s failed: %s (%s)", stage, errs.ErrCodeChatMLSRowRefused, b.Cause)
+	resp := errs.CodeResponse(errs.ErrCodeChatMLSRowRefused,
 		"this device refused a commit the server served and stopped at its epoch; nothing was applied")
 	resp.Data = syncBlockWire(&b)
 	return resp
@@ -398,25 +398,21 @@ func syncBlockWire(b *chatstate.SyncBlock) *proto.MLSSyncBlock {
 // so the UI can offer §5.5's three paths without asking the server for the
 // very key the refusal is about. The reason names a condition, never a value.
 func mlsLeafUntrustedResponse(d Deps, stage string, err error) proto.BaseResponse {
-	d.Logger.Printf("chat state %s failed: %s", stage, proto.ChatMLSErrorCodeLeafUntrusted)
+	d.Logger.Printf("chat state %s failed: %s", stage, errs.ErrCodeChatMLSLeafUntrusted)
 	resp := errs.CodeResponse(
-		errs.ErrorCode(proto.ChatMLSErrorCodeLeafUntrusted),
+		errs.ErrCodeChatMLSLeafUntrusted,
 		"a leaf entering the group is not vouched for by its account; nothing was applied",
 	)
 	var detail *MLSLeafUntrustedError
 	if errors.As(err, &detail) && detail.KeyTransparencyCode != "" {
-		code := proto.ChatMLSErrorCodeKeyTransparencyUnverified
+		code := errs.ErrCodeChatMLSKeyTransparencyUnverified
 		switch detail.KeyTransparencyCode {
-		case keyTransparencyCodeFork:
-			code = proto.ChatMLSErrorCodeKeyTransparencyFork
-		case keyTransparencyCodeTrustInvalid:
-			code = proto.ChatMLSErrorCodeKeyTransparencyTrustInvalid
+		case errs.ErrCodeKeyTransparencyFork:
+			code = errs.ErrCodeChatMLSKeyTransparencyFork
+		case errs.ErrCodeKeyTransparencyTrustInvalid:
+			code = errs.ErrCodeChatMLSKeyTransparencyTrustInvalid
 		}
-		return proto.BaseResponse{
-			Success:   false,
-			Error:     keyTransparencyRefusalMessage(detail.KeyTransparencyCode),
-			ErrorCode: code,
-		}
+		return errs.CodeResponse(code, keyTransparencyRefusalMessage(detail.KeyTransparencyCode))
 	}
 	if errors.As(err, &detail) && detail.ObservedFingerprint != "" {
 		resp.Data = proto.PeerKeyChangedResponseData{

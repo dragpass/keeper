@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -93,9 +94,9 @@ func TestMLSChatE2E_ADeviceReadsItsOwnSentMessages(t *testing.T) {
 	// Refusals: a seq that carries Bob's message, a second seq for a bound
 	// message, and a message with no copy on this device. None writes.
 	before := c.alice.status()
-	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(1), theirs.Seq), proto.ChatStateErrorCodeConflict)
-	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(1), own.Seq+100), proto.ChatStateErrorCodeConflict)
-	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(9), own.Seq+101), proto.ChatStateErrorCodeNotFound)
+	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(1), theirs.Seq), string(errs.ErrCodeChatStateConflict))
+	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(1), own.Seq+100), string(errs.ErrCodeChatStateConflict))
+	c.alice.refused(proto.MLSMarkSent, c.alice.markSentRequest(messageID(9), own.Seq+101), string(errs.ErrCodeChatStateNotFound))
 	assertShown(t, c.alice.decrypt(theirs), 0, "from bob", c.bob, true)
 	if after := c.alice.status(); after.Epoch != before.Epoch {
 		t.Fatalf("status moved across refused mark sents: %+v -> %+v", before, after)
@@ -114,7 +115,7 @@ func TestMLSChatE2E_AnOwnMessageDoesNotExcuseADamagedOne(t *testing.T) {
 	good := c.send(c.bob, 3, 1, "fine")
 
 	resp := c.alice.call(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(own, bad, good))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeFailed || resp.Data != nil {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSFailed) || resp.Data != nil {
 		t.Fatalf("a page with a damaged message = %+v", resp)
 	}
 	// Nothing was written: Bob's good message is still a first delivery.
@@ -158,14 +159,14 @@ func TestMLSChatE2E_ALostDMCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
 	bob.refused(proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
 		Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: bobID,
 		Outcome: proto.MLSCommitOutcomeSuperseded, WinnerCommitB64: aliceCreate.CommitB64,
-	}, proto.ChatMLSErrorCodeFailed)
+	}, string(errs.ErrCodeChatMLSFailed))
 	join := proto.MLSJoinRequest{Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: aliceCreate.WelcomeB64}
-	bob.refused(proto.MLSJoin, join, proto.ChatMLSErrorCodeCommitPending)
+	bob.refused(proto.MLSJoin, join, string(errs.ErrCodeChatMLSCommitPending))
 
 	// Refusals first: another id, and Alice's accepted group. Neither writes.
-	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(alice.nextCommitID()), proto.ChatStateErrorCodeConflict)
+	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(alice.nextCommitID()), string(errs.ErrCodeChatStateConflict))
 	bob.assertStatus(bob.status(), 0, bobID)
-	alice.refused(proto.MLSGroupDiscardUnaccepted, alice.discardRequest(aliceID), proto.ChatStateErrorCodeConflict)
+	alice.refused(proto.MLSGroupDiscardUnaccepted, alice.discardRequest(aliceID), string(errs.ErrCodeChatStateConflict))
 	alice.assertStatus(alice.status(), 1, "")
 
 	if got := bob.discard(bobID); !got.Discarded {
@@ -189,7 +190,7 @@ func TestMLSChatE2E_ALostDMCreateIsDiscardedAndTheWinnerJoined(t *testing.T) {
 	assertShown(t, c.bob.decrypt(c.send(c.alice, 2, 1, "welcome")), 0, "welcome", c.alice, false)
 
 	// Once joined, the group is confirmed and cannot be discarded.
-	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(bobID), proto.ChatStateErrorCodeConflict)
+	bob.refused(proto.MLSGroupDiscardUnaccepted, bob.discardRequest(bobID), string(errs.ErrCodeChatStateConflict))
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -282,7 +283,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 		t.Fatalf("add commit name = %+v", second)
 	}
 	// Not openable until the epoch is really 2 on this device.
-	alice.refused(proto.MLSRoomNameOpen, alice.openNameRequest(second), proto.ChatMLSErrorCodeEpochStale)
+	alice.refused(proto.MLSRoomNameOpen, alice.openNameRequest(second), string(errs.ErrCodeChatMLSEpochStale))
 	alice.confirm(add.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	bob.process(2, 2, add.CommitB64)
 	carol.must(proto.MLSJoin, proto.MLSJoinRequest{
@@ -293,7 +294,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 			t.Fatalf("%s opened %q at epoch 2", who, got)
 		}
 		// The previous epoch's exporter is gone.
-		k.refused(proto.MLSRoomNameOpen, k.openNameRequest(first), proto.ChatMLSErrorCodeEpochStale)
+		k.refused(proto.MLSRoomNameOpen, k.openNameRequest(first), string(errs.ErrCodeChatMLSEpochStale))
 	}
 
 	// A rename at the confirmed epoch, and an Update that reseals it.
@@ -311,7 +312,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 	if got := alice.openName(nameOf(update)); got != "새 이름" {
 		t.Fatalf("alice opened %q at epoch 3", got)
 	}
-	alice.refused(proto.MLSRoomNameOpen, alice.openNameRequest(renamed), proto.ChatMLSErrorCodeEpochStale)
+	alice.refused(proto.MLSRoomNameOpen, alice.openNameRequest(renamed), string(errs.ErrCodeChatMLSEpochStale))
 
 	// An altered name is refused with no plaintext.
 	bad := nameOf(update)
@@ -319,7 +320,7 @@ func TestMLSChatE2E_ARoomNameFollowsTheEpochThroughEveryCommit(t *testing.T) {
 	ct[0] ^= 1
 	bad.ct = base64.StdEncoding.EncodeToString(ct)
 	resp := alice.call(proto.MLSRoomNameOpen, alice.openNameRequest(bad))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeFailed || resp.Data != nil {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSFailed) || resp.Data != nil {
 		t.Fatalf("an altered name = %+v", resp)
 	}
 	for _, k := range []*keeper{alice, bob, carol} {

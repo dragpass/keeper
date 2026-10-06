@@ -14,8 +14,9 @@
 //   - main.go's production wiring stays short.
 //
 // Rand is also passed to handler-facing Deps so key material generation
-// failure paths are testable. Low-level crypto helpers still use
-// crypto/rand.Reader directly.
+// failure paths are testable; handlers pass it to crypto.SealAESGCM for IVs.
+// The other crypto primitives (RSA, the hybrid wrap, Shamir) still read
+// crypto/rand directly.
 package keystore
 
 import (

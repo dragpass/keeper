@@ -17,16 +17,6 @@ import (
 )
 
 const (
-	// ChatMLSErrorCodeStatementUnverified — a signed statement handed to
-	// mls_commit_build does not verify. Nothing was built.
-	ChatMLSErrorCodeStatementUnverified = "CHAT_MLS_STATEMENT_UNVERIFIED"
-
-	// ChatMLSErrorCodeRolesUnsupported — a member's leaf or KeyPackage does not
-	// advertise the room roles extension, which a group carrying roles
-	// requires of every leaf. That member's Keeper must update. Nothing was
-	// built.
-	ChatMLSErrorCodeRolesUnsupported = "CHAT_MLS_ROLES_UNSUPPORTED"
-
 	// MLSRoleOwner / MLSRoleAdmin are the listed roles. A member is anyone
 	// holding a leaf and is not listed.
 	MLSRoleOwner = "owner"

@@ -41,7 +41,7 @@ func HandleMLSLeafHandoverSign(d Deps, req proto.MLSLeafHandoverSignRequest) pro
 	}
 	refuse := func(message string) proto.BaseResponse {
 		d.Logger.Printf("mls leaf handover sign refused: %s", message)
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeHandoverInvalid), message)
+		return errs.CodeResponse(errs.ErrCodeChatMLSHandoverInvalid, message)
 	}
 	now := d.Now().Unix()
 	if req.ExpiresAt <= now || req.ExpiresAt > now+proto.MLSLeafHandoverMaxSeconds+handoverSignClockSkewSeconds {

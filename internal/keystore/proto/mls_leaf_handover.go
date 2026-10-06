@@ -9,13 +9,6 @@
 
 package proto
 
-// ChatMLSErrorCodeHandoverInvalid — a leaf handover does not verify, names
-// another succession than the one it is offered for, or, at signing, is asked
-// for a declaration this device's account key did not sign, for this device
-// itself, or for a request whose window has closed. Nothing was signed or
-// built.
-const ChatMLSErrorCodeHandoverInvalid = "CHAT_MLS_HANDOVER_INVALID"
-
 // MLSLeafHandoverMaxSeconds mirrors chatstate.HandoverMaxSeconds (a test in
 // handlers keeps them equal): the ten-minute request window of design Q1.
 const MLSLeafHandoverMaxSeconds = 600

@@ -61,7 +61,7 @@ func openMLSChat(
 		return nil, resp, false
 	}
 	if !mls.Available() {
-		return nil, errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeCapabilityRequired),
+		return nil, errs.CodeResponse(errs.ErrCodeChatMLSCapabilityRequired,
 			"this Keeper was built without the MLS library"), false
 	}
 	permit, _, conversationID := req.ChatStateContext()
@@ -94,7 +94,7 @@ func mlsSessionFailure(d Deps, err error) proto.BaseResponse {
 	case errors.Is(err, mls.ErrLeafKeyUnreadable):
 		message = "mls leaf key record is unreadable"
 	}
-	return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed), message)
+	return errs.CodeResponse(errs.ErrCodeChatMLSFailed, message)
 }
 
 func (c *mlsChat) verifier(d Deps, statements []proto.KeyRotationStatement) *MLSLeafVerifier {
@@ -716,7 +716,7 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 	}()
 	if errors.Is(err, errDisplayNotText) {
 		d.Logger.Println("mls decrypt batch refused a plaintext that is not text")
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed),
+		return errs.CodeResponse(errs.ErrCodeChatMLSFailed,
 			"a message is not text; nothing was shown or written")
 	}
 	if err != nil {
@@ -832,7 +832,7 @@ func HandleMLSRoomNameOpen(d Deps, payload json.RawMessage) proto.BaseResponse {
 	}
 	if !utf8.Valid(name) {
 		d.Logger.Println("mls room name open refused a name that is not text")
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed), "the room name is not text")
+		return errs.CodeResponse(errs.ErrCodeChatMLSFailed, "the room name is not text")
 	}
 	d.Logger.Println("mls room name open successful")
 	return proto.BaseResponse{Success: true, Data: proto.MLSDisplayResponseData{

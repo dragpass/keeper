@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -25,7 +26,7 @@ func TestMLSTimeTrust_APermitFromThePastIsRefused(t *testing.T) {
 	old.ExpiresAt -= 3600
 	req := c.alice.encryptRequest(messageID(1), 1, "hi")
 	req.Permit = old
-	c.alice.refused(proto.MLSEncrypt, req, proto.ChatStateErrorCodeNotAuthorized)
+	c.alice.refused(proto.MLSEncrypt, req, string(errs.ErrCodeChatStateNotAuthorized))
 }
 
 // A KeyPackage whose embedded declaration has expired by this Keeper's clock
@@ -43,7 +44,7 @@ func TestMLSTimeTrust_AnExpiredKeyPackageIsRefusedAtTheAdd(t *testing.T) {
 	req.Permit = r.alice.permitAt(time.Duration(proto.MLSLeafMaxValiditySeconds+3600) * time.Second)
 	req.Add, req.UserInitiated = []proto.MLSMemberKeyPackage{kp}, true
 	resp := r.alice.call(proto.MLSCommitBuild, req)
-	assertCode(t, resp, proto.ChatMLSErrorCodeLeafUntrusted)
+	assertCode(t, resp, string(errs.ErrCodeChatMLSLeafUntrusted))
 	if !r.alice.deps.Logger.(*testdouble.MemoryLogger).Contains("leaf declaration has expired") {
 		t.Fatalf("refused for another reason than the expiry: %+v", resp)
 	}
@@ -70,7 +71,7 @@ func TestMLSTimeTrust_APreRecoveryKeyPackageIsRefusedAfterTheRecovery(t *testing
 	r.alice.accepted(req)
 	add := r.alice.buildRequest(3)
 	add.Add, add.UserInitiated = []proto.MLSMemberKeyPackage{stale}, true
-	assertCode(t, r.alice.call(proto.MLSCommitBuild, add), proto.ChatMLSErrorCodeLeafUntrusted)
+	assertCode(t, r.alice.call(proto.MLSCommitBuild, add), string(errs.ErrCodeChatMLSLeafUntrusted))
 }
 
 // The gap: a device whose leaf was removed on its account's signed

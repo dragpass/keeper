@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -26,7 +27,7 @@ func TestMLSChatE2E_ACommitReferencingAnUnreceivedProposalIsRefusedWithoutStateC
 	request := r.alice.processRequest(r.nextSeq(), 2, advB64(commit))
 	request.CommitAttestation = attested(e2eAlice, e2eCarol, advMallory, dave.id)
 	response := r.alice.call(proto.MLSProcess, request)
-	if response.Success || string(response.ErrorCode) != proto.ChatMLSErrorCodeFailed {
+	if response.Success || string(response.ErrorCode) != string(errs.ErrCodeChatMLSFailed) {
 		t.Fatalf("a Commit referencing a proposal alice never received = %+v", response)
 	}
 	if got := r.alice.status(); got.Epoch != 1 || got.SyncBlocked != nil || got.NeedsRekey {

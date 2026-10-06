@@ -12,6 +12,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -35,7 +36,7 @@ func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseRespons
 
 	var iv, ciphertext []byte
 	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		i, c, err := aesGCMSealSplit(groupDEK, plaintext)
+		i, c, err := crypto.SealAESGCM(d.Random(), groupDEK, plaintext, nil)
 		if err != nil {
 			return errors.New("encrypt failed: " + err.Error())
 		}

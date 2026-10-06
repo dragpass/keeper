@@ -105,7 +105,7 @@ func signAliasWithWrapKey(d Deps, alias string, wrapKey []byte) proto.BaseRespon
 	// If wrap_key is provided, AES-GCM-wrap the pending private key.
 	var wrappedKeeper string
 	if wrapKey != nil {
-		wrappedKeeper, err = crypto.AESGCMEncryptBase64(wrapKey, pendingPrivBuf.Bytes())
+		wrappedKeeper, err = crypto.AESGCMEncryptBase64(d.Random(), wrapKey, pendingPrivBuf.Bytes())
 		if err != nil {
 			d.Logger.Printf("alias signing error: wrap pending private key failed: %v", err)
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap pending private key failed: "+err.Error())

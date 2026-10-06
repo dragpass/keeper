@@ -11,6 +11,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	pwIv := pwRaw[16 : 16+12]
 	pwCt := pwRaw[16+12:]
 	kek := pbkdf2.Key([]byte(password), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	dekFromPw, err := AESGCMOpen(kek, pwIv, pwCt)
+	dekFromPw, err := crypto.OpenAESGCM(kek, pwIv, pwCt, nil)
 	if err != nil {
 		t.Fatalf("password decrypt: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestGenerateAndWrapDual_BothWrapsRecoverSameDEK(t *testing.T) {
 	}
 	devIv := devRaw[:12]
 	devCt := devRaw[12:]
-	dekFromDev, err := AESGCMOpen(deviceKey, devIv, devCt)
+	dekFromDev, err := crypto.OpenAESGCM(deviceKey, devIv, devCt, nil)
 	if err != nil {
 		t.Fatalf("device decrypt: %v", err)
 	}
@@ -183,13 +184,13 @@ func TestDEKRotateToDeviceKey_Roundtrip(t *testing.T) {
 	rotateData := rotate.Data.(proto.DEKRotateToDeviceKeyResponseData)
 
 	signupDevRaw, _ := base64.StdEncoding.DecodeString(signupData.DeviceWrappedDEKB64)
-	signupDev, err := AESGCMOpen(deviceKey, signupDevRaw[:12], signupDevRaw[12:])
+	signupDev, err := crypto.OpenAESGCM(deviceKey, signupDevRaw[:12], signupDevRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("signup device decrypt: %v", err)
 	}
 
 	rotateDevRaw, _ := base64.StdEncoding.DecodeString(rotateData.DeviceWrappedDEKB64)
-	rotateDev, err := AESGCMOpen(deviceKey2, rotateDevRaw[:12], rotateDevRaw[12:])
+	rotateDev, err := crypto.OpenAESGCM(deviceKey2, rotateDevRaw[:12], rotateDevRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("rotate device decrypt: %v", err)
 	}
@@ -239,7 +240,7 @@ func TestDEKRotateToDeviceKey_CreatesDeviceKeyWhenAbsent(t *testing.T) {
 		t.Fatalf("personal DEK not stored: %v", err)
 	}
 	raw, _ := base64.StdEncoding.DecodeString(stored)
-	if _, err := AESGCMOpen(deviceKey, raw[:12], raw[12:]); err != nil {
+	if _, err := crypto.OpenAESGCM(deviceKey, raw[:12], raw[12:], nil); err != nil {
 		t.Fatalf("stored DEK does not open with the created device key: %v", err)
 	}
 }

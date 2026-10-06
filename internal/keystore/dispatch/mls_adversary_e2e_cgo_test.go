@@ -34,6 +34,7 @@ import (
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -211,7 +212,7 @@ func (r *advRoom) assertRefused(who *keeper, req proto.MLSProcessRequest, want r
 		r.t.Fatalf("%s status after the refusal = %+v; want blocked at 3, not latched", name, st)
 	}
 	who.refused(proto.MLSEncrypt, who.encryptRequest(messageID(7), 2, "not on top of a refused commit"),
-		proto.ChatMLSErrorCodeSyncBlocked)
+		string(errs.ErrCodeChatMLSSyncBlocked))
 	assertUnchanged(r.t, name, before, stateOf(r.t, who))
 }
 
@@ -241,13 +242,13 @@ func TestMLSAdversary_AGroupWithoutRolesTakesNoCommit(t *testing.T) {
 
 	update := alice.buildRequest(1)
 	update.UpdateSelf = true
-	assertCode(t, alice.call(proto.MLSCommitBuild, update), proto.ChatMLSErrorCodeRoomRecreateRequired)
+	assertCode(t, alice.call(proto.MLSCommitBuild, update), string(errs.ErrCodeChatMLSRoomRecreateRequired))
 	remove := alice.buildRequest(1)
 	remove.RemoveAccountIDs, remove.UserInitiated = []string{e2eCarol}, true
-	assertCode(t, alice.call(proto.MLSCommitBuild, remove), proto.ChatMLSErrorCodeRoomRecreateRequired)
+	assertCode(t, alice.call(proto.MLSCommitBuild, remove), string(errs.ErrCodeChatMLSRoomRecreateRequired))
 	roles := alice.buildRequest(1)
 	roles.SetRoles, roles.UserInitiated = roleSet(e2eAlice), true
-	assertCode(t, alice.call(proto.MLSCommitBuild, roles), proto.ChatMLSErrorCodeRoomRecreateRequired)
+	assertCode(t, alice.call(proto.MLSCommitBuild, roles), string(errs.ErrCodeChatMLSRoomRecreateRequired))
 	if st := alice.status(); st.CommitPending || st.Epoch != 1 {
 		t.Fatalf("a refused build left %+v", st)
 	}
@@ -320,7 +321,7 @@ func TestMLSAdversary_APlainMemberSeatsARecoveredIdentity(t *testing.T) {
 			continue
 		}
 		r.deliver(lawfulSeq, lawfulB64, commit, blockedUnauthorized,
-			refusal{code: proto.ChatMLSErrorCodeLeafUntrusted}, chain)
+			refusal{code: string(errs.ErrCodeChatMLSLeafUntrusted)}, chain)
 	}
 }
 
@@ -345,7 +346,7 @@ func TestMLSAdversary_TwoDevicesOfOneAccountInOneCommit(t *testing.T) {
 	commit, _ := r.adv.Build(mlsadversary.Commit{Adds: [][]byte{
 		keyPackageBytes(t, dave.keyPackage()), keyPackageBytes(t, dave2.keyPackage()),
 	}})
-	untrusted := refusal{code: proto.ChatMLSErrorCodeLeafUntrusted}
+	untrusted := refusal{code: string(errs.ErrCodeChatMLSLeafUntrusted)}
 	r.deliver(lawfulSeq, lawfulB64, commit, untrusted, untrusted)
 
 	// Control: one of them is applied.
