@@ -1807,7 +1807,7 @@ extension options page is the only caller.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`dek_rotate_to_device_key`|`password`, `encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|Login: re-wrap server password-wrap with deviceKey. deviceKey from Keychain; created there first when absent (a device recovered through the App), only after the password opened the DEK.|
+|`dek_rotate_to_device_key`|`password`, `encrypted_dek_b64`|`{ device_wrapped_dek_b64 }`|Login: re-wrap server password-wrap with deviceKey. deviceKey from Keychain; created there first when absent (a device recovered through the App), only after the password opened the DEK. The deviceKey read and the slot write share one hold of the keychain process lock, so a device key rotation cannot leave the slot sealed under a key that is no longer stored. It writes on a signed-out device too: it is the password sign-in that ends a sign-out.|
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64?`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain. (0.0.58) Empty `encrypted_dek_b64` opens the device master Keeper keeps in its `personal_device_wrapped_dek` slot (written by login and signup, removed by `device_signout`); no slot → `not_found`. The same holds for `dek_unwrap_and_encrypt_with_aad`, `dek_unwrap_and_decrypt_to_clipboard` and `dek_rotate_to_new_password`. A caller that sends its own copy is served as before, and none of them stores that copy: `personal_dek_adopt` is the only action that writes a caller-supplied wrap into the slot.|
 |`personal_dek_adopt`|`device_wrapped_dek_b64` (standard Base64 of iv(12) ‖ ciphertext ‖ tag, 60 bytes)|`{ adopted, reason? }`|(0.0.58) Moves the Extension's old copy of the device master (its `vault` storage) into `personal_device_wrapped_dek`. Under one hold of the keychain process lock, the lock `device_signout`, login, signup and `rotate_device_key` write under, it reads the account binding, the slot and the device key and writes the copy only when the binding is not `signed_out`, the slot is empty and the copy opens to a 32-byte DEK with the stored device key. Not adopted is a success with `adopted: false` and `reason`: `signed_out` (nothing else is checked) or `slot_occupied` (the slot keeps its value, whoever wrote it). A copy that does not open is `crypto_failure`, no device key is `not_found`, a malformed request is `validation_error`, an unreadable binding or stored device key is `storage_failure`; none writes. The copy is ciphertext under a key that never crosses IPC; the response carries no key material and logs carry neither the copy nor the key. The decrypted DEK is zeroized. Native Messaging only: no Local RPC route, not on the MCP surface (the App never kept a copy). An older Keeper answers `unsupported`.|
 
@@ -2062,7 +2062,7 @@ route-specific request shape; unknown fields are 400.
 |`/v1/auth/login/pending/sign-alias`|`auth_login_pending_sign_alias`||
 |`/v1/auth/login/pending/sign-challenge`|`auth_login_pending_sign_challenge`|No stage or key field: the key is the staged one the server-signed binding names.|
 |`/v1/auth/recovery/rewrap-group-dek`|`dek_rewrap_with_old_key_to_self`|No `new_public_key`: the target is always this Keeper's active key.|
-|`/v1/auth/password/rewrap`|`dek_rotate_to_device_key`, then `dek_rotate_to_new_password`|`{ password, encrypted_dek_b64, new_password }` → `{ encrypted_dek_b64 }`. The current password must open the server's password wrap (a wrong one is the first action's `crypto_failure`); the answer is the same DEK under the new password. The device-wrapped DEK between the steps is never answered.|
+|`/v1/auth/password/rewrap`|`dek_rotate_to_device_key`, then `dek_rotate_to_new_password`|`{ password, encrypted_dek_b64, new_password }` → `{ encrypted_dek_b64 }`. The current password must open the server's password wrap (a wrong one is the first action's `crypto_failure`); the answer is the same DEK under the new password. The device-wrapped DEK between the steps is never answered. Both steps run as one unit: no other Native Messaging or App request runs between them.|
 |`/v1/account-key/public`|`getpublickey`||
 |`/v1/key-transparency/status`|`key_transparency_status`||
 |`/v1/key-transparency/monitor`|App-only Keeper handler|Strict body; 8 MiB cap; verifies up to 100 event proofs; 60 s write deadline.|
@@ -2197,7 +2197,7 @@ material. It is not exposed to MCP. The registered action count is 110.
 |Route|Request|Answer|
 |---|---|---|
 |`/v1/chat/capability`|`{}`|`ping`'s `{ version, hash, chat_contract, chat_capabilities }` without `path`. Not gated.|
-|`/v1/chat/room_row_name_seal`|`{ org_id, conversation_id, plaintext_b64 }` (lowercase non-nil UUIDs, 1..256 UTF-8 bytes)|`{ iv_b64, ciphertext_b64 }`. Keeper generates a Group DEK to its own key, seals with AAD `dragpass.room\|1\|<org_id>\|<conversation_id>\|1`, and closes the handle; no handle or AAD input exists, so this is not a general encrypt. Not gated.|
+|`/v1/chat/room_row_name_seal`|`{ org_id, conversation_id, plaintext_b64 }` (lowercase non-nil UUIDs, 1..256 UTF-8 bytes)|`{ iv_b64, ciphertext_b64 }`. Keeper generates a Group DEK to its own key, seals with AAD `dragpass.room\|1\|<org_id>\|<conversation_id>\|1`, and closes the handle, as one unit (no other request runs in between, so a `device_signout` cannot close the handle mid-seal); no handle or AAD input exists, so this is not a general encrypt. Not gated.|
 
 **Key-trust routes.** Each passes the action's own request:
 `/v1/peer-key/pin-list` (`peer_key_pin_list`), `/v1/peer-key/pin-verify`
@@ -2249,7 +2249,7 @@ rotation and the device wipe the Extension's admin bridge runs:
 |`/v1/account-key/rotate/prepare`|`rotate_user_keypair_prepare`||
 |`/v1/account-key/rotate/rewrap-group-dek`|`dek_rewrap_for_member`|Only `{ wrapped_for_me_b64 }`. The target is the pending key of the rotation in progress, which Keeper reads itself (400 when nothing is pending); a self-wrap names no accounts, so no pin applies, as on Native Messaging.|
 |`/v1/account-key/rotate/promote`|`rotate_user_keypair_promote`||
-|`/v1/device/forget`|`device_key_status`, then `deletedevicekey`|`{}` → `{ forgotten }`. Deletes the device key only when one is stored, so a retry (the server revocation failed after the local wipe) succeeds with `forgotten: false`. The device-wrapped personal DEK left behind cannot be opened without the device key; the next password login writes a new one.|
+|`/v1/device/forget`|`device_key_status`, then `deletedevicekey`|`{}` → `{ forgotten }`. Deletes the device key only when one is stored, so a retry (the server revocation failed after the local wipe) succeeds with `forgotten: false`. The device-wrapped personal DEK left behind cannot be opened without the device key; the next password login writes a new one. The check and the delete run as one unit: no other request runs between them.|
 
 **Group handle routes.** The Secure Message and the external share, as the
 Extension background runs them. No route takes an AAD or answers a key:

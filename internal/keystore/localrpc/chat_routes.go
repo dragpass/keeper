@@ -220,42 +220,52 @@ func runRoomRowNameSeal(s *Server, request appRequest, input any) (proto.BaseRes
 	}
 	secure.Zeroize(name)
 
-	own, err := s.ownPublicKey()
-	if err != nil {
-		return proto.BaseResponse{}, err
-	}
-	generate, _ := json.Marshal(proto.GroupDEKGenerateAndOpenRequest{MyPublicKey: own})
-	generated, err := s.handle(request.token, proto.ActionGroupDEKGenerateAndOpen, generate)
-	if err != nil || !generated.Success {
-		return generated, err
-	}
-	var opened proto.GroupDEKGenerateAndOpenResponseData
-	if err := remarshal(generated.Data, &opened); err != nil || opened.GroupHandle == "" {
-		return proto.BaseResponse{}, errAppRouteRefused
-	}
-	defer func() {
-		closeRequest, _ := json.Marshal(proto.GroupSessionCloseRequest{GroupHandle: opened.GroupHandle})
-		_, _ = s.handle(request.token, proto.ActionGroupSessionClose, closeRequest)
-	}()
+	// Generate, seal and close run as one unit, so no device sign-out closes
+	// the throwaway handle between them.
+	return s.handleSteps(request.token, "", func(step stepFunc) (proto.BaseResponse, error) {
+		own, err := readOwnPublicKey(step)
+		if err != nil {
+			return proto.BaseResponse{}, err
+		}
+		generate, _ := json.Marshal(proto.GroupDEKGenerateAndOpenRequest{MyPublicKey: own})
+		generated, err := step(proto.ActionGroupDEKGenerateAndOpen, generate)
+		if err != nil || !generated.Success {
+			return generated, err
+		}
+		var opened proto.GroupDEKGenerateAndOpenResponseData
+		if err := remarshal(generated.Data, &opened); err != nil || opened.GroupHandle == "" {
+			return proto.BaseResponse{}, errAppRouteRefused
+		}
+		defer func() {
+			closeRequest, _ := json.Marshal(proto.GroupSessionCloseRequest{GroupHandle: opened.GroupHandle})
+			_, _ = step(proto.ActionGroupSessionClose, closeRequest)
+		}()
 
-	aad := "dragpass.room|1|" + in.OrgID + "|" + in.ConversationID + "|" + roomRowNameSealDEKVersion
-	encrypt, _ := json.Marshal(proto.GroupEncryptWithAADRequest{
-		GroupHandle:  opened.GroupHandle,
-		PlaintextB64: in.PlaintextB64,
-		AADB64:       base64.StdEncoding.EncodeToString([]byte(aad)),
+		encrypt, _ := json.Marshal(proto.GroupEncryptWithAADRequest{
+			GroupHandle:  opened.GroupHandle,
+			PlaintextB64: in.PlaintextB64,
+			AADB64:       base64.StdEncoding.EncodeToString([]byte(roomNameAAD(in.OrgID, in.ConversationID, roomRowNameSealDEKVersion))),
+		})
+		sealed, err := step(proto.ActionGroupEncryptWithAAD, encrypt)
+		if err != nil || !sealed.Success {
+			return sealed, err
+		}
+		var data proto.GroupEncryptResponseData
+		if err := remarshal(sealed.Data, &data); err != nil || data.IVB64 == "" || data.CiphertextB64 == "" {
+			return proto.BaseResponse{}, errAppRouteRefused
+		}
+		return proto.BaseResponse{Success: true, Data: map[string]string{
+			"iv_b64":         data.IVB64,
+			"ciphertext_b64": data.CiphertextB64,
+		}}, nil
 	})
-	sealed, err := s.handle(request.token, proto.ActionGroupEncryptWithAAD, encrypt)
-	if err != nil || !sealed.Success {
-		return sealed, err
-	}
-	var data proto.GroupEncryptResponseData
-	if err := remarshal(sealed.Data, &data); err != nil || data.IVB64 == "" || data.CiphertextB64 == "" {
-		return proto.BaseResponse{}, errAppRouteRefused
-	}
-	return proto.BaseResponse{Success: true, Data: map[string]string{
-		"iv_b64":         data.IVB64,
-		"ciphertext_b64": data.CiphertextB64,
-	}}, nil
+}
+
+// roomNameAAD is the room name canonical AAD. dragpass
+// packages/crypto/lib/chat-aad.mts builds the same string; both pin the same
+// golden vector (chat_routes_test.go), so a change to either breaks a test.
+func roomNameAAD(orgID, conversationID, dekVersion string) string {
+	return "dragpass.room|1|" + orgID + "|" + conversationID + "|" + dekVersion
 }
 
 func remarshal(from, into any) error {

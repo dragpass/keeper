@@ -203,7 +203,13 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 // same action the App could call, so the route holds no keychain access of
 // its own.
 func (s *Server) ownPublicKey() (string, error) {
-	response, err := s.handle("", proto.ActionGetPublicKey, nil)
+	return readOwnPublicKey(func(action string, payload []byte) (proto.BaseResponse, error) {
+		return s.handle("", action, payload)
+	})
+}
+
+func readOwnPublicKey(step stepFunc) (string, error) {
+	response, err := step(proto.ActionGetPublicKey, nil)
 	if err != nil || !response.Success {
 		return "", errAppRouteRefused
 	}

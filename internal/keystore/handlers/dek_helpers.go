@@ -42,6 +42,11 @@ func loadDeviceKeyFromKeychain(store keychain.SecretStore) ([]byte, error) {
 	if deviceKeyB64 == "" {
 		return nil, errors.New("device key not found in keychain (signup required)")
 	}
+	return decodeDeviceKey(deviceKeyB64)
+}
+
+// decodeDeviceKey is the raw 32B device key of its stored Base64 form.
+func decodeDeviceKey(deviceKeyB64 string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(deviceKeyB64)
 	if err != nil {
 		return nil, errors.New("failed to decode device key from keychain: " + err.Error())
