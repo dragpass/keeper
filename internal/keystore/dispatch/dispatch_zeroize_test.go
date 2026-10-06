@@ -15,10 +15,10 @@ import (
 func TestHandleRequestGatedWipesThePayloadAfterTheHandler(t *testing.T) {
 	const action = "test_capture_payload"
 	var captured json.RawMessage
-	actionRegistry[action] = func(_ handlers.Deps, payload json.RawMessage) proto.BaseResponse {
+	actionRegistry[action] = direct(func(_ handlers.Deps, payload json.RawMessage) proto.BaseResponse {
 		captured = payload
 		return proto.BaseResponse{Success: true}
-	}
+	})
 	defer delete(actionRegistry, action)
 
 	log := testdouble.NewMemoryLogger()
