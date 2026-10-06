@@ -19,6 +19,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 
@@ -68,7 +69,7 @@ func HandleDEKUnwrapAndEncryptWithAAD(
 	}
 	defer secure.Zeroize(dek)
 
-	iv, ciphertext, err := aesGCMSealSplitWithAAD(dek, plaintext, aad)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, aad)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
 	}

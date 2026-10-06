@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // appRoute is one fixed App action for recovery and group DEK wrapping. The
@@ -205,7 +206,13 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 // same action the App could call, so the route holds no keychain access of
 // its own.
 func (s *Server) ownPublicKey() (string, error) {
-	response, err := s.handle("", proto.ActionGetPublicKey, nil)
+	return readOwnPublicKey(func(action string, payload []byte) (proto.BaseResponse, error) {
+		return s.handle("", action, payload)
+	})
+}
+
+func readOwnPublicKey(step stepFunc) (string, error) {
+	response, err := step(proto.ActionGetPublicKey, nil)
 	if err != nil || !response.Success {
 		return "", errAppRouteRefused
 	}
@@ -225,6 +232,7 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 	if !ok {
 		return
 	}
+	defer secure.Zeroize(request.plain)
 	input := route.input()
 	if err := decodeStrict(bytes.NewReader(request.plain), input); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)

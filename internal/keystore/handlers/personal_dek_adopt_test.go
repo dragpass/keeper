@@ -6,8 +6,10 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"sync"
 	"testing"
@@ -32,7 +34,7 @@ func adoptFixture(t *testing.T) (Deps, *testdouble.MemoryLogger, []byte, string)
 	for i := range dek {
 		dek[i] = byte(0x90 + i)
 	}
-	wrapped, err := aesGCMSeal(deviceKey, dek)
+	wrapped, err := crypto.AESGCMEncryptBase64(rand.Reader, deviceKey, dek)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -92,7 +94,7 @@ func TestPersonalDEKAdopt_SignedOutIsNotAdopted(t *testing.T) {
 
 func TestPersonalDEKAdopt_OccupiedSlotIsKept(t *testing.T) {
 	deps, _, deviceKey, wrapped := adoptFixture(t)
-	fresh, err := aesGCMSeal(deviceKey, make([]byte, 32))
+	fresh, err := crypto.AESGCMEncryptBase64(rand.Reader, deviceKey, make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +112,7 @@ func TestPersonalDEKAdopt_OccupiedSlotIsKept(t *testing.T) {
 
 func TestPersonalDEKAdopt_WrapUnderAnotherDeviceKeyIsCryptoFailure(t *testing.T) {
 	deps, _, _, _ := adoptFixture(t)
-	other, err := aesGCMSeal(make([]byte, 32), make([]byte, 32))
+	other, err := crypto.AESGCMEncryptBase64(rand.Reader, make([]byte, 32), make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +127,7 @@ func TestPersonalDEKAdopt_WrapUnderAnotherDeviceKeyIsCryptoFailure(t *testing.T)
 
 func TestPersonalDEKAdopt_NoDeviceKeyIsNotFound(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	wrapped, err := aesGCMSeal(make([]byte, 32), make([]byte, 32))
+	wrapped, err := crypto.AESGCMEncryptBase64(rand.Reader, make([]byte, 32), make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +161,7 @@ func TestPersonalDEKAdopt_Validation(t *testing.T) {
 func TestPersonalDEKAdopt_NoWrapOrKeyInResponsesOrLogs(t *testing.T) {
 	deps, log, deviceKey, wrapped := adoptFixture(t)
 	deviceKeyB64 := base64.StdEncoding.EncodeToString(deviceKey)
-	other, _ := aesGCMSeal(make([]byte, 32), make([]byte, 32))
+	other, _ := crypto.AESGCMEncryptBase64(rand.Reader, make([]byte, 32), make([]byte, 32))
 
 	responses := []proto.BaseResponse{adopt(deps, other), adopt(deps, wrapped), adopt(deps, wrapped)}
 	HandleDeviceSignout(deps, proto.DeviceSignoutRequest{})
@@ -227,7 +229,7 @@ func TestPersonalDEKAdopt_RacingSignoutNeverRestoresTheDeviceMaster(t *testing.T
 func TestPersonalDEKAdopt_RacingLoginKeepsTheLoginWrap(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		deps, _, deviceKey, stale := adoptFixture(t)
-		login, err := aesGCMSeal(deviceKey, make([]byte, 32))
+		login, err := crypto.AESGCMEncryptBase64(rand.Reader, deviceKey, make([]byte, 32))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,7 +281,7 @@ func TestDEKUnwrapAndEncryptWithAAD_SuppliedWrapNeverReachesTheSlot(t *testing.T
 		t.Fatal("an empty slot was filled by a supplied wrap")
 	}
 
-	fresh, _ := aesGCMSeal(deviceKey, make([]byte, 32))
+	fresh, _ := crypto.AESGCMEncryptBase64(rand.Reader, deviceKey, make([]byte, 32))
 	if err := keychain.SavePersonalDeviceWrappedDEK(deps.Store, fresh); err != nil {
 		t.Fatal(err)
 	}

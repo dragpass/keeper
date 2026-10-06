@@ -20,6 +20,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/logger"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // Gate may refuse an action before its handler runs. It sees the action the
@@ -44,6 +45,11 @@ func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate 
 	}
 
 	log.Printf("received action: %s request_id: %s", base.Action, base.RequestID)
+
+	// The payload carries passwords, recovery keys and plaintext; handlers
+	// decode their own copies and wipe what they can. Best effort: Go strings
+	// decoded from it are not covered.
+	defer secure.Zeroize(base.Payload)
 
 	var resp proto.BaseResponse
 	if refusal, admitted := admit(gate, base.Action); !admitted {

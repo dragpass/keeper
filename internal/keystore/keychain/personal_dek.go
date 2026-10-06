@@ -15,6 +15,33 @@ func SavePersonalDeviceWrappedDEK(store SecretStore, wrapped string) error {
 	})
 }
 
+// SealPersonalDeviceWrappedDEK stores as the device master the wrap seal
+// makes under the stored device key, and returns it. The device key read and
+// the slot write share one hold of the keychain process lock, so a device key
+// rotation cannot land between them and leave the slot sealed under a key
+// that is no longer stored. seal receives the device key (Base64) and must
+// not keep it. Its error is returned as is.
+func SealPersonalDeviceWrappedDEK(store SecretStore, seal func(deviceKeyB64 string) (string, error)) (string, error) {
+	var wrapped string
+	err := withPersonalKeyBundleLock(store, func() error {
+		if err := recoverPersonalKeyBundleLocked(store); err != nil {
+			return err
+		}
+		deviceKey, err := getDeviceKeyLocked(store)
+		if errors.Is(err, ErrSecretNotFound) || (err == nil && deviceKey == "") {
+			return ErrNoDeviceKey
+		}
+		if err != nil {
+			return err
+		}
+		if wrapped, err = seal(deviceKey); err != nil {
+			return err
+		}
+		return savePersonalDeviceWrappedDEKLocked(store, wrapped)
+	})
+	return wrapped, err
+}
+
 func GetPersonalDeviceWrappedDEK(store SecretStore) (string, error) {
 	var wrapped string
 	err := withPersonalKeyBundleLock(store, func() error {

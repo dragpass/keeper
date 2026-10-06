@@ -31,7 +31,7 @@ func TestCryptoRoundTrip_AESGCM_SealOpen(t *testing.T) {
 	}
 	plaintext := []byte("DragPass crypto boundary worked example payload")
 
-	envelope, err := AESGCMEncryptBase64(key, plaintext)
+	envelope, err := AESGCMEncryptBase64(rand.Reader, key, plaintext)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestCryptoRoundTrip_AESGCM_SealOpen(t *testing.T) {
 func TestCryptoRoundTrip_AESGCM_TamperedCiphertextRejected(t *testing.T) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
-	envelope, err := AESGCMEncryptBase64(key, []byte("integrity-protected message body — long enough"))
+	envelope, err := AESGCMEncryptBase64(rand.Reader, key, []byte("integrity-protected message body — long enough"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestCryptoRoundTrip_AESGCM_WrongKeyRejected(t *testing.T) {
 	_, _ = rand.Read(key1)
 	_, _ = rand.Read(key2)
 
-	envelope, err := AESGCMEncryptBase64(key1, []byte("encrypted with key1"))
+	envelope, err := AESGCMEncryptBase64(rand.Reader, key1, []byte("encrypted with key1"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCryptoRoundTrip_AESGCM_RejectsBadKeyLength(t *testing.T) {
 	cases := []int{0, 16, 24, 31, 33, 64}
 	for _, n := range cases {
 		key := make([]byte, n)
-		if _, err := AESGCMEncryptBase64(key, []byte("x")); err == nil {
+		if _, err := AESGCMEncryptBase64(rand.Reader, key, []byte("x")); err == nil {
 			t.Fatalf("expected rejection for key length %d", n)
 		}
 	}

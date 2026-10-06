@@ -58,7 +58,7 @@ func HandleMLSKeyPackageGenerate(d Deps, req proto.MLSKeyPackageGenerateRequest)
 		return resp
 	}
 	if !mls.Available() {
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeCapabilityRequired),
+		return errs.CodeResponse(errs.ErrCodeChatMLSCapabilityRequired,
 			"this Keeper was built without the MLS library")
 	}
 

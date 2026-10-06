@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -47,7 +48,7 @@ func TestMLSStatementWindow_AnOrgRemovalOlderThanThirtyDaysIsRefusedAtBuild(t *t
 	req := r.bob.buildRequest(1)
 	req.Permit, req.RemoveAccountIDs = r.bob.permit(e2eCarol), []string{e2eCarol}
 	req.OrgRemovalStatements = []proto.MLSOrgRemovalStatement{old}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 	if got := r.bob.status(); got.CommitPending || got.Epoch != 1 {
 		t.Fatalf("a refused build left %+v", got)
 	}
@@ -67,7 +68,7 @@ func TestMLSStatementWindow_ALeaveOlderThanThirtyDaysIsRefusedAtBuild(t *testing
 
 	req := r.bob.buildRequest(1)
 	req.RemoveAccountIDs, req.LeaveStatements = []string{e2eCarol}, []proto.MLSLeaveStatement{old}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 
 	recent := r.carol.leaveAgo(29 * day)
 	req.ClientCommitID, req.LeaveStatements = r.bob.nextCommitID(), []proto.MLSLeaveStatement{recent}

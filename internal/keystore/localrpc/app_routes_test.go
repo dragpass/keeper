@@ -2,6 +2,7 @@ package localrpc
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -99,7 +100,7 @@ func TestAppRecoveryRoutesStageThenPromote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrappedOld, err := keepercrypto.AESGCMEncryptBase64(wrapKey, []byte(old.PrivateKey))
+	wrappedOld, err := keepercrypto.AESGCMEncryptBase64(rand.Reader, wrapKey, []byte(old.PrivateKey))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestAppRecoveryRoutesRefuseAndAbortWithoutAKeyringChange(t *testing.T) {
 	session, csrf := openTestSession(t, server)
 	const alias, rk = "alice", "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
 	_, wrapKey, _ := recoverykey.Derive([]byte(rk), alias, recoverykey.Version)
-	wrappedOld, _ := keepercrypto.AESGCMEncryptBase64(wrapKey, []byte(owner.PrivateKey))
+	wrappedOld, _ := keepercrypto.AESGCMEncryptBase64(rand.Reader, wrapKey, []byte(owner.PrivateKey))
 	before := store.Snapshot()
 
 	prepare := func(entered string) (routeResult, string) {

@@ -20,7 +20,7 @@ func TestAESGCM_Roundtrip(t *testing.T) {
 	key := randAESKey(t)
 	plaintext := []byte("hello dragpass recovery wrap")
 
-	ct, err := AESGCMEncryptBase64(key, plaintext)
+	ct, err := AESGCMEncryptBase64(rand.Reader, key, plaintext)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestAESGCM_DifferentIVEachCall(t *testing.T) {
 	key := randAESKey(t)
 	pt := []byte("same plaintext")
 
-	a, _ := AESGCMEncryptBase64(key, pt)
-	b, _ := AESGCMEncryptBase64(key, pt)
+	a, _ := AESGCMEncryptBase64(rand.Reader, key, pt)
+	b, _ := AESGCMEncryptBase64(rand.Reader, key, pt)
 
 	if a == b {
 		t.Errorf("expected different ciphertexts (random IV), got identical")
@@ -52,7 +52,7 @@ func TestAESGCM_WrongKeyFails(t *testing.T) {
 	other := randAESKey(t)
 	pt := []byte("secret")
 
-	ct, _ := AESGCMEncryptBase64(key, pt)
+	ct, _ := AESGCMEncryptBase64(rand.Reader, key, pt)
 	if _, err := AESGCMDecryptBase64(other, ct); err == nil {
 		t.Errorf("expected decrypt with wrong key to fail")
 	}
@@ -60,7 +60,7 @@ func TestAESGCM_WrongKeyFails(t *testing.T) {
 
 func TestAESGCM_RejectsWrongKeyLength(t *testing.T) {
 	short := make([]byte, 16)
-	if _, err := AESGCMEncryptBase64(short, []byte("x")); err == nil {
+	if _, err := AESGCMEncryptBase64(rand.Reader, short, []byte("x")); err == nil {
 		t.Errorf("expected encrypt with 16-byte key to fail")
 	}
 	if _, err := AESGCMDecryptBase64(short, "AAA"); err == nil {
@@ -70,7 +70,7 @@ func TestAESGCM_RejectsWrongKeyLength(t *testing.T) {
 
 func TestAESGCM_OutputContainsIVPrefix(t *testing.T) {
 	key := randAESKey(t)
-	ct, err := AESGCMEncryptBase64(key, []byte("payload"))
+	ct, err := AESGCMEncryptBase64(rand.Reader, key, []byte("payload"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestAESGCM_OutputContainsIVPrefix(t *testing.T) {
 
 func TestAESGCM_RejectsCorruptedCiphertext(t *testing.T) {
 	key := randAESKey(t)
-	ct, _ := AESGCMEncryptBase64(key, []byte("payload"))
+	ct, _ := AESGCMEncryptBase64(rand.Reader, key, []byte("payload"))
 
 	raw, _ := base64.StdEncoding.DecodeString(ct)
 	// Flip a bit in the ciphertext portion (after IV)

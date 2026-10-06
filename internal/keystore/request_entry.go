@@ -34,6 +34,23 @@ func (a *App) HandleAppChatWrite(session, epoch string, msg []byte) proto.BaseRe
 	return a.handleAs(chatRuntimeCaller{app: true, session: session, epoch: epoch, chatWrite: true}, msg)
 }
 
+// HandleAppSteps runs a flow Keeper composes for the App from several actions
+// under one hold of requestMu, so no Native Messaging, proxied or other App
+// request lands between its steps. run dispatches one action message as the
+// App caller and is valid only until steps returns; steps must not call any
+// other App entry point, which would wait on the lock it holds.
+func (a *App) HandleAppSteps(
+	session, epoch string,
+	steps func(run func(msg []byte) proto.BaseResponse) (proto.BaseResponse, error),
+) (proto.BaseResponse, error) {
+	a.requestMu.Lock()
+	defer a.requestMu.Unlock()
+	caller := chatRuntimeCaller{app: true, session: session, epoch: epoch}
+	return steps(func(msg []byte) proto.BaseResponse {
+		return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
+	})
+}
+
 func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse {
 	a.requestMu.Lock()
 	defer a.requestMu.Unlock()

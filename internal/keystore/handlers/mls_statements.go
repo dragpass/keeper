@@ -329,7 +329,7 @@ func HandleMLSDeviceRevokeSign(d Deps, req proto.MLSDeviceRevokeSignRequest) pro
 func requireOwnAccount(d Deps, accountID string) (proto.BaseResponse, bool) {
 	key, found, err := keychain.GetMLSLeafKey(d.Store)
 	if err != nil || !found {
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed),
+		return errs.CodeResponse(errs.ErrCodeChatMLSFailed,
 			"no active mls leaf key; this device cannot sign for its account"), false
 	}
 	if key.AccountID != accountID {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -60,8 +61,8 @@ func TestMLSHandover_ATakeoverWithoutTheOldDevicesApprovalIsRefused(t *testing.T
 	r, _, _, kp := takeoverRoom(t)
 
 	resp := r.alice.buildReplace(2, replaceOf(kp))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
-		t.Fatalf("an unapproved replace = %+v; want %s", resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
+		t.Fatalf("an unapproved replace = %+v; want %s", resp, string(errs.ErrCodeChatMLSCommitUnauthorized))
 	}
 	if got := r.alice.status(); got.CommitPending || got.Epoch != 2 {
 		t.Fatalf("a refused replace left %+v", got)
@@ -129,8 +130,8 @@ func TestMLSHandover_TheOldDeviceRefusesWhatItCannotVouchFor(t *testing.T) {
 	}
 	expect := func(name string, resp proto.BaseResponse) {
 		t.Helper()
-		if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeHandoverInvalid {
-			t.Fatalf("%s: %+v; want %s", name, resp, proto.ChatMLSErrorCodeHandoverInvalid)
+		if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSHandoverInvalid) {
+			t.Fatalf("%s: %+v; want %s", name, resp, string(errs.ErrCodeChatMLSHandoverInvalid))
 		}
 	}
 
@@ -174,14 +175,14 @@ func TestMLSHandover_AHandoverThatDoesNotFitIsRefusedAtBuild(t *testing.T) {
 	other := good
 	other.NewSignatureKeyFP = strings.Repeat("ab", 32)
 	resp := r.alice.buildReplace(2, approved(kp, other))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeHandoverInvalid {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSHandoverInvalid) {
 		t.Fatalf("a handover for another leaf = %+v", resp)
 	}
 
 	self := good
 	self.Signature = base64.StdEncoding.EncodeToString(bob2.signAsLeaf(t, good))
 	resp = r.alice.buildReplace(2, approved(kp, self))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeHandoverInvalid {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSHandoverInvalid) {
 		t.Fatalf("a handover the new leaf signed = %+v", resp)
 	}
 	if got := r.alice.status(); got.CommitPending || got.Epoch != 2 {
@@ -236,7 +237,7 @@ func TestMLSHandover_ARejoinUnderAnotherLeafKeyBuildsNothing(t *testing.T) {
 		AccountID: e2eBob, DeviceID: e2eDevice2, KeyPackageB64: bob2.keyPackage().KeyPackageB64,
 		Request: bob2.rejoinRequest(),
 	})
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("a rejoin under another device's key = %+v", resp)
 	}
 
@@ -245,7 +246,7 @@ func TestMLSHandover_ARejoinUnderAnotherLeafKeyBuildsNothing(t *testing.T) {
 		AccountID: e2eBob, DeviceID: e2eDevice, KeyPackageB64: bob.keyPackage().KeyPackageB64,
 		Request: bob.rejoinRequest(),
 	})
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("a rejoin under a rotated key = %+v", resp)
 	}
 	if got := alice.status(); got.CommitPending || got.Epoch != 1 {

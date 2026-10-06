@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -184,7 +185,7 @@ func TestMLSChatE2E_ASecondDeviceIsNotAddedBesideTheFirst(t *testing.T) {
 	bob2.declare(proto.MLSLeafReasonEnroll, oldBob.NotBefore+60)
 	add := r.alice.buildRequest(1)
 	add.Add, add.UserInitiated = []proto.MLSMemberKeyPackage{bob2.keyPackage()}, true
-	assertCode(t, r.alice.call(proto.MLSCommitBuild, add), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.alice.call(proto.MLSCommitBuild, add), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	if got := r.alice.status(); got.CommitPending || got.Epoch != 1 {
 		t.Fatalf("alice after the refused add = %+v", got)
 	}

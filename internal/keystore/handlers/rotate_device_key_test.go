@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 
@@ -119,7 +120,7 @@ func TestRotateDeviceKey_Roundtrip(t *testing.T) {
 
 	// Baseline consistency: oldWrap unwrapped with oldDK yields a 32B raw DEK
 	oldWrapRaw, _ := base64.StdEncoding.DecodeString(oldWrapB64)
-	originalDEK, err := aesGCMOpen(oldDK, oldWrapRaw[:12], oldWrapRaw[12:])
+	originalDEK, err := crypto.OpenAESGCM(oldDK, oldWrapRaw[:12], oldWrapRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("baseline old wrap open failed: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestRotateDeviceKey_Roundtrip(t *testing.T) {
 
 	// Unwrapping the new wrap with the new deviceKey must yield the same raw DEK
 	newWrapRaw, _ := base64.StdEncoding.DecodeString(data.DeviceWrappedDEKB64)
-	rotatedDEK, err := aesGCMOpen(newDK, newWrapRaw[:12], newWrapRaw[12:])
+	rotatedDEK, err := crypto.OpenAESGCM(newDK, newWrapRaw[:12], newWrapRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("new wrap open with new device key failed: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestRotateDeviceKey_NewWrapNotDecryptableByOldKey(t *testing.T) {
 	newWrapRaw, _ := base64.StdEncoding.DecodeString(data.DeviceWrappedDEKB64)
 
 	// attempting to unwrap the new wrap with OLD deviceKey must fail
-	if _, err := aesGCMOpen(oldDK, newWrapRaw[:12], newWrapRaw[12:]); err == nil {
+	if _, err := crypto.OpenAESGCM(oldDK, newWrapRaw[:12], newWrapRaw[12:], nil); err == nil {
 		t.Error("new wrap should not decrypt with old device key")
 	}
 }
@@ -202,7 +203,7 @@ func TestRotateDeviceKey_OldWrapNotDecryptableByNewKey(t *testing.T) {
 	newDK, _ := base64.StdEncoding.DecodeString(stored)
 
 	oldWrapRaw, _ := base64.StdEncoding.DecodeString(oldWrapB64)
-	if _, err := aesGCMOpen(newDK, oldWrapRaw[:12], oldWrapRaw[12:]); err == nil {
+	if _, err := crypto.OpenAESGCM(newDK, oldWrapRaw[:12], oldWrapRaw[12:], nil); err == nil {
 		t.Error("old wrap should NOT decrypt with new device key")
 	}
 }
@@ -290,7 +291,7 @@ func TestRotateDeviceKey_PostRotateLoginPathContinuity(t *testing.T) {
 
 	// extract raw DEK (baseline for comparison)
 	oldWrapRaw, _ := base64.StdEncoding.DecodeString(oldDeviceWrapB64)
-	originalDEK, err := aesGCMOpen(oldDK, oldWrapRaw[:12], oldWrapRaw[12:])
+	originalDEK, err := crypto.OpenAESGCM(oldDK, oldWrapRaw[:12], oldWrapRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("baseline open failed: %v", err)
 	}
@@ -314,7 +315,7 @@ func TestRotateDeviceKey_PostRotateLoginPathContinuity(t *testing.T) {
 
 	stored, _ := keychain.GetDeviceKey(store)
 	newDK, _ := base64.StdEncoding.DecodeString(stored)
-	loginRotatedDEK, err := aesGCMOpen(newDK, loginWrapRaw[:12], loginWrapRaw[12:])
+	loginRotatedDEK, err := crypto.OpenAESGCM(newDK, loginWrapRaw[:12], loginWrapRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("login-path open failed: %v", err)
 	}

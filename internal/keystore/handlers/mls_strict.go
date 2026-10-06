@@ -26,6 +26,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -100,11 +101,11 @@ func sendAdmission(d Deps, owner string, session *mls.Session) func() error {
 }
 
 func peerUnverifiedResponse(d Deps, stage string, e *MLSPeerUnverifiedError) proto.BaseResponse {
-	d.Logger.Printf("chat state %s failed: %s", stage, proto.ChatMLSErrorCodePeerUnverified)
+	d.Logger.Printf("chat state %s failed: %s", stage, errs.ErrCodeChatMLSPeerUnverified)
 	return proto.BaseResponse{
 		Success:   false,
 		Error:     "this device requires verified peers and a member's key has not been verified; nothing was built, joined or sent",
-		ErrorCode: proto.ChatMLSErrorCodePeerUnverified,
+		ErrorCode: string(errs.ErrCodeChatMLSPeerUnverified),
 		Data:      proto.MLSPeerUnverifiedData{UnverifiedAccountIDs: e.AccountIDs},
 	}
 }

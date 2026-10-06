@@ -210,7 +210,7 @@ func wrapActivePrivateKeyWithKey(d Deps, wrapKey []byte) (string, proto.BaseResp
 	secure.WipeString(&pemStr)
 	defer privKeyBuf.Destroy()
 
-	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey, privKeyBuf.Bytes())
+	wrappedB64, err := crypto.AESGCMEncryptBase64(d.Random(), wrapKey, privKeyBuf.Bytes())
 	if err != nil {
 		d.Logger.Printf("wrap active private key error: AES-GCM wrap failed: %v", err)
 		return "", errs.CodeResponse(errs.ErrCodeCryptoFailure,

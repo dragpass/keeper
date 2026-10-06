@@ -29,7 +29,7 @@ func HybridWrap(pub *rsa.PublicKey, plaintext []byte) (wrappedKeyB64, ciphertext
 	}
 	defer zeroize(aesKey)
 
-	ciphertextB64, err = AESGCMEncryptBase64(aesKey, plaintext)
+	ciphertextB64, err = AESGCMEncryptBase64(rand.Reader, aesKey, plaintext)
 	if err != nil {
 		return "", "", fmt.Errorf("hybrid wrap: aes-gcm: %w", err)
 	}

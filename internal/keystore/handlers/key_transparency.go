@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -97,27 +98,21 @@ func verifyMLSLeafTransparency(d Deps, evidence []proto.KeyTransparencyEvidence,
 func keyTransparencyRefusal(d Deps, err error) proto.BaseResponse {
 	code := keyTransparencyErrorCode(err)
 	d.Logger.Printf("key transparency verification refused a key change (%s)", code)
-	return proto.BaseResponse{Success: false, Error: keyTransparencyRefusalMessage(code), ErrorCode: code}
+	return errs.CodeResponse(code, keyTransparencyRefusalMessage(code))
 }
 
-const (
-	keyTransparencyCodeUnverified   = "key_transparency_unverified"
-	keyTransparencyCodeFork         = "key_transparency_fork"
-	keyTransparencyCodeTrustInvalid = "key_transparency_trust_invalid"
-)
-
-func keyTransparencyErrorCode(err error) string {
+func keyTransparencyErrorCode(err error) errs.ErrorCode {
 	if errors.Is(err, keytransparency.ErrTrustInvalid) {
-		return keyTransparencyCodeTrustInvalid
+		return errs.ErrCodeKeyTransparencyTrustInvalid
 	}
 	if errors.Is(err, keytransparency.ErrCheckpointFork) || errors.Is(err, keytransparency.ErrCheckpointRollback) || errors.Is(err, keytransparency.ErrConsistencyProof) {
-		return keyTransparencyCodeFork
+		return errs.ErrCodeKeyTransparencyFork
 	}
-	return keyTransparencyCodeUnverified
+	return errs.ErrCodeKeyTransparencyUnverified
 }
 
-func keyTransparencyRefusalMessage(code string) string {
-	if code == keyTransparencyCodeTrustInvalid {
+func keyTransparencyRefusalMessage(code errs.ErrorCode) string {
+	if code == errs.ErrCodeKeyTransparencyTrustInvalid {
 		return "key transparency trust file is present but unusable; key changes are refused"
 	}
 	return "key transparency proof could not be verified"

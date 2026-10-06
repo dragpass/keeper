@@ -12,6 +12,7 @@ package dispatch
 import (
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -48,9 +49,9 @@ func TestMLSOwnerSuccession_TheServersNomineeIsNotTheRule(t *testing.T) {
 	r := ownerRemoved(t, e2eBob)
 	claim := r.carol.buildRequest(2)
 	claim.SetRoles = roleSet(e2eCarol, e2eBob)
-	assertCode(t, r.carol.call(proto.MLSCommitBuild, claim), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.carol.call(proto.MLSCommitBuild, claim), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	claim.ClientCommitID, claim.SetRoles = r.carol.nextCommitID(), roleSet(e2eCarol)
-	assertCode(t, r.carol.call(proto.MLSCommitBuild, claim), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.carol.call(proto.MLSCommitBuild, claim), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	if got := r.carol.status(); got.CommitPending || got.Epoch != 2 {
 		t.Fatalf("a refused claim left %+v", got)
 	}
@@ -96,7 +97,7 @@ func TestMLSOwnerSuccession_TwoMembersClaimAtOnce(t *testing.T) {
 	// Carol cannot now take it back: Bob holds a leaf.
 	again := r.carol.buildRequest(3)
 	again.SetRoles = roleSet(e2eCarol)
-	assertCode(t, r.carol.call(proto.MLSCommitBuild, again), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.carol.call(proto.MLSCommitBuild, again), string(errs.ErrCodeChatMLSCommitUnauthorized))
 }
 
 // A claim needs the owner's leaf to be gone: while Alice still holds one, no
@@ -105,7 +106,7 @@ func TestMLSOwnerSuccession_NoClaimWhileTheOwnerHoldsALeaf(t *testing.T) {
 	r := newRolesRoom(t, e2eBob)
 	claim := r.bob.buildRequest(1)
 	claim.SetRoles = roleSet(e2eBob)
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, claim), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, claim), string(errs.ErrCodeChatMLSCommitUnauthorized))
 }
 
 // P1-1: the owner Alice and the only admin Bob are both removed from the

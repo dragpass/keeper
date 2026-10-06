@@ -11,6 +11,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -42,6 +43,11 @@ func loadDeviceKeyFromKeychain(store keychain.SecretStore) ([]byte, error) {
 	if deviceKeyB64 == "" {
 		return nil, errors.New("device key not found in keychain (signup required)")
 	}
+	return decodeDeviceKey(deviceKeyB64)
+}
+
+// decodeDeviceKey is the raw 32B device key of its stored Base64 form.
+func decodeDeviceKey(deviceKeyB64 string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(deviceKeyB64)
 	if err != nil {
 		return nil, errors.New("failed to decode device key from keychain: " + err.Error())
@@ -65,7 +71,7 @@ func unwrapDeviceWrappedDEK(deviceKey []byte, encryptedDekB64 string) ([]byte, e
 	}
 	iv := raw[:12]
 	ciphertext := raw[12:]
-	dek, err := aesGCMOpen(deviceKey, iv, ciphertext)
+	dek, err := crypto.OpenAESGCM(deviceKey, iv, ciphertext, nil)
 	if err != nil {
 		return nil, errors.New("dek decrypt failed: " + err.Error())
 	}

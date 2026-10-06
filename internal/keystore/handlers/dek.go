@@ -5,6 +5,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
@@ -46,7 +47,7 @@ func HandleDEKUnwrapAndEncrypt(d Deps, req proto.DEKUnwrapAndEncryptRequest) pro
 	}
 	defer secure.Zeroize(dek)
 
-	iv, ciphertext, err := aesGCMSealSplit(dek, plaintext)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, nil)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
 	}
@@ -88,20 +89,26 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	if _, response := ensureDeviceKey(d); !response.Success {
 		return response
 	}
-	// fetch deviceKey internally — never accept it via the IPC payload
-	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	// The device key is read, never accepted via the IPC payload, and read
+	// in the same keychain lock hold as the slot write.
+	var sealErr error
+	devWrapped, err := keychain.SealPersonalDeviceWrappedDEK(d.Store, func(deviceKeyB64 string) (string, error) {
+		deviceKey, err := decodeDeviceKey(deviceKeyB64)
+		if err != nil {
+			return "", err
+		}
+		deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
+		defer deviceKeyBuf.Destroy()
+		wrapped, err := crypto.AESGCMEncryptBase64(d.Random(), deviceKeyBuf.Bytes(), dek)
+		if err != nil {
+			sealErr = err
+		}
+		return wrapped, err
+	})
+	if sealErr != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+sealErr.Error())
 	}
-	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
-	defer deviceKeyBuf.Destroy()
-
-	// rewrap with deviceKey
-	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
-	}
-	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, devWrapped); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 
@@ -128,7 +135,7 @@ func openPasswordWrappedDEK(encryptedDEKB64 string, pwBuf *memguard.LockedBuffer
 	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
 
-	dek, err := aesGCMOpen(kek, iv, ciphertext)
+	dek, err := crypto.OpenAESGCM(kek, iv, ciphertext, nil)
 	if err != nil {
 		return nil, errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed (wrong password?): "+err.Error())
 	}
@@ -188,7 +195,7 @@ func HandleDEKRotateToNewPassword(d Deps, req proto.DEKRotateToNewPasswordReques
 	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
 
-	iv, ciphertext, err := aesGCMSealSplit(kek, dek)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), kek, dek, nil)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap dek failed: "+err.Error())
 	}

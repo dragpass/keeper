@@ -42,6 +42,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
@@ -158,7 +159,7 @@ func HandleGroupDecryptWithAadForAppDisplay(d Deps, payload json.RawMessage) pro
 	var plaintext []byte
 	var openErr error
 	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		opened, err := AESGCMOpenWithAAD(groupDEK, iv, ciphertext, aad)
+		opened, err := crypto.OpenAESGCM(groupDEK, iv, ciphertext, aad)
 		if err != nil {
 			openErr = err
 			return nil

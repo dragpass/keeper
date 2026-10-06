@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/rand"
 	"testing"
 	"time"
 
@@ -228,7 +229,7 @@ func TestRotatedAtBound_AuthRecoveryPrepare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
-	wrappedOldKey, err := crypto.AESGCMEncryptBase64(oldWrapKey, []byte(oldKeypair.PrivateKey))
+	wrappedOldKey, err := crypto.AESGCMEncryptBase64(rand.Reader, oldWrapKey, []byte(oldKeypair.PrivateKey))
 	secure.Zeroize(oldWrapKey)
 	if err != nil {
 		t.Fatalf("AESGCMEncryptBase64: %v", err)

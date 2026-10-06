@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -102,12 +103,12 @@ func TestMLSRecovery_AutomationNeverSeatsARecoveredIdentity(t *testing.T) {
 	c.alice.replacing, c.bob.replacing, bob2.replacing = listed, listed, listed
 
 	resp := c.alice.buildRecoveryReplace(1, bob2.keyPackage(), false, chain)
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
-		t.Fatalf("an automated seat of a recovered identity = %+v; want %s", resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
+		t.Fatalf("an automated seat of a recovered identity = %+v; want %s", resp, string(errs.ErrCodeChatMLSCommitUnauthorized))
 	}
 	// Sends stay blocked until the lawful Commit lands.
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 }
 
 // The DM peer confirms once: Alice seats the recovered Bob2 with a replace
@@ -125,7 +126,7 @@ func TestMLSRecovery_TheDMPeerSeatsTheRecoveredIdentityOnce(t *testing.T) {
 
 	// Without the chain the new account key is an unexplained change.
 	resp := c.alice.buildRecoveryReplace(1, bob2.keyPackage(), true)
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeLeafUntrusted {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSLeafUntrusted) {
 		t.Fatalf("a recovered identity without its chain = %+v", resp)
 	}
 
@@ -139,7 +140,7 @@ func TestMLSRecovery_TheDMPeerSeatsTheRecoveredIdentityOnce(t *testing.T) {
 	// another key and stays where it was: it is out of the group either way.
 	req := c.bob.processRequest(c.nextSeq(), 2, built.CommitB64)
 	req.RotationStatements = []proto.KeyRotationStatement{chain}
-	c.bob.refused(proto.MLSProcess, req, proto.ChatMLSErrorCodeLeafUntrusted)
+	c.bob.refused(proto.MLSProcess, req, string(errs.ErrCodeChatMLSLeafUntrusted))
 	bob2.must(proto.MLSJoin, proto.MLSJoinRequest{
 		Permit: bob2.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64,
 	})
@@ -178,7 +179,7 @@ func TestMLSRecovery_ARoomMemberAppliesAPersonsSeatOfARecoveredIdentity(t *testi
 
 	r2, _, _, kp := takeoverRoom(t)
 	resp := r2.alice.buildRecoveryReplace(2, kp, true)
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("a person seating a same-key device without a handover = %+v", resp)
 	}
 }
@@ -211,9 +212,9 @@ func TestMLSRecovery_InARoomWithRolesOnlyTheOwnerOrAnAdminSeatsARecoveredIdentit
 
 		resp := r.carol.buildRecoveryReplace(1, bob2.keyPackage(), true, chain)
 		if !admin {
-			if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+			if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 				t.Fatalf("a plain member seating a recovered identity = %+v; want %s",
-					resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+					resp, string(errs.ErrCodeChatMLSCommitUnauthorized))
 			}
 			continue
 		}
@@ -244,9 +245,9 @@ func TestMLSRecovery_AnOwnerWithNoAdminWhoRecoversIsNotSeatedBack(t *testing.T) 
 	for _, member := range []*keeper{r.bob, r.carol} {
 		for _, asked := range []bool{false, true} {
 			resp := member.buildRecoveryReplace(1, kp, asked, chain)
-			if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+			if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 				t.Fatalf("%s seating the recovered owner (asked %t) = %+v; want %s",
-					member.id[:8], asked, resp, proto.ChatMLSErrorCodeCommitUnauthorized)
+					member.id[:8], asked, resp, string(errs.ErrCodeChatMLSCommitUnauthorized))
 			}
 			if got := member.status(); got.CommitPending || got.Epoch != 1 {
 				t.Fatalf("a refused seat left %+v", got)

@@ -15,16 +15,19 @@
 //
 // **AES-GCM** (`aes.go`)
 //
-//   - `AESGCMEncryptBase64(key, plaintext) (string, error)`
-//   - input: 32B AES-256 key + plaintext bytes
-//   - output: Base64( IV(12B) || ciphertext_with_tag )
-//   - error: key length != 32 → "key must be 32 bytes (AES-256)"
-//   - usage: Recovery Wrap (PEM ↔ wrap_key), etc.
-//   - `AESGCMDecryptBase64(key, b64) ([]byte, error)`
-//   - input: 32B AES-256 key + Base64 envelope (same format as above)
-//   - output: plaintext bytes
-//   - error: key length / Base64 / IV length / GCM auth tag verification failure
-//   - usage: Recovery Unwrap, etc.
+//   - `SealAESGCM(random, key, plaintext, aad) (iv, ciphertext, error)`
+//   - input: random source for the 12B IV (handlers pass Deps.Random()),
+//     32B AES-256 key, plaintext bytes, aad (nil for none)
+//   - output: IV(12B) and ciphertext_with_tag
+//   - error: key length != 32 → "key must be 32 bytes (AES-256)"; IV read
+//   - usage: every AES-GCM seal in Keeper (DEK wraps, drag tokens,
+//     credential payloads, guest shares).
+//   - `OpenAESGCM(key, iv, ciphertext, aad) ([]byte, error)`
+//   - error: key length / IV length / GCM auth tag (aad mismatch included)
+//   - `AESGCMEncryptBase64(random, key, plaintext) (string, error)` /
+//     `AESGCMDecryptBase64(key, b64) ([]byte, error)`
+//   - SealAESGCM / OpenAESGCM without AAD in the Base64( IV(12B) ||
+//     ciphertext_with_tag ) envelope: device-wrapped DEK, Recovery Wrap.
 //
 // **RSA** (`keypair.go`)
 //
@@ -113,9 +116,9 @@
 //     primitive caller cannot specify parameters.
 //  2. **Constant-time comparison**: signature verification uses the standard
 //     crypto/rsa package, so there is no timing leak.
-//  3. **Random source**: all IVs / key pairs / nonces use `crypto/rand`. No
-//     path in production allows a deterministic reader (Deps.Rand is
-//     test-only).
+//  3. **Random source**: all IVs / key pairs / nonces use `crypto/rand`.
+//     Handlers draw AES-GCM IVs from Deps.Random(), which is `crypto/rand`
+//     in production; a deterministic reader there is test-only.
 //  4. **Memory lifecycle**: raw 32B keys / PEM bytes are wiped immediately
 //     after use via `zeroize` or `memguard.LockedBuffer.Destroy`. See
 //     the `secure.go` header for detailed guidance.

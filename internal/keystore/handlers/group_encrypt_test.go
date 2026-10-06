@@ -2,7 +2,7 @@
 //
 // Core guarantees:
 //   1. roundtrip: the sealed {iv, ciphertext} decrypts back to the plaintext
-//      under the same raw Group DEK (aesGCMOpen).
+//      under the same raw Group DEK (crypto.OpenAESGCM).
 //   2. response envelope carries plaintext 0 times.
 //   3. logger Messages echo the plaintext sentinel 0 times (success path too).
 //   4. bad handle → not_found; expired session → expired_session.
@@ -10,8 +10,10 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +52,7 @@ func TestHandleGroupEncrypt_RoundTrip(t *testing.T) {
 
 	// Decrypt back directly with the raw Group DEK — mirror of the client-side
 	// / group_decrypt_to_clipboard open path.
-	got, err := AESGCMOpen(groupRaw, iv, ct)
+	got, err := crypto.OpenAESGCM(groupRaw, iv, ct, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -126,5 +128,31 @@ func TestHandleGroupEncrypt_ExpiredSession(t *testing.T) {
 	}
 	if resp.ErrorCode != string(errs.ErrCodeExpiredSession) {
 		t.Fatalf("error_code = %q, want %q", resp.ErrorCode, errs.ErrCodeExpiredSession)
+	}
+}
+
+// The IV comes from Deps.Rand like every other random value a handler draws,
+// so a failing source fails the seal instead of falling back to crypto/rand.
+func TestHandleGroupEncrypt_DrawsTheIVFromDepsRand(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	handle, _ := openSessionForFreshKey(t, deps)
+	request := proto.GroupEncryptRequest{
+		GroupHandle:  handle,
+		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
+	}
+
+	fixedIV := []byte("twelve-bytes")
+	deps.Rand = bytes.NewReader(fixedIV)
+	resp := HandleGroupEncrypt(deps, request)
+	if !resp.Success {
+		t.Fatalf("seal: %s", resp.Error)
+	}
+	if got := resp.Data.(proto.GroupEncryptResponseData).IVB64; got != base64.StdEncoding.EncodeToString(fixedIV) {
+		t.Fatalf("iv = %s, want the bytes Deps.Rand supplied", got)
+	}
+
+	deps.Rand = failingReader{}
+	if resp := HandleGroupEncrypt(deps, request); resp.Success {
+		t.Fatal("a failing Deps.Rand must fail the seal")
 	}
 }

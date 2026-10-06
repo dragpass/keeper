@@ -49,10 +49,6 @@ const (
 	ChatRuntimeLeaseTTL        = 60 * time.Second
 	ChatRuntimeExtensionWindow = 120 * time.Second
 
-	ErrCodeChatRuntimeBusy          = "chat_runtime_busy"
-	ErrCodeChatRuntimeLeaseRequired = "chat_runtime_lease_required"
-	ErrCodeChatRuntimeRevoked       = "chat_runtime_revoked"
-
 	ChatRuntimeRevokedPurged = "purged"
 	ChatRuntimeRevokedReset  = "reset"
 

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"golang.org/x/mod/sumdb/note"
@@ -57,13 +58,13 @@ func TestKeyTransparencyGateAtTheProcessBoundary(t *testing.T) {
 	}{
 		{name: "absent", trustFile: func(*testing.T) string { return "" }},
 		{name: "valid", trustFile: writeKeeperTrustFile, configured: true,
-			wantCode: proto.ChatMLSErrorCodeKeyTransparencyUnverified},
+			wantCode: string(errs.ErrCodeChatMLSKeyTransparencyUnverified)},
 		{name: "malformed", trustFile: func(*testing.T) string { return garbage },
 			trustError: proto.KeyTransparencyTrustErrorInvalid,
-			wantCode:   proto.ChatMLSErrorCodeKeyTransparencyTrustInvalid},
+			wantCode:   string(errs.ErrCodeChatMLSKeyTransparencyTrustInvalid)},
 		{name: "unreadable", trustFile: func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.json") },
 			trustError: proto.KeyTransparencyTrustErrorInvalid,
-			wantCode:   proto.ChatMLSErrorCodeKeyTransparencyTrustInvalid},
+			wantCode:   string(errs.ErrCodeChatMLSKeyTransparencyTrustInvalid)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

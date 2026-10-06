@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"reflect"
@@ -84,7 +85,7 @@ func wrapUnderStageRK24(t *testing.T, privateKeyPEM string) string {
 		t.Fatalf("Derive: %v", err)
 	}
 	defer secure.Zeroize(wrapKey)
-	wrapped, err := crypto.AESGCMEncryptBase64(wrapKey, []byte(privateKeyPEM))
+	wrapped, err := crypto.AESGCMEncryptBase64(rand.Reader, wrapKey, []byte(privateKeyPEM))
 	if err != nil {
 		t.Fatalf("wrap old key: %v", err)
 	}

@@ -11,6 +11,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"time"
 
 	"github.com/awnumar/memguard"
@@ -57,7 +58,7 @@ func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptT
 	}
 	defer secure.Zeroize(dek)
 
-	plaintext, err := aesGCMOpen(dek, iv, ciphertext)
+	plaintext, err := crypto.OpenAESGCM(dek, iv, ciphertext, nil)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed: "+err.Error())
 	}
@@ -66,7 +67,7 @@ func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptT
 
 // HandleGroupDecryptToClipboard writes the plaintext of a drag / audit token
 // (encrypted directly with the raw Group DEK) to the OS clipboard. There is
-// no key indirection, so aesGCMOpen is called directly inside GroupSessions.Use.
+// no key indirection, so crypto.OpenAESGCM is called directly inside GroupSessions.Use.
 //
 // Plaintext appears zero times in the response — only {copied, ttl}.
 func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequest) proto.BaseResponse {
@@ -87,7 +88,7 @@ func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequ
 
 	var plaintext []byte
 	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
-		pt, err := aesGCMOpen(groupDEK, iv, ciphertext)
+		pt, err := crypto.OpenAESGCM(groupDEK, iv, ciphertext, nil)
 		if err != nil {
 			return errors.New("decrypt failed: " + err.Error())
 		}

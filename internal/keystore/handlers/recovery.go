@@ -91,7 +91,7 @@ func generateKeypairWithRecoveryWrapKey(
 	defer privKeyBuf.Destroy()
 
 	// wrap private key with AES-GCM
-	wrappedB64, err := crypto.AESGCMEncryptBase64(wrapKey.Bytes(), privKeyBuf.Bytes())
+	wrappedB64, err := crypto.AESGCMEncryptBase64(d.Random(), wrapKey.Bytes(), privKeyBuf.Bytes())
 	if err != nil {
 		d.Logger.Printf("recovery wrap error: AES-GCM wrap failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "AES-GCM wrap failed: "+err.Error())
