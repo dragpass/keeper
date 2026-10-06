@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -91,7 +92,7 @@ func TestKeeperProcessesContendOverASignedLeave(t *testing.T) {
 			if err := json.Unmarshal(r.Data, &built); err != nil {
 				t.Fatal(err)
 			}
-		case r.ErrorCode != proto.ChatMLSErrorCodeCommitPending:
+		case r.ErrorCode != string(errs.ErrCodeChatMLSCommitPending):
 			t.Fatalf("the loser answered %+v", r)
 		}
 	}
@@ -126,7 +127,7 @@ func TestKeeperProcessRefusesAMembersRolesChangeAndWritesNothing(t *testing.T) {
 		ClientCommitID: g.carol.nextCommitID(), ExpectedEpoch: 1, UserInitiated: true,
 		SetRoles: &proto.MLSRoleSet{Kind: proto.MLSRolesKindRoom,
 			Entries: []proto.MLSRoleEntry{{AccountID: hCarol, Role: proto.MLSRoleOwner}}},
-	}, proto.ChatMLSErrorCodeCommitUnauthorized)
+	}, string(errs.ErrCodeChatMLSCommitUnauthorized))
 	c.killAndAssertKilled()
 
 	c = g.carol.start("", 0)
@@ -152,12 +153,12 @@ func TestKeeperProcessHoldsTheDeviceRevocationLatchAcrossAKill(t *testing.T) {
 	a := g.alice.start("", 0)
 	req := g.alice.encryptRequest(messageID(1), 1, "to carol's old device")
 	req.Permit = g.alice.permitRevoking(ref)
-	a.refused(proto.MLSEncrypt, req, proto.ChatMLSErrorCodeRotationPending)
+	a.refused(proto.MLSEncrypt, req, string(errs.ErrCodeChatMLSRotationPending))
 	a.killAndAssertKilled()
 
 	a = g.alice.start("", 0)
 	a.refused(proto.MLSEncrypt, g.alice.encryptRequest(messageID(1), 1, "the permit forgot"),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 
 	b := g.bob.start("", 0)
 	var built proto.MLSCommitResponseData

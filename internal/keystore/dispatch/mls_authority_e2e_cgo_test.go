@@ -12,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -61,8 +62,8 @@ func (k *keeper) buildRemove(expected uint64, accounts ...string) proto.BaseResp
 // blockedData is the sync block a CHAT_MLS_ROW_REFUSED answer carries (N3).
 func blockedData(t *testing.T, resp proto.BaseResponse) proto.MLSSyncBlock {
 	t.Helper()
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeRowRefused {
-		t.Fatalf("response = %+v; want %s", resp, proto.ChatMLSErrorCodeRowRefused)
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSRowRefused) {
+		t.Fatalf("response = %+v; want %s", resp, string(errs.ErrCodeChatMLSRowRefused))
 	}
 	data, ok := resp.Data.(*proto.MLSSyncBlock)
 	if !ok || data == nil {
@@ -73,8 +74,8 @@ func blockedData(t *testing.T, resp proto.BaseResponse) proto.MLSSyncBlock {
 
 func latchedData(t *testing.T, resp proto.BaseResponse) proto.ChatStateRekeyLatchedData {
 	t.Helper()
-	if resp.Success || string(resp.ErrorCode) != proto.ChatStateErrorCodeRekeyRequired {
-		t.Fatalf("response = %+v; want %s", resp, proto.ChatStateErrorCodeRekeyRequired)
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatStateRekeyRequired) {
+		t.Fatalf("response = %+v; want %s", resp, string(errs.ErrCodeChatStateRekeyRequired))
 	}
 	data, ok := resp.Data.(proto.ChatStateRekeyLatchedData)
 	if !ok {
@@ -92,7 +93,7 @@ func TestMLSAuthority_APlainMemberCannotBuildARemoveOfAnotherMember(t *testing.T
 		Permit: r.bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2,
 		RemoveAccountIDs: []string{e2eCarol}, UserInitiated: true,
-	}), proto.ChatMLSErrorCodeCommitUnauthorized)
+	}), string(errs.ErrCodeChatMLSCommitUnauthorized))
 }
 
 // N3: a blocked row is not a dead end. Another, valid Commit for the same
@@ -129,7 +130,7 @@ func TestMLSAuthority_AValidCommitForTheBlockedEpochClearsTheBlock(t *testing.T)
 func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	r := newRoom(t)
 	resp := r.bob.buildRemove(2, e2eCarol)
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("an automated remove of another member = %+v", resp)
 	}
 	dave := newKeeper(t, "d4444444-4444-4444-8444-444444444444")
@@ -138,7 +139,7 @@ func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2,
 		Add: []proto.MLSMemberKeyPackage{dave.keyPackage()},
 	})
-	if add.Success || string(add.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if add.Success || string(add.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("an automated add = %+v", add)
 	}
 	if got := r.bob.status(); got.CommitPending {
@@ -147,14 +148,14 @@ func TestMLSAuthority_AutomationCannotBuildARemoveOrAnAdd(t *testing.T) {
 	r.bob.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r.bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, UpdateSelf: true, UserInitiated: true,
-	}, proto.ChatStateErrorCodeInvalidInput)
+	}, string(errs.ErrCodeChatStateInvalidInput))
 
 	// The permit naming a departure is no longer enough (wave 5a): only the
 	// org admin's signed statement makes it anyone's to carry out.
 	r.bob.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r.bob.permit(e2eCarol), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eCarol},
-	}, proto.ChatMLSErrorCodeCommitUnauthorized)
+	}, string(errs.ErrCodeChatMLSCommitUnauthorized))
 	r.bob.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: r.bob.permit(e2eCarol), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: r.bob.nextCommitID(), ExpectedEpoch: 2, RemoveAccountIDs: []string{e2eCarol},
@@ -187,7 +188,7 @@ func TestMLSAuthority_AttestedAndDepartedRemovesAreApplied(t *testing.T) {
 	// Carol's permit before the Remove named Alice; she latched it then.
 	r2.carol.status(e2eAlice)
 	r2.carol.refused(proto.MLSEncrypt, r2.carol.encryptRequest(messageID(1), 2, "hi", e2eAlice),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 	// Now the server has cleared the row and serves no attestation (an old
 	// row): the statement inside the Commit is what carol verifies.
 	if got := r2.carol.process(r2.nextSeq(), 3, departed.CommitB64); got.Epoch != 3 {
@@ -223,7 +224,7 @@ func TestMLSFork_AnotherCommitForAConfirmedEpochLatchesFork(t *testing.T) {
 	c.bob.processAttested(c.nextSeq(), 2, first.CommitB64, e2eAlice, e2eBob)
 
 	c.bob.refused(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, first.CommitB64),
-		proto.ChatMLSErrorCodeEpochStale)
+		string(errs.ErrCodeChatMLSEpochStale))
 
 	other := c.alice.buildUpdate(2)
 	got := latchedData(t, c.bob.call(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, other.CommitB64)))
@@ -246,7 +247,7 @@ func TestMLSAuthority_AnAttestationThatDoesNotVerifyIsNotAuthorized(t *testing.T
 	req := c.bob.processRequest(c.nextSeq(), 2, first.CommitB64)
 	req.CommitAttestation = attested(e2eAlice, e2eBob)
 	req.CommitAttestation.Signature = base64.StdEncoding.EncodeToString([]byte("tampered"))
-	c.bob.refused(proto.MLSProcess, req, proto.ChatStateErrorCodeNotAuthorized)
+	c.bob.refused(proto.MLSProcess, req, string(errs.ErrCodeChatStateNotAuthorized))
 	if got := c.bob.status(); got.NeedsRekey || got.Epoch != 1 {
 		t.Fatalf("a refused attestation moved the state: %+v", got)
 	}

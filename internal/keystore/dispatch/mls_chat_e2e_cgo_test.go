@@ -21,6 +21,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -309,7 +310,7 @@ func TestMLSChatE2E_ADMIsCreatedConfirmedAndJoined(t *testing.T) {
 	c.alice.refused(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 		Permit: c.alice.permit(), Roles: roleSet(c.alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{c.bob.keyPackage()},
-	}, proto.ChatStateErrorCodeConflict)
+	}, string(errs.ErrCodeChatStateConflict))
 }
 
 // A KeyPackage the server hands out for Bob but which names someone else is
@@ -322,7 +323,7 @@ func TestMLSChatE2E_AKeyPackageForAnotherAccountIsRefused(t *testing.T) {
 	alice.refused(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 		Permit: alice.permit(), Roles: roleSet(alice.id), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), Members: []proto.MLSMemberKeyPackage{kp},
-	}, proto.ChatMLSErrorCodeLeafUntrusted)
+	}, string(errs.ErrCodeChatMLSLeafUntrusted))
 
 	// Nothing was persisted: a correct create afterwards is the first one.
 	created := commitOf(alice.must(proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
@@ -348,7 +349,7 @@ func TestMLSChatE2E_ACommitRaceConverges(t *testing.T) {
 	c.bob.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.bob.nextCommitID(), ExpectedEpoch: 1, UpdateSelf: true,
-	}, proto.ChatMLSErrorCodeCommitPending)
+	}, string(errs.ErrCodeChatMLSCommitPending))
 
 	// The response to Bob was lost: unknown moves nothing and hands back the
 	// Commit to ask about.
@@ -382,13 +383,13 @@ func TestMLSChatE2E_HandshakesApplyInOrder(t *testing.T) {
 	second := c.bob.buildUpdate(2)
 	c.bob.confirm(second.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 
-	c.alice.refused(proto.MLSProcess, c.alice.processRequest(5, 3, second.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	c.alice.refused(proto.MLSProcess, c.alice.processRequest(5, 3, second.CommitB64), string(errs.ErrCodeChatMLSEpochStale))
 	c.alice.process(4, 2, first.CommitB64)
-	c.alice.refused(proto.MLSProcess, c.alice.processRequest(4, 2, first.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	c.alice.refused(proto.MLSProcess, c.alice.processRequest(4, 2, first.CommitB64), string(errs.ErrCodeChatMLSEpochStale))
 	// A row that claims the right epoch but carries a Commit for another one
 	// passes the ordering check and is refused by MLS, which binds the epoch
 	// into the Commit. Nothing is kept.
-	c.alice.refused(proto.MLSProcess, c.alice.processRequest(5, 3, first.CommitB64), proto.ChatMLSErrorCodeFailed)
+	c.alice.refused(proto.MLSProcess, c.alice.processRequest(5, 3, first.CommitB64), string(errs.ErrCodeChatMLSFailed))
 	c.alice.process(5, 3, second.CommitB64)
 }
 
@@ -525,7 +526,7 @@ func TestMLSChatE2E_EncryptIsIdempotentAndEpochBound(t *testing.T) {
 	if !first.Created || again.Created || again.CiphertextB64 != first.CiphertextB64 {
 		t.Fatalf("retransmission = %+v, first = %+v", again, first)
 	}
-	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 2, "stale"), proto.ChatMLSErrorCodeEpochStale)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 2, "stale"), string(errs.ErrCodeChatMLSEpochStale))
 
 	// The largest plaintext the protocol accepts fits the stored ciphertext.
 	big := strings.Repeat("가", proto.MLSEncryptMaxPlaintextBytes/3)
@@ -563,7 +564,7 @@ func TestMLSChatE2E_ADisplayBatchIsAllOrNothing(t *testing.T) {
 	bad := proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: base64.StdEncoding.EncodeToString(raw)}
 
 	resp := c.bob.call(proto.MLSDecryptBatchForAppDisplay, c.bob.decryptRequest(good, bad))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeFailed || resp.Data != nil {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSFailed) || resp.Data != nil {
 		t.Fatalf("a batch with a damaged message = %+v", resp)
 	}
 	assertShown(t, c.bob.decrypt(good), 0, "fine", c.alice, false)
@@ -572,7 +573,7 @@ func TestMLSChatE2E_ADisplayBatchIsAllOrNothing(t *testing.T) {
 	update := c.alice.buildUpdate(1)
 	c.bob.refused(proto.MLSDecryptBatchForAppDisplay,
 		c.bob.decryptRequest(proto.MLSDisplayMessage{Seq: c.nextSeq(), CiphertextB64: update.CommitB64}),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 }
 
 // S-1: once a permit names Bob as removed from the organization, Alice may not
@@ -583,9 +584,9 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	// Status shows the latch before anything is tried.
 	c.alice.assertStatus(c.alice.status(c.bob.id), 1, "", c.bob.id)
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob", c.bob.id),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 
 	remove := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(c.bob.id), OrgID: e2eOrg, ConversationID: e2eConv,
@@ -594,7 +595,7 @@ func TestMLSChatE2E_TheRemovalLatchHoldsUntilARemoveIsConfirmed(t *testing.T) {
 	}))
 	// Pending is not confirmed: still latched, and now also waiting.
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "to bob"),
-		proto.ChatMLSErrorCodeCommitPending)
+		string(errs.ErrCodeChatMLSCommitPending))
 	c.alice.assertStatus(c.alice.status(c.bob.id), 1, remove.ClientCommitID, c.bob.id)
 	c.alice.confirm(remove.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.assertStatus(c.alice.status(c.bob.id), 2, "")
@@ -661,7 +662,7 @@ func TestMLSChatE2E_EpochComparisonMatchesMembersAndSeparatesDivergentStates(t *
 	update := first.alice.buildUpdate(1)
 	first.alice.refused(proto.MLSEpochComparison, proto.MLSEpochComparisonRequest{
 		Permit: first.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
-	}, proto.ChatMLSErrorCodeCommitPending)
+	}, string(errs.ErrCodeChatMLSCommitPending))
 	first.alice.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	first.bob.process(first.nextSeq(), 2, update.CommitB64)
 	afterAlice, afterBob := first.alice.epochComparison(), first.bob.epochComparison()
@@ -709,11 +710,11 @@ func TestMLSChatE2E_StatusReportsARewindLatch(t *testing.T) {
 	if got := c.alice.status(); !got.NeedsRekey {
 		t.Fatalf("the latch did not hold for the next permit: %+v", got)
 	}
-	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"), proto.ChatStateErrorCodeRekeyRequired)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"), string(errs.ErrCodeChatStateRekeyRequired))
 	c.alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, UpdateSelf: true,
-	}, proto.ChatStateErrorCodeRekeyRequired)
+	}, string(errs.ErrCodeChatStateRekeyRequired))
 	// Bob's copy is his own and is not affected.
 	c.bob.assertStatus(c.bob.status(), 1, "")
 }
@@ -756,7 +757,7 @@ func TestMLSChatE2E_AWelcomeForAKeyPackageOfTheOldLeafIsUnusable(t *testing.T) {
 		t.Fatalf("bob's pool holds %d entries of the old leaf after the promote", n)
 	}
 	join := proto.MLSJoinRequest{Permit: bob.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: built.WelcomeB64}
-	bob.refused(proto.MLSJoin, join, proto.ChatMLSErrorCodeWelcomeUnusable)
+	bob.refused(proto.MLSJoin, join, string(errs.ErrCodeChatMLSWelcomeUnusable))
 	if got := bob.status(); got.HasGroupState || got.CommitPending || got.NeedsRekey || got.Epoch != 0 {
 		t.Fatalf("bob's status after the refused join = %+v", got)
 	}
@@ -791,20 +792,20 @@ func TestMLSChatE2E_ALatchedConversationKeepsItsHistoryReadable(t *testing.T) {
 	}
 
 	assertShown(t, c.alice.decrypt(read), 0, "before the rewind", c.bob, true)
-	c.alice.refused(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(unread), proto.ChatStateErrorCodeRekeyRequired)
+	c.alice.refused(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(unread), string(errs.ErrCodeChatStateRekeyRequired))
 	resp := c.alice.call(proto.MLSDecryptBatchForAppDisplay, c.alice.decryptRequest(read, unread))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatStateErrorCodeRekeyRequired || resp.Data != nil {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatStateRekeyRequired) || resp.Data != nil {
 		t.Fatalf("a mixed batch under the latch = %+v", resp)
 	}
-	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(3), 1, "x"), proto.ChatStateErrorCodeRekeyRequired)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(3), 1, "x"), string(errs.ErrCodeChatStateRekeyRequired))
 	c.alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, UpdateSelf: true,
-	}, proto.ChatStateErrorCodeRekeyRequired)
+	}, string(errs.ErrCodeChatStateRekeyRequired))
 	update := c.bob.buildUpdate(1)
 	c.bob.confirm(update.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.refused(proto.MLSProcess, c.alice.processRequest(c.nextSeq(), 2, update.CommitB64),
-		proto.ChatStateErrorCodeRekeyRequired)
+		string(errs.ErrCodeChatStateRekeyRequired))
 
 	// A Welcome to one of Alice's KeyPackages, for the latched conversation:
 	// the join is refused on the latch and the pool entry is kept.
@@ -817,7 +818,7 @@ func TestMLSChatE2E_ALatchedConversationKeepsItsHistoryReadable(t *testing.T) {
 	carol.confirm(id, proto.MLSCommitOutcomeAccepted, "")
 	c.alice.refused(proto.MLSJoin, proto.MLSJoinRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: invite.WelcomeB64,
-	}, proto.ChatStateErrorCodeRekeyRequired)
+	}, string(errs.ErrCodeChatStateRekeyRequired))
 	if n := c.alice.poolSize(); n != 1 {
 		t.Fatalf("alice's pool holds %d after the refused join, want the entry kept", n)
 	}

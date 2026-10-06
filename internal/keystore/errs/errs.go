@@ -91,6 +91,21 @@ const (
 	// list was returned. The only way to change the recorded owner is
 	// `peer_key_owner_reset` from the extension options page.
 	ErrCodePeerKeyOwnerMismatch ErrorCode = "peer_key_owner_mismatch"
+
+	// ErrCodeChatRuntimeBusy, ErrCodeChatRuntimeLeaseRequired and
+	// ErrCodeChatRuntimeRevoked are the chat runtime lease refusals
+	// (keystore/chat_runtime.go). Nothing ran.
+	ErrCodeChatRuntimeBusy          ErrorCode = "chat_runtime_busy"
+	ErrCodeChatRuntimeLeaseRequired ErrorCode = "chat_runtime_lease_required"
+	ErrCodeChatRuntimeRevoked       ErrorCode = "chat_runtime_revoked"
+
+	// ErrCodeKeyTransparency*: a key change the Keeper's trust file does not
+	// let through. A leaf entering an MLS group is refused for the same reasons
+	// under the ErrCodeChatMLSKeyTransparency* spellings in chat.go; both sets
+	// are on the wire and neither can be renamed.
+	ErrCodeKeyTransparencyUnverified   ErrorCode = "key_transparency_unverified"
+	ErrCodeKeyTransparencyFork         ErrorCode = "key_transparency_fork"
+	ErrCodeKeyTransparencyTrustInvalid ErrorCode = "key_transparency_trust_invalid"
 )
 
 // CodeForError inspects an error and returns the matching coarse code.

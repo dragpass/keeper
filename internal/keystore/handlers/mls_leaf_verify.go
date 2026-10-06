@@ -45,6 +45,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -58,7 +59,7 @@ type MLSLeafUntrustedError struct {
 	Reason              string
 	ObservedFingerprint string
 	PinnedFingerprint   string
-	KeyTransparencyCode string
+	KeyTransparencyCode errs.ErrorCode
 }
 
 func (e *MLSLeafUntrustedError) Error() string { return "mls leaf untrusted: " + e.Reason }

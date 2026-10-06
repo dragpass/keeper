@@ -5,6 +5,7 @@ package dispatch
 import (
 	"testing"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -35,5 +36,5 @@ func TestMLSChatE2E_AnOutboxEntryReadsBackWithItsMLSPositionAndNoPlaintext(t *te
 
 	c.alice.refused(proto.ChatStateReadOutbox, proto.ChatStateReadOutboxRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientMessageID: messageID(3),
-	}, proto.ChatStateErrorCodeNotFound)
+	}, string(errs.ErrCodeChatStateNotFound))
 }

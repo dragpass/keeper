@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -134,7 +135,7 @@ func TestMLSRoles_APlainMemberCannotAddAndAnAdminCan(t *testing.T) {
 	dave := newKeeper(t, e2eDave)
 	req := r.carol.buildRequest(1)
 	req.Add, req.UserInitiated = []proto.MLSMemberKeyPackage{dave.keyPackage()}, true
-	assertCode(t, r.carol.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.carol.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	if got := r.carol.status(); got.CommitPending {
 		t.Fatal("a refused add left a pending commit")
 	}
@@ -170,7 +171,7 @@ func TestMLSRoles_ACreateWithoutRolesIsRefused(t *testing.T) {
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientCommitID: alice.nextCommitID(),
 		Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 	})
-	assertCode(t, resp, proto.ChatStateErrorCodeInvalidInput)
+	assertCode(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 	if got := alice.status(); got.HasGroupState || got.CommitPending {
 		t.Fatalf("a refused create left %+v", got)
 	}
@@ -183,11 +184,11 @@ func TestMLSRoles_OwnershipTransferIsARolesCommit(t *testing.T) {
 	r := newRolesRoom(t, e2eBob)
 	req := r.bob.buildRequest(1)
 	req.SetRoles, req.UserInitiated = roleSet(e2eBob, e2eAlice), true
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 
 	req = r.alice.buildRequest(1)
 	req.SetRoles = roleSet(e2eCarol, e2eAlice)
-	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 
 	req = r.alice.buildRequest(1)
 	req.SetRoles, req.UserInitiated = roleSet(e2eCarol, e2eAlice), true
@@ -200,7 +201,7 @@ func TestMLSRoles_OwnershipTransferIsARolesCommit(t *testing.T) {
 	}
 	req = r.alice.buildRequest(2)
 	req.SetRoles, req.UserInitiated = roleSet(e2eAlice), true
-	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	req = r.carol.buildRequest(2)
 	req.SetRoles, req.UserInitiated = roleSet(e2eCarol, e2eAlice, e2eBob), true
 	grant := r.carol.accepted(req)
@@ -225,7 +226,7 @@ func TestMLSRoles_ADMAddsNobody(t *testing.T) {
 	carol := newKeeper(t, e2eCarol)
 	req := alice.buildRequest(1)
 	req.Add, req.UserInitiated = []proto.MLSMemberKeyPackage{carol.keyPackage()}, true
-	assertCode(t, alice.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, alice.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 }
 
 // An admin removes a member; an admin cannot remove the owner; a member
@@ -234,10 +235,10 @@ func TestMLSRoles_RoleBasedRemoves(t *testing.T) {
 	r := newRolesRoom(t, e2eBob)
 	req := r.carol.buildRequest(1)
 	req.RemoveAccountIDs, req.UserInitiated = []string{e2eBob}, true
-	assertCode(t, r.carol.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.carol.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	req = r.bob.buildRequest(1)
 	req.RemoveAccountIDs, req.UserInitiated = []string{e2eAlice}, true
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	req = r.bob.buildRequest(1)
 	req.RemoveAccountIDs, req.UserInitiated = []string{e2eCarol}, true
 	removed := r.bob.accepted(req)
@@ -248,7 +249,7 @@ func TestMLSRoles_RoleBasedRemoves(t *testing.T) {
 	if replay := r.alice.process(seq, 2, removed.CommitB64); !slices.Equal(replay.RemovedAccountIDs, []string{e2eCarol}) {
 		t.Fatalf("removal receipt after a lost response = %+v", replay)
 	}
-	r.alice.refused(proto.MLSProcess, r.alice.processRequest(seq+1, 2, removed.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	r.alice.refused(proto.MLSProcess, r.alice.processRequest(seq+1, 2, removed.CommitB64), string(errs.ErrCodeChatMLSEpochStale))
 	if got := r.carol.process(r.nextSeq(), 2, removed.CommitB64); !got.Removed {
 		t.Fatalf("carol processed her removal as %+v", got)
 	}
@@ -268,21 +269,21 @@ func TestMLSRoles_AnOrgRemovalNeedsTheAdminsStatement(t *testing.T) {
 	// Omitted: the server lists Carol as departed but serves no statement.
 	req := r.bob.buildRequest(1)
 	req.Permit, req.RemoveAccountIDs = r.bob.permit(e2eCarol), []string{e2eCarol}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	r.bob.refused(proto.MLSEncrypt, r.bob.encryptRequest(messageID(1), 1, "hi", e2eCarol),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 
 	// Tampered: the statement names Carol but its signature is over Bob.
 	forged := orgRemoval(admin, e2eBob)
 	forged.RemovedAccountID = e2eCarol
 	req.ClientCommitID, req.OrgRemovalStatements = r.bob.nextCommitID(), []proto.MLSOrgRemovalStatement{forged}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 
 	// Another organization's statement.
 	other := orgRemoval(admin, e2eCarol)
 	other.OrgID = e2eConv2
 	req.ClientCommitID, req.OrgRemovalStatements = r.bob.nextCommitID(), []proto.MLSOrgRemovalStatement{other}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 
 	// The genuine statement: Bob, a plain member, carries it out.
 	req.ClientCommitID, req.OrgRemovalStatements = r.bob.nextCommitID(), []proto.MLSOrgRemovalStatement{orgRemoval(admin, e2eCarol)}
@@ -370,7 +371,7 @@ func TestMLSRoles_ASignedLeaveIsCarriedOutByAnyMember(t *testing.T) {
 	req := r.bob.buildRequest(1)
 	req.Permit, req.RemoveAccountIDs = r.bob.permit(e2eCarol), []string{e2eCarol}
 	req.LeaveStatements = []proto.MLSLeaveStatement{replayed}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 
 	req.ClientCommitID, req.LeaveStatements = r.bob.nextCommitID(), []proto.MLSLeaveStatement{leave}
 	removed := r.bob.accepted(req)
@@ -386,7 +387,7 @@ func TestMLSRoles_ASignedLeaveIsCarriedOutByAnyMember(t *testing.T) {
 	forged.AccountID = e2eBob
 	req = r.alice.buildRequest(2)
 	req.RemoveAccountIDs, req.LeaveStatements = []string{e2eBob}, []proto.MLSLeaveStatement{forged}
-	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeStatementUnverified)
+	assertCode(t, r.alice.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSStatementUnverified))
 }
 
 // Carol revokes her device. The permit names the revocation, which latches
@@ -398,14 +399,14 @@ func TestMLSRoles_ASignedDeviceRevocationRemovesThatLeaf(t *testing.T) {
 	ref := proto.MLSDeviceRef{AccountID: e2eCarol, DeviceID: r.carol.device}
 	r.alice.revoked = []proto.MLSDeviceRef{ref}
 	r.alice.refused(proto.MLSEncrypt, r.alice.encryptRequest(messageID(1), 1, "to carol's old device"),
-		proto.ChatMLSErrorCodeRotationPending)
+		string(errs.ErrCodeChatMLSRotationPending))
 	if got := r.alice.status(); !slices.Equal(got.DeviceRevokeLatch, []proto.MLSDeviceRef{ref}) {
 		t.Fatalf("alice's device revoke latch = %+v", got.DeviceRevokeLatch)
 	}
 
 	req := r.bob.buildRequest(1)
 	req.RevokeDevices = []proto.MLSDeviceRef{ref}
-	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), proto.ChatMLSErrorCodeCommitUnauthorized)
+	assertCode(t, r.bob.call(proto.MLSCommitBuild, req), string(errs.ErrCodeChatMLSCommitUnauthorized))
 	req.ClientCommitID, req.DeviceRevocations = r.bob.nextCommitID(), []proto.MLSDeviceRevocation{revocation}
 	removed := r.bob.accepted(req)
 	if got := r.alice.process(r.nextSeq(), 2, removed.CommitB64); got.Epoch != 2 {

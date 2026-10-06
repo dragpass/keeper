@@ -151,7 +151,7 @@ func TestMLSKeyPackageGenerate_ANewDeviceGetsKeyPackagesAndTheirKeysAreKept(t *t
 
 	resp := HandleMLSKeyPackageGenerate(f.deps, f.keyPackageRequest(t, 3, ""))
 	if !mls.Available() {
-		if resp.ErrorCode != proto.ChatMLSErrorCodeCapabilityRequired {
+		if resp.ErrorCode != string(errs.ErrCodeChatMLSCapabilityRequired) {
 			t.Fatalf("without the library: %+v", resp)
 		}
 		return

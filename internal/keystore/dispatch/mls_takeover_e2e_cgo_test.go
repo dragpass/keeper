@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -124,18 +125,18 @@ func TestMLSChatE2E_ANewDeviceTakesOverAndTheOldOneIsRemoved(t *testing.T) {
 	assertReplacementLatch(t, c.alice, takeover)
 	state := c.alice.storedGroupState()
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "to the old leaf"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 	if !bytes.Equal(state, c.alice.storedGroupState()) {
 		t.Fatal("a refused send changed alice's group state")
 	}
 	c.bob.refused(proto.MLSEncrypt, c.bob.encryptRequest(messageID(3), 1, "from the old device"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 
 	// The server dropping the entry is not a reason to resume: the old leaf
 	// is still in Alice's confirmed group.
 	c.alice.replacing = nil
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "to the old leaf"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 	assertReplacementLatch(t, c.alice, takeover)
 	c.alice.replacing = []proto.ChatStateLeafReplacement{takeover}
 
@@ -143,8 +144,8 @@ func TestMLSChatE2E_ANewDeviceTakesOverAndTheOldOneIsRemoved(t *testing.T) {
 	// refused and persists nothing. Bob's old device's KeyPackage is exactly
 	// that case: the right account, the wrong key.
 	resp := c.alice.buildReplace(1, replaceOf(c.bob.keyPackage()))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeLeafUntrusted {
-		t.Fatalf("replace with the old leaf's key package = %+v; want %s", resp, proto.ChatMLSErrorCodeLeafUntrusted)
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSLeafUntrusted) {
+		t.Fatalf("replace with the old leaf's key package = %+v; want %s", resp, string(errs.ErrCodeChatMLSLeafUntrusted))
 	}
 	if got := c.alice.status(); got.CommitPending || got.Epoch != 1 {
 		t.Fatalf("a refused replace left %+v", got)
@@ -165,7 +166,7 @@ func TestMLSChatE2E_ANewDeviceTakesOverAndTheOldOneIsRemoved(t *testing.T) {
 	}
 	// Pending is not confirmed: the latch still holds, and nothing is sent.
 	assertReplacementLatch(t, c.alice, takeover)
-	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "x"), proto.ChatMLSErrorCodeCommitPending)
+	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "x"), string(errs.ErrCodeChatMLSCommitPending))
 
 	confirmed := c.alice.confirm(built.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
 	if confirmed.Epoch != 2 || !confirmed.WelcomeReleasable {
@@ -213,7 +214,7 @@ func TestMLSChatE2E_AReplaceThePermitDoesNotCoverIsRefused(t *testing.T) {
 	kp := bob2.keyPackage()
 
 	resp := c.alice.buildReplace(1, replaceOf(kp))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatStateErrorCodeInvalidInput {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatStateInvalidInput) {
 		t.Fatalf("replace of an unlisted account = %+v", resp)
 	}
 
@@ -222,7 +223,7 @@ func TestMLSChatE2E_AReplaceThePermitDoesNotCoverIsRefused(t *testing.T) {
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1,
 		Replace: []proto.MLSReplaceMember{replaceOf(kp)}, UpdateSelf: true,
-	}, proto.ChatStateErrorCodeInvalidInput)
+	}, string(errs.ErrCodeChatStateInvalidInput))
 
 	// A KeyPackage of another account named as Bob's replacement is refused
 	// by the credential check.
@@ -230,7 +231,7 @@ func TestMLSChatE2E_AReplaceThePermitDoesNotCoverIsRefused(t *testing.T) {
 	c.alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: c.alice.nextCommitID(), ExpectedEpoch: 1, Replace: []proto.MLSReplaceMember{other},
-	}, proto.ChatMLSErrorCodeLeafUntrusted)
+	}, string(errs.ErrCodeChatMLSLeafUntrusted))
 	if got := c.alice.status(); got.CommitPending || got.Epoch != 1 {
 		t.Fatalf("refused replaces left %+v", got)
 	}
@@ -251,7 +252,7 @@ func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
 	bob2KP := bob2.keyPackage()
 	c.alice.replacing = []proto.ChatStateLeafReplacement{{AccountID: c.bob.id, NewSignatureKeyFP: decl2.SignatureKeyFingerprint}}
 	c.alice.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "x"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 
 	bob3 := newTakeoverKeeper(t, c.bob, "d3333333-3333-4333-8333-333333333333")
 	decl3 := bob3.declare(proto.MLSLeafReasonRotate, oldBob.NotBefore+120)
@@ -262,7 +263,7 @@ func TestMLSChatE2E_ADoubleTakeoverWaitsForTheLatestDevice(t *testing.T) {
 
 	state := c.alice.storedGroupState()
 	resp := c.alice.buildReplace(1, replaceOf(bob2KP))
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeLeafUntrusted {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSLeafUntrusted) {
 		t.Fatalf("replace with bob2 under the bob3 permit = %+v", resp)
 	}
 	if got := c.alice.status(); got.CommitPending || got.Epoch != 1 || !bytes.Equal(state, c.alice.storedGroupState()) {
@@ -294,7 +295,7 @@ func (c *dm) takeOver(from, to *keeper, epoch uint64, notBefore int64) uint64 {
 	// The old device is still in use, and the send it tries now is refused.
 	// The refusal stores the latch in its record, waiting for to's key.
 	from.refused(proto.MLSEncrypt, from.encryptRequest(messageID(int(epoch)*100), epoch, "still here"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 
 	built := commitOf(c.alice.must(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
@@ -327,7 +328,7 @@ func (k *keeper) refuseForget() {
 	k.t.Helper()
 	k.refused(proto.MLSConversationForgetRemoved, proto.MLSConversationForgetRemovedRequest{
 		Permit: k.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
-	}, proto.ChatStateErrorCodeConflict)
+	}, string(errs.ErrCodeChatStateConflict))
 }
 
 // The reproduction: the user switches back to the old device after a
@@ -347,7 +348,7 @@ func TestMLSChatE2E_ASwitchBackWithoutForgettingStaysLatched(t *testing.T) {
 	epoch = c.takeOver(bob2, c.bob, epoch, oldBob.NotBefore+120)
 
 	c.bob.refused(proto.MLSEncrypt, c.bob.encryptRequest(messageID(1), epoch, "back on the old laptop"),
-		proto.ChatMLSErrorCodeLeafReplacementPending)
+		string(errs.ErrCodeChatMLSLeafReplacementPending))
 	// The join replaced the removed group, so the record is no longer one
 	// this device was removed from and it cannot be forgotten any more: the
 	// app has to forget before it joins.

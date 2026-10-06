@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -173,7 +174,7 @@ func TestKeeperKilledMidProcessAppliesTheCommitOnce(t *testing.T) {
 	if applied.Epoch != 2 {
 		t.Fatalf("process after the kill = %+v", applied)
 	}
-	b.refused(proto.MLSProcess, c.bob.processRequest(seq, 2, update.CommitB64), proto.ChatMLSErrorCodeEpochStale)
+	b.refused(proto.MLSProcess, c.bob.processRequest(seq, 2, update.CommitB64), string(errs.ErrCodeChatMLSEpochStale))
 	assertReady(t, b, 2)
 	assertOnce(t, b.decrypt(row(c, a.encrypt(messageID(1), 2, "epoch two").CiphertextB64)), "epoch two", false)
 }
@@ -197,10 +198,10 @@ func TestKeeperKilledMidConfirmKeepsTheCommitPendingUntilSettled(t *testing.T) {
 	if !got.CommitPending || got.PendingClientCommitID != update.ClientCommitID || got.Epoch != 1 || got.NeedsRekey {
 		t.Fatalf("status after the kill = %+v", got)
 	}
-	a.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "not yet"), proto.ChatMLSErrorCodeCommitPending)
+	a.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(1), 1, "not yet"), string(errs.ErrCodeChatMLSCommitPending))
 	a.must(proto.MLSCommitConfirm, c.alice.confirmRequest(update.ClientCommitID), nil)
 	assertReady(t, a, 2)
-	a.refused(proto.MLSCommitConfirm, c.alice.confirmRequest(update.ClientCommitID), proto.ChatStateErrorCodeConflict)
+	a.refused(proto.MLSCommitConfirm, c.alice.confirmRequest(update.ClientCommitID), string(errs.ErrCodeChatStateConflict))
 
 	b := c.bob.start("", 0)
 	b.must(proto.MLSProcess, c.bob.processRequest(c.nextSeq(), 2, update.CommitB64), nil)
@@ -231,7 +232,7 @@ func TestKeeperWithARestoredStateDirectoryLatches(t *testing.T) {
 	if !got.NeedsRekey || got.RekeyCause != proto.ChatStateRekeyCauseRollback {
 		t.Fatalf("status of a restored directory = %+v", got)
 	}
-	a.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "never"), proto.ChatStateErrorCodeRekeyRequired)
+	a.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "never"), string(errs.ErrCodeChatStateRekeyRequired))
 }
 
 // Two Keeper processes of one device on one conversation. One is parked
@@ -246,7 +247,7 @@ func TestTwoKeeperProcessesOnOneConversationHaveOneWriter(t *testing.T) {
 	ceiling := c.alice.anchor().ReservedBefore
 
 	other := c.alice.start("", 0)
-	other.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "other"), proto.ChatStateErrorCodeLockTimeout)
+	other.refused(proto.MLSEncrypt, c.alice.encryptRequest(messageID(2), 1, "other"), string(errs.ErrCodeChatStateLockTimeout))
 	if got := c.alice.anchor().ReservedBefore; got != ceiling {
 		t.Fatalf("the refused process moved the ceiling from %d to %d", ceiling, got)
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -407,7 +408,7 @@ func TestChatActionRoutesRunWithTheLeaseAndKeepTheRawRequest(t *testing.T) {
 	response := localRequest(server, http.MethodPost, "/v1/chat/mls_conversation_status", duplicate, session, csrf)
 	var status routeResult
 	_ = json.Unmarshal(response.Body.Bytes(), &status)
-	if response.Code != http.StatusOK || status.Success || status.ErrorCode != proto.ChatStateErrorCodeInvalidInput || !strings.Contains(status.Error, "duplicate") {
+	if response.Code != http.StatusOK || status.Success || status.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) || !strings.Contains(status.Error, "duplicate") {
 		t.Fatalf("duplicate key: %d %s", response.Code, response.Body.String())
 	}
 }
@@ -424,7 +425,7 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 		return map[string]any{"messages": messages}
 	}
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(200))
-	if code != http.StatusOK || result.ErrorCode != proto.ChatStateErrorCodeInvalidInput {
+	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
 		t.Fatalf("a 2 MB display batch did not reach the handler: %d %.200s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(320)); code != http.StatusBadRequest {
@@ -438,7 +439,7 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 	code, result, body = callRoute(t, server, session, csrf, "/v1/chat/mls_commit_build", map[string]any{
 		"app_context_b64": strings.Repeat("A", 200_000),
 	})
-	if code != http.StatusOK || result.ErrorCode != proto.ChatStateErrorCodeInvalidInput {
+	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
 		t.Fatalf("a 200 KB commit build did not reach the handler: %d %.200s", code, body)
 	}
 }
