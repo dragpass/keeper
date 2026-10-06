@@ -16,8 +16,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func peerKeyActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func peerKeyActions() map[string]action {
+	return map[string]action{
 		proto.ActionKeyTransparencyStatus: wrap(handlers.HandleKeyTransparencyStatus),
 		proto.ActionPeerKeyPinList:        wrap(handlers.HandlePeerKeyPinList),
 		proto.ActionPeerKeyPinGet:         wrap(handlers.HandlePeerKeyPinGet),

@@ -11,8 +11,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func archiveActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func archiveActions() map[string]action {
+	return map[string]action{
 		// per-org Archive / Recovery keypair actions
 		proto.ActionArchiveKeyGenerate:     wrap(handlers.HandleArchiveKeyGenerate),
 		proto.ActionArchiveKeyStatus:       wrap(handlers.HandleArchiveKeyStatus),

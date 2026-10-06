@@ -14,9 +14,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func credentialActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
-		proto.ActionCredentialHTTPRequest: wrap(handlers.HandleCredentialHTTPRequest),
-		proto.ActionCredentialExecRequest: wrap(handlers.HandleCredentialExecRequest),
+func credentialActions() map[string]action {
+	return map[string]action{
+		proto.ActionCredentialHTTPRequest: wrap(handlers.HandleCredentialHTTPRequest).onMCP(),
+		proto.ActionCredentialExecRequest: wrap(handlers.HandleCredentialExecRequest).onMCP(),
 	}
 }

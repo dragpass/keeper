@@ -19,9 +19,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func messageActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
-		proto.ActionMessageDisplayPrepare:            handlers.HandleMessageDisplayPrepare,
-		proto.ActionGroupDecryptWithAadForAppDisplay: handlers.HandleGroupDecryptWithAadForAppDisplay,
+func messageActions() map[string]action {
+	return map[string]action{
+		proto.ActionMessageDisplayPrepare:            direct(handlers.HandleMessageDisplayPrepare),
+		proto.ActionGroupDecryptWithAadForAppDisplay: direct(handlers.HandleGroupDecryptWithAadForAppDisplay).returnsPlaintext(),
 	}
 }

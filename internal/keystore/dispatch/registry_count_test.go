@@ -30,8 +30,8 @@ func TestActionRegistry_Count(t *testing.T) {
 // but this catches macro-pattern regressions where the same wrap call gets
 // registered twice.
 func TestActionRegistry_AllEntriesNonNil(t *testing.T) {
-	for action, fn := range actionRegistry {
-		if fn == nil {
+	for action, entry := range actionRegistry {
+		if entry.handle == nil {
 			t.Errorf("action %q maps to nil handler", action)
 		}
 	}

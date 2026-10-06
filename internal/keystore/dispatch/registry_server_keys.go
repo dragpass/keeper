@@ -10,8 +10,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func serverKeyActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func serverKeyActions() map[string]action {
+	return map[string]action{
 		proto.ActionGetServerPublicKey: wrap(handlers.HandleGetServerPublicKey),
 
 		// multi-version server public key refresh

@@ -25,11 +25,11 @@ func TestBuildRegistry_PanicsOnDuplicateAction(t *testing.T) {
 	}()
 
 	buildRegistry([]actionFragment{
-		func() map[string]actionHandlerFunc {
-			return map[string]actionHandlerFunc{proto.ActionPing: noopHandler}
+		func() map[string]action {
+			return map[string]action{proto.ActionPing: direct(noopHandler)}
 		},
-		func() map[string]actionHandlerFunc {
-			return map[string]actionHandlerFunc{proto.ActionPing: noopHandler}
+		func() map[string]action {
+			return map[string]action{proto.ActionPing: direct(noopHandler)}
 		},
 	})
 }
@@ -38,11 +38,11 @@ func TestBuildRegistry_PanicsOnDuplicateAction(t *testing.T) {
 // into the union without loss.
 func TestBuildRegistry_MergesDisjointFragments(t *testing.T) {
 	reg := buildRegistry([]actionFragment{
-		func() map[string]actionHandlerFunc {
-			return map[string]actionHandlerFunc{proto.ActionPing: noopHandler}
+		func() map[string]action {
+			return map[string]action{proto.ActionPing: direct(noopHandler)}
 		},
-		func() map[string]actionHandlerFunc {
-			return map[string]actionHandlerFunc{proto.ActionGetPublicKey: noopHandler}
+		func() map[string]action {
+			return map[string]action{proto.ActionGetPublicKey: direct(noopHandler)}
 		},
 	})
 	if len(reg) != 2 {

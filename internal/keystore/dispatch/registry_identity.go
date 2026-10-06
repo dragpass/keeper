@@ -11,8 +11,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func identityActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func identityActions() map[string]action {
+	return map[string]action{
 		proto.ActionAuthSignupPrepare:          wrap(handlers.HandleAuthSignupPrepare),
 		proto.ActionAuthRecoveryReissuePrepare: wrap(handlers.HandleAuthRecoveryReissuePrepare),
 		proto.ActionAuthRecoveryBegin:          wrap(handlers.HandleAuthRecoveryBegin),
@@ -30,7 +30,7 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionDeviceKeyEnsure: wrap(handlers.HandleDeviceKeyEnsure),
 
 		// local self-recovery: wipe this device's account-scoped key material
-		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity),
+		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity).revoking(ChatRuntimeRevokedReset),
 
 		// one device id per machine and the account binding hint (0.0.58)
 		proto.ActionDeviceIDEnsure:      wrap(handlers.HandleDeviceIDEnsure),
@@ -83,15 +83,15 @@ func identityActions() map[string]actionHandlerFunc {
 		proto.ActionRotateRequestKeyAbort:   wrap(handlers.HandleRotateRequestKeyAbort),
 
 		// MLS leaf signature key + its declaration under the account key
-		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare),
-		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote),
-		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort),
-		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus),
+		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare).gated(),
+		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote).gated(),
+		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort).gated(),
+		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus).chatFree(),
 		// the old device's approval of a takeover (design Q1)
-		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign),
+		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign).chatFree(),
 
 		// KeyPackages for the active leaf, gated by the purpose-bound
 		// KeyPackage challenge; their private keys go to the sealed pool.
-		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate),
+		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate).gated(),
 	}
 }

@@ -22,6 +22,7 @@
 package dispatch
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,8 +30,9 @@ import (
 )
 
 // mcpCallableActions is the whole Keeper surface `@dragpass/mcp` and
-// `dragpass-run` use. Adding an entry means widening what a model can reach
-// through a tool call, which is the decision this constant exists to surface.
+// `dragpass-run` use, pinned against the actions the registry marks onMCP().
+// Adding an entry means widening what a model can reach through a tool call,
+// which is the decision this constant exists to surface.
 var mcpCallableActions = []string{
 	proto.ActionPing,
 	proto.ActionGroupSessionOpen,
@@ -48,6 +50,11 @@ func TestMCPCallableActions_AreRegisteredAndExactlyFive(t *testing.T) {
 		if _, ok := actionRegistry[action]; !ok {
 			t.Errorf("pinned MCP action %q is not registered; the pin is stale", action)
 		}
+	}
+	pinned := slices.Clone(mcpCallableActions)
+	slices.Sort(pinned)
+	if marked := MCPCallableActions(); !slices.Equal(marked, pinned) {
+		t.Fatalf("actions marked onMCP() = %v, pinned %v", marked, pinned)
 	}
 }
 
