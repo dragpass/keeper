@@ -411,7 +411,7 @@ Returns this machine's device id (0.0.58), choosing it on the first call: an id 
 
 #### `account_binding_set` - Set Account Binding
 
-Records which account the App signed in to on this device (0.0.58), so the Extension can sign itself in. Needs an active account key. `generation` moves whenever the record changes. A hint, not an identity: the server and the active account key decide every sign-in.
+Records which account the App signed in to on this device (0.0.58), so the Extension can sign itself in. Needs an active account key. `generation` moves whenever the record changes, and on every call with `"renew": true`, which the App sends after a sign-in, signup or recovery. A hint, not an identity: the server and the active account key decide every sign-in.
 
 **Request:**
 ```json

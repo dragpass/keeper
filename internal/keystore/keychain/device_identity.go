@@ -159,8 +159,8 @@ func ValidDeviceID(value string) bool {
 const accountBindingVersion = 1
 
 // AccountBinding is the decoded account binding record. Generation moves on
-// every change, so a reader that polls it sees any change, signed_out
-// included.
+// every change and every renewal, so a reader that polls it sees any change,
+// signed_out included.
 type AccountBinding struct {
 	V          int    `json:"v"`
 	AccountID  string `json:"account_id"`
@@ -188,10 +188,15 @@ func GetAccountBinding(store SecretStore) (AccountBinding, bool, error) {
 }
 
 // SetAccountBinding records the account the App signed in to. A record that
-// already says exactly this, and is not signed out, is left as it is;
-// anything else is replaced with the next generation and signed_out false.
-// changed reports whether it wrote.
-func SetAccountBinding(store SecretStore, accountID, alias string) (AccountBinding, bool, error) {
+// already says exactly this, and is not signed out, is left as it is unless
+// renew is set; anything else is replaced with the next generation and
+// signed_out false. renew is the App's word that it has just opened a
+// session: a recovery that rotated the account key or a sign-in that
+// re-registered a revoked device leaves the account and alias as they were,
+// and the Extension, which waits for the generation to move before it
+// retries a refused sign-in, must still see it. changed reports whether it
+// wrote.
+func SetAccountBinding(store SecretStore, accountID, alias string, renew bool) (AccountBinding, bool, error) {
 	var (
 		result  AccountBinding
 		changed bool
@@ -201,7 +206,7 @@ func SetAccountBinding(store SecretStore, accountID, alias string) (AccountBindi
 		if err != nil {
 			return err
 		}
-		if current.AccountID == accountID && current.Alias == alias && !current.SignedOut && current.Generation > 0 {
+		if !renew && current.AccountID == accountID && current.Alias == alias && !current.SignedOut && current.Generation > 0 {
 			result = current
 			return nil
 		}

@@ -275,6 +275,39 @@ func TestAccountBindingSet_BumpsGenerationOnlyOnChange(t *testing.T) {
 	}
 }
 
+// A sign-in, signup or recovery the App just completed is a change the
+// Extension must see even when the record already names the same account:
+// a recovery rotates the account key, and a fresh sign-in re-registers a
+// revoked device. Only an idempotent rewrite (a restored session) leaves
+// the generation alone.
+func TestAccountBindingSet_RenewBumpsGenerationOnIdenticalRecord(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	set := func(renew bool) proto.AccountBindingSetResponseData {
+		t.Helper()
+		resp := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{
+			AccountID: leafTestAccountID, Alias: identityTestAlias, Renew: renew,
+		})
+		if !resp.Success {
+			t.Fatalf("binding: %s", resp.Error)
+		}
+		return resp.Data.(proto.AccountBindingSetResponseData)
+	}
+	if got := set(true); !got.Changed || got.Generation != 1 {
+		t.Fatalf("first renew = %+v", got)
+	}
+	if got := set(true); !got.Changed || got.Generation != 2 {
+		t.Fatalf("renew of the same record = %+v, want generation 2", got)
+	}
+	if got := set(false); got.Changed || got.Generation != 2 {
+		t.Fatalf("restore of the same record = %+v, want unchanged", got)
+	}
+	status := deviceStatus(t, deps)
+	if status.AccountID != leafTestAccountID || status.Alias != identityTestAlias || status.Generation != 2 || status.SignedOut {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestAccountBindingSetRequest_Validates(t *testing.T) {
 	good := proto.AccountBindingSetRequest{AccountID: leafTestAccountID, Alias: "gh_abcdefghijklmnopqrst"}
 	if err := good.Validate(); err != nil {

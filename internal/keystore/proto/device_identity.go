@@ -25,10 +25,13 @@ type DeviceIDEnsureResponseData struct {
 	Source   string `json:"source"`
 }
 
-// AccountBindingSetRequest is the account the App just signed in to.
+// AccountBindingSetRequest is the account the App just signed in to. Renew
+// says the App has just opened a session (sign-in, signup, recovery) rather
+// than restored one, which moves the generation even for the same record.
 type AccountBindingSetRequest struct {
 	AccountID string `json:"account_id"`
 	Alias     string `json:"alias"`
+	Renew     bool   `json:"renew,omitempty"`
 }
 
 func (r *AccountBindingSetRequest) Validate() error {
