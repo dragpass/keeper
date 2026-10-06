@@ -23,11 +23,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"io"
 	"net"
 	"net/http"
@@ -75,7 +77,7 @@ func credTestPolicy(hosts, methods []string) proto.CredentialPolicy {
 // ciphertext / aad Base64 the request carries.
 func sealCredentialForTest(t *testing.T, groupRaw []byte, credJSON string, aad string) (ivB64, ctB64, aadB64 string) {
 	t.Helper()
-	iv, ct, err := AESGCMSealSplitWithAAD(groupRaw, []byte(credJSON), []byte(aad))
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(credJSON), []byte(aad))
 	if err != nil {
 		t.Fatalf("seal credential: %v", err)
 	}

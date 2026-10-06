@@ -9,6 +9,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"testing"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -32,7 +33,7 @@ func TestDEKRotateToNewPassword_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode device-wrapped: %v", err)
 	}
-	origDEK, err := AESGCMOpen(deviceKey, devRaw[:12], devRaw[12:])
+	origDEK, err := crypto.OpenAESGCM(deviceKey, devRaw[:12], devRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("unwrap device DEK: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestDEKRotateToNewPassword_Roundtrip(t *testing.T) {
 	iv := out[dekSaltLength : dekSaltLength+12]
 	ct := out[dekSaltLength+12:]
 	kek := pbkdf2.Key([]byte(newPassword), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
-	got, err := AESGCMOpen(kek, iv, ct)
+	got, err := crypto.OpenAESGCM(kek, iv, ct, nil)
 	if err != nil {
 		t.Fatalf("decrypt with new password: %v", err)
 	}

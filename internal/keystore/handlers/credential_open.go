@@ -14,6 +14,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 
@@ -89,7 +90,7 @@ func openCredentialForSink(d Deps, common credentialRequestCommon,
 	var payload []byte
 	var decErr error
 	useErr := withCredentialDEK(d, common.keySource, func(dek []byte) error {
-		pt, err := AESGCMOpenWithAAD(dek, iv, ciphertext, aad)
+		pt, err := crypto.OpenAESGCM(dek, iv, ciphertext, aad)
 		if err != nil {
 			decErr = err
 			return nil

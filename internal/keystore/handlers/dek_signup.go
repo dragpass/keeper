@@ -5,6 +5,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
@@ -42,7 +43,7 @@ func generateAndWrapDual(d Deps, password *memguard.LockedBuffer, save func(keyc
 	// password wrap
 	kek := pbkdf2.Key(password.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
-	pwIV, pwCT, err := aesGCMSealSplit(kek, dek)
+	pwIV, pwCT, err := crypto.SealAESGCM(d.Random(), kek, dek, nil)
 	if err != nil {
 		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "password wrap failed: "+err.Error())
 	}
@@ -52,7 +53,7 @@ func generateAndWrapDual(d Deps, password *memguard.LockedBuffer, save func(keyc
 	pwOut = append(pwOut, pwCT...)
 
 	// device wrap
-	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
+	devWrapped, err := crypto.AESGCMEncryptBase64(d.Random(), deviceKeyBuf.Bytes(), dek)
 	if err != nil {
 		return empty, errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
 	}
