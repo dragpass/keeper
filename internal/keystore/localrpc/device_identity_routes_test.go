@@ -65,6 +65,11 @@ func TestDeviceIdentityRoutes(t *testing.T) {
 	if !bound.Changed || bound.Generation != 1 {
 		t.Fatalf("binding = %+v", bound)
 	}
+	var renewed proto.AccountBindingSetResponseData
+	call("/v1/account/binding", map[string]any{"account_id": routeOwner, "alias": "alice", "renew": true}, &renewed)
+	if !renewed.Changed || renewed.Generation != 2 {
+		t.Fatalf("renewed binding = %+v", renewed)
+	}
 
 	var status proto.DeviceAccountStatusResponseData
 	call("/v1/device/status", map[string]string{}, &status)

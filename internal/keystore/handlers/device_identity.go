@@ -51,7 +51,7 @@ func HandleAccountBindingSet(d Deps, req proto.AccountBindingSetRequest) proto.B
 	if publicKey, err := keychain.GetPublicKey(d.Store); err != nil || publicKey == "" {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "no active account key")
 	}
-	binding, changed, err := keychain.SetAccountBinding(d.Store, req.AccountID, req.Alias)
+	binding, changed, err := keychain.SetAccountBinding(d.Store, req.AccountID, req.Alias, req.Renew)
 	if err != nil {
 		d.Logger.Printf("account binding set error: %s", deviceIdentityErrorClass(err))
 		return deviceIdentityErrorResponse(err)
