@@ -257,95 +257,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatus(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/request-signature":
 		s.signRequest(w, r)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/sign-alias":
-		s.dispatchAppAuthAction(w, r, proto.ActionSignAliasWithTimestamp, func() any {
-			return &proto.SignAliasWithTimestampRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/sign-challenge":
-		s.dispatchAppAuthAction(w, r, proto.ActionSignChallengeToken, func() any {
-			return &proto.SignChallengeTokenRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/pending/sign-alias":
-		s.dispatchAppAuthAction(w, r, proto.ActionAuthLoginPendingSignAlias, func() any {
-			return &proto.AuthLoginPendingSignAliasRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/pending/sign-challenge":
-		s.dispatchAppAuthAction(w, r, proto.ActionAuthLoginPendingSignChallenge, func() any {
-			return &proto.AuthLoginPendingSignChallengeRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/restore-device-master":
-		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionDEKRotateToDeviceKey, func() any {
-			return &proto.DEKRotateToDeviceKeyRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login/ensure-request-key":
-		s.dispatchAppAuthAction(w, r, proto.ActionRequestKeyGenerate, func() any {
-			return &proto.RequestKeyGenerateRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/signup/prepare":
-		s.dispatchAppAuthAction(w, r, proto.ActionAuthSignupPrepare, func() any {
-			return &proto.AuthSignupPrepareRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/recovery-key/reissue-prepare":
-		s.dispatchAppAuthAction(w, r, proto.ActionAuthRecoveryReissuePrepare, func() any {
-			return &proto.AuthRecoveryReissuePrepareRequest{}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/signup/save-session-code":
-		s.dispatchAppAuthActionWithoutResult(w, r, proto.ActionSaveSessionCode, func() any {
-			return &proto.SaveSessionCodeRequest{}
-		})
 	case r.Method == http.MethodPost && isAppRoute:
 		s.serveAppRoute(w, r, route)
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func (s *Server) dispatchAppAuthAction(w http.ResponseWriter, r *http.Request, action string, newPayload func() any) {
-	s.dispatchAppAction(w, r, action, newPayload, false)
-}
-
-func (s *Server) dispatchAppAuthActionWithoutResult(w http.ResponseWriter, r *http.Request, action string, newPayload func() any) {
-	s.dispatchAppAction(w, r, action, newPayload, true)
-}
-
-func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, action string, newPayload func() any, suppressResult bool) {
-	request, ok := s.openAppRequest(w, r)
-	if !ok {
-		return
-	}
-	input := newPayload()
-	decoder := json.NewDecoder(bytes.NewReader(request.plain))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(input); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	payload, err := json.Marshal(input)
-	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	response, err := s.handle(request.token, action, payload)
-	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	if suppressResult && response.Success {
-		// Which stage a save promoted is not secret, and the App needs it to
-		// tell a recovery (grants to re-share) from a signup; the session
-		// code itself stays in Keeper.
-		if saved, ok := response.Data.(proto.SaveSessionCodeResponseData); ok {
-			response.Data = map[string]any{"stored": true, "promoted": saved.Promoted}
-		} else {
-			response.Data = map[string]bool{"stored": true}
-		}
-	}
-	s.writeSealed(w, request, response)
 }
 
 // appRequest is one opened, authenticated App request. epoch is the chat
@@ -529,9 +445,7 @@ type openSessionRequest struct {
 func (s *Server) openSession(w http.ResponseWriter, r *http.Request, origin string) {
 	defer r.Body.Close()
 	var input openSessionRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || !validNonce(input.ClientNonce, 16) {
+	if err := decodeStrict(r.Body, &input); err != nil || !validNonce(input.ClientNonce, 16) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -632,13 +546,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input requestSignature
-	decoder := json.NewDecoder(bytes.NewReader(request.plain))
-	if err := decoder.Decode(&input); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if err := decodeStrict(bytes.NewReader(request.plain), &input); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -793,6 +701,24 @@ func (s *Server) dispatch(action string, payload []byte, run func([]byte) proto.
 		s.onAction(action, payload, response)
 	}
 	return response, nil
+}
+
+var errTrailingJSON = errors.New("trailing data after the JSON value")
+
+// decodeStrict decodes exactly one JSON value into into, refusing unknown
+// fields and anything after the value. Every App request body goes through
+// it.
+func decodeStrict(r io.Reader, into any) error {
+	decoder := json.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errTrailingJSON
+	}
+	return nil
 }
 
 func randomToken() (string, error) {
