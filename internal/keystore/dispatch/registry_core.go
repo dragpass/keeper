@@ -10,9 +10,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func coreActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
-		proto.ActionPing: wrap(handlers.HandlePing),
+func coreActions() map[string]action {
+	return map[string]action{
+		proto.ActionPing: wrap(handlers.HandlePing).onMCP(),
 
 		// test-only — query SHA-256 hash recorded in MemoryClipboard under
 		// KEEPER_E2E_MODE.

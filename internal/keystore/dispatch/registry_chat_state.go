@@ -17,9 +17,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func chatStateActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
-		proto.ChatStateReadOutbox: handlers.HandleChatStateReadOutbox,
-		proto.ChatStatePurge:      handlers.HandleChatStatePurge,
+func chatStateActions() map[string]action {
+	return map[string]action{
+		proto.ChatStateReadOutbox: direct(handlers.HandleChatStateReadOutbox).gated(),
+		proto.ChatStatePurge:      direct(handlers.HandleChatStatePurge).revoking(ChatRuntimeRevokedPurged),
 	}
 }

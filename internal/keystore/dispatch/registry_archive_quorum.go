@@ -11,8 +11,8 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func archiveQuorumActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func archiveQuorumActions() map[string]action {
+	return map[string]action{
 		proto.ActionArchiveKeySplit:               wrap(handlers.HandleArchiveKeySplit),
 		proto.ActionArchiveShareRewrap:            wrap(handlers.HandleArchiveShareRewrap),
 		proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin),

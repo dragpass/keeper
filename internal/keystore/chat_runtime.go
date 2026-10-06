@@ -34,7 +34,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -49,52 +48,17 @@ const (
 	ChatRuntimeLeaseTTL        = 60 * time.Second
 	ChatRuntimeExtensionWindow = 120 * time.Second
 
-	ChatRuntimeRevokedPurged = "purged"
-	ChatRuntimeRevokedReset  = "reset"
+	ChatRuntimeRevokedPurged = dispatch.ChatRuntimeRevokedPurged
+	ChatRuntimeRevokedReset  = dispatch.ChatRuntimeRevokedReset
 
 	ChatRuntimeHolderApp       = "app"
 	ChatRuntimeHolderExtension = "extension"
 )
 
-// chatRuntimeGated lists every action that writes chat state, MLS group
-// state, leaf slots or the KeyPackage pool, plus the display decrypt (which
-// advances the receive state). Read-only reports and signed statements are
-// not here: either caller may run them at any time.
-var chatRuntimeGated = map[string]struct{}{
-	proto.MLSGroupCreate:               {},
-	proto.MLSGroupDiscardUnaccepted:    {},
-	proto.MLSConversationForgetRemoved: {},
-	proto.MLSCommitBuild:               {},
-	proto.MLSCommitConfirm:             {},
-	proto.MLSProcess:                   {},
-	proto.MLSJoin:                      {},
-	proto.MLSEncrypt:                   {},
-	proto.MLSMarkSent:                  {},
-	proto.MLSDecryptBatchForAppDisplay: {},
-	proto.ChatStateReadOutbox:          {},
-	proto.ChatStatePurge:               {},
-	proto.ActionMLSLeafDeclare:         {},
-	proto.ActionMLSLeafPromote:         {},
-	proto.ActionMLSLeafAbort:           {},
-	proto.MLSKeyPackageGenerate:        {},
-	proto.ActionResetDeviceIdentity:    {},
-}
-
-// chatRuntimeRevocations are the gated actions that erase chat state. They
-// move the epoch for any caller and are never refused busy to the Extension.
-var chatRuntimeRevocations = map[string]string{
-	proto.ChatStatePurge:            ChatRuntimeRevokedPurged,
-	proto.ActionResetDeviceIdentity: ChatRuntimeRevokedReset,
-}
-
-// ChatRuntimeGatedActions returns the gated action names, sorted.
+// ChatRuntimeGatedActions returns the gated action names, sorted. Each action
+// declares its class where it is registered (dispatch/registry_*.go).
 func ChatRuntimeGatedActions() []string {
-	out := make([]string, 0, len(chatRuntimeGated))
-	for action := range chatRuntimeGated {
-		out = append(out, action)
-	}
-	sort.Strings(out)
-	return out
+	return dispatch.ChatRuntimeGatedActions()
 }
 
 type chatRuntimeLease struct {
@@ -286,7 +250,8 @@ func leaseRequired() proto.BaseResponse {
 
 func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 	return func(action string) (proto.BaseResponse, bool) {
-		if _, gated := chatRuntimeGated[action]; !gated && !caller.chatWrite {
+		gated, revocation := dispatch.ChatRuntimeClass(action)
+		if !gated && !caller.chatWrite {
 			return proto.BaseResponse{}, true
 		}
 		l := &a.chatRuntime
@@ -294,7 +259,7 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		defer l.mu.Unlock()
 		now := a.Clock()
 		live := l.liveLocked(now)
-		revocation, revokes := chatRuntimeRevocations[action]
+		revokes := revocation != ""
 		if caller.app {
 			if caller.epoch == "" {
 				return leaseRequired(), false

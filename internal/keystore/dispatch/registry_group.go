@@ -7,13 +7,13 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func groupActions() map[string]actionHandlerFunc {
-	return map[string]actionHandlerFunc{
+func groupActions() map[string]action {
+	return map[string]action{
 		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf),
 
 		// Group DEK opaque handle
-		proto.ActionGroupSessionOpen:  wrap(handlers.HandleGroupSessionOpen),
-		proto.ActionGroupSessionClose: wrap(handlers.HandleGroupSessionClose),
+		proto.ActionGroupSessionOpen:  wrap(handlers.HandleGroupSessionOpen).onMCP(),
+		proto.ActionGroupSessionClose: wrap(handlers.HandleGroupSessionClose).onMCP(),
 
 		// Admin-path raw-free composite actions (Group DEK never crosses into JS).
 		proto.ActionGroupDEKGenerateAndOpen: wrap(handlers.HandleGroupDEKGenerateAndOpen),

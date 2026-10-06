@@ -66,10 +66,10 @@ func admit(gate Gate, action string) (proto.BaseResponse, bool) {
 // dispatchAction looks up the handler in actionRegistry and forwards deps +
 // payload. Unknown actions are logged and respond with the unsupported code.
 func dispatchAction(log logger.Logger, deps handlers.Deps, base proto.BaseRequest) proto.BaseResponse {
-	handler, ok := actionRegistry[base.Action]
+	entry, ok := actionRegistry[base.Action]
 	if !ok {
 		log.Printf("unknown action: %s", base.Action)
 		return errs.CodeResponse(errs.ErrCodeUnsupported, "unknown action: "+base.Action)
 	}
-	return handler(deps, base.Payload)
+	return entry.handle(deps, base.Payload)
 }
