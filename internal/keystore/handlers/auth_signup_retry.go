@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
@@ -26,11 +25,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/recoverykey"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
-
-// signupStageMu serialises the staged-signup check with the staging and the
-// abort in this process. Keychain helpers used inside take the keychain
-// process lock themselves, so that lock cannot be held around them.
-var signupStageMu sync.Mutex
 
 const signupInputDomain = "dragpass-signup-prepare-input-v1"
 
@@ -198,8 +192,6 @@ func HandleAuthSignupAbort(d Deps, req proto.AuthSignupAbortRequest) proto.BaseR
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	signupStageMu.Lock()
-	defer signupStageMu.Unlock()
 	discarded, err := keychain.DiscardPendingSignup(d.Store, req.PublicKey)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to discard the staged signup")

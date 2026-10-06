@@ -98,6 +98,12 @@ type App struct {
 	MessageChallenges   *handlers.MessageChallengeStore
 	KeyTransparency     keytransparency.Gate
 
+	// requestMu runs every handler one at a time in this process (Native
+	// Messaging stdio, proxied hosts, App routes, composed App steps), so
+	// handlers need no mutex of their own against each other. Another Keeper
+	// process is kept apart only by the keychain process lock
+	// (keychain.withPersonalKeyBundleLock), taken inside the keychain helpers;
+	// requestMu is always taken first and is never taken under it.
 	requestMu   sync.Mutex
 	chatRuntime chatRuntimeLease
 }

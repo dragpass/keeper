@@ -16,6 +16,14 @@ var errPersonalKeyBundleLockTimeout = errors.New("personal key bundle lock timeo
 
 var personalKeyBundleMu sync.Mutex
 
+// withPersonalKeyBundleLock is the keychain process lock: an in-process mutex
+// in front of a cross-process file lock. Neither half is reentrant, so fn
+// must use only the ...Locked helpers. A read-check-write that must not be
+// split by another process is one keychain function taking a callback
+// (AdoptPersonalDeviceWrappedDEK, SealPersonalDeviceWrappedDEK, EnsureDeviceKey),
+// not a lock scope opened by a handler: a handler would hold it across RSA
+// key generation or PBKDF2, and another process waits for it at most
+// personalKeyBundleLockTimeout.
 func withPersonalKeyBundleLock(store SecretStore, fn func() error) error {
 	personalKeyBundleMu.Lock()
 	defer personalKeyBundleMu.Unlock()

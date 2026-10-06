@@ -26,9 +26,9 @@ func HandleAuthSignupPrepare(d Deps, req proto.AuthSignupPrepareRequest) proto.B
 	// device, a bad password or recovery key, another signup already staged)
 	// leaves the keyring as it was; the new keypair and DEK are written to
 	// pending slots only, and save_session_code promotes them once the server
-	// accepted the signup.
-	signupStageMu.Lock()
-	defer signupStageMu.Unlock()
+	// accepted the signup. The staged-signup check and the staging cannot
+	// interleave with another request in this process: every handler runs
+	// under App.requestMu (app.go).
 	if response := signupAllowed(d); !response.Success {
 		secure.WipeString(&req.Password)
 		secure.WipeString(&req.RecoveryKey)
