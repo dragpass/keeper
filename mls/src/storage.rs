@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mls_rs_core::crypto::HpkeSecretKey;
@@ -33,6 +33,21 @@ struct Inner {
     state: Option<Zeroizing<Vec<u8>>>,
     epochs: BTreeMap<u64, StoredEpoch>,
     max_epoch_id_seen: Option<u64>,
+}
+
+/// Take a lock even if an earlier holder panicked.
+///
+/// A panic under one of these locks is caught at the C ABI edge and the call
+/// fails, but the session lives on until Go frees it at the end of the Keeper
+/// action; treating poison as fatal would turn every later call on it into a
+/// panic. Recovering is sound because nothing a panicking holder half-did can
+/// outlive its call: the failed call returns an error, so Go persists nothing
+/// from it; Go loads the group from the stored blob before each group
+/// operation, and `decode_into` replaces every field of the group state; and
+/// a custody entry lives for one call, since `install` clears the map and
+/// `take` refuses anything but exactly one entry.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn now_seconds() -> u64 {
@@ -74,7 +89,7 @@ impl RecordStorage {
     }
 
     pub fn has_prior_epoch(&self, group_id: &[u8], epoch: u64) -> bool {
-        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = lock(&self.0);
         if inner.group_id != group_id {
             return false;
         }
@@ -85,7 +100,7 @@ impl RecordStorage {
     /// Serialize everything mls-rs has pushed down so far. None means the group
     /// has never been written, which is not the same as an empty group.
     pub fn encode(&self) -> Option<Zeroizing<Vec<u8>>> {
-        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = lock(&self.0);
         inner.prune(now_seconds());
         let state = inner.state.as_ref()?;
 
@@ -138,7 +153,7 @@ impl RecordStorage {
             return Err("chat state MLS blob has trailing bytes");
         }
 
-        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = lock(&self.0);
         inner.group_id = group_id.clone();
         inner.state = Some(state);
         inner.epochs = epochs;
@@ -152,7 +167,7 @@ impl GroupStateStorage for RecordStorage {
     type Error = Infallible;
 
     fn state(&self, group_id: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, Self::Error> {
-        let inner = self.0.lock().expect("group state storage mutex poisoned");
+        let inner = lock(&self.0);
         if inner.group_id != group_id {
             return Ok(None);
         }
@@ -164,7 +179,7 @@ impl GroupStateStorage for RecordStorage {
         group_id: &[u8],
         epoch_id: u64,
     ) -> Result<Option<Zeroizing<Vec<u8>>>, Self::Error> {
-        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = lock(&self.0);
         if inner.group_id != group_id {
             return Ok(None);
         }
@@ -178,7 +193,7 @@ impl GroupStateStorage for RecordStorage {
         epoch_inserts: Vec<EpochRecord>,
         epoch_updates: Vec<EpochRecord>,
     ) -> Result<(), Self::Error> {
-        let mut inner = self.0.lock().expect("group state storage mutex poisoned");
+        let mut inner = lock(&self.0);
         inner.group_id = state.id;
         inner.state = Some(state.data);
         let now = now_seconds();
@@ -203,7 +218,7 @@ impl GroupStateStorage for RecordStorage {
     }
 
     fn max_epoch_id(&self, group_id: &[u8]) -> Result<Option<u64>, Self::Error> {
-        let inner = self.0.lock().expect("group state storage mutex poisoned");
+        let inner = lock(&self.0);
         if inner.group_id != group_id {
             return Ok(None);
         }
@@ -241,7 +256,7 @@ impl KeyPackageCustody {
     /// its KeyPackage reference. Anything but exactly one entry is an error:
     /// it would mean a key the caller is not about to persist.
     pub fn take(&self) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), &'static str> {
-        let mut inner = self.0.lock().expect("key package custody mutex poisoned");
+        let mut inner = lock(&self.0);
         if inner.len() != 1 {
             inner.clear();
             return Err("mls: key package custody did not hold exactly one new entry");
@@ -257,25 +272,19 @@ impl KeyPackageCustody {
     /// reference.
     pub fn install(&self, entry: &[u8]) -> Result<Vec<u8>, &'static str> {
         let (reference, data) = decode_key_package_entry(entry)?;
-        let mut inner = self.0.lock().expect("key package custody mutex poisoned");
+        let mut inner = lock(&self.0);
         inner.clear();
         inner.insert(reference.clone(), data);
         Ok(reference)
     }
 
     pub fn clear(&self) {
-        self.0
-            .lock()
-            .expect("key package custody mutex poisoned")
-            .clear();
+        lock(&self.0).clear();
     }
 
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.0
-            .lock()
-            .expect("key package custody mutex poisoned")
-            .len()
+        lock(&self.0).len()
     }
 }
 
@@ -283,28 +292,17 @@ impl KeyPackageStorage for KeyPackageCustody {
     type Error = Infallible;
 
     fn delete(&mut self, id: &[u8]) -> Result<(), Self::Error> {
-        self.0
-            .lock()
-            .expect("key package custody mutex poisoned")
-            .remove(id);
+        lock(&self.0).remove(id);
         Ok(())
     }
 
     fn insert(&mut self, id: Vec<u8>, pkg: KeyPackageData) -> Result<(), Self::Error> {
-        self.0
-            .lock()
-            .expect("key package custody mutex poisoned")
-            .insert(id, pkg);
+        lock(&self.0).insert(id, pkg);
         Ok(())
     }
 
     fn get(&self, id: &[u8]) -> Result<Option<KeyPackageData>, Self::Error> {
-        Ok(self
-            .0
-            .lock()
-            .expect("key package custody mutex poisoned")
-            .get(id)
-            .cloned())
+        Ok(lock(&self.0).get(id).cloned())
     }
 }
 
@@ -381,12 +379,18 @@ impl<'a> Cursor<'a> {
         Ok(out)
     }
 
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], &'static str> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| "chat state MLS blob is truncated")
+    }
+
     fn take_u32(&mut self) -> Result<u32, &'static str> {
-        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()))
+        Ok(u32::from_be_bytes(self.take_array()?))
     }
 
     fn take_u64(&mut self) -> Result<u64, &'static str> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_be_bytes(self.take_array()?))
     }
 
     fn take_prefixed(&mut self) -> Result<&'a [u8], &'static str> {
@@ -574,5 +578,40 @@ mod tests {
         let mut longer = blob.to_vec();
         longer.push(0);
         assert!(RecordStorage::new().decode_into(&longer).is_err());
+    }
+
+    fn poison<T>(m: &Mutex<T>) {
+        let _ = std::panic::catch_unwind(|| {
+            let _held = m.lock();
+            panic!("poisoning the mutex on purpose");
+        });
+        assert!(m.is_poisoned());
+    }
+
+    // A panic under the lock is caught at the C ABI edge, so the session
+    // outlives it. The next call must still work rather than panic again.
+    #[test]
+    fn a_poisoned_record_storage_still_loads_and_answers() {
+        let mut s = RecordStorage::new();
+        s.write(state(b"gid", b"body"), vec![], vec![]).unwrap();
+        let blob = s.encode().unwrap();
+
+        let loaded = RecordStorage::new();
+        poison(&loaded.0);
+
+        assert_eq!(loaded.decode_into(&blob).unwrap(), b"gid".to_vec());
+        assert_eq!(loaded.state(b"gid").unwrap().unwrap().to_vec(), b"body");
+        assert!(loaded.encode().is_some());
+    }
+
+    #[test]
+    fn a_poisoned_key_package_custody_still_hands_entries_over() {
+        let mut custody = KeyPackageCustody::new();
+        poison(&custody.0);
+
+        custody.insert(b"ref".to_vec(), key_package_data()).unwrap();
+        let (reference, entry) = custody.take().unwrap();
+        assert_eq!(reference, b"ref");
+        assert_eq!(custody.install(&entry).unwrap(), b"ref");
     }
 }
