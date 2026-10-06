@@ -26,6 +26,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/version"
 )
 
@@ -313,6 +314,7 @@ func (s *Server) dispatchAppAction(w http.ResponseWriter, r *http.Request, actio
 	if !ok {
 		return
 	}
+	defer secure.Zeroize(request.plain)
 	input := newPayload()
 	decoder := json.NewDecoder(bytes.NewReader(request.plain))
 	decoder.DisallowUnknownFields()
@@ -437,6 +439,7 @@ func (s *Server) writeSealed(w http.ResponseWriter, request appRequest, response
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	defer secure.Zeroize(plain)
 	sealed, err := sealEnvelope(request.session.key, appResponseAAD(request.session.origin, request.token, request.path, request.nonce), plain)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -450,6 +453,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	defer secure.Zeroize(request.plain)
 	if !bytes.Equal(bytes.TrimSpace(request.plain), []byte("{}")) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
@@ -479,10 +483,12 @@ func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	response, err := json.Marshal(s.app.HandleRequest(message))
+	secure.Zeroize(message)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	defer secure.Zeroize(response)
 	sealed, err := sealProxyResponse(proxyKey, s.proxy.instance, requestNonce, response)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -631,6 +637,7 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	defer secure.Zeroize(request.plain)
 	var input requestSignature
 	decoder := json.NewDecoder(bytes.NewReader(request.plain))
 	if err := decoder.Decode(&input); err != nil {
@@ -792,6 +799,11 @@ func (s *Server) dispatch(action string, payload []byte, run func([]byte) proto.
 	if s.onAction != nil {
 		s.onAction(action, payload, response)
 	}
+	// Every payload reaching here is the caller's last use of it (the App's
+	// opened bytes, a re-encoding, a composed step's request), so this one
+	// exit wipes both copies of the secrets it may carry.
+	secure.Zeroize(encoded)
+	secure.Zeroize(payload)
 	return response, nil
 }
 
