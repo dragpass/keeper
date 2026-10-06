@@ -15,6 +15,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -40,7 +41,7 @@ func TestChatState_AV3PermitIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Signature = base64.StdEncoding.EncodeToString(sig)
-	assertChatStateFailure(t, f.readOutbox(t, p), proto.ChatStateErrorCodeNotAuthorized)
+	assertChatStateFailure(t, f.readOutbox(t, p), string(errs.ErrCodeChatStateNotAuthorized))
 	f.assertStateRootAbsent(t)
 
 	// The same permit signed over the v4 bytes, then sent without the slot a
@@ -56,7 +57,7 @@ func TestChatState_AV3PermitIsRefused(t *testing.T) {
 	delete(permit, "pending_leaf_replacements")
 	object["permit"] = chatMarshal(t, permit)
 	resp := HandleChatStateReadOutbox(f.deps, chatMarshal(t, object))
-	assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
+	assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 	f.assertStateRootAbsent(t)
 }
 
@@ -79,7 +80,7 @@ func TestChatState_AMalformedPendingListIsRefused(t *testing.T) {
 			p := f.unsignedPermit()
 			p.PendingRemovalAccountIDs = ids
 			resp := f.readOutbox(t, f.sign(t, p))
-			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -92,7 +93,7 @@ func TestChatState_ASignedListReachesAConversationWithoutAGroupHarmlessly(t *tes
 	f := newChatStateFixture(t)
 	p := f.unsignedPermit()
 	p.PendingRemovalAccountIDs = []string{chatRemovedA, chatRemovedB}
-	assertChatStateFailure(t, f.readOutbox(t, f.sign(t, p)), proto.ChatStateErrorCodeNotFound)
+	assertChatStateFailure(t, f.readOutbox(t, f.sign(t, p)), string(errs.ErrCodeChatStateNotFound))
 }
 
 // The replacement list is held to the same never-repaired rule at the edge.
@@ -113,7 +114,7 @@ func TestChatState_AMalformedLeafReplacementListIsRefused(t *testing.T) {
 			p := f.unsignedPermit()
 			p.PendingLeafReplacements = entries
 			resp := f.readOutbox(t, f.sign(t, p))
-			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -122,11 +123,11 @@ func TestChatState_AMalformedLeafReplacementListIsRefused(t *testing.T) {
 func TestChatState_ALeafReplacementPendingRefusalHasItsOwnCode(t *testing.T) {
 	f := newChatStateFixture(t)
 	resp := chatStateFailure(f.deps, "send", fmt.Errorf("wrapped: %w", chatstate.ErrLeafReplacementPending))
-	assertChatStateFailure(t, resp, proto.ChatMLSErrorCodeLeafReplacementPending)
+	assertChatStateFailure(t, resp, string(errs.ErrCodeChatMLSLeafReplacementPending))
 }
 
 func TestChatState_ARotationPendingRefusalHasItsOwnCode(t *testing.T) {
 	f := newChatStateFixture(t)
 	resp := chatStateFailure(f.deps, "send", fmt.Errorf("wrapped: %w", chatstate.ErrRotationPending))
-	assertChatStateFailure(t, resp, proto.ChatMLSErrorCodeRotationPending)
+	assertChatStateFailure(t, resp, string(errs.ErrCodeChatMLSRotationPending))
 }

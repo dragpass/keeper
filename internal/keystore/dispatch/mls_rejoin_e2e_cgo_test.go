@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -124,8 +125,8 @@ func TestMLSRejoin_AnUnsignedOrForeignRequestBuildsNothing(t *testing.T) {
 		"names another leaf key":     otherKey,
 	} {
 		resp := alice.buildRejoin(1, member(r))
-		if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeRejoinUnverified {
-			t.Fatalf("%s: rejoin = %+v; want %s", name, resp, proto.ChatMLSErrorCodeRejoinUnverified)
+		if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSRejoinUnverified) {
+			t.Fatalf("%s: rejoin = %+v; want %s", name, resp, string(errs.ErrCodeChatMLSRejoinUnverified))
 		}
 	}
 	wrongConv := good
@@ -133,7 +134,7 @@ func TestMLSRejoin_AnUnsignedOrForeignRequestBuildsNothing(t *testing.T) {
 	alice.refused(proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv,
 		ClientCommitID: alice.nextCommitID(), ExpectedEpoch: 1, Rejoin: []proto.MLSRejoinMember{member(wrongConv)},
-	}, proto.ChatStateErrorCodeInvalidInput)
+	}, string(errs.ErrCodeChatStateInvalidInput))
 	if got := alice.status(); got.CommitPending || got.Epoch != 1 {
 		t.Fatalf("a refused rejoin moved alice: %+v", got)
 	}
@@ -141,7 +142,7 @@ func TestMLSRejoin_AnUnsignedOrForeignRequestBuildsNothing(t *testing.T) {
 	// The old two-Commit shape is not a way around the signature: an
 	// automated Remove of Bob's leaf alone is not authorized.
 	resp := alice.buildRemove(1, e2eBob)
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("a bare remove ahead of a rejoin = %+v", resp)
 	}
 }
@@ -158,7 +159,7 @@ func TestMLSRejoin_AnAccountWithNoLeafInTheGroupIsNeverAdded(t *testing.T) {
 	resp := alice.buildRejoin(1, proto.MLSRejoinMember{
 		AccountID: mallory.id, DeviceID: e2eDevice, KeyPackageB64: kp.KeyPackageB64, Request: request,
 	})
-	if resp.Success || string(resp.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if resp.Success || string(resp.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("a rejoin of an account outside the group = %+v", resp)
 	}
 	if got := alice.status(); got.CommitPending || got.Epoch != 1 {
@@ -170,7 +171,7 @@ func TestMLSRejoin_AnAccountWithNoLeafInTheGroupIsNeverAdded(t *testing.T) {
 		ClientCommitID: alice.nextCommitID(), ExpectedEpoch: 1,
 		Add: []proto.MLSMemberKeyPackage{mallory.keyPackage()},
 	})
-	if add.Success || string(add.ErrorCode) != proto.ChatMLSErrorCodeCommitUnauthorized {
+	if add.Success || string(add.ErrorCode) != string(errs.ErrCodeChatMLSCommitUnauthorized) {
 		t.Fatalf("an automated add of the listed account = %+v", add)
 	}
 }

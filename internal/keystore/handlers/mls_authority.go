@@ -50,7 +50,7 @@ func rejoinMembers(d Deps, members []proto.MLSRejoinMember) ([]chatstate.RejoinM
 	now := d.Now().Unix()
 	refuse := func(reason string) ([]chatstate.RejoinMember, proto.BaseResponse, bool) {
 		d.Logger.Printf("mls commit build refused a rejoin: %s", reason)
-		return nil, errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeRejoinUnverified),
+		return nil, errs.CodeResponse(errs.ErrCodeChatMLSRejoinUnverified,
 			"the rejoin request is not the account's own signed request for this key package; nothing was built"), false
 	}
 	for _, m := range members {
@@ -103,7 +103,7 @@ func HandleMLSRejoinRequestSign(d Deps, payload json.RawMessage) proto.BaseRespo
 
 	fingerprint, err := crypto.MLSLeafSignatureKeyFingerprint(c.leaf.PublicKey)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrorCode(proto.ChatMLSErrorCodeFailed), "mls leaf key fingerprint failed")
+		return errs.CodeResponse(errs.ErrCodeChatMLSFailed, "mls leaf key fingerprint failed")
 	}
 	statement := proto.MLSRejoinStatement{
 		ConversationID:          c.conv,

@@ -23,6 +23,7 @@ import (
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -167,8 +168,8 @@ func TestKeeperProcessRefusesAMaliciousClientsCommitAcrossAKill(t *testing.T) {
 		t.Fatalf("status after the restart = %+v", status)
 	}
 	a.refused(proto.MLSProcess, alice.attestedProcess(2, 2, commitB64, hAlice, hCarol, hMallory),
-		proto.ChatMLSErrorCodeRowRefused)
-	a.refused(proto.MLSEncrypt, alice.encryptRequest(messageID(3), 1, "not on top of it"), proto.ChatMLSErrorCodeSyncBlocked)
+		string(errs.ErrCodeChatMLSRowRefused))
+	a.refused(proto.MLSEncrypt, alice.encryptRequest(messageID(3), 1, "not on top of it"), string(errs.ErrCodeChatMLSSyncBlocked))
 	assertSameState(t, "after the restart and a retry", before, alice.state())
 	if anchor := alice.anchor(); anchor.Epoch != 1 || anchor.NeedsRekey || anchor.SyncBlock == nil {
 		t.Fatalf("anchor after the restart = %+v", anchor)

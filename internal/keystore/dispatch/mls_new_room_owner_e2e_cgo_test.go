@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/mls/mlsadversary"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -22,7 +23,7 @@ func TestMLSNewRoom_ACreateThatNamesAnotherOwnerIsRefused(t *testing.T) {
 		Members: []proto.MLSMemberKeyPackage{bob.keyPackage()},
 		Roles:   roleSet(e2eBob, e2eAlice),
 	})
-	assertCode(t, resp, proto.ChatStateErrorCodeInvalidInput)
+	assertCode(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 	if got := alice.status(); got.HasGroupState || got.CommitPending {
 		t.Fatalf("a refused create left %+v", got)
 	}
@@ -52,7 +53,7 @@ func TestMLSNewRoom_AWelcomeWhoseFirstRolesNameAnotherOwnerIsRefused(t *testing.
 			}
 			continue
 		}
-		assertCode(t, resp, proto.ChatMLSErrorCodeFailed)
+		assertCode(t, resp, string(errs.ErrCodeChatMLSFailed))
 		if got := carol.status(); got.HasGroupState {
 			t.Fatalf("carol joined a room whose first roles name her owner: %+v", got)
 		}

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -131,7 +132,7 @@ func TestMLSChat_AnUnsignedPermitIsRefusedBeforeTheStateDirectoryExists(t *testi
 			forged := f.permit(t)
 			forged.PendingRemovalAccountIDs = []string{mlsTestPeer}
 			resp := tc.handler(f.deps, chatMarshal(t, tc.request(forged)))
-			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeNotAuthorized)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateNotAuthorized))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -149,7 +150,7 @@ func TestMLSChat_APermitForAnotherConversationIsRefused(t *testing.T) {
 			}
 			raw["conversation_id"] = chatConvID
 			resp := tc.handler(f.deps, chatMarshal(t, raw))
-			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeNotAuthorized)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateNotAuthorized))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -162,7 +163,7 @@ func TestMLSChat_AnExpiredPermitIsRefused(t *testing.T) {
 			p := f.permit(t)
 			f.clock.unix += proto.ChatStatePermitTTLSeconds
 			assertChatStateFailure(t, tc.handler(f.deps, chatMarshal(t, tc.request(p))),
-				proto.ChatStateErrorCodeNotAuthorized)
+				string(errs.ErrCodeChatStateNotAuthorized))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -177,13 +178,13 @@ func TestMLSChat_AnAuthorizedRequestNeedsTheLibraryAndALeaf(t *testing.T) {
 			f := newChatStateFixture(t)
 			resp := tc.handler(f.deps, chatMarshal(t, tc.request(f.permit(t))))
 			if mls.Available() {
-				assertChatStateFailure(t, resp, proto.ChatMLSErrorCodeFailed)
+				assertChatStateFailure(t, resp, string(errs.ErrCodeChatMLSFailed))
 				if !strings.Contains(resp.Error, "leaf") {
 					t.Fatalf("error = %q; want the missing leaf named", resp.Error)
 				}
 				return
 			}
-			assertChatStateFailure(t, resp, proto.ChatMLSErrorCodeCapabilityRequired)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatMLSCapabilityRequired))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -197,7 +198,7 @@ func TestMLSChat_AnOversizedRequestIsRefusedByLength(t *testing.T) {
 			for i := range payload {
 				payload[i] = ' '
 			}
-			assertChatStateFailure(t, tc.handler(f.deps, payload), proto.ChatStateErrorCodeInvalidInput)
+			assertChatStateFailure(t, tc.handler(f.deps, payload), string(errs.ErrCodeChatStateInvalidInput))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -265,7 +266,7 @@ func TestMLSChat_ValidationRefusesMalformedRequests(t *testing.T) {
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
 			assertChatStateFailure(t, HandleMLSCommitBuild(f.deps, chatMarshal(t, req)),
-				proto.ChatStateErrorCodeInvalidInput)
+				string(errs.ErrCodeChatStateInvalidInput))
 		})
 	}
 
@@ -274,41 +275,41 @@ func TestMLSChat_ValidationRefusesMalformedRequests(t *testing.T) {
 		ClientCommitID: mlsTestCommitID, Outcome: proto.MLSCommitOutcomeSuperseded,
 	}
 	assertChatStateFailure(t, HandleMLSCommitConfirm(f.deps, chatMarshal(t, confirm)),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 	confirm.Outcome, confirm.WinnerCommitB64 = proto.MLSCommitOutcomeAccepted, mlsTestBlobB64
 	assertChatStateFailure(t, HandleMLSCommitConfirm(f.deps, chatMarshal(t, confirm)),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 	confirm.Outcome = "maybe"
 	assertChatStateFailure(t, HandleMLSCommitConfirm(f.deps, chatMarshal(t, confirm)),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 
 	encrypt := proto.MLSEncryptRequest{
 		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID, ClientMessageID: mlsTestCommitID,
 		ExpectedEpoch: 1, PlaintextB64: base64.StdEncoding.EncodeToString(make([]byte, proto.MLSEncryptMaxPlaintextBytes+1)),
 	}
-	assertChatStateFailure(t, HandleMLSEncrypt(f.deps, chatMarshal(t, encrypt)), proto.ChatStateErrorCodeInvalidInput)
+	assertChatStateFailure(t, HandleMLSEncrypt(f.deps, chatMarshal(t, encrypt)), string(errs.ErrCodeChatStateInvalidInput))
 	decrypt := proto.MLSDecryptBatchForAppDisplayRequest{
 		Permit: p, OrgID: p.OrgID, ConversationID: p.ConversationID,
 		Messages: []proto.MLSDisplayMessage{{Seq: 3, CiphertextB64: mlsTestBlobB64}, {Seq: 3, CiphertextB64: mlsTestBlobB64}},
 	}
-	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), proto.ChatStateErrorCodeInvalidInput)
+	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), string(errs.ErrCodeChatStateInvalidInput))
 	decrypt.Messages = make([]proto.MLSDisplayMessage, proto.MLSDecryptMaxMessages+1)
 	for i := range decrypt.Messages {
 		decrypt.Messages[i] = proto.MLSDisplayMessage{Seq: uint64(i + 1), CiphertextB64: mlsTestBlobB64}
 	}
-	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), proto.ChatStateErrorCodeInvalidInput)
+	assertChatStateFailure(t, HandleMLSDecryptBatchForAppDisplay(f.deps, chatMarshal(t, decrypt)), string(errs.ErrCodeChatStateInvalidInput))
 
 	create := proto.MLSGroupCreateRequest{
 		Permit: p, Roles: ownerRolesOf(p), OrgID: p.OrgID, ConversationID: p.ConversationID,
 		ClientCommitID: mlsTestCommitID, Members: make([]proto.MLSMemberKeyPackage, proto.MLSChatMaxMembersPerCommit+1),
 	}
 	assertChatStateFailure(t, HandleMLSGroupCreate(f.deps, chatMarshal(t, create)),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 	// 0.0.58: a create without roles would make a group that takes no Commit.
 	create.Members, create.Roles = create.Members[:1], nil
 	create.Members[0] = proto.MLSMemberKeyPackage{AccountID: mlsTestPeer, DeviceID: mlsTestDevice, KeyPackageB64: mlsTestBlobB64}
 	assertChatStateFailure(t, HandleMLSGroupCreate(f.deps, chatMarshal(t, create)),
-		proto.ChatStateErrorCodeInvalidInput)
+		string(errs.ErrCodeChatStateInvalidInput))
 	f.assertStateRootAbsent(t)
 }
 
@@ -361,32 +362,32 @@ func TestMLSChat_FailuresMapToTheirProtocolCodes(t *testing.T) {
 		err  error
 		code string
 	}{
-		{mls.ErrLeafUntrusted, proto.ChatMLSErrorCodeLeafUntrusted},
-		{&MLSLeafUntrustedError{Reason: "x"}, proto.ChatMLSErrorCodeLeafUntrusted},
-		{chatstate.ErrRotationPending, proto.ChatMLSErrorCodeRotationPending},
-		{chatstate.ErrLeafReplacementPending, proto.ChatMLSErrorCodeLeafReplacementPending},
-		{chatstate.ErrReplacementNotListed, proto.ChatStateErrorCodeInvalidInput},
-		{chatstate.ErrCommitPending, proto.ChatMLSErrorCodeCommitPending},
-		{chatstate.ErrEpochStale, proto.ChatMLSErrorCodeEpochStale},
-		{chatstate.ErrHandshakeApplied, proto.ChatMLSErrorCodeEpochStale},
-		{chatstate.ErrHandshakeSkipped, proto.ChatMLSErrorCodeEpochStale},
-		{chatstate.ErrRekeyRequired, proto.ChatStateErrorCodeRekeyRequired},
-		{chatstate.ErrNoGroupState, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrNotHandshake, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrNotApplication, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrHistoryUnavailable, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrDeclarationMismatch, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrGenerationUnknown, proto.ChatMLSErrorCodeFailed},
-		{chatstate.ErrBurnForward, proto.ChatMLSErrorCodeFailed},
-		{mls.ErrFailed, proto.ChatMLSErrorCodeFailed},
-		{mls.ErrNoKeyPackageForWelcome, proto.ChatMLSErrorCodeWelcomeUnusable},
-		{mls.ErrGroupMismatch, proto.ChatMLSErrorCodeFailed},
-		{mls.ErrUnavailable, proto.ChatMLSErrorCodeCapabilityRequired},
-		{chatstate.ErrGroupExists, proto.ChatStateErrorCodeConflict},
-		{chatstate.ErrNoPendingCommit, proto.ChatStateErrorCodeConflict},
-		{chatstate.ErrCommitMismatch, proto.ChatStateErrorCodeConflict},
-		{chatstate.ErrLockTimeout, proto.ChatStateErrorCodeLockTimeout},
-		{errors.New("disk full"), proto.ChatStateErrorCodeStorageFailure},
+		{mls.ErrLeafUntrusted, string(errs.ErrCodeChatMLSLeafUntrusted)},
+		{&MLSLeafUntrustedError{Reason: "x"}, string(errs.ErrCodeChatMLSLeafUntrusted)},
+		{chatstate.ErrRotationPending, string(errs.ErrCodeChatMLSRotationPending)},
+		{chatstate.ErrLeafReplacementPending, string(errs.ErrCodeChatMLSLeafReplacementPending)},
+		{chatstate.ErrReplacementNotListed, string(errs.ErrCodeChatStateInvalidInput)},
+		{chatstate.ErrCommitPending, string(errs.ErrCodeChatMLSCommitPending)},
+		{chatstate.ErrEpochStale, string(errs.ErrCodeChatMLSEpochStale)},
+		{chatstate.ErrHandshakeApplied, string(errs.ErrCodeChatMLSEpochStale)},
+		{chatstate.ErrHandshakeSkipped, string(errs.ErrCodeChatMLSEpochStale)},
+		{chatstate.ErrRekeyRequired, string(errs.ErrCodeChatStateRekeyRequired)},
+		{chatstate.ErrNoGroupState, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrNotHandshake, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrNotApplication, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrHistoryUnavailable, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrDeclarationMismatch, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrGenerationUnknown, string(errs.ErrCodeChatMLSFailed)},
+		{chatstate.ErrBurnForward, string(errs.ErrCodeChatMLSFailed)},
+		{mls.ErrFailed, string(errs.ErrCodeChatMLSFailed)},
+		{mls.ErrNoKeyPackageForWelcome, string(errs.ErrCodeChatMLSWelcomeUnusable)},
+		{mls.ErrGroupMismatch, string(errs.ErrCodeChatMLSFailed)},
+		{mls.ErrUnavailable, string(errs.ErrCodeChatMLSCapabilityRequired)},
+		{chatstate.ErrGroupExists, string(errs.ErrCodeChatStateConflict)},
+		{chatstate.ErrNoPendingCommit, string(errs.ErrCodeChatStateConflict)},
+		{chatstate.ErrCommitMismatch, string(errs.ErrCodeChatStateConflict)},
+		{chatstate.ErrLockTimeout, string(errs.ErrCodeChatStateLockTimeout)},
+		{errors.New("disk full"), string(errs.ErrCodeChatStateStorageFailure)},
 	}
 	for _, tc := range cases {
 		for _, err := range []error{tc.err, wrapped(tc.err)} {

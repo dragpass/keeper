@@ -1874,7 +1874,12 @@ between Go sentinel errors and codes lives in `internal/keystore/errs/errs.go`
 
 `crypto_failure`, `storage_failure`, `unsupported`, and the three
 `peer_key_*` codes are not auto-mapped — the handler that detects the failure
-assigns them explicitly via `errorCodeResponse(...)`.
+assigns them explicitly via `errs.CodeResponse(...)`.
+
+Every code Keeper sends is a typed `errs.ErrorCode` constant: the lowercase
+ones in `internal/keystore/errs/errs.go`, the uppercase `CHAT_STATE_*` /
+`CHAT_MLS_*` ones in `internal/keystore/errs/chat.go`. `errs/codes_wire_test.go`
+pins each wire value.
 
 The `error_code` field is `omitempty` in the response envelope — older Keeper
 builds (pre-Wave 7 P2) returned only the human-readable `error` string. The

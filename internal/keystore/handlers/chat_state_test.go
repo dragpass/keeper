@@ -28,6 +28,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -195,7 +196,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				p.Signature = base64.StdEncoding.EncodeToString([]byte("not a signature"))
 				return f.readOutboxRequest(p)
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "watermark changed after signing",
@@ -203,7 +204,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				p.WatermarkNextApplication += 9
 				return f.readOutboxRequest(p)
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "server key version not pinned",
@@ -212,7 +213,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				p.ServerKeyVersion = msgServerKeyVersion + 1
 				return f.readOutboxRequest(f.sign(t, p))
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "request names a different conversation than the permit",
@@ -221,7 +222,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				req.ConversationID = chatOtherUUID
 				return req
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "permit has expired",
@@ -229,7 +230,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				f.clock.advance(proto.ChatStatePermitTTLSeconds)
 				return f.readOutboxRequest(p)
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "permit window is wider than the fixed span",
@@ -238,7 +239,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				p.ExpiresAt = p.IssuedAt + 2*proto.ChatStatePermitTTLSeconds
 				return f.readOutboxRequest(f.sign(t, p))
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 		{
 			name: "permit is issued too far in the future",
@@ -248,7 +249,7 @@ func TestChatState_UnauthorizedCallsNeverOpenTheStateDirectory(t *testing.T) {
 				p.ExpiresAt = p.IssuedAt + proto.ChatStatePermitTTLSeconds
 				return f.readOutboxRequest(f.sign(t, p))
 			},
-			code: proto.ChatStateErrorCodeNotAuthorized,
+			code: string(errs.ErrCodeChatStateNotAuthorized),
 		},
 	}
 
@@ -301,7 +302,7 @@ func TestChatState_MalformedRequestsNeverOpenTheStateDirectory(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := HandleChatStateReadOutbox(f.deps, tc.payload)
-			assertChatStateFailure(t, resp, proto.ChatStateErrorCodeInvalidInput)
+			assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
 			f.assertStateRootAbsent(t)
 		})
 	}
@@ -323,7 +324,7 @@ func TestChatState_ReadOutboxReportsAMissingEntry(t *testing.T) {
 	f := newChatStateFixture(t)
 	f.seedConversation(t, chatAccountID)
 
-	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), proto.ChatStateErrorCodeNotFound)
+	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), string(errs.ErrCodeChatStateNotFound))
 }
 
 // TestChatState_OwnerComesFromThePermit checks the partitioning the handler
@@ -343,8 +344,8 @@ func TestChatState_OwnerComesFromThePermit(t *testing.T) {
 	otherUnsigned.AccountID = chatOtherUUID
 	other := f.sign(t, otherUnsigned)
 
-	assertChatStateFailure(t, f.readOutbox(t, other), proto.ChatStateErrorCodeNotFound)
-	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), proto.ChatStateErrorCodeRekeyRequired)
+	assertChatStateFailure(t, f.readOutbox(t, other), string(errs.ErrCodeChatStateNotFound))
+	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), string(errs.ErrCodeChatStateRekeyRequired))
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -363,9 +364,9 @@ func TestChatState_ADeletedStateFileIsRefusedAsARewind(t *testing.T) {
 
 	removeSealedRecords(t, f.root)
 
-	assertChatStateFailure(t, f.readOutbox(t, permit), proto.ChatStateErrorCodeRekeyRequired)
+	assertChatStateFailure(t, f.readOutbox(t, permit), string(errs.ErrCodeChatStateRekeyRequired))
 	// The refusal latches: a retry is not a way out.
-	assertChatStateFailure(t, f.readOutbox(t, permit), proto.ChatStateErrorCodeRekeyRequired)
+	assertChatStateFailure(t, f.readOutbox(t, permit), string(errs.ErrCodeChatStateRekeyRequired))
 }
 
 func removeSealedRecords(t *testing.T, root string) {
@@ -407,12 +408,12 @@ func TestChatState_PurgeRemovesTheStateAndNeedsNoPermit(t *testing.T) {
 
 	// After a purge the conversation is a first use again, not a rewind: the
 	// seal key went with the files, so there is no old state left to be behind.
-	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), proto.ChatStateErrorCodeNotFound)
+	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), string(errs.ErrCodeChatStateNotFound))
 }
 
 func TestChatState_PurgeRejectsAMalformedOwner(t *testing.T) {
 	f := newChatStateFixture(t)
-	assertChatStateFailure(t, f.purge(t, "not-a-uuid"), proto.ChatStateErrorCodeInvalidInput)
+	assertChatStateFailure(t, f.purge(t, "not-a-uuid"), string(errs.ErrCodeChatStateInvalidInput))
 }
 
 // The wire spells the two ratchets and the store stores them, so a drift here
