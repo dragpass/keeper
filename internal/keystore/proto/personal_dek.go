@@ -2,8 +2,6 @@
 
 package proto
 
-import "errors"
-
 // DEKGenerateAndWrapDualResponseData is the signup dual wrap's output: one
 // new DEK wrapped for the password and for the device. The signup prepare
 // action builds it in-process; the plaintext DEK never leaves the Keeper.
@@ -71,48 +69,6 @@ func (r DEKUnwrapAndEncryptRequest) Validate() error {
 type DEKUnwrapAndEncryptResponseData struct {
 	IVB64         string `json:"iv_b64"`
 	CiphertextB64 string `json:"ciphertext_b64"`
-}
-
-// DEKUnwrapAndDecryptMetaRequest is the bulk-decrypt action for personal
-// entry metadata fields.
-//
-// **Carve-out:** the response carries plaintext metadata. This is an
-// intentional exception to the zero-extractable model, for user-visible
-// search / filter / display purposes — value (secret) plaintext is never
-// returned by this action.
-//
-// Input meta_fields: key → Base64(IV(12)||ciphertext)
-// Response fields:   key → plaintext string (UTF-8)
-//
-// deviceKey is fetched internally from the Keeper Keychain.
-type DEKUnwrapAndDecryptMetaRequest struct {
-	EncryptedDEKB64 string            `json:"encrypted_dek_b64,omitempty"`
-	MetaFields      map[string]string `json:"meta_fields"`
-}
-
-func (r DEKUnwrapAndDecryptMetaRequest) Validate() error {
-	if err := optionalDeviceWrappedDEK(r.EncryptedDEKB64); err != nil {
-		return err
-	}
-	if len(r.MetaFields) == 0 {
-		return errors.New("meta_fields: at least one field required")
-	}
-	for k, v := range r.MetaFields {
-		if k == "" {
-			return errors.New("meta_fields: empty key")
-		}
-		if v == "" {
-			continue
-		}
-		if _, _, err := SplitMetaCipherInline(v); err != nil {
-			return errors.New("meta_fields[" + k + "]: " + err.Error())
-		}
-	}
-	return nil
-}
-
-type DEKUnwrapAndDecryptMetaResponseData struct {
-	Fields map[string]string `json:"fields"` // key → plaintext (UTF-8)
 }
 
 // DEKRotateToNewPasswordRequest — master password change.

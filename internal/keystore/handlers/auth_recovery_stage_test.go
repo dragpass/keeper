@@ -26,6 +26,21 @@ const (
 	stageRotatedAtNow = int64(1_000_000)
 )
 
+// openTestRecoverySession registers raw PEM bytes with deps's
+// RecoverySessions and returns a handle. Auto-closed on test end.
+func openTestRecoverySession(t *testing.T, deps Deps, rawPEM string) string {
+	t.Helper()
+	rawCopy := []byte(rawPEM)
+	handle, _, err := deps.RecoverySessions.Open(rawCopy)
+	if err != nil {
+		t.Fatalf("openTestRecoverySession: %v", err)
+	}
+	t.Cleanup(func() {
+		deps.RecoverySessions.Close(handle)
+	})
+	return handle
+}
+
 // recoveryStage is a device part-way through an RK24 recovery: the account
 // key the server holds wrapped under the RK24, and whatever this device
 // already had in its keyring.

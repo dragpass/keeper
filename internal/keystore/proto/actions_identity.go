@@ -177,7 +177,7 @@ const (
 	// RecoverySessionClose: explicit handle disposal (the Extension calls
 	//                       it when Recovery completes).
 	//
-	// Subsequent recoverysign / dek_rewrap_with_old_key actions take a
+	// Subsequent recoverysign / dek_rewrap_with_old_key_to_self actions take a
 	// recovery_handle instead of old_private_key_pem and operate on the
 	// PEM bytes from the store.
 	ActionRecoverySessionOpen  = "recovery_session_open"
@@ -215,13 +215,6 @@ const (
 	// personal credential payload cannot be opened under a different context.
 	// aad_b64 is public context material, not secret.
 	ActionDEKUnwrapAndEncryptWithAAD = "dek_unwrap_and_encrypt_with_aad"
-
-	// DEKUnwrapAndDecryptMeta: bulk-decrypt personal entry metadata fields.
-	//   Inputs: encrypted_dek_b64, meta_fields (key→Base64(IV(12)||ct))
-	//   Output: fields (key→plaintext UTF-8)
-	// Carve-out for plaintext metadata in response — value is split off
-	// (consumed via decrypt-to-clipboard).
-	ActionDEKUnwrapAndDecryptMeta = "dek_unwrap_and_decrypt_meta"
 
 	// DEKUnwrapAndDecryptToClipboard: decrypt-to-clipboard. After DEK
 	// unwrap+decrypt, the Keeper writes the plaintext directly to the OS

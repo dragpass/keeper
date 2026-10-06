@@ -59,7 +59,7 @@ type GenerateKeypairWithRecoveryWrapResponseData struct {
 // otherwise live as a string in the Extension JS heap during Recovery.
 // The Keeper takes wrappedKeeper + wrap_key, unwraps internally → keeps in
 // memguard → issues a handle. Subsequent recoverysign /
-// dek_rewrap_with_old_key operate on PEM bytes via the handle.
+// dek_rewrap_with_old_key_to_self operate on PEM bytes via the handle.
 // ────────────────────────────────────────────────────────────────────────
 
 // RecoverySessionOpenRequest — the Extension sends both the wrap_key it

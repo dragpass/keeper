@@ -3,41 +3,6 @@
 
 package proto
 
-// DEKRewrapWithOldKeyRequest is the request for the Recovery composite
-// re-wrap action. Replaces the old `unwrapgroupdekwithkey` + wrap pair with
-// a single Keeper-side composite action so the raw Group DEK does not live
-// in the Extension JS heap.
-//
-// Takes a `recovery_handle` instead of the PEM. The PEM is referenced
-// through the handle from the store pre-registered by recovery_session_open.
-//
-// NewPublicKey is the new RSA public key PEM of the re-wrap target member
-// (usually self).
-type DEKRewrapWithOldKeyRequest struct {
-	ChallengeToken    string `json:"challenge_token"`
-	Signature         string `json:"signature"`
-	RecoveryHandle    string `json:"recovery_handle"`
-	EncryptedGroupDEK string `json:"encrypted_group_dek"`
-	NewPublicKey      string `json:"new_public_key"`
-	ServerKeyVersion  uint   `json:"server_key_version,omitempty"` // falls back to active when 0
-}
-
-func (r DEKRewrapWithOldKeyRequest) Validate() error {
-	if err := requireString(r.ChallengeToken, "challenge_token"); err != nil {
-		return err
-	}
-	if err := requireString(r.Signature, "signature"); err != nil {
-		return err
-	}
-	if err := requireHandle(r.RecoveryHandle, "recovery_handle"); err != nil {
-		return err
-	}
-	if _, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek"); err != nil {
-		return err
-	}
-	return requirePEM(r.NewPublicKey, "new_public_key")
-}
-
 type DEKRewrapWithOldKeyToSelfRequest struct {
 	ChallengeToken    string `json:"challenge_token"`
 	Signature         string `json:"signature"`

@@ -9,7 +9,6 @@ import (
 
 func groupActions() map[string]actionHandlerFunc {
 	return map[string]actionHandlerFunc{
-		proto.ActionDEKRewrapWithOldKey:       wrap(handlers.HandleDEKRewrapWithOldKey),
 		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf),
 
 		// Group DEK opaque handle
@@ -37,10 +36,6 @@ func groupActions() map[string]actionHandlerFunc {
 		// AAD-binding variant of group_encrypt: binds a canonical context AAD
 		// into the GCM tag to prevent ciphertext swap across contexts.
 		proto.ActionGroupEncryptWithAAD: wrap(handlers.HandleGroupEncryptWithAAD),
-
-		// raw Group DEK direct batch metadata encrypt/decrypt.
-		proto.ActionGroupEncryptMeta: wrap(handlers.HandleGroupEncryptMeta),
-		proto.ActionGroupDecryptMeta: wrap(handlers.HandleGroupDecryptMeta),
 
 		// org token → external guest share re-encryption (Keeper-owned re-encrypt
 		// sink; plaintext / Group DEK never enter the JS heap).
