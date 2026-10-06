@@ -55,6 +55,13 @@ type sealedEnvelope struct {
 	Sealed    string `json:"ct"`
 }
 
+// mac joins parts with '\n' and no length prefix. That is unambiguous only
+// because no part can hold a '\n': labels are constants, origins come from
+// the allowlist (url.Parse refuses control characters), challenges, session
+// and CSRF tokens and the instance are Keeper's own Base64URL, a client nonce
+// must be canonical Base64URL (validNonce), and the rest are decimal
+// timestamps. A new part that a caller controls needs the same guarantee or a
+// length-prefixed encoding.
 func mac(key []byte, parts ...string) []byte {
 	h := hmac.New(sha256.New, key)
 	for i, part := range parts {
@@ -75,9 +82,12 @@ func equalMAC(expected []byte, providedB64 string) bool {
 	return err == nil && hmac.Equal(expected, provided)
 }
 
+// validNonce requires canonical Base64URL: the decoder skips '\r' and '\n',
+// and a nonce is a mac part.
 func validNonce(value string, minBytes int) bool {
 	raw, err := base64.RawURLEncoding.DecodeString(value)
-	return err == nil && len(raw) >= minBytes && len(value) <= 128
+	return err == nil && len(raw) >= minBytes && len(value) <= 128 &&
+		base64.RawURLEncoding.EncodeToString(raw) == value
 }
 
 func newAEAD(proxyKey []byte) (cipher.AEAD, error) {
