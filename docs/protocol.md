@@ -2270,7 +2270,10 @@ App-origin limit is threat model §4.12.
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,
 "dragpass-keeper-app-session-key-v1\n" + origin + "\n" + challenge + "\n" +
-client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`. A session
+client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`. These
+newline-joined inputs carry no length prefix, so `client_nonce` must be
+canonical unpadded Base64URL of at least 16 bytes: one that only decodes (Go's
+decoder skips `\r` and `\n`) is refused with 401. A session
 request carries `Authorization: Bearer <session>`, `X-DragPass-CSRF`, and the
 body `{ nonce, ct }`: the JSON request AES-256-GCM sealed (key
 `HMAC(session key, "aead")`, 12-byte nonce) with AAD
