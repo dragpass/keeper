@@ -5,6 +5,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/pbkdf2"
@@ -46,7 +47,7 @@ func HandleDEKUnwrapAndEncrypt(d Deps, req proto.DEKUnwrapAndEncryptRequest) pro
 	}
 	defer secure.Zeroize(dek)
 
-	iv, ciphertext, err := aesGCMSealSplit(dek, plaintext)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, nil)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
 	}
@@ -98,7 +99,7 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 		}
 		deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
 		defer deviceKeyBuf.Destroy()
-		wrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
+		wrapped, err := crypto.AESGCMEncryptBase64(d.Random(), deviceKeyBuf.Bytes(), dek)
 		if err != nil {
 			sealErr = err
 		}
@@ -134,7 +135,7 @@ func openPasswordWrappedDEK(encryptedDEKB64 string, pwBuf *memguard.LockedBuffer
 	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
 
-	dek, err := aesGCMOpen(kek, iv, ciphertext)
+	dek, err := crypto.OpenAESGCM(kek, iv, ciphertext, nil)
 	if err != nil {
 		return nil, errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed (wrong password?): "+err.Error())
 	}
@@ -194,7 +195,7 @@ func HandleDEKRotateToNewPassword(d Deps, req proto.DEKRotateToNewPasswordReques
 	kek := pbkdf2.Key(pwBuf.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
 
-	iv, ciphertext, err := aesGCMSealSplit(kek, dek)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), kek, dek, nil)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap dek failed: "+err.Error())
 	}

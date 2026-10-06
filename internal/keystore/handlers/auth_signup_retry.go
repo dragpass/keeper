@@ -140,7 +140,7 @@ func answerStagedSignup(d Deps, alias string, privateKey, publicKey string, pass
 	privateBuffer := memguard.NewBufferFromBytes([]byte(privateKey))
 	secure.WipeString(&privateKey)
 	defer privateBuffer.Destroy()
-	wrappedKeeper, err := crypto.AESGCMEncryptBase64(wrapKey, privateBuffer.Bytes())
+	wrappedKeeper, err := crypto.AESGCMEncryptBase64(d.Random(), wrapKey, privateBuffer.Bytes())
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap staged private key failed")
 	}
@@ -185,7 +185,7 @@ func passwordWrapDEK(d Deps, password *memguard.LockedBuffer, dek []byte) (strin
 	}
 	kek := pbkdf2.Key(password.Bytes(), salt, dekPBKDF2Iterations, dekKEKLength, sha256.New)
 	defer secure.Zeroize(kek)
-	iv, ciphertext, err := aesGCMSealSplit(kek, dek)
+	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), kek, dek, nil)
 	if err != nil {
 		return "", errs.CodeResponse(errs.ErrCodeCryptoFailure, "password wrap failed")
 	}

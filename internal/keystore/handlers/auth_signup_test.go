@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -181,7 +182,7 @@ func TestHandleAuthRecoveryBeginAndPrepareKeepRKOutOfResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
-	wrappedOldKey, err := keepercrypto.AESGCMEncryptBase64(oldWrapKey, []byte(oldKeypair.PrivateKey))
+	wrappedOldKey, err := keepercrypto.AESGCMEncryptBase64(rand.Reader, oldWrapKey, []byte(oldKeypair.PrivateKey))
 	secure.Zeroize(oldWrapKey)
 	if err != nil {
 		t.Fatalf("AESGCMEncryptBase64: %v", err)

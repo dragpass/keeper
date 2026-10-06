@@ -10,6 +10,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func sealPersonalWithAAD(t *testing.T) (deps Deps, encryptedDEKB64 string, dek [
 	if err != nil {
 		t.Fatalf("decode device wrap: %v", err)
 	}
-	raw, err := AESGCMOpen(deviceKey, devRaw[:12], devRaw[12:])
+	raw, err := crypto.OpenAESGCM(deviceKey, devRaw[:12], devRaw[12:], nil)
 	if err != nil {
 		t.Fatalf("device decrypt: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestHandleDEKUnwrapAndEncryptWithAAD_RoundTrip(t *testing.T) {
 	}
 
 	// Opens only under the byte-identical AAD.
-	pt, err := AESGCMOpenWithAAD(dek, iv, ct, aad)
+	pt, err := crypto.OpenAESGCM(dek, iv, ct, aad)
 	if err != nil {
 		t.Fatalf("open with same aad: %v", err)
 	}
@@ -113,12 +114,12 @@ func TestHandleDEKUnwrapAndEncryptWithAAD_SwapAADFails(t *testing.T) {
 	// A different entry in the same account must not open it — this is the
 	// swap guard the whole action exists for.
 	otherAAD := []byte("acct_42|entry_8|credential|1|1")
-	if _, err := AESGCMOpenWithAAD(dek, iv, ct, otherAAD); err == nil {
+	if _, err := crypto.OpenAESGCM(dek, iv, ct, otherAAD); err == nil {
 		t.Error("payload opened under a different AAD — swap guard is not binding")
 	}
 	// So must a different account holding the same entry id.
 	otherAccount := []byte("acct_43|entry_7|credential|1|1")
-	if _, err := AESGCMOpenWithAAD(dek, iv, ct, otherAccount); err == nil {
+	if _, err := crypto.OpenAESGCM(dek, iv, ct, otherAccount); err == nil {
 		t.Error("payload opened under a different account AAD")
 	}
 }

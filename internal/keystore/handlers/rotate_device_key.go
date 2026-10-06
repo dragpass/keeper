@@ -5,6 +5,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/awnumar/memguard"
 
@@ -80,7 +81,7 @@ func HandleRotateDeviceKey(d Deps, req proto.RotateDeviceKeyRequest) proto.BaseR
 	defer newBuf.Destroy()
 
 	// 5) wrap with new deviceKey
-	newWrappedB64, err := aesGCMSeal(newBuf.Bytes(), dek)
+	newWrappedB64, err := crypto.AESGCMEncryptBase64(d.Random(), newBuf.Bytes(), dek)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "wrap with new device key failed: "+err.Error())
 	}

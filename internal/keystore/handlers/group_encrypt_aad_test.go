@@ -13,6 +13,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func TestHandleGroupEncryptWithAAD_RoundTrip(t *testing.T) {
 	}
 
 	// Opening with the SAME AAD succeeds and yields the plaintext.
-	got, err := AESGCMOpenWithAAD(groupRaw, iv, ct, aad)
+	got, err := crypto.OpenAESGCM(groupRaw, iv, ct, aad)
 	if err != nil {
 		t.Fatalf("open with matching AAD: %v", err)
 	}
@@ -97,15 +98,15 @@ func TestHandleGroupEncryptWithAAD_SwapAADFails(t *testing.T) {
 	ct, _ := base64.StdEncoding.DecodeString(data.CiphertextB64)
 
 	// Opening with the swapped AAD must fail (GCM tag mismatch).
-	if _, err := AESGCMOpenWithAAD(groupRaw, iv, ct, swappedAAD); err == nil {
+	if _, err := crypto.OpenAESGCM(groupRaw, iv, ct, swappedAAD); err == nil {
 		t.Fatalf("open with swapped AAD unexpectedly succeeded — swap guard broken")
 	}
 	// Opening with an empty/nil AAD (as plain group_encrypt would) must also fail.
-	if _, err := AESGCMOpen(groupRaw, iv, ct); err == nil {
+	if _, err := crypto.OpenAESGCM(groupRaw, iv, ct, nil); err == nil {
 		t.Fatalf("open with nil AAD unexpectedly succeeded — AAD not bound into tag")
 	}
 	// Sanity: the correct AAD still opens.
-	if _, err := AESGCMOpenWithAAD(groupRaw, iv, ct, sealAAD); err != nil {
+	if _, err := crypto.OpenAESGCM(groupRaw, iv, ct, sealAAD); err != nil {
 		t.Fatalf("open with matching AAD failed: %v", err)
 	}
 }
