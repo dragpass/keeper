@@ -21,6 +21,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proc"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/service"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/zalando/go-keyring"
@@ -325,6 +326,7 @@ func runMessageLoop(app *keystore.App) {
 
 		// Handle the request
 		resp := app.HandleRequest(msg)
+		secure.Zeroize(msg)
 
 		// Send response
 		if err := msgr.SendResponse(resp); err != nil {

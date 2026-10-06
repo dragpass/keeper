@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // appRoute is one fixed App action for recovery and group DEK wrapping. The
@@ -229,6 +230,7 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 	if !ok {
 		return
 	}
+	defer secure.Zeroize(request.plain)
 	input := route.input()
 	decoder := json.NewDecoder(bytes.NewReader(request.plain))
 	decoder.DisallowUnknownFields()
