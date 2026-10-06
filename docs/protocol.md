@@ -1844,7 +1844,7 @@ message. Codes are stable enums; messages are not.
 
 |Code|Trigger|Extension reaction|
 |---|---|---|
-|`validation_error`|Payload format / length / required-field check failed (see `validation.go`).|Bug — surface as developer error, no retry.|
+|`validation_error`|Payload format / length / required-field check failed (see `validation.go`), or the request is not valid JSON (0.0.58; an older Keeper sends that failure without an `error_code`).|Bug — surface as developer error, no retry.|
 |`not_found`|Requested resource missing (Keychain secret slot, session handle, server key version).|Re-bootstrap / re-login / refresh server keys + retry once.|
 |`expired_session`|TTL expired on a Keeper session handle (`recovery_session_*`, `group_session_*`).|Open a fresh session and retry the original action.|
 |`crypto_failure`|AES-GCM unwrap, RSA-OAEP, or signature verification failed.|Hard fail — payload was tampered or wrong key. No retry.|
@@ -2274,7 +2274,10 @@ App-origin limit is threat model §4.12.
 **Every session request is sealed to the owner that proved itself.** Both
 sides derive `session key = HMAC(pairing key,
 "dragpass-keeper-app-session-key-v1\n" + origin + "\n" + challenge + "\n" +
-client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`. A session
+client_nonce + "\n" + session + "\n" + csrf + "\n" + expires_at)`. These
+newline-joined inputs carry no length prefix, so `client_nonce` must be
+canonical unpadded Base64URL of at least 16 bytes: one that only decodes (Go's
+decoder skips `\r` and `\n`) is refused with 401. A session
 request carries `Authorization: Bearer <session>`, `X-DragPass-CSRF`, and the
 body `{ nonce, ct }`: the JSON request AES-256-GCM sealed (key
 `HMAC(session key, "aead")`, 12-byte nonce) with AAD
