@@ -1844,7 +1844,7 @@ message. Codes are stable enums; messages are not.
 
 |Code|Trigger|Extension reaction|
 |---|---|---|
-|`validation_error`|Payload format / length / required-field check failed (see `validation.go`).|Bug — surface as developer error, no retry.|
+|`validation_error`|Payload format / length / required-field check failed (see `validation.go`), or the request is not valid JSON (0.0.58; an older Keeper sends that failure without an `error_code`).|Bug — surface as developer error, no retry.|
 |`not_found`|Requested resource missing (Keychain secret slot, session handle, server key version).|Re-bootstrap / re-login / refresh server keys + retry once.|
 |`expired_session`|TTL expired on a Keeper session handle (`recovery_session_*`, `group_session_*`).|Open a fresh session and retry the original action.|
 |`crypto_failure`|AES-GCM unwrap, RSA-OAEP, or signature verification failed.|Hard fail — payload was tampered or wrong key. No retry.|
