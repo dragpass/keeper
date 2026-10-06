@@ -773,6 +773,20 @@ func (s *Server) handleRequest(request appRequest, action string, payload []byte
 	})
 }
 
+// stepFunc runs one action of a route Keeper composes from several.
+type stepFunc func(action string, payload []byte) (proto.BaseResponse, error)
+
+// handleSteps runs a composed route as one unit (keystore.App.HandleAppSteps):
+// no other request lands between its steps. steps reaches Keeper only through
+// step; s.handle inside it would wait on the lock the steps hold.
+func (s *Server) handleSteps(session, epoch string, steps func(step stepFunc) (proto.BaseResponse, error)) (proto.BaseResponse, error) {
+	return s.app.HandleAppSteps(session, epoch, func(run func([]byte) proto.BaseResponse) (proto.BaseResponse, error) {
+		return steps(func(action string, payload []byte) (proto.BaseResponse, error) {
+			return s.dispatch(action, payload, run)
+		})
+	})
+}
+
 func (s *Server) dispatch(action string, payload []byte, run func([]byte) proto.BaseResponse) (proto.BaseResponse, error) {
 	request := struct {
 		Action  string          `json:"action"`

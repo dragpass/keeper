@@ -88,20 +88,26 @@ func rotateDEKToDeviceKey(d Deps, encryptedDEKB64 string, pwBuf *memguard.Locked
 	if _, response := ensureDeviceKey(d); !response.Success {
 		return response
 	}
-	// fetch deviceKey internally — never accept it via the IPC payload
-	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
+	// The device key is read, never accepted via the IPC payload, and read
+	// in the same keychain lock hold as the slot write.
+	var sealErr error
+	devWrapped, err := keychain.SealPersonalDeviceWrappedDEK(d.Store, func(deviceKeyB64 string) (string, error) {
+		deviceKey, err := decodeDeviceKey(deviceKeyB64)
+		if err != nil {
+			return "", err
+		}
+		deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
+		defer deviceKeyBuf.Destroy()
+		wrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
+		if err != nil {
+			sealErr = err
+		}
+		return wrapped, err
+	})
+	if sealErr != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+sealErr.Error())
 	}
-	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
-	defer deviceKeyBuf.Destroy()
-
-	// rewrap with deviceKey
-	devWrapped, err := aesGCMSeal(deviceKeyBuf.Bytes(), dek)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "device wrap failed: "+err.Error())
-	}
-	if err := keychain.SavePersonalDeviceWrappedDEK(d.Store, devWrapped); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to save personal DEK: "+err.Error())
 	}
 

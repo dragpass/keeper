@@ -7,7 +7,7 @@ import (
 )
 
 // accountRoutes is the account key rotation and the device wipe the App runs
-// from its settings, the same actions the Extension's admin bridge reaches.
+// from its settings, the same actions the Native Messaging path offers.
 // The rotation's group DEK rewrap names no target: Keeper binds it to its own
 // pending key, so the App cannot point a self-wrap at any other key.
 var accountRoutes = map[string]appRoute{
@@ -43,23 +43,26 @@ var accountRoutes = map[string]appRoute{
 
 // runDeviceForget deletes the device key only when one is stored. The delete
 // action refuses a missing key, and the App retries a forget whose server
-// revocation failed after the local wipe went through.
+// revocation failed after the local wipe went through. The check and the
+// delete run as one unit, so no other caller's delete lands between them.
 func runDeviceForget(s *Server, request appRequest, _ any) (proto.BaseResponse, error) {
-	status, err := s.handleRequest(request, proto.ActionDeviceKeyStatus, nil)
-	if err != nil || !status.Success {
-		return status, err
-	}
-	var data proto.DeviceKeyStatusResponseData
-	if err := remarshal(status.Data, &data); err != nil {
-		return proto.BaseResponse{}, err
-	}
-	if data.Present {
-		deleted, err := s.handleRequest(request, proto.ActionDeleteDeviceKey, nil)
-		if err != nil || !deleted.Success {
-			return deleted, err
+	return s.handleSteps(request.token, request.epoch, func(step stepFunc) (proto.BaseResponse, error) {
+		status, err := step(proto.ActionDeviceKeyStatus, nil)
+		if err != nil || !status.Success {
+			return status, err
 		}
-	}
-	return proto.BaseResponse{Success: true, Data: map[string]bool{"forgotten": data.Present}}, nil
+		var data proto.DeviceKeyStatusResponseData
+		if err := remarshal(status.Data, &data); err != nil {
+			return proto.BaseResponse{}, err
+		}
+		if data.Present {
+			deleted, err := step(proto.ActionDeleteDeviceKey, nil)
+			if err != nil || !deleted.Success {
+				return deleted, err
+			}
+		}
+		return proto.BaseResponse{Success: true, Data: map[string]bool{"forgotten": data.Present}}, nil
+	})
 }
 
 type appRotationRewrap struct {
