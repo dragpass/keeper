@@ -11,6 +11,7 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -70,7 +71,7 @@ func unwrapDeviceWrappedDEK(deviceKey []byte, encryptedDekB64 string) ([]byte, e
 	}
 	iv := raw[:12]
 	ciphertext := raw[12:]
-	dek, err := aesGCMOpen(deviceKey, iv, ciphertext)
+	dek, err := crypto.OpenAESGCM(deviceKey, iv, ciphertext, nil)
 	if err != nil {
 		return nil, errors.New("dek decrypt failed: " + err.Error())
 	}

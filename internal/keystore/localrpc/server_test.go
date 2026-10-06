@@ -3,6 +3,7 @@ package localrpc
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -672,7 +673,7 @@ func TestLocalRPCRestoresDeviceMasterWithoutReturningWrappedMaterial(t *testing.
 	// under the password-derived key.
 	salt := bytes.Repeat([]byte{0x11}, handlers.DekSaltLength)
 	kek := pbkdf2.Key([]byte("correct-password"), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
-	iv, ciphertext, err := handlers.AESGCMSealSplit(kek, bytes.Repeat([]byte{0x22}, 32))
+	iv, ciphertext, err := keepercrypto.SealAESGCM(rand.Reader, kek, bytes.Repeat([]byte{0x22}, 32), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

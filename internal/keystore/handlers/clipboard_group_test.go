@@ -10,9 +10,11 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 
@@ -28,7 +30,7 @@ func TestHandleGroupDecryptToClipboard_RoundTrip(t *testing.T) {
 
 	// Prelude: like the Extension, AES-GCM seal directly with raw Group DEK.
 	// Split IV / ciphertext with AESGCMSealSplit.
-	iv, ct, err := AESGCMSealSplit(groupRaw, []byte(plaintextSentinel))
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(plaintextSentinel), nil)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestHandleGroupDecryptToClipboard_NoPlaintextInLogger(t *testing.T) {
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 
 	const sentinel = "GROUP_LOGGER_LEAK_SENTINEL"
-	iv, ct, err := AESGCMSealSplit(groupRaw, []byte(sentinel))
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(sentinel), nil)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

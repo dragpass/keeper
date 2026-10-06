@@ -2,8 +2,10 @@ package localrpc
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"net/http"
 	"testing"
 
@@ -17,7 +19,7 @@ func passwordWrap(t *testing.T, password string, dek []byte) string {
 	t.Helper()
 	salt := bytes.Repeat([]byte{0x11}, handlers.DekSaltLength)
 	kek := pbkdf2.Key([]byte(password), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
-	iv, ciphertext, err := handlers.AESGCMSealSplit(kek, dek)
+	iv, ciphertext, err := crypto.SealAESGCM(rand.Reader, kek, dek, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +35,7 @@ func openPasswordWrap(t *testing.T, password, wrappedB64 string) ([]byte, error)
 	salt := raw[:handlers.DekSaltLength]
 	iv := raw[handlers.DekSaltLength : handlers.DekSaltLength+12]
 	kek := pbkdf2.Key([]byte(password), salt, handlers.DekPBKDF2Iterations, handlers.DekKEKLength, sha256.New)
-	return handlers.AESGCMOpen(kek, iv, raw[handlers.DekSaltLength+12:])
+	return crypto.OpenAESGCM(kek, iv, raw[handlers.DekSaltLength+12:], nil)
 }
 
 // The route answers the same DEK under the new password and nothing else:

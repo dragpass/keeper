@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"strings"
 	"testing"
 
@@ -91,7 +92,7 @@ func guestViewerDecrypt(t *testing.T, ciphertextB64, keyB64url, passphrase, salt
 // the raw Group DEK and return the (iv_b64, ciphertext_b64) the handler wants.
 func sealOrgToken(t *testing.T, groupRaw, plaintext []byte) (ivB64, ctB64 string) {
 	t.Helper()
-	iv, ct, err := AESGCMSealSplit(groupRaw, plaintext)
+	iv, ct, err := keepercrypto.SealAESGCM(rand.Reader, groupRaw, plaintext, nil)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
