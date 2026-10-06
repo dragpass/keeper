@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -27,13 +26,16 @@ type appRoute struct {
 	// (several actions, or none). It gets the decoded input and the opened
 	// request, whose session a lease-aware route needs.
 	run func(s *Server, request appRequest, input any) (proto.BaseResponse, error)
+	// shape replaces a successful answer's data, for an action whose answer
+	// carries what the App must not receive.
+	shape func(data any) any
 }
 
 var errAppRouteRefused = errors.New("request refused by the App route")
 
 // appRoutes is every fixed App route. The table is split by domain; a path
 // registered twice is a programming error caught at start-up.
-var appRoutes = mergeAppRoutes(authAndGroupRoutes, chatRoutes(), peerKeyRoutes, archiveRoutes, accountRoutes, groupHandleRoutes, passwordRoutes, deviceIdentityRoutes)
+var appRoutes = mergeAppRoutes(authLoginRoutes, authAndGroupRoutes, chatRoutes(), peerKeyRoutes, archiveRoutes, accountRoutes, groupHandleRoutes, passwordRoutes, deviceIdentityRoutes)
 
 func mergeAppRoutes(tables ...map[string]appRoute) map[string]appRoute {
 	merged := map[string]appRoute{}
@@ -232,14 +234,7 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 	}
 	defer secure.Zeroize(request.plain)
 	input := route.input()
-	decoder := json.NewDecoder(bytes.NewReader(request.plain))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(input); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if err := decodeStrict(bytes.NewReader(request.plain), input); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -269,6 +264,9 @@ func (s *Server) serveAppRoute(w http.ResponseWriter, r *http.Request, route app
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
+	}
+	if route.shape != nil && response.Success {
+		response.Data = route.shape(response.Data)
 	}
 	s.writeSealed(w, request, response)
 }

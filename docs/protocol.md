@@ -2048,7 +2048,11 @@ are typed (`POST /v1/status`, `/v1/request-signature`, `/v1/auth/login/*`,
 `/v1/auth/signup/*`, `/v1/auth/recovery-key/reissue-prepare`, and the recovery
 and group DEK, chat, key-trust, archive, account, device and group handle
 routes below); there is no generic
-action route. `auth_signup_prepare` checks every precondition (a
+action route. Every request body, `/v1/session` and `/v1/request-signature`
+included, must be exactly one JSON object with only that route's fields: an
+unknown field or trailing data is refused (400, or 401 on `/v1/session`), and
+the action receives the bytes the App sent, not a re-encoding.
+`auth_signup_prepare` checks every precondition (a
 registered device, password, recovery key) before it writes anything, and
 keeps the new device-wrapped DEK in a pending slot that `save_session_code`
 promotes together with the signup's pending keypair; a refused or abandoned
