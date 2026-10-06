@@ -22,6 +22,8 @@
 // native-messaging daemon means the process dies on input the extension merely
 // got wrong.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod authority;
 mod gate;
 mod roles;
@@ -127,20 +129,29 @@ unsafe fn slice<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], String> {
     if ptr.is_null() {
         return Err("mls: null pointer with a non-zero length".into());
     }
-    Ok(std::slice::from_raw_parts(ptr, len))
+    // SAFETY: `ptr` is non-null here and the caller promises it points to
+    // `len` readable bytes that stay valid while the returned slice is used.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
+/// # Safety
+/// `handle` must be null, or a session from `dpmls_session_new` that has not
+/// been freed and that nothing else uses while the returned borrow lives.
 unsafe fn session_of<'a>(handle: *mut Session) -> Result<&'a mut Session, String> {
-    handle
-        .as_mut()
-        .ok_or_else(|| "mls: null session handle".into())
+    // SAFETY: the caller promises `handle` is null or a live, unaliased
+    // session; `as_mut` turns null into None.
+    unsafe { handle.as_mut() }.ok_or_else(|| "mls: null session handle".into())
 }
 
+/// # Safety
+/// `out` must be null, or point to a writable DpBuf. Its previous contents are
+/// overwritten without being read or freed.
 unsafe fn put(out: *mut DpBuf, v: Vec<u8>) -> Result<(), String> {
     if out.is_null() {
         return Err("mls: null output buffer".into());
     }
-    *out = DpBuf::from_vec(v);
+    // SAFETY: `out` is non-null here and the caller promises it is writable.
+    unsafe { *out = DpBuf::from_vec(v) };
     Ok(())
 }
 
@@ -162,6 +173,8 @@ pub unsafe extern "C" fn dpmls_version(out: *mut DpBuf) -> i32 {
             "secret_tree_access,export_key_generation",
             u16::from(session::CIPHER_SUITE),
         );
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
         unsafe { put(out, s.into_bytes())? };
         Ok(DPMLS_OK)
     })
@@ -175,6 +188,8 @@ pub unsafe extern "C" fn dpmls_version(out: *mut DpBuf) -> i32 {
 pub unsafe extern "C" fn dpmls_last_error(out: *mut DpBuf) -> i32 {
     guard(|| {
         let msg = LAST_ERROR.with(|e| e.borrow().clone());
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
         unsafe { put(out, msg.into_bytes())? };
         Ok(DPMLS_OK)
     })
@@ -187,11 +202,18 @@ pub unsafe extern "C" fn dpmls_last_error(out: *mut DpBuf) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn dpmls_buf_free(buf: *mut DpBuf) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let Some(b) = buf.as_mut() else { return };
+        // SAFETY: the caller promises `buf` is null or a DpBuf this library
+        // filled; `as_mut` turns null into None.
+        let Some(b) = (unsafe { buf.as_mut() }) else {
+            return;
+        };
         if b.ptr.is_null() {
             return;
         }
-        let mut v = Vec::from_raw_parts(b.ptr, b.len, b.cap);
+        // SAFETY: a non-null DpBuf this library filled holds exactly the
+        // pointer, length and capacity `DpBuf::from_vec` took from a Vec<u8>,
+        // and nothing else has freed it (a freed one is left null, above).
+        let mut v = unsafe { Vec::from_raw_parts(b.ptr, b.len, b.cap) };
         v.zeroize();
         drop(v);
         *b = DpBuf::EMPTY;
@@ -215,6 +237,8 @@ pub unsafe extern "C" fn dpmls_signature_key_generate(
 ) -> i32 {
     guard(|| {
         let (sk, pk) = session::generate_signature_key()?;
+        // SAFETY: the caller promises both outputs point to writable DpBufs;
+        // `put` checks each for null and overwrites it without reading it.
         unsafe {
             put(secret, sk)?;
             put(public, pk)?;
@@ -246,13 +270,21 @@ pub unsafe extern "C" fn dpmls_session_new(
         if out.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let s = Session::new(
-            slice(identity, identity_len)?,
-            slice(secret, secret_len)?,
-            slice(public, public_len)?,
-            slice(declaration, declaration_len)?,
-        )?;
-        *out = Box::into_raw(Box::new(s));
+        // SAFETY: the caller promises each input points to its `*_len`
+        // readable bytes for the duration of this call; Session::new copies
+        // what it keeps before returning.
+        let (identity, secret, public, declaration) = unsafe {
+            (
+                slice(identity, identity_len)?,
+                slice(secret, secret_len)?,
+                slice(public, public_len)?,
+                slice(declaration, declaration_len)?,
+            )
+        };
+        let s = Session::new(identity, secret, public, declaration)?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable session pointer.
+        unsafe { *out = Box::into_raw(Box::new(s)) };
         Ok(DPMLS_OK)
     })
 }
@@ -263,7 +295,10 @@ pub unsafe extern "C" fn dpmls_session_new(
 pub unsafe extern "C" fn dpmls_session_free(handle: *mut Session) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if !handle.is_null() {
-            drop(Box::from_raw(handle));
+            // SAFETY: a non-null `handle` came from Box::into_raw in
+            // dpmls_session_new and the caller promises it is not freed twice
+            // or used after this call.
+            drop(unsafe { Box::from_raw(handle) });
         }
     }));
 }
@@ -279,7 +314,11 @@ pub unsafe extern "C" fn dpmls_group_create(
     group_id_len: usize,
 ) -> i32 {
     guard(|| {
-        session_of(handle)?.create_group(slice(group_id, group_id_len)?)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `group_id` points to
+        // `group_id_len` readable bytes for the duration of this call.
+        let (session, group_id) = unsafe { (session_of(handle)?, slice(group_id, group_id_len)?) };
+        session.create_group(group_id)?;
         Ok(DPMLS_OK)
     })
 }
@@ -616,12 +655,24 @@ pub unsafe extern "C" fn dpmls_group_commit_add_members(
         if expected_epoch.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let framed = slice(key_packages, key_packages_len)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `key_packages` points to
+        // `key_packages_len` readable bytes for the duration of this call. The
+        // key package slices borrow the caller's buffer only until the Commit
+        // is built, inside this call.
+        let (session, framed) =
+            unsafe { (session_of(handle)?, slice(key_packages, key_packages_len)?) };
         let kps = gate::decode_key_packages(framed).map_err(|e| format!("mls: {e}"))?;
-        let (c, w, epoch) = session_of(handle)?.commit_add_members(&kps)?;
-        *expected_epoch = epoch;
-        put(commit, c)?;
-        put(welcome, w)?;
+        let (c, w, epoch) = session.commit_add_members(&kps)?;
+        // SAFETY: `expected_epoch` was checked for null above and the caller
+        // promises it points to a writable u64; the caller promises `commit`
+        // and `welcome` point to writable DpBufs, which `put` checks for null
+        // and overwrites without reading.
+        unsafe {
+            *expected_epoch = epoch;
+            put(commit, c)?;
+            put(welcome, w)?;
+        }
         Ok(DPMLS_OK)
     })
 }
@@ -640,9 +691,17 @@ pub unsafe extern "C" fn dpmls_group_commit_update(
         if expected_epoch.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let (c, epoch) = session_of(handle)?.commit_update()?;
-        *expected_epoch = epoch;
-        put(commit, c)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let (c, epoch) = unsafe { session_of(handle)? }.commit_update()?;
+        // SAFETY: `expected_epoch` was checked for null above and the caller
+        // promises it points to a writable u64; the caller promises `commit`
+        // points to a writable DpBuf, which `put` checks for null and
+        // overwrites without reading.
+        unsafe {
+            *expected_epoch = epoch;
+            put(commit, c)?;
+        }
         Ok(DPMLS_OK)
     })
 }
@@ -785,7 +844,9 @@ pub unsafe extern "C" fn dpmls_group_id(handle: *mut Session, out: *mut DpBuf) -
 #[no_mangle]
 pub unsafe extern "C" fn dpmls_group_commit_apply(handle: *mut Session) -> i32 {
     guard(|| {
-        session_of(handle)?.apply_pending_commit()?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        unsafe { session_of(handle)? }.apply_pending_commit()?;
         Ok(DPMLS_OK)
     })
 }
@@ -797,7 +858,9 @@ pub unsafe extern "C" fn dpmls_group_commit_apply(handle: *mut Session) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn dpmls_group_commit_clear(handle: *mut Session) -> i32 {
     guard(|| {
-        session_of(handle)?.clear_pending_commit()?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        unsafe { session_of(handle)? }.clear_pending_commit()?;
         Ok(DPMLS_OK)
     })
 }
@@ -810,7 +873,12 @@ pub unsafe extern "C" fn dpmls_group_has_pending_commit(handle: *mut Session, ou
         if out.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        *out = u8::from(session_of(handle)?.has_pending_commit()?);
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let pending = unsafe { session_of(handle)? }.has_pending_commit()?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u8.
+        unsafe { *out = u8::from(pending) };
         Ok(DPMLS_OK)
     })
 }
@@ -825,7 +893,12 @@ pub unsafe extern "C" fn dpmls_group_epoch(handle: *mut Session, out: *mut u64) 
         if out.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        *out = session_of(handle)?.epoch()?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let epoch = unsafe { session_of(handle)? }.epoch()?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u64.
+        unsafe { *out = epoch };
         Ok(DPMLS_OK)
     })
 }
@@ -847,9 +920,19 @@ pub unsafe extern "C" fn dpmls_group_epoch_comparison(
         if epoch.is_null() || out.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let conversation_id = slice(conversation_id, conversation_id_len)?;
-        let (confirmed_epoch, digest) =
-            session_of(handle)?.epoch_comparison_digest(conversation_id)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `conversation_id` points to
+        // `conversation_id_len` readable bytes for the duration of this call.
+        let (session, conversation_id) = unsafe {
+            (
+                session_of(handle)?,
+                slice(conversation_id, conversation_id_len)?,
+            )
+        };
+        let (confirmed_epoch, digest) = session.epoch_comparison_digest(conversation_id)?;
+        // SAFETY: both outputs were checked for null above; the caller
+        // promises `epoch` points to a writable u64 and `out` to a writable
+        // DpBuf, which `put` overwrites without reading.
         unsafe {
             *epoch = confirmed_epoch;
             put(out, digest)?;
@@ -867,7 +950,11 @@ pub unsafe extern "C" fn dpmls_group_join(
     welcome_len: usize,
 ) -> i32 {
     guard(|| {
-        session_of(handle)?.join(slice(welcome, welcome_len)?)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `welcome` points to `welcome_len`
+        // readable bytes for the duration of this call.
+        let (session, welcome) = unsafe { (session_of(handle)?, slice(welcome, welcome_len)?) };
+        session.join(welcome)?;
         Ok(DPMLS_OK)
     })
 }
@@ -886,11 +973,20 @@ pub unsafe extern "C" fn dpmls_group_encrypt(
     out: *mut DpBuf,
 ) -> i32 {
     guard(|| {
-        let ct = session_of(handle)?.encrypt(
-            slice(plaintext, plaintext_len)?,
-            slice(authenticated_data, authenticated_data_len)?,
-        )?;
-        put(out, ct)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that both inputs point to their `*_len`
+        // readable bytes for the duration of this call.
+        let (session, plaintext, authenticated_data) = unsafe {
+            (
+                session_of(handle)?,
+                slice(plaintext, plaintext_len)?,
+                slice(authenticated_data, authenticated_data_len)?,
+            )
+        };
+        let ct = session.encrypt(plaintext, authenticated_data)?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, ct)? };
         Ok(DPMLS_OK)
     })
 }
@@ -938,15 +1034,27 @@ pub unsafe extern "C" fn dpmls_group_process(
             sender_index: leaf,
             authenticated_data: aad,
             key_generation: gen,
-        } = session_of(handle)?.process(slice(message, message_len)?)?;
-        *epoch = e;
-        *sender_index = leaf;
-        *removed = u8::from(r);
-        *is_application = u8::from(application.is_some());
-        *key_generation = gen.unwrap_or(0);
-        *key_generation_known = u8::from(gen.is_some());
-        put(authenticated_data, aad)?;
-        put(out, take_zeroizing(application))?;
+        } = {
+            // SAFETY: the caller promises `handle` came from dpmls_session_new
+            // and is not used concurrently, and that `message` points to
+            // `message_len` readable bytes for the duration of this call.
+            let (session, message) = unsafe { (session_of(handle)?, slice(message, message_len)?) };
+            session.process(message)?
+        };
+        // SAFETY: the six scalar outputs were checked for null above and the
+        // caller promises each is writable; the caller promises `out` and
+        // `authenticated_data` point to writable DpBufs, which `put` checks
+        // for null and overwrites without reading.
+        unsafe {
+            *epoch = e;
+            *sender_index = leaf;
+            *removed = u8::from(r);
+            *is_application = u8::from(application.is_some());
+            *key_generation = gen.unwrap_or(0);
+            *key_generation_known = u8::from(gen.is_some());
+            put(authenticated_data, aad)?;
+            put(out, take_zeroizing(application))?;
+        }
         Ok(DPMLS_OK)
     })
 }
@@ -975,8 +1083,13 @@ pub unsafe extern "C" fn dpmls_wire_form(
         if out.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let form: WireForm = session::wire_form(slice(message, message_len)?)?;
-        *out = form as u8;
+        // SAFETY: the caller promises `message` points to `message_len`
+        // readable bytes for the duration of this call; the borrow ends before
+        // this statement does.
+        let form: WireForm = session::wire_form(unsafe { slice(message, message_len)? })?;
+        // SAFETY: `out` was checked for null above and the caller promises it
+        // points to a writable u8.
+        unsafe { *out = form as u8 };
         Ok(DPMLS_OK)
     })
 }
@@ -1077,10 +1190,16 @@ pub unsafe extern "C" fn dpmls_group_send_position(
         if epoch.is_null() || leaf_index.is_null() || generation.is_null() {
             return Ok(DPMLS_ERR_ARG);
         }
-        let (e, leaf, gen) = session_of(handle)?.send_position()?;
-        *epoch = e;
-        *leaf_index = leaf;
-        *generation = gen;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let (e, leaf, gen) = unsafe { session_of(handle)? }.send_position()?;
+        // SAFETY: the three outputs were checked for null above and the caller
+        // promises each is writable.
+        unsafe {
+            *epoch = e;
+            *leaf_index = leaf;
+            *generation = gen;
+        }
         Ok(DPMLS_OK)
     })
 }
@@ -1093,7 +1212,9 @@ pub unsafe extern "C" fn dpmls_group_send_position(
 #[no_mangle]
 pub unsafe extern "C" fn dpmls_group_burn_generation(handle: *mut Session) -> i32 {
     guard(|| {
-        session_of(handle)?.burn_generation()?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        unsafe { session_of(handle)? }.burn_generation()?;
         Ok(DPMLS_OK)
     })
 }
@@ -1110,8 +1231,12 @@ pub unsafe extern "C" fn dpmls_group_burn_generation(handle: *mut Session) -> i3
 #[no_mangle]
 pub unsafe extern "C" fn dpmls_group_flush(handle: *mut Session, out: *mut DpBuf) -> i32 {
     guard(|| {
-        let blob = session_of(handle)?.flush()?;
-        put(out, blob.to_vec())?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently; the borrow ends with this statement.
+        let blob = unsafe { session_of(handle)? }.flush()?;
+        // SAFETY: the caller promises `out` points to a writable DpBuf; `put`
+        // checks it for null and overwrites it without reading it.
+        unsafe { put(out, blob.to_vec())? };
         Ok(DPMLS_OK)
     })
 }
@@ -1125,7 +1250,11 @@ pub unsafe extern "C" fn dpmls_group_load(
     blob_len: usize,
 ) -> i32 {
     guard(|| {
-        session_of(handle)?.load(slice(blob, blob_len)?)?;
+        // SAFETY: the caller promises `handle` came from dpmls_session_new and
+        // is not used concurrently, and that `blob` points to `blob_len`
+        // readable bytes for the duration of this call.
+        let (session, blob) = unsafe { (session_of(handle)?, slice(blob, blob_len)?) };
+        session.load(blob)?;
         Ok(DPMLS_OK)
     })
 }
@@ -1134,8 +1263,11 @@ pub unsafe extern "C" fn dpmls_group_load(
 mod tests {
     use super::*;
 
+    // Callers pass only a DpBuf an entry point just filled.
     fn take(buf: &mut DpBuf) -> Vec<u8> {
+        // SAFETY: a filled DpBuf points to `len` initialized bytes it owns.
         let out = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }.to_vec();
+        // SAFETY: the buffer came from this library and is freed only here.
         unsafe { dpmls_buf_free(buf) };
         out
     }
@@ -1143,6 +1275,7 @@ mod tests {
     #[test]
     fn version_names_the_two_features_that_are_off_by_default() {
         let mut buf = DpBuf::EMPTY;
+        // SAFETY: `buf` is a writable DpBuf.
         assert_eq!(unsafe { dpmls_version(&mut buf) }, DPMLS_OK);
         let s = String::from_utf8(take(&mut buf)).unwrap();
         assert!(s.contains("secret_tree_access"), "{s}");
@@ -1154,8 +1287,12 @@ mod tests {
     #[test]
     fn freeing_a_buffer_twice_is_harmless() {
         let mut buf = DpBuf::EMPTY;
+        // SAFETY: `buf` is a writable DpBuf.
         assert_eq!(unsafe { dpmls_version(&mut buf) }, DPMLS_OK);
         assert!(!buf.ptr.is_null());
+        // SAFETY: the first free takes a buffer this library filled; the
+        // second and third pass a freed (null) DpBuf and a null pointer,
+        // which is the behaviour under test.
         unsafe { dpmls_buf_free(&mut buf) };
         assert!(buf.ptr.is_null());
         unsafe { dpmls_buf_free(&mut buf) };
@@ -1164,11 +1301,14 @@ mod tests {
 
     #[test]
     fn a_null_handle_is_an_error_rather_than_a_dereference() {
+        // SAFETY: a null handle is the input under test; `session_of` refuses
+        // it, and the input slice names 3 readable bytes.
         assert_eq!(
             unsafe { dpmls_group_create(std::ptr::null_mut(), b"gid".as_ptr(), 3) },
             DPMLS_ERR
         );
         let mut buf = DpBuf::EMPTY;
+        // SAFETY: `buf` is a writable DpBuf.
         assert_eq!(unsafe { dpmls_last_error(&mut buf) }, DPMLS_OK);
         assert!(String::from_utf8(take(&mut buf))
             .unwrap()
@@ -1177,6 +1317,8 @@ mod tests {
 
     #[test]
     fn a_null_input_with_a_length_is_refused() {
+        // SAFETY: null pointers are the input under test; `session_of` and
+        // `slice` refuse them before any dereference.
         assert_eq!(
             unsafe { dpmls_group_create(std::ptr::null_mut(), std::ptr::null(), 7) },
             DPMLS_ERR

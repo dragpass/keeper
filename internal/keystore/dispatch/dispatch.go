@@ -40,7 +40,7 @@ func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate 
 	var base proto.BaseRequest
 	if err := json.Unmarshal(msg, &base); err != nil {
 		log.Printf("failed to unmarshal base request: %v", err)
-		return proto.BaseResponse{Success: false, Error: "invalid JSON format"}
+		return errs.CodeResponse(errs.ErrCodeValidation, "invalid JSON format")
 	}
 
 	log.Printf("received action: %s request_id: %s", base.Action, base.RequestID)

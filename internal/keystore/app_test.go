@@ -22,6 +22,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -324,6 +325,9 @@ func TestApp_HandleRequest_InvalidJSONLoggedNotPanic(t *testing.T) {
 	}
 	if resp.Error != "invalid JSON format" {
 		t.Fatalf("unexpected error message: %q", resp.Error)
+	}
+	if resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("invalid JSON must carry error_code validation_error, got %q", resp.ErrorCode)
 	}
 	if !logger.Contains("failed to unmarshal base request") {
 		t.Fatalf("expected unmarshal-error log, got %v", logger.Messages())

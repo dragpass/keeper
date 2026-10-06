@@ -3,18 +3,6 @@
 package proto
 
 const (
-	// DEKRewrapWithOldKey: composite Recovery re-wrap action. Handles the
-	// old unwrap + wrap pair inside the Keeper in one
-	// shot. The raw Group DEK exists only inside a memguard LockedBuffer
-	// and is zeroized right before the response →
-	// **the raw never lives in the Extension JS heap.**
-	//   Inputs: challenge_token + signature (verifies Recovery origin)
-	//           + recovery_handle + encrypted_group_dek + new_public_key
-	//   Output: new_encrypted_group_dek (new RSA-OAEP wrap result)
-	// Reduces the Recovery group loop from 3 Keeper round-trips
-	// (unwrap+wrap+put) to 1 (rewrap+put).
-	ActionDEKRewrapWithOldKey = "dek_rewrap_with_old_key"
-
 	// DEKRewrapWithOldKeyToSelf: the recovery rewrap with no caller-chosen
 	// target. The Keeper wraps to its own active account key, and only after
 	// save_session_code promoted the recovered keypair; a caller cannot use
@@ -101,23 +89,6 @@ const (
 	// (zeroized after sealing); it never appears in the response or logs. The AAD
 	// is public context material (not secret). The raw Group DEK never crosses IPC.
 	ActionGroupEncryptWithAAD = "group_encrypt_with_aad"
-
-	// GroupEncryptMeta / GroupDecryptMeta: raw Group DEK direct batch metadata
-	// crypto behind the opaque handle.
-	//
-	// GroupDecryptMeta: group_handle + meta_fields (key→Base64(IV(12)||ct)) →
-	//                   {fields} (key→plaintext UTF-8). Batch decrypt for the
-	//                   DragLink page. Plaintext metadata carve-out — value
-	//                   plaintext is never returned here.
-	// GroupEncryptMeta: group_handle + fields (key→plaintext UTF-8) →
-	//                   {meta_fields} (key→Base64(IV(12)||ct)). The inverse of
-	//                   GroupDecryptMeta: its meta_fields output is directly
-	//                   feedable back as GroupDecryptMeta's meta_fields input,
-	//                   and the combined Base64(IV||ct) form matches what the
-	//                   Extension stores per meta field. plaintext / raw Group
-	//                   DEK echoed 0 times.
-	ActionGroupEncryptMeta = "group_encrypt_meta"
-	ActionGroupDecryptMeta = "group_decrypt_meta"
 
 	// GroupTranscryptForGuest: re-encrypts an org Group-DEK token as an
 	// external guest share without ever returning plaintext to the Extension

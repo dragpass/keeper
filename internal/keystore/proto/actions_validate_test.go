@@ -79,33 +79,15 @@ func TestRecoverySessionClose_Validate_RejectsShortHandle(t *testing.T) {
 // Group DEK rewrap
 // ────────────────────────────────────────────────────────────────────────
 
-func TestDEKRewrapWithOldKey_Validate_RejectsShortHandle(t *testing.T) {
-	r := DEKRewrapWithOldKeyRequest{
+func TestDEKRewrapWithOldKeyToSelf_Validate_RejectsShortHandle(t *testing.T) {
+	r := DEKRewrapWithOldKeyToSelfRequest{
 		ChallengeToken:    "ct",
 		Signature:         "sig",
 		RecoveryHandle:    testShortHandle,
 		EncryptedGroupDEK: testValidBase64,
-		NewPublicKey:      testValidPubPEM,
 	}
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected error for short handle")
-	}
-}
-
-func TestDEKRewrapWithOldKey_Validate_RejectsNonPEMNewKey(t *testing.T) {
-	r := DEKRewrapWithOldKeyRequest{
-		ChallengeToken:    "ct",
-		Signature:         "sig",
-		RecoveryHandle:    testValidHandle,
-		EncryptedGroupDEK: testValidBase64,
-		NewPublicKey:      testInvalidPEM,
-	}
-	err := r.Validate()
-	if err == nil {
-		t.Fatalf("expected error for non-PEM new_public_key")
-	}
-	if !strings.Contains(err.Error(), "new_public_key") {
-		t.Fatalf("error must mention field, got %q", err.Error())
 	}
 }
 

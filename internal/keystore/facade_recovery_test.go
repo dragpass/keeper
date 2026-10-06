@@ -36,7 +36,7 @@ func TestHandleRequest_RecoverySign_BadServerSignature(t *testing.T) {
 
 // TestHandleRequest_UnwrapGroupDEKWithKey_Unsupported: the legacy raw
 // PEM Recovery path is no longer dispatched. Recovery rewrap must use
-// recovery_session_open + dek_rewrap_with_old_key.
+// recovery_session_open + dek_rewrap_with_old_key_to_self.
 func TestHandleRequest_UnwrapGroupDEKWithKey_Unsupported(t *testing.T) {
 	app := newFacadeTestApp()
 	msg := `{"action":"unwrapgroupdekwithkey","payload":{
