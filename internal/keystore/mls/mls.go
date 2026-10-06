@@ -3,20 +3,20 @@
 //
 // # What is here and what is not
 //
-// This is the skeleton: the library is linked, its policy is fixed, and the
-// bytes it serializes reach disk through chatstate's whole-file replacement.
-// The send and receive ordering that has to sit on top of it — naming the
-// generation before consuming it, burning an uncertain one after a crash,
-// holding the lock across the encryption — is not here yet.
+// This package is the binding: the library is linked, its policy is fixed, and
+// the bytes it serializes reach disk through chatstate's whole-file
+// replacement. The send and receive ordering that sits on top of it (naming
+// the generation before consuming it, burning an uncertain one after a crash,
+// holding the lock across the encryption) lives in chatstate's send.go and
+// receive.go, not here.
 //
 // # Build tag
 //
 // The binding needs cgo and a Rust static library, so it sits behind the `mls`
-// build tag and a stub answers ErrUnavailable without it. The default build is
-// byte-for-byte what it was: the Linux release still builds with CGO_ENABLED=0
-// and still ships a static binary, which linking this would end. Keeping the
-// tag off by default is what lets the library be measured and reviewed before
-// that trade is made rather than as a side effect of making it.
+// build tag and a stub answers ErrUnavailable without it. Every release binary
+// sets the tag: the Makefile builds with MLS=1 by default (the Linux build
+// turns cgo on for it) and GoReleaser's darwin builds pass `mls`. A plain
+// `go build` or `go test` without the tag gets the stub.
 //
 // # What the state blob holds
 //
