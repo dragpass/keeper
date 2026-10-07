@@ -33,10 +33,11 @@ func identityActions() map[string]action {
 		proto.ActionResetDeviceIdentity: wrap(handlers.HandleResetDeviceIdentity).revoking(ChatRuntimeRevokedReset),
 
 		// one device id per machine and the account binding hint (0.0.58)
-		proto.ActionDeviceIDEnsure:      wrap(handlers.HandleDeviceIDEnsure),
-		proto.ActionAccountBindingSet:   wrap(handlers.HandleAccountBindingSet),
-		proto.ActionDeviceAccountStatus: wrap(handlers.HandleDeviceAccountStatus),
-		proto.ActionDeviceSignout:       wrap(handlers.HandleDeviceSignout),
+		proto.ActionDeviceIDEnsure:        wrap(handlers.HandleDeviceIDEnsure),
+		proto.ActionAccountBindingSet:     wrap(handlers.HandleAccountBindingSet),
+		proto.ActionDeviceAccountStatus:   wrap(handlers.HandleDeviceAccountStatus),
+		proto.ActionDeviceSignout:         wrap(handlers.HandleDeviceSignout),
+		proto.ActionAccountBindingSignout: wrap(handlers.HandleAccountBindingSignout),
 
 		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
 

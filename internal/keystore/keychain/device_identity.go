@@ -270,6 +270,37 @@ func SignOutDevice(store SecretStore) (bool, AccountBinding, error) {
 	return removed, result, err
 }
 
+// SignOutAccountBinding marks the binding signed out with the next
+// generation and touches nothing else: the device master, the account key
+// and every other slot stay. A binding already signed out is left as it is
+// (changed false). A device with no binding gets a record that is only
+// signed out, as SignOutDevice does.
+func SignOutAccountBinding(store SecretStore) (AccountBinding, bool, error) {
+	var (
+		result  AccountBinding
+		changed bool
+	)
+	err := withPersonalKeyBundleLock(store, func() error {
+		current, _, err := GetAccountBinding(store)
+		if err != nil {
+			return err
+		}
+		if current.SignedOut && current.Generation > 0 {
+			result = current
+			return nil
+		}
+		current.V = accountBindingVersion
+		current.Generation++
+		current.SignedOut = true
+		if err := saveAccountBinding(store, current); err != nil {
+			return err
+		}
+		result, changed = current, true
+		return nil
+	})
+	return result, changed, err
+}
+
 // DeleteAccountBinding is idempotent.
 func DeleteAccountBinding(store SecretStore) error {
 	return withPersonalKeyBundleLock(store, func() error {

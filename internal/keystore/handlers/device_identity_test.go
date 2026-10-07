@@ -483,6 +483,97 @@ func TestDeviceSignout_IsIdempotentAndWorksWithoutABinding(t *testing.T) {
 	}
 }
 
+// "Log out of all devices": the binding alone is marked signed out so the
+// Extension stops signing itself in, and nothing else moves. Unlike
+// device_signout the device master stays, so the App's next sign-in needs
+// no password-wrapped DEK round trip to set the device up again.
+func TestAccountBindingSignout_KeepsKeysAndBumpsGeneration(t *testing.T) {
+	deps, log, store := newTestDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	if err := keychain.SaveDeviceKey(store, deviceKeySentinelB64); err != nil {
+		t.Fatal(err)
+	}
+	const wrapped = "WRAPPED_DEVICE_MASTER_SENTINEL"
+	if err := keychain.SavePersonalDeviceWrappedDEK(store, wrapped); err != nil {
+		t.Fatal(err)
+	}
+	ensureDeviceID(t, deps, "")
+	if resp := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{AccountID: leafTestAccountID, Alias: identityTestAlias}); !resp.Success {
+		t.Fatal(resp.Error)
+	}
+	handle, _, err := deps.GroupSessions.Open(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+
+	resp := HandleAccountBindingSignout(deps, proto.AccountBindingSignoutRequest{})
+	if !resp.Success {
+		t.Fatal(resp.Error)
+	}
+	if got := resp.Data.(proto.AccountBindingSignoutResponseData); !got.Changed || got.Generation != 2 {
+		t.Fatalf("binding signout = %+v", got)
+	}
+	after := store.Snapshot()
+	for slot := range before {
+		if slot == config.Service+"|"+config.AccountBinding {
+			continue
+		}
+		if after[slot] != before[slot] {
+			t.Fatalf("the binding signout touched %s", slot)
+		}
+	}
+	if err := deps.GroupSessions.Use(handle, func([]byte) error { return nil }); err != nil {
+		t.Fatal("the binding signout closed a group session handle")
+	}
+	status := deviceStatus(t, deps)
+	if !status.SignedOut || !status.DeviceMasterPresent || status.AccountID != leafTestAccountID ||
+		status.Alias != identityTestAlias || status.Generation != 2 || status.AccountKeyFingerprint == "" {
+		t.Fatalf("status after the binding signout = %+v", status)
+	}
+	privateKey, _ := keychain.GetPrivateKey(store)
+	assertNoSecretsIn(t, log, resp, deviceKeySentinelB64, wrapped, privateKey)
+
+	// Repeating it changes nothing.
+	again := HandleAccountBindingSignout(deps, proto.AccountBindingSignoutRequest{})
+	if got := again.Data.(proto.AccountBindingSignoutResponseData); !again.Success || got.Changed || got.Generation != 2 {
+		t.Fatalf("second binding signout = %+v", again)
+	}
+	// Only the App's next sign-in clears it, with the next generation.
+	renewed := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{AccountID: leafTestAccountID, Alias: identityTestAlias, Renew: true})
+	if !renewed.Success {
+		t.Fatal(renewed.Error)
+	}
+	if status := deviceStatus(t, deps); status.SignedOut || status.Generation != 3 {
+		t.Fatalf("status after the next sign-in = %+v", status)
+	}
+}
+
+func TestAccountBindingSignout_WorksWithoutABinding(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	resp := HandleAccountBindingSignout(deps, proto.AccountBindingSignoutRequest{})
+	if got := resp.Data.(proto.AccountBindingSignoutResponseData); !resp.Success || !got.Changed || got.Generation != 1 {
+		t.Fatalf("binding signout without a binding = %+v", resp)
+	}
+	if status := deviceStatus(t, deps); !status.SignedOut || status.AccountID != "" {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestAccountBindingSignout_MalformedBindingIsStorageFailureAndLeftAlone(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	if err := store.Set(config.Service, config.AccountBinding, `{"v":9}`); err != nil {
+		t.Fatal(err)
+	}
+	resp := HandleAccountBindingSignout(deps, proto.AccountBindingSignoutRequest{})
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeStorageFailure) {
+		t.Fatalf("binding signout over a malformed record = %+v, want storage_failure", resp)
+	}
+	if raw, _ := store.Get(config.Service, config.AccountBinding); raw != `{"v":9}` {
+		t.Fatalf("the malformed record was replaced: %s", raw)
+	}
+}
+
 type failingDeleteStore struct{ *testdouble.MemorySecretStore }
 
 func (failingDeleteStore) Delete(string, string) error {

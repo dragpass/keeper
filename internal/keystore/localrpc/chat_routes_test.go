@@ -108,6 +108,7 @@ var pinnedAppRoutes = []string{
 	"/v1/account-key/rotate/rewrap-group-dek",
 	"/v1/account-key/rotate/status",
 	"/v1/account/binding",
+	"/v1/account/binding/signout",
 	"/v1/archive/account_archive_key_generate",
 	"/v1/archive/account_archive_key_status",
 	"/v1/archive/archive_key_generate",

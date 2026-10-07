@@ -73,6 +73,16 @@ type DeviceSignoutResponseData struct {
 	Generation          uint64 `json:"generation"`
 }
 
+// AccountBindingSignoutRequest takes no input.
+type AccountBindingSignoutRequest struct{}
+
+// AccountBindingSignoutResponseData says whether the binding was marked
+// signed out just now and what its generation is.
+type AccountBindingSignoutResponseData struct {
+	Changed    bool   `json:"changed"`
+	Generation uint64 `json:"generation"`
+}
+
 // requireAccountAlias accepts what ariadne's accountalias validator could
 // accept: 3..32 bytes of lowercase ASCII letters, digits and . _ -, starting
 // with a letter. The server stays the judge of the exact grammar.
