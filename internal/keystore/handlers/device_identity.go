@@ -120,6 +120,23 @@ func HandleDeviceSignout(d Deps, _ proto.DeviceSignoutRequest) proto.BaseRespons
 	}}
 }
 
+// HandleAccountBindingSignout is the Keeper half of "log out of all devices"
+// on the device that ran it: the binding is marked signed out, so the
+// Extension stops signing itself in until the App's next sign-in renews it.
+// Unlike device_signout it keeps the device master, and it closes no group
+// session handle.
+func HandleAccountBindingSignout(d Deps, _ proto.AccountBindingSignoutRequest) proto.BaseResponse {
+	binding, changed, err := keychain.SignOutAccountBinding(d.Store)
+	if err != nil {
+		d.Logger.Printf("account binding signout error: %s", deviceIdentityErrorClass(err))
+		return deviceIdentityErrorResponse(err)
+	}
+	d.Logger.Printf("account binding signout: changed=%t", changed)
+	return proto.BaseResponse{Success: true, Data: proto.AccountBindingSignoutResponseData{
+		Changed: changed, Generation: binding.Generation,
+	}}
+}
+
 func deviceMasterPresent(d Deps) (bool, error) {
 	wrapped, err := keychain.GetPersonalDeviceWrappedDEK(d.Store)
 	if errors.Is(err, keychain.ErrSecretNotFound) || (err == nil && wrapped == "") {

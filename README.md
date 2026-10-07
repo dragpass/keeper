@@ -481,6 +481,27 @@ Deletes the device master and marks the binding signed out (0.0.58). The account
 
 ---
 
+#### `account_binding_signout` - Mark The Binding Signed Out
+
+Marks only the account binding signed out, with the next generation (0.0.58). This is "log out of all devices" on the device that ran it: the Extension stops signing itself in until the App signs in again. The device master, account key, device key, request-signing key and MLS leaf stay. Idempotent.
+
+**Request:**
+```json
+{
+  "action": "account_binding_signout"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "changed": true, "generation": 3 }
+}
+```
+
+---
+
 #### `personal_dek_adopt` - Adopt the Extension's Device Master Copy
 
 Moves the Extension's old copy of the device-wrapped personal DEK into the Keeper slot (0.0.58). In one hold of the keychain process lock it writes the copy only when the device is not signed out, the slot is empty and the copy opens with the stored device key; otherwise `adopted` is false and `reason` is `signed_out` or `slot_occupied`. A copy that does not open is `crypto_failure`. The only action that stores a caller-supplied wrap. Native Messaging only.

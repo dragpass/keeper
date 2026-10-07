@@ -81,11 +81,14 @@ const (
 	// device id, the binding, the active account key's fingerprint and
 	// whether a device master is stored. DeviceSignout deletes the device
 	// master only, marks the binding signed out and closes this process's
-	// group session handles; the account key stays.
-	ActionDeviceIDEnsure      = "device_id_ensure"
-	ActionAccountBindingSet   = "account_binding_set"
-	ActionDeviceAccountStatus = "device_account_status"
-	ActionDeviceSignout       = "device_signout"
+	// group session handles; the account key stays. AccountBindingSignout
+	// marks only the binding signed out ("log out of all devices"): the
+	// device master stays too.
+	ActionDeviceIDEnsure        = "device_id_ensure"
+	ActionAccountBindingSet     = "account_binding_set"
+	ActionDeviceAccountStatus   = "device_account_status"
+	ActionDeviceSignout         = "device_signout"
+	ActionAccountBindingSignout = "account_binding_signout"
 
 	// related to signup flow
 	ActionSignAlias       = "signalias"
