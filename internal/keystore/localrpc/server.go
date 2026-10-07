@@ -118,6 +118,16 @@ type requestSignature struct {
 	DeviceID   string `json:"device_id"`
 }
 
+// appSessionRefreshSignature is the App's half of a dp-app-refresh-v1
+// canonical. The origin is the paired session's, never the caller's.
+type appSessionRefreshSignature struct {
+	Timestamp  string `json:"timestamp"`
+	Nonce      string `json:"nonce"`
+	BodySHA256 string `json:"body_sha256"`
+	AppBinding string `json:"app_binding"`
+	DeviceID   string `json:"device_id"`
+}
+
 func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Server, error) {
 	if secret.IsZero() {
 		return nil, errors.New("local RPC requires the Keeper local secret")
@@ -258,6 +268,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatus(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/request-signature":
 		s.signRequest(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/app-session-refresh-signature":
+		s.signAppSessionRefresh(w, r)
 	case r.Method == http.MethodPost && isAppRoute:
 		s.serveAppRoute(w, r, route)
 	default:
@@ -561,32 +573,9 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := request.token
-	s.mu.Lock()
-	current, ok := s.sessions[token]
-	if !ok || !s.now().Before(current.expires) {
-		s.deleteSessionLocked(token)
-		s.mu.Unlock()
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if !s.reserveSigningNonce(w, token, input.Nonce) {
 		return
 	}
-	if _, replay := current.nonces[input.Nonce]; replay {
-		s.mu.Unlock()
-		http.Error(w, "replayed request", http.StatusConflict)
-		return
-	}
-	if len(current.nonces) >= maxSessionNonces {
-		s.mu.Unlock()
-		http.Error(w, "session request limit reached", http.StatusTooManyRequests)
-		return
-	}
-	current.nonces[input.Nonce] = s.now()
-	for nonce, seen := range current.nonces {
-		if s.now().Sub(seen) > 2*time.Minute {
-			delete(current.nonces, nonce)
-		}
-	}
-	s.sessions[token] = current
-	s.mu.Unlock()
 	canonical := strings.Join([]string{
 		"dp-req-v1", input.Method, input.Path, input.Query, input.Timestamp,
 		input.Nonce, input.BodySHA256, input.AccountID, input.TokenID, input.DeviceID,
@@ -606,6 +595,79 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeSealed(w, request, response)
+}
+
+// reserveSigningNonce records a signing nonce for the session, so one nonce
+// is signed once whichever signing route asked; it answers the failure itself.
+func (s *Server) reserveSigningNonce(w http.ResponseWriter, token, requestNonce string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.sessions[token]
+	if !ok || !s.now().Before(current.expires) {
+		s.deleteSessionLocked(token)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	if _, replay := current.nonces[requestNonce]; replay {
+		http.Error(w, "replayed request", http.StatusConflict)
+		return false
+	}
+	if len(current.nonces) >= maxSessionNonces {
+		http.Error(w, "session request limit reached", http.StatusTooManyRequests)
+		return false
+	}
+	current.nonces[requestNonce] = s.now()
+	for nonce, seen := range current.nonces {
+		if s.now().Sub(seen) > 2*time.Minute {
+			delete(current.nonces, nonce)
+		}
+	}
+	s.sessions[token] = current
+	return true
+}
+
+// signAppSessionRefresh signs the App's cookie session refresh. Keeper names
+// the origin from the paired session and builds the canonical itself
+// (sign_app_session_refresh), so the App supplies only the request values.
+func (s *Server) signAppSessionRefresh(w http.ResponseWriter, r *http.Request) {
+	request, ok := s.openAppRequest(w, r)
+	if !ok {
+		return
+	}
+	defer secure.Zeroize(request.plain)
+	var input appSessionRefreshSignature
+	if err := decodeStrict(bytes.NewReader(request.plain), &input); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	fields := proto.SignAppSessionRefreshRequest{
+		Origin: request.session.origin, Timestamp: input.Timestamp, Nonce: input.Nonce,
+		BodySHA256: input.BodySHA256, AppBinding: input.AppBinding, DeviceID: input.DeviceID,
+	}
+	if fields.Validate() != nil || !freshSigningTimestamp(input.Timestamp, s.now()) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !s.reserveSigningNonce(w, request.token, input.Nonce) {
+		return
+	}
+	body, _ := json.Marshal(fields)
+	response, err := s.handle(request.token, proto.ActionSignAppSessionRefresh, body)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.writeSealed(w, request, response)
+}
+
+// freshSigningTimestamp is a unix-seconds timestamp within 60 s of now.
+func freshSigningTimestamp(timestamp string, now time.Time) bool {
+	seconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil || strconv.FormatInt(seconds, 10) != timestamp {
+		return false
+	}
+	delta := now.Unix() - seconds
+	return delta >= -60 && delta <= 60
 }
 
 func validateRequestSignature(input requestSignature, now time.Time) error {
