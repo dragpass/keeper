@@ -78,6 +78,16 @@ func TestDeviceIdentityRoutes(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 
+	var bindingOut proto.AccountBindingSignoutResponseData
+	call("/v1/account/binding/signout", map[string]string{}, &bindingOut)
+	if !bindingOut.Changed || bindingOut.Generation != 3 {
+		t.Fatalf("binding signout = %+v", bindingOut)
+	}
+	call("/v1/device/status", map[string]string{}, &status)
+	if !status.SignedOut || !status.DeviceMasterPresent || status.Generation != 3 {
+		t.Fatalf("status after binding signout = %+v", status)
+	}
+
 	if _, _, err := server.app.GroupSessions.Open(bytes.Repeat([]byte{9}, 32)); err != nil {
 		t.Fatal(err)
 	}
@@ -109,10 +119,11 @@ func TestDeviceIdentityRoutesRefuseOtherShapes(t *testing.T) {
 	server := newTestServer(t)
 	session, csrf := openTestSession(t, server)
 	for path, body := range map[string]any{
-		"/v1/device/id":       map[string]string{"device_id": routeCandidate},
-		"/v1/account/binding": map[string]string{"account_id": routeOwner, "alias": "alice", "generation": "9"},
-		"/v1/device/status":   map[string]bool{"include_keys": true},
-		"/v1/device/signout":  map[string]bool{"wipe_account_key": true},
+		"/v1/device/id":               map[string]string{"device_id": routeCandidate},
+		"/v1/account/binding":         map[string]string{"account_id": routeOwner, "alias": "alice", "generation": "9"},
+		"/v1/device/status":           map[string]bool{"include_keys": true},
+		"/v1/device/signout":          map[string]bool{"wipe_account_key": true},
+		"/v1/account/binding/signout": map[string]bool{"wipe_device_master": true},
 	} {
 		if code, _, raw := callRoute(t, server, session, csrf, path, body); code != http.StatusBadRequest {
 			t.Errorf("%s with a foreign field: %d %s", path, code, raw)
@@ -130,7 +141,7 @@ func TestDeviceIdentityRoutesRefuseOtherShapes(t *testing.T) {
 
 func TestDeviceIdentityRoutesNeedASession(t *testing.T) {
 	server := newTestServer(t)
-	for _, path := range []string{"/v1/device/id", "/v1/account/binding", "/v1/device/status", "/v1/device/signout"} {
+	for _, path := range []string{"/v1/device/id", "/v1/account/binding", "/v1/device/status", "/v1/device/signout", "/v1/account/binding/signout"} {
 		if response := localRequest(server, http.MethodPost, path, `{}`, "", ""); response.Code == http.StatusOK {
 			t.Fatalf("%s answered without a session", path)
 		}

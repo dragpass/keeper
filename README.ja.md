@@ -410,6 +410,27 @@ App がこのデバイスでサインインしたアカウントを記録しま�
 
 ---
 
+#### `account_binding_signout` - バインディングのサインアウト
+
+アカウントバインディングだけをサインアウト状態にし、generation を進めます (0.0.58)。実行したデバイスでの「すべてのデバイスからログアウト」です。アプリで再びログインするまで拡張機能は自動でログインしません。デバイスマスター、アカウントキー、デバイスキー、リクエスト署名キー、MLS leaf は残ります。冪等です。
+
+**Request:**
+```json
+{
+  "action": "account_binding_signout"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { "changed": true, "generation": 3 }
+}
+```
+
+---
+
 #### `personal_dek_adopt` - 拡張機能のデバイスマスターのコピーを取り込む
 
 拡張機能が保持していたデバイスマスター (device-wrapped 個人 DEK) のコピーを Keeper のスロットへ移します (0.0.58)。keychain のプロセスロックを一度保持したまま、サインアウト状態でなく、スロットが空で、コピーが保存済みのデバイス鍵で開けるときだけ書き込みます。それ以外は `adopted` が false で、`reason` は `signed_out` または `slot_occupied` です。開けないコピーは `crypto_failure` です。呼び出し側が送った wrap をスロットに保存する唯一のアクションで、Native Messaging でのみ受け付けます。
