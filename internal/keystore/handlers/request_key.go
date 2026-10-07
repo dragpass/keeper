@@ -116,17 +116,23 @@ func HandleRequestKeyStatus(d Deps, req proto.RequestKeyStatusRequest) proto.Bas
 //
 // If there is no active key → not_found, the caller triggers the enroll flow.
 //
-// Once this Keeper owns a device id (device_id_ensure), it signs only a
-// dp-req-v1 canonical whose device field is that id, so no caller gets a
-// request signed as another device. Before that there is nothing to compare
-// with and any canonical is signed, as before.
+// Only a dp-req-v1 canonical of ten fields is signed, so no other signing
+// domain (dp-app-refresh-v1) can be obtained through this action. Once this
+// Keeper owns a device id (device_id_ensure), its device field must be that
+// id, so no caller gets a request signed as another device. Before that there
+// is nothing to compare with and any device field is signed, as before.
 func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse {
 	d.Logger.Println("sign request processing...")
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	if resp, ok := checkCanonicalDeviceID(d, req.CanonicalRequest); !ok {
+	fields := strings.Split(req.CanonicalRequest, "\n")
+	if len(fields) != canonicalRequestFields || fields[0] != "dp-req-v1" {
+		d.Logger.Println("sign request: refused, canonical is not dp-req-v1")
+		return errs.CodeResponse(errs.ErrCodeValidation, "canonical_request is not a dp-req-v1 canonical")
+	}
+	if resp, ok := checkStoredDeviceID(d, fields[canonicalRequestFields-1], "canonical_request"); !ok {
 		return resp
 	}
 	return signRequestCanonical(d, req.CanonicalRequest)
@@ -137,22 +143,18 @@ func HandleSignRequest(d Deps, req proto.SignRequestRequest) proto.BaseResponse 
 // device id, one per line.
 const canonicalRequestFields = 10
 
-// checkCanonicalDeviceID refuses a canonical request whose device field is not
-// the stored device id. A stored id that cannot be read refuses too: signing
-// then would skip the check exactly when it is in doubt.
-func checkCanonicalDeviceID(d Deps, canonical string) (proto.BaseResponse, bool) {
-	deviceID, found, err := keychain.GetDeviceID(d.Store)
+// checkStoredDeviceID refuses a signature for a device other than the stored
+// device id. A stored id that cannot be read refuses too: signing then would
+// skip the check exactly when it is in doubt.
+func checkStoredDeviceID(d Deps, deviceID, field string) (proto.BaseResponse, bool) {
+	stored, found, err := keychain.GetDeviceID(d.Store)
 	if err != nil {
 		d.Logger.Printf("sign request: device id unreadable: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "device id is unreadable"), false
 	}
-	if !found {
-		return proto.BaseResponse{}, true
-	}
-	fields := strings.Split(canonical, "\n")
-	if len(fields) != canonicalRequestFields || fields[0] != "dp-req-v1" || fields[canonicalRequestFields-1] != deviceID {
-		d.Logger.Println("sign request: refused, canonical device id is not this Keeper's")
-		return errs.CodeResponse(errs.ErrCodeValidation, "canonical_request device id does not match this device"), false
+	if found && deviceID != stored {
+		d.Logger.Println("sign request: refused, device id is not this Keeper's")
+		return errs.CodeResponse(errs.ErrCodeValidation, field+" device id does not match this device"), false
 	}
 	return proto.BaseResponse{}, true
 }

@@ -17,6 +17,15 @@
 
 package proto
 
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
 type RequestKeyGenerateRequest struct {
 	// force_rotate is ignored through P4. rotate_request_key_prepare is
 	// added in P4 as a separate action.
@@ -46,6 +55,45 @@ type SignRequestRequest struct {
 
 func (r SignRequestRequest) Validate() error {
 	return requireString(r.CanonicalRequest, "canonical_request")
+}
+
+// SignAppSessionRefreshRequest carries the fields of a dp-app-refresh-v1
+// canonical. Keeper joins them itself, so a caller cannot get any other
+// string signed through this action. The Local RPC route fills Origin from
+// the paired session; a Native Messaging caller names it.
+type SignAppSessionRefreshRequest struct {
+	Origin     string `json:"origin"`
+	Timestamp  string `json:"timestamp"`
+	Nonce      string `json:"nonce"`
+	BodySHA256 string `json:"body_sha256"`
+	AppBinding string `json:"app_binding"`
+	DeviceID   string `json:"device_id"`
+}
+
+func (r SignAppSessionRefreshRequest) Validate() error {
+	if u, err := url.Parse(r.Origin); err != nil || (u.Scheme != "https" && u.Scheme != "http") ||
+		u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil ||
+		u.String() != r.Origin {
+		return newValidationError("origin", "must be a scheme://host origin")
+	}
+	if seconds, err := strconv.ParseInt(r.Timestamp, 10, 64); err != nil || seconds <= 0 ||
+		strconv.FormatInt(seconds, 10) != r.Timestamp {
+		return newValidationError("timestamp", "must be unix seconds")
+	}
+	if nonce, err := base64.RawURLEncoding.DecodeString(r.Nonce); err != nil || len(nonce) < 16 || len(r.Nonce) > 128 {
+		return newValidationError("nonce", "must be base64url of at least 16 bytes")
+	}
+	if digest, err := hex.DecodeString(r.BodySHA256); err != nil || len(digest) != sha256.Size ||
+		r.BodySHA256 != strings.ToLower(r.BodySHA256) {
+		return newValidationError("body_sha256", "must be lowercase hex SHA-256")
+	}
+	if binding, err := base64.RawURLEncoding.DecodeString(r.AppBinding); err != nil || len(binding) != sha256.Size {
+		return newValidationError("app_binding", "must be base64url SHA-256")
+	}
+	if len(r.DeviceID) < 8 || len(r.DeviceID) > 128 || strings.ContainsAny(r.DeviceID, "\r\n") {
+		return newValidationError("device_id", "invalid")
+	}
+	return nil
 }
 
 type SignRequestResponseData struct {

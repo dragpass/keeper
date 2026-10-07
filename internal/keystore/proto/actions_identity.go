@@ -252,6 +252,10 @@ const (
 	ActionRequestKeyGenerate = "request_key_generate"
 	ActionRequestKeyStatus   = "request_key_status"
 	ActionSignRequest        = "sign_request"
+	// SignAppSessionRefresh signs the App's cookie session refresh
+	// (dp-app-refresh-v1). Keeper builds the canonical from the fields;
+	// sign_request never signs this domain.
+	ActionSignAppSessionRefresh = "sign_app_session_refresh"
 
 	// request-signing key rotation (3-step: prepare / promote / abort).
 	//

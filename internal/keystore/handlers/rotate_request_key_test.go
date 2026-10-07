@@ -100,7 +100,7 @@ func TestRotateRequestKeyPromote_HappyPath(t *testing.T) {
 
 	// After promote, sign_request must work with the new key (indirect regression).
 	signResp := HandleSignRequest(deps,
-		proto.SignRequestRequest{CanonicalRequest: "post-promote"})
+		proto.SignRequestRequest{CanonicalRequest: canonicalForDevice("post-promote-device")})
 	if !signResp.Success {
 		t.Errorf("sign with promoted key failed: %s", signResp.Error)
 	}

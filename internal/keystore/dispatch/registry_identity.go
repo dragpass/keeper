@@ -78,6 +78,8 @@ func identityActions() map[string]action {
 		proto.ActionRequestKeyGenerate: wrap(handlers.HandleRequestKeyGenerate),
 		proto.ActionRequestKeyStatus:   wrap(handlers.HandleRequestKeyStatus),
 		proto.ActionSignRequest:        wrap(handlers.HandleSignRequest),
+		// the App's cookie session refresh (dp-app-refresh-v1)
+		proto.ActionSignAppSessionRefresh: wrap(handlers.HandleSignAppSessionRefresh),
 		// request-signing key rotation
 		proto.ActionRotateRequestKeyPrepare: wrap(handlers.HandleRotateRequestKeyPrepare),
 		proto.ActionRotateRequestKeyPromote: wrap(handlers.HandleRotateRequestKeyPromote),
