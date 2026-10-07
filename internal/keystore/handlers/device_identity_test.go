@@ -455,8 +455,8 @@ func TestDeviceSignout_RemovesOnlyTheDeviceMaster(t *testing.T) {
 	privateKey, _ := keychain.GetPrivateKey(store)
 	assertNoSecretsIn(t, log, resp, deviceKeySentinelB64, wrapped, privateKey)
 
-	// The App's next sign-in writes the binding again, which signs back in.
-	again := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{AccountID: leafTestAccountID, Alias: identityTestAlias})
+	// The App's next sign-in renews the binding, which signs back in.
+	again := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{AccountID: leafTestAccountID, Alias: identityTestAlias, Renew: true})
 	if !again.Success || !again.Data.(proto.AccountBindingSetResponseData).Changed {
 		t.Fatalf("binding after sign-out = %+v", again)
 	}
@@ -546,6 +546,52 @@ func TestAccountBindingSignout_KeepsKeysAndBumpsGeneration(t *testing.T) {
 	}
 	if status := deviceStatus(t, deps); status.SignedOut || status.Generation != 3 {
 		t.Fatalf("status after the next sign-in = %+v", status)
+	}
+}
+
+// A restored session writes the binding without renew. Arriving after "log
+// out of all devices" or "sign out on this device" (a restore that read the
+// account just before), it must not clear the mark: only a sign-in, which
+// renews, does.
+func TestAccountBindingSet_WithoutRenewLeavesASignedOutBindingAlone(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	seedActiveKeypairForRotateTest(t, store)
+	set := func(account, alias string, renew bool) proto.AccountBindingSetResponseData {
+		t.Helper()
+		resp := HandleAccountBindingSet(deps, proto.AccountBindingSetRequest{AccountID: account, Alias: alias, Renew: renew})
+		if !resp.Success {
+			t.Fatalf("binding: %s", resp.Error)
+		}
+		return resp.Data.(proto.AccountBindingSetResponseData)
+	}
+	set(leafTestAccountID, identityTestAlias, true)
+	for _, signOut := range []func() proto.BaseResponse{
+		func() proto.BaseResponse {
+			return HandleAccountBindingSignout(deps, proto.AccountBindingSignoutRequest{})
+		},
+		func() proto.BaseResponse { return HandleDeviceSignout(deps, proto.DeviceSignoutRequest{}) },
+	} {
+		if resp := signOut(); !resp.Success {
+			t.Fatal(resp.Error)
+		}
+		before := deviceStatus(t, deps)
+		for _, other := range []struct{ account, alias string }{
+			{leafTestAccountID, identityTestAlias},
+			{identityTestOther, "bob"},
+		} {
+			if got := set(other.account, other.alias, false); got.Changed || got.Generation != before.Generation {
+				t.Fatalf("restore over a signed-out binding = %+v, want unchanged at %d", got, before.Generation)
+			}
+		}
+		if status := deviceStatus(t, deps); !status.SignedOut || status.AccountID != leafTestAccountID || status.Generation != before.Generation {
+			t.Fatalf("status after a restore = %+v", status)
+		}
+		if got := set(leafTestAccountID, identityTestAlias, true); !got.Changed || got.Generation != before.Generation+1 {
+			t.Fatalf("sign-in after the sign-out = %+v", got)
+		}
+		if status := deviceStatus(t, deps); status.SignedOut {
+			t.Fatalf("status after the sign-in = %+v", status)
+		}
 	}
 }
 
