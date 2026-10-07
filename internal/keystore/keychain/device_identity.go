@@ -194,8 +194,10 @@ func GetAccountBinding(store SecretStore) (AccountBinding, bool, error) {
 // session: a recovery that rotated the account key or a sign-in that
 // re-registered a revoked device leaves the account and alias as they were,
 // and the Extension, which waits for the generation to move before it
-// retries a refused sign-in, must still see it. changed reports whether it
-// wrote.
+// retries a refused sign-in, must still see it. Without renew (a restored
+// session) a signed-out record is left as it is too: a restore that read
+// the account just before a sign-out must not undo it, and only a sign-in
+// clears the mark. changed reports whether it wrote.
 func SetAccountBinding(store SecretStore, accountID, alias string, renew bool) (AccountBinding, bool, error) {
 	var (
 		result  AccountBinding
@@ -206,7 +208,8 @@ func SetAccountBinding(store SecretStore, accountID, alias string, renew bool) (
 		if err != nil {
 			return err
 		}
-		if !renew && current.AccountID == accountID && current.Alias == alias && !current.SignedOut && current.Generation > 0 {
+		unchanged := current.AccountID == accountID && current.Alias == alias && !current.SignedOut
+		if !renew && current.Generation > 0 && (unchanged || current.SignedOut) {
 			result = current
 			return nil
 		}
