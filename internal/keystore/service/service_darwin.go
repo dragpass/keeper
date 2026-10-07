@@ -25,87 +25,12 @@ func manageWindows(string, string) error {
 	return errors.New("Keeper App service lifecycle is not supported on this operating system")
 }
 
-type launchAgent struct {
-	XMLName    xml.Name  `xml:"plist"`
-	Version    string    `xml:"version,attr"`
-	Dictionary agentDict `xml:"dict"`
-}
-
 type agentDict struct {
 	Label             string
 	ProgramArguments  []string
 	StandardOutPath   string
 	StandardErrorPath string
 	TrustFilePath     string
-}
-
-func (d agentDict) MarshalXML(encoder *xml.Encoder, start xml.StartElement) error {
-	if err := encoder.EncodeToken(start); err != nil {
-		return err
-	}
-	if err := plistString(encoder, "Label", d.Label); err != nil {
-		return err
-	}
-	if err := encoder.EncodeToken(xml.StartElement{Name: xml.Name{Local: "key"}}); err != nil {
-		return err
-	}
-	if err := encoder.EncodeToken(xml.CharData("ProgramArguments")); err != nil {
-		return err
-	}
-	if err := encoder.EncodeToken(xml.EndElement{Name: xml.Name{Local: "key"}}); err != nil {
-		return err
-	}
-	if err := encoder.EncodeToken(xml.StartElement{Name: xml.Name{Local: "array"}}); err != nil {
-		return err
-	}
-	for _, argument := range d.ProgramArguments {
-		if err := encoder.EncodeElement(argument, xml.StartElement{Name: xml.Name{Local: "string"}}); err != nil {
-			return err
-		}
-	}
-	if err := encoder.EncodeToken(xml.EndElement{Name: xml.Name{Local: "array"}}); err != nil {
-		return err
-	}
-	if d.TrustFilePath != "" {
-		if err := encoder.EncodeElement("EnvironmentVariables", xml.StartElement{Name: xml.Name{Local: "key"}}); err != nil {
-			return err
-		}
-		if err := encoder.EncodeToken(xml.StartElement{Name: xml.Name{Local: "dict"}}); err != nil {
-			return err
-		}
-		if err := plistString(encoder, "DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE", d.TrustFilePath); err != nil {
-			return err
-		}
-		if err := encoder.EncodeToken(xml.EndElement{Name: xml.Name{Local: "dict"}}); err != nil {
-			return err
-		}
-	}
-	for _, item := range []struct{ key, value string }{
-		{"RunAtLoad", ""}, {"KeepAlive", ""},
-		{"StandardOutPath", d.StandardOutPath}, {"StandardErrorPath", d.StandardErrorPath},
-	} {
-		if err := encoder.EncodeElement(item.key, xml.StartElement{Name: xml.Name{Local: "key"}}); err != nil {
-			return err
-		}
-		if item.value == "" {
-			if err := encoder.EncodeToken(xml.StartElement{Name: xml.Name{Local: "true"}}); err != nil {
-				return err
-			}
-			if err := encoder.EncodeToken(xml.EndElement{Name: xml.Name{Local: "true"}}); err != nil {
-				return err
-			}
-		} else if err := encoder.EncodeElement(item.value, xml.StartElement{Name: xml.Name{Local: "string"}}); err != nil {
-			return err
-		}
-	}
-	return encoder.EncodeToken(start.End())
-}
-
-func plistString(encoder *xml.Encoder, key, value string) error {
-	if err := encoder.EncodeElement(key, xml.StartElement{Name: xml.Name{Local: "key"}}); err != nil {
-		return err
-	}
-	return encoder.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: "string"}})
 }
 
 func manageDarwin(action, invokedPath string) error {
@@ -190,20 +115,60 @@ func manageDarwin(action, invokedPath string) error {
 }
 
 func marshalLaunchAgent(executable, logPath, trustFile string) ([]byte, error) {
-	manifest := launchAgent{Version: "1.0", Dictionary: agentDict{
+	return renderLaunchAgent(agentDict{
 		Label:             launchAgentLabel,
 		ProgramArguments:  []string{executable, "--app-service"},
 		StandardOutPath:   logPath,
 		StandardErrorPath: logPath,
 		TrustFilePath:     trustFile,
-	}}
-	var content bytes.Buffer
-	content.WriteString(xml.Header)
-	encoder := xml.NewEncoder(&content)
-	encoder.Indent("", "  ")
-	if err := encoder.Encode(manifest); err != nil {
+	})
+}
+
+// renderLaunchAgent writes the plist by hand because encoding/xml cannot emit
+// self-closing elements, and launchd's XPC plist parser rejects <true></true>
+// ("Invalid property list", bootstrap fails with EIO) although plutil accepts it.
+func renderLaunchAgent(d agentDict) ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteString(xml.Header)
+	b.WriteString("<plist version=\"1.0\">\n  <dict>\n")
+	line := func(indent, open, value, close string) error {
+		b.WriteString(indent + open)
+		if err := xml.EscapeText(&b, []byte(value)); err != nil {
+			return err
+		}
+		b.WriteString(close + "\n")
+		return nil
+	}
+	keyString := func(indent, key, value string) error {
+		if err := line(indent, "<key>", key, "</key>"); err != nil {
+			return err
+		}
+		return line(indent, "<string>", value, "</string>")
+	}
+	if err := keyString("    ", "Label", d.Label); err != nil {
 		return nil, err
 	}
-	content.WriteByte('\n')
-	return content.Bytes(), nil
+	b.WriteString("    <key>ProgramArguments</key>\n    <array>\n")
+	for _, argument := range d.ProgramArguments {
+		if err := line("      ", "<string>", argument, "</string>"); err != nil {
+			return nil, err
+		}
+	}
+	b.WriteString("    </array>\n")
+	if d.TrustFilePath != "" {
+		b.WriteString("    <key>EnvironmentVariables</key>\n    <dict>\n")
+		if err := keyString("      ", "DRAGPASS_KEY_TRANSPARENCY_TRUST_FILE", d.TrustFilePath); err != nil {
+			return nil, err
+		}
+		b.WriteString("    </dict>\n")
+	}
+	b.WriteString("    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n")
+	if err := keyString("    ", "StandardOutPath", d.StandardOutPath); err != nil {
+		return nil, err
+	}
+	if err := keyString("    ", "StandardErrorPath", d.StandardErrorPath); err != nil {
+		return nil, err
+	}
+	b.WriteString("  </dict>\n</plist>\n")
+	return b.Bytes(), nil
 }
