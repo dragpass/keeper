@@ -42,6 +42,10 @@ type action struct {
 	mcp bool
 	// plaintext marks an action whose response carries decrypted user data.
 	plaintext bool
+	// appOnly marks an action only the authenticated App caller (local RPC
+	// session) may run; a Native Messaging frame is refused before its
+	// handler. Chat runs only in the App, so every gated chat action is one.
+	appOnly bool
 }
 
 type chatRuntimeClass uint8
@@ -52,8 +56,8 @@ const (
 	// run it at any time.
 	chatFree
 	// chatGated: writes chat state, MLS group state, leaf slots or the
-	// KeyPackage pool, or advances the receive state; runs only for the chat
-	// runtime holder.
+	// KeyPackage pool, or advances the receive state; runs only for the App
+	// session holding the chat runtime lease.
 	chatGated
 )
 
@@ -63,7 +67,9 @@ const (
 	ChatRuntimeRevokedReset  = "reset"
 )
 
-func (a action) gated() action    { a.chat = chatGated; return a }
+// gated is an App-only chat action. revoking is gated but not App-only: the
+// Extension's logout and device reset erase chat state too.
+func (a action) gated() action    { a.chat = chatGated; a.appOnly = true; return a }
 func (a action) chatFree() action { a.chat = chatFree; return a }
 
 func (a action) revoking(reason string) action {
@@ -71,6 +77,10 @@ func (a action) revoking(reason string) action {
 	a.revokes = reason
 	return a
 }
+
+// appOnlyAction marks an ungated action App-only, such as a chat action that
+// returns plaintext.
+func (a action) appOnlyAction() action { a.appOnly = true; return a }
 
 func (a action) onMCP() action            { a.mcp = true; return a }
 func (a action) returnsPlaintext() action { a.plaintext = true; return a }
@@ -162,6 +172,16 @@ func buildRegistry(fragments []actionFragment) map[string]action {
 func ChatRuntimeClass(name string) (gated bool, revocation string) {
 	entry := actionRegistry[name]
 	return entry.chat == chatGated, entry.revokes
+}
+
+// AppOnly reports whether only the authenticated App caller may run action.
+func AppOnly(name string) bool {
+	return actionRegistry[name].appOnly
+}
+
+// AppOnlyActions returns the App-only action names, sorted.
+func AppOnlyActions() []string {
+	return actionNames(func(a action) bool { return a.appOnly })
 }
 
 // ChatRuntimeGatedActions returns the gated action names, sorted.

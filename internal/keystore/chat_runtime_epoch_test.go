@@ -81,7 +81,7 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
 				t.Fatalf("the holder's gated call: %+v", response)
 			}
-			if response := app.HandleRequest([]byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeBusy {
+			if response := app.HandleRequest([]byte(gatedFrame)); response.ErrorCode != ErrCodeChatAppCallerRequired {
 				t.Fatalf("an ordinary Extension gated call is still refused: %+v", response)
 			}
 

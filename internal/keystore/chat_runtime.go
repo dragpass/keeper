@@ -8,15 +8,16 @@
 //
 //   - The App claims it for a holder id (one App tab) bound to its local RPC
 //     session. Only that session may run a gated action while it holds it.
-//   - While a live App lease exists, every gated action from the Extension is
-//     refused with chat_runtime_busy before its handler runs. An Extension
-//     that does not know the code fails closed rather than splitting state.
-//   - A gated action the Extension ran stamps activity; for
+//   - Chat runs only in the App (independence P4). A Native Messaging frame
+//     asking for an App-only action (every gated action but the two
+//     revocations, and mls_room_name_open) is refused with
+//     chat_app_caller_required before its handler runs, lease or not.
+//   - A revocation the Extension ran stamps activity; for
 //     ChatRuntimeExtensionWindow after it the App cannot claim.
 //
 // Admission and the stamp happen under one mutex, so a claim and an Extension
-// gated call racing at the same instant never both succeed. The mutex is its
-// own, not requestMu: a claim must not wait behind a long MLS action.
+// revocation racing at the same instant are ordered. The mutex is its own,
+// not requestMu: a claim must not wait behind a long MLS action.
 //
 // A revocation (chat_state_purge, reset_device_identity) wins over a live App
 // lease: the Extension's is never refused busy, and any caller's moves the
@@ -248,8 +249,21 @@ func leaseRequired() proto.BaseResponse {
 	}
 }
 
+// appCallerRequired refuses a Native Messaging frame an App-only action. The
+// caller is known from the transport the frame arrived on (HandleRequest
+// versus an authenticated local RPC session), never from the request.
+func appCallerRequired() proto.BaseResponse {
+	return proto.BaseResponse{
+		Error:     "only the DragPass app may run this chat action",
+		ErrorCode: ErrCodeChatAppCallerRequired,
+	}
+}
+
 func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 	return func(action string) (proto.BaseResponse, bool) {
+		if !caller.app && !nativeFramesDriveChat && dispatch.AppOnly(action) {
+			return appCallerRequired(), false
+		}
 		gated, revocation := dispatch.ChatRuntimeClass(action)
 		if !gated && !caller.chatWrite {
 			return proto.BaseResponse{}, true
@@ -275,6 +289,10 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 			}
 			return proto.BaseResponse{}, true
 		}
+		// A release build reaches here from Native Messaging only with a
+		// revocation (logout and reset win, design Q1, Q2): every other gated
+		// action is App-only and was refused above. The rest is the kill
+		// harness build (nativeFramesDriveChat).
 		if revokes {
 			a.revokeLocked(revocation)
 			l.extensionAt = now
