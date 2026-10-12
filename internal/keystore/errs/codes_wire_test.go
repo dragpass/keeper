@@ -26,6 +26,7 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeChatRuntimeBusy, "chat_runtime_busy"},
 		{ErrCodeChatRuntimeLeaseRequired, "chat_runtime_lease_required"},
 		{ErrCodeChatRuntimeRevoked, "chat_runtime_revoked"},
+		{ErrCodeChatAppCallerRequired, "chat_app_caller_required"},
 		{ErrCodeKeyTransparencyUnverified, "key_transparency_unverified"},
 		{ErrCodeKeyTransparencyFork, "key_transparency_fork"},
 		{ErrCodeKeyTransparencyTrustInvalid, "key_transparency_trust_invalid"},

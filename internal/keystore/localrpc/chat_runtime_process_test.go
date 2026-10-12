@@ -109,11 +109,11 @@ func leaseAdmitted(response proto.BaseResponse) bool {
 }
 
 // The real release binary as the App-service owner, a second real binary as
-// the Native Messaging host that proxies to it, and an App session: while the
-// App holds the chat runtime lease the Extension's gated frame is refused by
-// the owner and runs nothing; once released it runs, and then keeps the App
-// out for the Extension window.
-func TestProxiedExtensionFrameIsRefusedWhileTheAppHoldsTheLease(t *testing.T) {
+// the Native Messaging host that proxies to it, and an App session: the
+// Extension's gated frame is refused by the owner and runs nothing, whether
+// or not the App holds the chat runtime lease, and leaves no activity that
+// keeps the App out.
+func TestProxiedExtensionFrameIsRefusedAppOnlyChatActions(t *testing.T) {
 	dir, address := t.TempDir(), freeLoopbackAddress(t)
 	owner := startAppService(t, dir, address)
 	client := &testAppClient{address: address, origin: testOrigin, pairingKey: pairingKeyOf(t, dir)}
@@ -130,7 +130,7 @@ func TestProxiedExtensionFrameIsRefusedWhileTheAppHoldsTheLease(t *testing.T) {
 		t.Fatalf("claim: %+v %v\n%s", claim, err, owner.stderr.String())
 	}
 	refused := host.send(t, `{"action":"mls_leaf_abort","request_id":"g","payload":{}}`)
-	if refused.Success || refused.ErrorCode != "chat_runtime_busy" || refused.RequestID != "g" {
+	if refused.Success || refused.ErrorCode != "chat_app_caller_required" || refused.RequestID != "g" {
 		t.Fatalf("proxied gated frame while the App holds the lease: %+v", refused)
 	}
 	if ran, err := client.call("/v1/chat/mls_leaf_abort", map[string]any{}); err != nil || !leaseAdmitted(ran) {
@@ -140,11 +140,14 @@ func TestProxiedExtensionFrameIsRefusedWhileTheAppHoldsTheLease(t *testing.T) {
 	if released, err := client.call("/v1/chat/runtime/release", map[string]string{"holder_id": routeHolder}); err != nil || !released.Success {
 		t.Fatalf("release: %+v %v", released, err)
 	}
-	if ran := host.send(t, `{"action":"mls_leaf_abort","request_id":"h","payload":{}}`); !leaseAdmitted(ran) {
-		t.Fatalf("proxied gated frame after release: %+v", ran)
+	for _, action := range []string{"mls_leaf_abort", "mls_decrypt_batch_for_app_display", "mls_room_name_open"} {
+		after := host.send(t, `{"action":"`+action+`","request_id":"h","payload":{}}`)
+		if after.Success || after.ErrorCode != "chat_app_caller_required" {
+			t.Fatalf("proxied %s after release: %+v", action, after)
+		}
 	}
-	busy, err := client.call("/v1/chat/runtime/claim", map[string]string{"holder_id": routeHolder})
-	if err != nil || busy.Success || busy.ErrorCode != "chat_runtime_busy" {
-		t.Fatalf("claim right after Extension activity: %+v %v", busy, err)
+	again, err := client.call("/v1/chat/runtime/claim", map[string]string{"holder_id": routeHolder})
+	if err != nil || !again.Success {
+		t.Fatalf("claim after the refused Extension frames: %+v %v", again, err)
 	}
 }
