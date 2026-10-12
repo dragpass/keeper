@@ -888,5 +888,10 @@ func statusError(rc C.int32_t) error {
 	if rc == -8 {
 		return fmt.Errorf("%w (status %d): %s", chatstate.ErrEpochUnavailable, int(rc), msg)
 	}
+	// -9 is DPMLS_ERR_PRIOR_EPOCH_SENDER_UNAVAILABLE: a prior epoch message
+	// whose sending leaf is no longer the one in the confirmed tree.
+	if rc == -9 {
+		return fmt.Errorf("%w (status %d): %s", chatstate.ErrSenderUnavailable, int(rc), msg)
+	}
 	return fmt.Errorf("%w (status %d): %s", ErrFailed, int(rc), msg)
 }

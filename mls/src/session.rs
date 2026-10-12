@@ -138,6 +138,13 @@ fn err(context: &str, e: impl core::fmt::Display) -> String {
 /// a failure.
 pub const FROM_SELF: &str = "the message was sent by this leaf";
 pub const PRIOR_EPOCH_UNAVAILABLE: &str = "the prior epoch is no longer retained";
+/// Marks a message from a prior epoch whose sending leaf has since left the
+/// group, or is now held by someone else. mls-rs keeps no credentials for a
+/// prior epoch and refuses such a message rather than name it after whoever
+/// holds the leaf now (`MemberNotFound`); the marker lets Go answer it as one
+/// message that does not open instead of a failure of the whole batch.
+pub const PRIOR_EPOCH_SENDER_UNAVAILABLE: &str =
+    "the prior epoch sender leaf is no longer in the group";
 
 /// The largest authenticated data a Commit this Keeper builds may carry. The
 /// Go side puts one evidence document there (proto.MLSCommitEvidence: the
@@ -909,6 +916,7 @@ impl Session {
     /// caller reloads from the record, which never saw it.
     pub fn process(&mut self, message: &[u8]) -> Res<Processed> {
         let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        let mut prior_epoch = false;
         if matches!(msg.wire_format(), mls_rs::WireFormat::PrivateMessage) {
             if let Some(epoch) = msg.epoch() {
                 let group = self.group_mut()?;
@@ -917,6 +925,7 @@ impl Session {
                 if epoch < current_epoch && !self.storage.has_prior_epoch(&group_id, epoch) {
                     return Err(format!("mls: process: {PRIOR_EPOCH_UNAVAILABLE}"));
                 }
+                prior_epoch = epoch < current_epoch;
             }
         }
         let before = leaves_of(self.group_mut()?);
@@ -926,6 +935,9 @@ impl Session {
         self.disarm()?;
         let received = received.map_err(|e| match e {
             MlsError::CantProcessMessageFromSelf => format!("mls: process: {FROM_SELF}"),
+            MlsError::MemberNotFound if prior_epoch => {
+                format!("mls: process: {PRIOR_EPOCH_SENDER_UNAVAILABLE}")
+            }
             e => err("process", e),
         })?;
         let group = self.group_mut()?;
@@ -2133,6 +2145,33 @@ mod tests {
             processed.application.as_deref().map(|v| &v[..]),
             Some(&b"theirs"[..])
         );
+    }
+
+    // A message bob sent before alice removed him is refused with the marker
+    // the C ABI maps to its own status: mls-rs cannot name its sender once
+    // the leaf is blank.
+    #[test]
+    fn a_prior_epoch_message_from_a_removed_leaf_is_refused_with_its_marker() {
+        let (mut alice, mut bob) = pair();
+        let from_bob = bob.encrypt(b"before the remove", b"ad").unwrap();
+        let bob_leaf = alice
+            .roster()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.identity == b"bob")
+            .unwrap();
+        alice.approve_removals(vec![removal(&bob_leaf)]);
+        alice.commit_remove_members(&[bob_leaf.index]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        // The prior epoch reaches the storage only on a write, as every
+        // Keeper action does before the next one loads.
+        let blob = alice.flush().unwrap();
+        alice.load(&blob).unwrap();
+
+        let Err(e) = alice.process(&from_bob) else {
+            panic!("a message from a removed leaf was attributed");
+        };
+        assert!(e.contains(PRIOR_EPOCH_SENDER_UNAVAILABLE), "{e}");
     }
 
     const ROOM: &[u8] = b"dragpass room name";

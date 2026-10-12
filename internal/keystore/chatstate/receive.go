@@ -166,6 +166,14 @@ type ReceiveResult struct {
 	BeforeJoin       bool
 	EpochUnavailable bool
 
+	// SenderUnavailable is true for a message from a prior epoch whose
+	// sending leaf has since left the group or changed hands. The library
+	// keeps no credentials for a prior epoch and refuses to name such a
+	// sender, so the message does not open on this device. No plaintext, no
+	// position, no sender, and nothing was opened or written for it. Only
+	// ReceiveBatch reports it.
+	SenderUnavailable bool
+
 	// Generation is the record's write counter after the confirmation, or the
 	// current one when nothing was written.
 	Generation uint64
@@ -423,6 +431,10 @@ func (s *Store) ReceiveBatch(
 				out = append(out, ReceiveResult{Application: true, EpochUnavailable: true, Generation: rec.Generation})
 				continue
 			}
+			if errors.Is(err, ErrSenderUnavailable) {
+				out = append(out, ReceiveResult{Application: true, SenderUnavailable: true, Generation: rec.Generation})
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -505,6 +517,10 @@ func (e *forkDetected) Error() string {
 // go through the handshake path, in epoch order; nothing was written.
 var ErrNotApplication = errors.New("chat state was handed a handshake as an application message")
 var ErrEpochUnavailable = errors.New("chat state no longer retains the message epoch")
+
+// ErrSenderUnavailable — a message from a prior epoch whose sending leaf has
+// since left the group or changed hands; it cannot be attributed here.
+var ErrSenderUnavailable = errors.New("chat state cannot name the prior epoch sender")
 
 // receiveOne is one delivery against a loaded record, in memory. It reports
 // whether it changed the record; the caller writes it. The returned plaintext
