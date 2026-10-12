@@ -972,6 +972,30 @@ the mirror reason: a redelivery must advance the state once, not twice.
 is never carried in either direction: it is opaque bytes inside the sealed file
 that only in-process Keeper code touches, and no action reads or writes it.
 
+**Resending an unconfirmed message (no contract change).** When the App posted
+a message and never learned whether the server stored it, the App resends from
+`chat_state_read_outbox`, under the same `client_message_id`, and keeps no
+plaintext for it. What the Keeper guarantees for that flow, all since 0.0.55:
+
+- The entry is the bytes `mls_encrypt` built, at the position it consumed. It
+  stays in the conversation's outbox ring (64 entries) across epochs, across
+  `mls_mark_sent` and across restarts, until it falls off the ring or
+  `chat_state_purge` erases the conversation. Off the ring it is
+  `CHAT_STATE_NOT_FOUND` and the message is abandoned, never re-encrypted.
+- `epoch` is the epoch the bytes were encrypted at, not the record's current
+  one. A Commit applied since then does not change the entry, and `mls_encrypt`
+  under the same id answers the same entry (`created: false`) rather than
+  encrypting at the new epoch. Sending the message at the new epoch needs its
+  plaintext and a new id; the Keeper does not do that on its own.
+- Whether the bytes may still be posted is decided outside the Keeper, from
+  that `epoch` and the declared position. ariadne answers a repost of a stored
+  position with the stored row whatever the epoch has done since, refuses an
+  unstored one at a past epoch with `CHAT_MLS_EPOCH_STALE`, and tells the
+  sender whether a position of its own is stored without a post
+  (`GET /conversations/:id/messages/by-position`). The App checks there first
+  and offers a resend only while the entry's `epoch` is the conversation's
+  current epoch.
+
 Domain error codes for these actions are more specific than the coarse taxonomy
 below and travel in the same `error_code` field. They are shared verbatim with
 the server and the Extension:

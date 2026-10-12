@@ -38,3 +38,29 @@ func TestMLSChatE2E_AnOutboxEntryReadsBackWithItsMLSPositionAndNoPlaintext(t *te
 		Permit: c.alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, ClientMessageID: messageID(3),
 	}, string(errs.ErrCodeChatStateNotFound))
 }
+
+// A resend of an unconfirmed message reads its bytes back after the group has
+// moved on, still tagged with the epoch they were encrypted at, and asking
+// mls_encrypt again under the same id does not re-encrypt them at the new
+// epoch. Whether those bytes may still be posted is the caller's decision, made
+// from that epoch; the Keeper never upgrades them.
+func TestMLSChatE2E_AnOutboxEntryKeepsItsEpochAfterTheGroupMoves(t *testing.T) {
+	c := newDM(t)
+	sent := c.alice.encrypt(messageID(1), 1, "unconfirmed")
+
+	commit := c.bob.buildUpdate(1)
+	c.bob.confirm(commit.ClientCommitID, proto.MLSCommitOutcomeAccepted, "")
+	c.alice.processAttested(c.nextSeq(), 2, commit.CommitB64, e2eAlice, e2eBob)
+	if got := c.alice.status(); got.Epoch != 2 {
+		t.Fatalf("alice is at epoch %d, want 2", got.Epoch)
+	}
+
+	got := c.alice.readOutbox(messageID(1))
+	if got.Epoch != 1 || got.CiphertextB64 != sent.CiphertextB64 || got.ChainIndex != sent.Generation {
+		t.Fatalf("read outbox after the epoch moved = %+v; encrypt answered %+v", got, sent)
+	}
+	again := c.alice.encrypt(messageID(1), 2, "unconfirmed")
+	if again.Created || again.Epoch != 1 || again.CiphertextB64 != sent.CiphertextB64 {
+		t.Fatalf("encrypt under the same id after the epoch moved = %+v", again)
+	}
+}
