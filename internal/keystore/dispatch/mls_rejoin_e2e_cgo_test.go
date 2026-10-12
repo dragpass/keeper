@@ -116,7 +116,13 @@ func TestMLSRejoin_AnUnsignedOrForeignRequestBuildsNothing(t *testing.T) {
 	stale.RequestedAt = time.Now().Unix() - proto.MLSRejoinStatementMaxAgeSeconds - 60
 
 	otherKey := good
-	otherKey.SignatureKeyFingerprint = "00" + good.SignatureKeyFingerprint[2:]
+	// Swap the first hex digit for a different one. A fixed "00" prefix named
+	// the same key whenever the fingerprint already began with "00".
+	firstDigit := "0"
+	if good.SignatureKeyFingerprint[0] == '0' {
+		firstDigit = "1"
+	}
+	otherKey.SignatureKeyFingerprint = firstDigit + good.SignatureKeyFingerprint[1:]
 
 	for name, r := range map[string]proto.MLSRejoinStatement{
 		"garbage signature":          garbage,
