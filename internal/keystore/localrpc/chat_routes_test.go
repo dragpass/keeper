@@ -299,31 +299,37 @@ func TestChatRuntimeClaimAndReleaseRoutes(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeLeaseGatesTheExtensionAndDiesWithItsSession(t *testing.T) {
+func TestChatRuntimeLeaseRefusesTheExtensionAndDiesWithItsSession(t *testing.T) {
 	server, clock := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	claimLease(t, server, session, csrf, routeHolder)
 
 	refused := proxiedFrame(t, server, leafAbortFrame)
-	if refused.Success || refused.ErrorCode != "chat_runtime_busy" || holderOf(t, refused.Data) != "app" || refused.RequestID != "ext-1" {
+	if refused.Success || refused.ErrorCode != "chat_app_caller_required" || refused.RequestID != "ext-1" {
 		t.Fatalf("proxied gated frame while the App holds the lease: %+v", refused)
 	}
 	if ping := proxiedFrame(t, server, `{"action":"ping"}`); !ping.Success {
 		t.Fatalf("proxied ping: %+v", ping)
 	}
 
-	// Closing the session drops the lease.
+	// Closing the session drops the lease; the Extension is refused all the same.
 	if got := localRequest(server, http.MethodDelete, "/v1/session", "", session, csrf).Code; got != http.StatusNoContent {
 		t.Fatalf("close session: %d", got)
 	}
-	if ran := proxiedFrame(t, server, leafAbortFrame); !ran.Success {
-		t.Fatalf("the lease outlived its session: %+v", ran)
+	if ran := proxiedFrame(t, server, leafAbortFrame); ran.ErrorCode != "chat_app_caller_required" {
+		t.Fatalf("proxied gated frame with no lease: %+v", ran)
+	}
+	next, nextCSRF := openTestSession(t, server)
+	if result := claimLease(t, server, next, nextCSRF, routeOtherHolder); !result.Success {
+		t.Fatalf("the lease outlived its session: %+v %s", result, result.Data)
 	}
 
-	// Extension activity now keeps the App out for the window.
-	next, nextCSRF := openTestSession(t, server)
+	// An Extension logout keeps the App out for the window.
+	if purged := proxiedFrame(t, server, extensionPurgeFrame); !purged.Success {
+		t.Fatalf("proxied purge: %+v", purged)
+	}
 	if result := claimLease(t, server, next, nextCSRF, routeHolder); result.Success || !strings.Contains(string(result.Data), `"holder":"extension"`) {
-		t.Fatalf("claim right after Extension activity: %+v %s", result, result.Data)
+		t.Fatalf("claim right after the Extension purge: %+v %s", result, result.Data)
 	}
 	clock.advance(keystore.ChatRuntimeExtensionWindow)
 	if result := claimLease(t, server, next, nextCSRF, routeHolder); !result.Success {
@@ -337,8 +343,8 @@ func TestChatRuntimeLeaseGatesTheExtensionAndDiesWithItsSession(t *testing.T) {
 	if got := localRequest(server, http.MethodPost, "/v1/status", "{}", next, nextCSRF).Code; got != http.StatusUnauthorized {
 		t.Fatalf("status after rotation: %d", got)
 	}
-	if ran := proxiedFrame(t, server, leafAbortFrame); !ran.Success {
-		t.Fatalf("the lease outlived a secret rotation: %+v", ran)
+	if claim := server.app.ClaimChatRuntime(routeOtherHolder, "after-rotation", time.Minute, ""); !claim.Granted {
+		t.Fatalf("the lease outlived a secret rotation: %+v", claim)
 	}
 }
 

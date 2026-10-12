@@ -11,4 +11,5 @@ const (
 	ErrCodeChatRuntimeBusy          = string(errs.ErrCodeChatRuntimeBusy)
 	ErrCodeChatRuntimeLeaseRequired = string(errs.ErrCodeChatRuntimeLeaseRequired)
 	ErrCodeChatRuntimeRevoked       = string(errs.ErrCodeChatRuntimeRevoked)
+	ErrCodeChatAppCallerRequired    = string(errs.ErrCodeChatAppCallerRequired)
 )

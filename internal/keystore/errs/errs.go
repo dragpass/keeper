@@ -99,6 +99,11 @@ const (
 	ErrCodeChatRuntimeLeaseRequired ErrorCode = "chat_runtime_lease_required"
 	ErrCodeChatRuntimeRevoked       ErrorCode = "chat_runtime_revoked"
 
+	// ErrCodeChatAppCallerRequired: a Native Messaging frame (the Extension,
+	// stdio or proxied) asked for an action only the App caller may run.
+	// Nothing ran.
+	ErrCodeChatAppCallerRequired ErrorCode = "chat_app_caller_required"
+
 	// ErrCodeKeyTransparency*: a key change the Keeper's trust file does not
 	// let through. A leaf entering an MLS group is refused for the same reasons
 	// under the ErrCodeChatMLSKeyTransparency* spellings in chat.go; both sets

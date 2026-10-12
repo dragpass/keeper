@@ -26,7 +26,7 @@ func mlsChatActions() map[string]action {
 		proto.MLSMarkSent:                  direct(handlers.HandleMLSMarkSent).gated(),
 		proto.MLSDecryptBatchForAppDisplay: direct(handlers.HandleMLSDecryptBatchForAppDisplay).gated().returnsPlaintext(),
 		proto.MLSRoomNameSeal:              direct(handlers.HandleMLSRoomNameSeal).chatFree(),
-		proto.MLSRoomNameOpen:              direct(handlers.HandleMLSRoomNameOpen).chatFree().returnsPlaintext(),
+		proto.MLSRoomNameOpen:              direct(handlers.HandleMLSRoomNameOpen).chatFree().appOnlyAction().returnsPlaintext(),
 		proto.MLSConversationStatus:        direct(handlers.HandleMLSConversationStatus).chatFree(),
 		proto.MLSEpochComparison:           direct(handlers.HandleMLSEpochComparison).chatFree(),
 		proto.MLSRejoinRequestSign:         direct(handlers.HandleMLSRejoinRequestSign).chatFree(),

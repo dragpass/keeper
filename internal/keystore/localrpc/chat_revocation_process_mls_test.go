@@ -336,33 +336,6 @@ func rvSignature(client *testAppClient, method, path string, n int) map[string]s
 	}
 }
 
-func frame(t *testing.T, action string, payload any) string {
-	t.Helper()
-	body, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	msg, err := json.Marshal(proto.BaseRequest{Action: action, RequestID: "r", Payload: body})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(msg)
-}
-
-func mustNative(t *testing.T, host *nativeHost, action string, payload any, into any) {
-	t.Helper()
-	response := host.send(t, frame(t, action, payload))
-	if !response.Success {
-		t.Fatalf("%s: %s (%s)\n%s", action, response.Error, response.ErrorCode, host.stderr.String())
-	}
-	if into != nil {
-		raw, _ := json.Marshal(response.Data)
-		if err := json.Unmarshal(raw, into); err != nil {
-			t.Fatalf("%s: %v", action, err)
-		}
-	}
-}
-
 func leafDeclaration(d *rvDeviceDir, t *testing.T, account, device string) proto.MLSLeafDeclareRequest {
 	now := time.Now().Unix()
 	challenge := "dragpass.mls.leaf.challenge|1|" + account + "|" + device + "|" + rvNonce + "|" +
@@ -386,24 +359,25 @@ func (d *rvDeviceDir) promotion(t *testing.T, declared proto.MLSLeafDeclareRespo
 // one KeyPackage.
 func bobKeyPackage(t *testing.T, server rvServer) proto.MLSMemberKeyPackage {
 	t.Helper()
+	// Chat actions are App-only: Bob's own App enrols his leaf and makes the
+	// KeyPackage, on his own owner process.
 	bob := newRevocationDevice(t, server)
-	var env []string
-	for _, entry := range bob.env() {
-		if !strings.HasPrefix(entry, localsecret.DirEnvVar+"=") && !strings.HasPrefix(entry, AddressEnvVar+"=") {
-			env = append(env, entry)
-		}
+	owner := bob.startOwner(t)
+	client := bob.app(t)
+	if claim, err := client.claim(routeHolder); err != nil || !claim.Success || client.epoch == "" {
+		t.Fatalf("Bob's claim: %+v %v", claim, err)
 	}
-	host := bob.startNative(t, env)
 	var declared proto.MLSLeafDeclareResponseData
-	mustNative(t, host, proto.ActionMLSLeafDeclare, leafDeclaration(bob, t, rvBob, rvBobDev), &declared)
-	mustNative(t, host, proto.ActionMLSLeafPromote, bob.promotion(t, declared), nil)
+	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafDeclare, leafDeclaration(bob, t, rvBob, rvBobDev), &declared)
+	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafPromote, bob.promotion(t, declared), nil)
 	challenge := "dragpass.mls.keypackage.challenge|1|" + rvBob + "|" + rvBobDev + "|" + rvNonce + "|" +
 		strconv.FormatInt(time.Now().Unix()+proto.MLSKeyPackageChallengeTTLSeconds, 10)
 	var generated proto.MLSKeyPackageGenerateResponseData
-	mustNative(t, host, proto.MLSKeyPackageGenerate, proto.MLSKeyPackageGenerateRequest{
+	rvMust(t, client, "/v1/chat/"+proto.MLSKeyPackageGenerate, proto.MLSKeyPackageGenerateRequest{
 		ChallengeToken: challenge, ServerSignature: bob.sign(t, challenge), ServerKeyVersion: 1,
 		AccountID: rvBob, DeviceID: rvBobDev, Count: 1,
 	}, &generated)
+	owner.kill()
 	return proto.MLSMemberKeyPackage{AccountID: rvBob, DeviceID: rvBobDev, KeyPackageB64: generated.KeyPackages[0].KeyPackageB64}
 }
 
