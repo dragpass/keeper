@@ -738,6 +738,10 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateEpochUnavailable}
 			continue
 		}
+		if r.SenderUnavailable {
+			items[i] = proto.MLSDisplayItem{Seq: req.Messages[i].Seq, State: proto.MLSDisplayItemStateSenderUnavailable}
+			continue
+		}
 		if r.OwnWithoutCopy {
 			items[i] = proto.MLSDisplayItem{
 				Seq:             req.Messages[i].Seq,

@@ -1044,6 +1044,15 @@ const (
 	// The batch proceeds (0.0.55).
 	MLSDisplayItemStateBeforeJoin       = "before_join"
 	MLSDisplayItemStateEpochUnavailable = "epoch_unavailable"
+
+	// MLSDisplayItemStateSenderUnavailable — the message is from a prior
+	// epoch and the leaf that sent it has since left the group or changed
+	// hands (removed, replaced, or re-keyed). MLS keeps no credentials for a
+	// prior epoch, so it cannot be attributed and does not open on this
+	// device. plaintext_b64 is "" at this index, the sender and position
+	// fields are empty and zero, and nothing was opened or written for it.
+	// The batch proceeds.
+	MLSDisplayItemStateSenderUnavailable = "sender_unavailable"
 )
 
 // MLSDisplayItem is what the app may show about one decrypted message besides
