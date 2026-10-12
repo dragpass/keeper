@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -138,12 +139,25 @@ func TestPersonalDEKAdopt_NoDeviceKeyIsNotFound(t *testing.T) {
 }
 
 func TestPersonalDEKAdopt_Validation(t *testing.T) {
-	deps, _, _, wrapped := adoptFixture(t)
+	deps, _, deviceKey, wrapped := adoptFixture(t)
 	raw, _ := base64.StdEncoding.DecodeString(wrapped)
+	// A random IV leaves a 60-byte wrap free of '+' and '/' about 8% of the
+	// time, and then its URL-safe form is also valid standard Base64. An
+	// all-0xff IV makes the URL-safe form start with "____", so the only thing
+	// wrong with this wrap, which opens under the device key, is its alphabet.
+	urlSafe, err := crypto.AESGCMEncryptBase64(bytes.NewReader(bytes.Repeat([]byte{0xff}, 12)), deviceKey, make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlSafeRaw, _ := base64.StdEncoding.DecodeString(urlSafe)
+	urlSafe = base64.RawURLEncoding.EncodeToString(urlSafeRaw)
+	if !strings.HasPrefix(urlSafe, "____") {
+		t.Fatalf("url-safe fixture %q does not use the URL-safe alphabet", urlSafe)
+	}
 	cases := map[string]string{
 		"empty":    "",
 		"not b64":  "%%%",
-		"url-safe": base64.RawURLEncoding.EncodeToString(raw),
+		"url-safe": urlSafe,
 		"short":    base64.StdEncoding.EncodeToString(raw[:59]),
 		"long":     base64.StdEncoding.EncodeToString(append(append([]byte{}, raw...), 0)),
 	}
