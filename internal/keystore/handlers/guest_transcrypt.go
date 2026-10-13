@@ -26,6 +26,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 const (
@@ -72,10 +73,13 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 
 	var guestCiphertext, guestKey string
 	var orgMismatch bool
-	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, handleOrg string) error {
+	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
+		if isAuditOnlyLabel(label) {
+			return errHandleAuditOnly
+		}
 		// Checked before anything is decrypted: the org whose grant opened the
 		// handle must be the org whose policy the caller applied.
-		if req.ExpectedOrgID != "" && handleOrg != req.ExpectedOrgID {
+		if req.ExpectedOrgID != "" && label.OrgID != req.ExpectedOrgID {
 			orgMismatch = true
 			return nil
 		}
@@ -94,7 +98,8 @@ func HandleGroupTranscryptForGuest(d Deps, req proto.GroupTranscryptForGuestRequ
 		return nil
 	})
 	if useErr != nil {
-		return sessionUseError(useErr, "group transcrypt for guest")
+		secure.WipeString(&req.Passphrase)
+		return handleSessionError(useErr, "group transcrypt for guest")
 	}
 	if orgMismatch {
 		secure.WipeString(&req.Passphrase)

@@ -144,7 +144,7 @@ func validateCredentialSealedPayload(ivB64, ciphertextB64, aadB64 string) error 
 	if _, err := requireBase64(aadB64, "aad_b64"); err != nil {
 		return err
 	}
-	return nil
+	return rejectReservedAAD(aadB64, "aad_b64")
 }
 
 // validateCredentialPolicyEnvelope checks the signature envelope every signed

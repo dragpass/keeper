@@ -89,7 +89,7 @@ var authAndGroupRoutes = map[string]appRoute{
 	},
 	"/v1/group-dek/generate": {
 		action: proto.ActionGroupDEKGenerateAndOpen,
-		input:  func() any { return &struct{}{} },
+		input:  func() any { return &appGenerate{} },
 		bind:   bindGenerateToOwnKey,
 	},
 	"/v1/group-dek/close": {
@@ -110,6 +110,12 @@ var authAndGroupRoutes = map[string]appRoute{
 	},
 }
 
+// appGenerate names the version the new DEK will become. The wrap target is
+// always this Keeper's own key.
+type appGenerate struct {
+	GrantContext *proto.GrantContext `json:"grant_context,omitempty"`
+}
+
 // appMemberRewrap always names both accounts, so the pin is always enforced.
 type appMemberRewrap struct {
 	WrappedForMeB64    string                       `json:"wrapped_for_me_b64"`
@@ -117,12 +123,14 @@ type appMemberRewrap struct {
 	OwnerAccountID     string                       `json:"owner_account_id"`
 	OtherAccountID     string                       `json:"other_account_id"`
 	RotationStatements []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
+	GrantContext       *proto.GrantContext          `json:"grant_context,omitempty"`
 }
 
 type appManyRewrap struct {
-	WrappedForMeB64 string             `json:"wrapped_for_me_b64"`
-	OwnerAccountID  string             `json:"owner_account_id"`
-	Recipients      []appManyRecipient `json:"recipients"`
+	WrappedForMeB64 string              `json:"wrapped_for_me_b64"`
+	OwnerAccountID  string              `json:"owner_account_id"`
+	Recipients      []appManyRecipient  `json:"recipients"`
+	GrantContext    *proto.GrantContext `json:"grant_context,omitempty"`
 }
 
 // appManyRecipient without an account id is pin-exempt, as it is on the
@@ -136,12 +144,13 @@ type appManyRecipient struct {
 	OrgArchive         bool                         `json:"org_archive,omitempty"`
 }
 
-func bindGenerateToOwnKey(s *Server, _ any) (any, error) {
+func bindGenerateToOwnKey(s *Server, input any) (any, error) {
+	in := input.(*appGenerate)
 	own, err := s.ownPublicKey()
 	if err != nil {
 		return nil, err
 	}
-	return proto.GroupDEKGenerateAndOpenRequest{MyPublicKey: own}, nil
+	return proto.GroupDEKGenerateAndOpenRequest{MyPublicKey: own, GrantContext: in.GrantContext}, nil
 }
 
 func bindMemberRewrap(_ *Server, input any) (any, error) {
@@ -155,6 +164,7 @@ func bindMemberRewrap(_ *Server, input any) (any, error) {
 		OwnerAccountID:     in.OwnerAccountID,
 		OtherAccountID:     in.OtherAccountID,
 		RotationStatements: in.RotationStatements,
+		GrantContext:       in.GrantContext,
 	}, nil
 }
 
@@ -199,6 +209,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 		WrappedForMeB64: in.WrappedForMeB64,
 		OwnerAccountID:  in.OwnerAccountID,
 		Recipients:      recipients,
+		GrantContext:    in.GrantContext,
 	}, nil
 }
 

@@ -21,13 +21,27 @@ type GroupSessionOpenRequest struct {
 	// group_transcrypt_for_guest with expected_org_id refuses a handle opened
 	// for another org (or for none).
 	OrgID string `json:"org_id,omitempty"`
+	// GrantContext (0.0.58, optional) names the version this grant belongs to
+	// and the policy it was wrapped under; absent is legacy (empty OAEP label).
+	// The handle keeps the policy for its life: an audit-only handle refuses
+	// the AAD-free drag actions and serves only the audit actions.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r GroupSessionOpenRequest) Validate() error {
 	if _, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek"); err != nil {
 		return err
 	}
-	return validateOptionalOrgID(r.OrgID, "org_id")
+	if err := validateOptionalOrgID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
+		return err
+	}
+	if r.GrantContext != nil && r.OrgID != "" && r.OrgID != r.GrantContext.OrgID {
+		return newValidationError("org_id", "must equal grant_context.org_id")
+	}
+	return nil
 }
 
 func validateOptionalOrgID(orgID, field string) error {

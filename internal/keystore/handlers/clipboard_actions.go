@@ -21,6 +21,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 // HandleDEKUnwrapAndDecryptToClipboard writes the personal DEK plaintext
@@ -87,7 +88,10 @@ func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequ
 	}
 
 	var plaintext []byte
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
+	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
+		if isAuditOnlyLabel(label) {
+			return errHandleAuditOnly
+		}
 		pt, err := crypto.OpenAESGCM(groupDEK, iv, ciphertext, nil)
 		if err != nil {
 			return errors.New("decrypt failed: " + err.Error())
@@ -96,7 +100,7 @@ func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequ
 		return nil
 	})
 	if useErr != nil {
-		return sessionUseError(useErr, "group decrypt to clipboard")
+		return handleSessionError(useErr, "group decrypt to clipboard")
 	}
 	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "group decrypt to clipboard")
 }

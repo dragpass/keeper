@@ -69,6 +69,7 @@ func (a *App) HandlersDeps() handlers.Deps {
 		RecoveryKeySessions: a.RecoveryKeySessions,
 		Clipboard:           a.Clipboard,
 		MessageChallenges:   a.MessageChallenges,
+		AuditAuthorizations: a.AuditAuthorizations,
 		KeyTransparency:     a.KeyTransparency,
 	}
 }

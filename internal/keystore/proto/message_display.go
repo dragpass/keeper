@@ -486,3 +486,32 @@ func requireMessageBase64Len(value, field string, minLen, maxLen int) error {
 	}
 	return nil
 }
+
+// MessageSealRequest names the message being sealed, never its AAD.
+type MessageSealRequest struct {
+	GroupHandle    string `json:"group_handle"`
+	OrgID          string `json:"org_id"`
+	GroupID        string `json:"group_id"`
+	DekVersion     int    `json:"dek_version"`
+	TokenExpiresAt int64  `json:"token_expires_at"`
+	PlaintextB64   string `json:"plaintext_b64"` // secret in REQUEST only; never logged
+}
+
+func (r MessageSealRequest) Validate() error {
+	if err := requireHandle(r.GroupHandle, "group_handle"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.GroupID, "group_id"); err != nil {
+		return err
+	}
+	if err := requireMessageDekVersion(r.DekVersion, "dek_version"); err != nil {
+		return err
+	}
+	if err := requireMessageExpiry(r.TokenExpiresAt, "token_expires_at"); err != nil {
+		return err
+	}
+	return requireMessageBase64Len(r.PlaintextB64, "plaintext_b64", MessagePlaintextMinBytes, MessagePlaintextMaxBytes)
+}

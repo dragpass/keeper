@@ -40,17 +40,17 @@ func HandleGroupSessionOpen(d Deps, req proto.GroupSessionOpenRequest) proto.Bas
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key: "+err.Error())
 	}
 
-	rawDEK, err := crypto.DecryptData(privKey, encrypted)
+	rawDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("group session open error: RSA-OAEP decrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+		d.Logger.Printf("group session open error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		return grantOpenFailure(req.GrantContext, err)
 	}
 	if len(rawDEK) != 32 {
 		secure.Zeroize(rawDEK)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "unexpected group dek length (want 32)")
 	}
 
-	handle, expiresAt, err := d.GroupSessions.OpenLabeled(rawDEK, req.OrgID)
+	handle, expiresAt, err := d.GroupSessions.OpenLabeled(rawDEK, handleLabel(req.OrgID, req.GrantContext))
 	if err != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group session open error: store.Open failed: %v", err)

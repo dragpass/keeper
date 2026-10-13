@@ -84,4 +84,12 @@ const (
 	// fields, and requests over 16 KiB are refused as MESSAGE_INVALID_INPUT
 	// before anything is opened.
 	ActionGroupDecryptWithAadForAppDisplay = "group_decrypt_with_aad_for_app_display"
+
+	// MessageSeal (0.0.58, App only): seals a Secure Message under the message
+	// AAD the Keeper builds from structured fields. It replaces the App route's
+	// use of group_encrypt_with_aad, which refuses every dragpass.* AAD.
+	//   Inputs: group_handle, org_id, group_id, dek_version, token_expires_at,
+	//           plaintext_b64 (1..512 bytes)
+	//   Output: {iv_b64(12B), ciphertext_b64}
+	ActionMessageSeal = "message_seal"
 )

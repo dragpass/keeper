@@ -137,9 +137,15 @@ type ArchiveQuorumCombineAndRewrapRequest struct {
 	WrappedOldDEKB64 string                `json:"wrapped_old_dek_b64"`
 	Recipients       []DEKRewrapRecipient  `json:"recipients"`
 	OwnerAccountID   string                `json:"owner_account_id,omitempty"`
+	// GrantContext (0.0.58, optional) is the context of wrapped_old_dek_b64;
+	// every re-grant carries the same label.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r ArchiveQuorumCombineAndRewrapRequest) Validate() error {
+	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
+		return err
+	}
 	if len(r.RewrappedShares) < 2 {
 		return newValidationError("rewrapped_shares", "must have at least 2 shares")
 	}

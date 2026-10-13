@@ -66,7 +66,8 @@ func runDeviceForget(s *Server, request appRequest, _ any) (proto.BaseResponse, 
 }
 
 type appRotationRewrap struct {
-	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
+	WrappedForMeB64 string              `json:"wrapped_for_me_b64"`
+	GrantContext    *proto.GrantContext `json:"grant_context,omitempty"`
 }
 
 // bindRotationRewrap wraps to this Keeper's own pending key. A self-wrap is
@@ -81,6 +82,7 @@ func bindRotationRewrap(s *Server, input any) (any, error) {
 	return proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: in.WrappedForMeB64,
 		OtherPublicKey:  pending,
+		GrantContext:    in.GrantContext,
 	}, nil
 }
 

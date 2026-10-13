@@ -108,4 +108,32 @@ const (
 	// (app/src/shared/lib/guest-share-crypto.ts). Plaintext / Group DEK never
 	// appear in the response.
 	ActionGroupTranscryptForGuest = "group_transcrypt_for_guest"
+
+	// Audit-only Group DEK versions (0.0.58). A handle opened from a grant
+	// whose grant_context names audit_only_v1 refuses group_encrypt,
+	// group_decrypt_to_clipboard and group_transcrypt_for_guest with
+	// GROUP_POLICY_AUDIT_ONLY, and serves only these three. Each takes the
+	// version and table structurally (org_id, group_id, dek_version, table_id,
+	// table_b64) and never an AAD; the Keeper builds the AAD
+	// `dragpass.drag.audit|1|<org>|<group>|<dek_version>|<table_id>` and the
+	// token key HKDF-SHA256(Group DEK, SHA-256(table), AAD). Each requires a
+	// server signature that is consumed once in this process: a table receipt
+	// (60 s, keyed by table id) to seal, a decrypt permit (30 s, keyed by
+	// permit id) to open. Requests are decoded strictly.
+	//
+	// GroupEncryptAudit
+	//   Inputs: group_handle, org_id, group_id, dek_version, table_id,
+	//           table_b64 (256B), receipt, plaintext_b64
+	//   Output: {iv_b64(12B), ciphertext_b64}
+	ActionGroupEncryptAudit = "group_encrypt_audit"
+	// GroupDecryptAuditToClipboard
+	//   Inputs: the token context, permit, iv_b64, ciphertext_b64,
+	//           clipboard_ttl_ms
+	//   Output: {copied, clipboard_ttl_ms}
+	ActionGroupDecryptAuditToClipboard = "group_decrypt_audit_to_clipboard"
+	// GroupTranscryptAuditForGuest
+	//   Inputs: the token context, permit, iv_b64, ciphertext_b64,
+	//           passphrase?, passphrase_salt?
+	//   Output: {guest_ciphertext, guest_key}
+	ActionGroupTranscryptAuditForGuest = "group_transcrypt_audit_for_guest"
 )

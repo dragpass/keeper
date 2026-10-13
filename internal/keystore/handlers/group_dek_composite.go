@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"crypto/rsa"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 
@@ -44,14 +45,20 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 		return errs.CodeResponse(errs.ErrCodeInternal, "rand failed: "+err.Error())
 	}
 
-	encrypted, err := crypto.EncryptData(myPubKey, rawDEK)
+	encrypted, err := wrapGrant(myPubKey, rawDEK, req.GrantContext)
 	if err != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group dek generate error: RSA-OAEP encrypt failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
 	}
+	if req.GrantContext.IsAuditOnly() {
+		if resp, ok := selfOpenAuditGrant(d, encrypted, rawDEK, req.GrantContext); !ok {
+			secure.Zeroize(rawDEK)
+			return resp
+		}
+	}
 
-	handle, expiresAt, openErr := d.GroupSessions.Open(rawDEK)
+	handle, expiresAt, openErr := d.GroupSessions.OpenLabeled(rawDEK, handleLabel("", req.GrantContext))
 	if openErr != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group dek generate error: store.Open failed: %v", openErr)
@@ -126,10 +133,10 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key: "+err.Error())
 	}
 
-	groupDEK, err := crypto.DecryptData(privKey, encrypted)
+	groupDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("dek rewrap for member error: RSA-OAEP decrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+		d.Logger.Printf("dek rewrap for member error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		return grantOpenFailure(req.GrantContext, err)
 	}
 	defer secure.Zeroize(groupDEK)
 
@@ -137,7 +144,7 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, errors.New("unexpected group dek length (want 32)").Error())
 	}
 
-	newEncrypted, err := crypto.EncryptData(otherPubKey, groupDEK)
+	newEncrypted, err := wrapGrant(otherPubKey, groupDEK, req.GrantContext)
 	if err != nil {
 		d.Logger.Printf("dek rewrap for member error: RSA-OAEP encrypt failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
@@ -221,10 +228,10 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key: "+err.Error())
 	}
 
-	groupDEK, err := crypto.DecryptData(privKey, encrypted)
+	groupDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP decrypt failed: %v", err)
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
+		d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		return grantOpenFailure(req.GrantContext, err)
 	}
 	defer secure.Zeroize(groupDEK)
 
@@ -234,7 +241,7 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 
 	wraps := make([]string, len(recipientKeys))
 	for i, pub := range recipientKeys {
-		newEncrypted, err := crypto.EncryptData(pub, groupDEK)
+		newEncrypted, err := wrapGrant(pub, groupDEK, req.GrantContext)
 		if err != nil {
 			d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP encrypt failed [%d]: %v", i, err)
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())
@@ -251,4 +258,32 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		PinEnforced:               pinEnforced,
 		PinStates:                 pinStates,
 	}}
+}
+
+// selfOpenAuditGrant opens the audit-only wrap this Keeper just made for itself
+// and checks it yields the same DEK. A rotation built on a grant the label
+// does not open would leave the org on a key nobody can use; this is where it
+// is caught, before the wrap leaves the Keeper. It also pins my_public_key to
+// this Keeper's own key for the audit-only case.
+func selfOpenAuditGrant(d Deps, encrypted, rawDEK []byte, gc *proto.GrantContext) (proto.BaseResponse, bool) {
+	privKeyBuf, err := getPrivateKeySecure(d.Store)
+	if err != nil {
+		return errs.Response(err), false
+	}
+	defer privKeyBuf.Destroy()
+	privKey, err := crypto.ParsePrivateKey(string(privKeyBuf.Bytes()))
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse private key"), false
+	}
+	opened, err := unwrapGrant(privKey, encrypted, gc)
+	if err != nil {
+		d.Logger.Println("group dek generate refused: the audit-only wrap does not open with this Keeper's key")
+		return errs.CodeResponse(errs.ErrCodeValidation,
+			"my_public_key: an audit-only grant must be wrapped to this Keeper's own key"), false
+	}
+	defer secure.Zeroize(opened)
+	if subtle.ConstantTimeCompare(opened, rawDEK) != 1 {
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "audit-only grant self-check failed"), false
+	}
+	return proto.BaseResponse{}, true
 }

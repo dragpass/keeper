@@ -27,6 +27,9 @@ func HandleAuthRecoveryAbort(d Deps, req proto.AuthRecoveryAbortRequest) proto.B
 	return proto.BaseResponse{Success: true, Data: proto.AuthRecoveryAbortResponseData{Discarded: discarded}}
 }
 
+// errGrantDidNotOpen — the old key did not open the grant under its label.
+var errGrantDidNotOpen = errors.New("RSA-OAEP decrypt failed")
+
 // HandleDEKRewrapWithOldKeyToSelf moves one group DEK grant from the key the
 // recovery restored to this Keeper's active account key. It refuses while the
 // recovery is still staged (the server has not accepted the new key) and when
@@ -69,19 +72,22 @@ func HandleDEKRewrapWithOldKeyToSelf(d Deps, req proto.DEKRewrapWithOldKeyToSelf
 		if oldKey.PublicKey.Equal(activeKey) {
 			return errUnrotated
 		}
-		groupDEK, err := crypto.DecryptData(oldKey, encrypted)
+		groupDEK, err := unwrapGrant(oldKey, encrypted, req.GrantContext)
 		if err != nil {
-			return errors.New("RSA-OAEP decrypt failed")
+			return errGrantDidNotOpen
 		}
 		defer secure.Zeroize(groupDEK)
 		if len(groupDEK) != 32 {
 			return fmt.Errorf("unexpected group dek length: %d (want 32)", len(groupDEK))
 		}
-		rewrapped, err = crypto.EncryptData(activeKey, groupDEK)
+		rewrapped, err = wrapGrant(activeKey, groupDEK, req.GrantContext)
 		return err
 	})
 	if errors.Is(useErr, errUnrotated) {
 		return errs.CodeResponse(errs.ErrCodeValidation, errUnrotated.Error())
+	}
+	if errors.Is(useErr, errGrantDidNotOpen) {
+		return grantOpenFailure(req.GrantContext, useErr)
 	}
 	if useErr != nil {
 		return sessionUseError(useErr, "dek rewrap to self")

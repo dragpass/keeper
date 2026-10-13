@@ -23,5 +23,6 @@ func messageActions() map[string]action {
 	return map[string]action{
 		proto.ActionMessageDisplayPrepare:            direct(handlers.HandleMessageDisplayPrepare),
 		proto.ActionGroupDecryptWithAadForAppDisplay: direct(handlers.HandleGroupDecryptWithAadForAppDisplay).returnsPlaintext(),
+		proto.ActionMessageSeal:                      wrap(handlers.HandleMessageSeal).appOnlyAction(),
 	}
 }

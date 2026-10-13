@@ -28,10 +28,19 @@ var ChatCapabilities = []string{
 	"app_runtime.v1",      // chat runtime lease and the App's /v1/chat/* local routes
 }
 
+// GroupCapabilities names what this build's Group DEK actions do. Like
+// chat_capabilities it is a compatibility signal, not proof: the Extension
+// reads it to tell a member to update Keeper before it tries an audit-only
+// grant, and an older Keeper that tried anyway would fail the OAEP label.
+var GroupCapabilities = []string{
+	"audit_only_v1", // grant_context labels, the three audit actions, table receipts and decrypt permits
+}
+
 type PingResponseData struct {
-	Version          string   `json:"version"`
-	Hash             string   `json:"hash"`
-	Path             string   `json:"path"`
-	ChatContract     int      `json:"chat_contract"`
-	ChatCapabilities []string `json:"chat_capabilities"`
+	Version           string   `json:"version"`
+	Hash              string   `json:"hash"`
+	Path              string   `json:"path"`
+	ChatContract      int      `json:"chat_contract"`
+	ChatCapabilities  []string `json:"chat_capabilities"`
+	GroupCapabilities []string `json:"group_capabilities"`
 }
