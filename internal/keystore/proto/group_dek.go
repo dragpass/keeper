@@ -9,6 +9,9 @@ type DEKRewrapWithOldKeyToSelfRequest struct {
 	RecoveryHandle    string `json:"recovery_handle"`
 	EncryptedGroupDEK string `json:"encrypted_group_dek"`
 	ServerKeyVersion  uint   `json:"server_key_version,omitempty"`
+	// GrantContext (0.0.58, optional) names the version this grant belongs to
+	// and the policy it was wrapped under; absent is legacy (empty OAEP label).
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r DEKRewrapWithOldKeyToSelfRequest) Validate() error {
@@ -21,8 +24,10 @@ func (r DEKRewrapWithOldKeyToSelfRequest) Validate() error {
 	if err := requireHandle(r.RecoveryHandle, "recovery_handle"); err != nil {
 		return err
 	}
-	_, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek")
-	return err
+	if _, err := requireBase64(r.EncryptedGroupDEK, "encrypted_group_dek"); err != nil {
+		return err
+	}
+	return validateGrantContext(r.GrantContext, "grant_context")
 }
 
 type DEKRewrapWithOldKeyResponseData struct {
@@ -51,10 +56,18 @@ type DEKRewrapWithOldKeyResponseData struct {
 // server createOrg/createGroup body.
 type GroupDEKGenerateAndOpenRequest struct {
 	MyPublicKey string `json:"my_public_key"`
+	// GrantContext (0.0.58, optional) is the version the new DEK will become.
+	// With the audit-only policy the wrap carries its label, my_public_key must
+	// be this Keeper's own key, and the Keeper opens its own wrap once before
+	// answering, so a grant nobody can open is never handed out.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r GroupDEKGenerateAndOpenRequest) Validate() error {
-	return requirePEM(r.MyPublicKey, "my_public_key")
+	if err := requirePEM(r.MyPublicKey, "my_public_key"); err != nil {
+		return err
+	}
+	return validateGrantContext(r.GrantContext, "grant_context")
 }
 
 type GroupDEKGenerateAndOpenResponseData struct {
@@ -100,6 +113,10 @@ type DEKRewrapForMemberRequest struct {
 	// Absent means no rotation is claimed.
 	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
 	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	// GrantContext (0.0.58, optional) is the context of wrapped_for_me_b64.
+	// The new wrap carries the same label: a rewrap cannot change a grant's
+	// policy, and there is no field to ask it to.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r DEKRewrapForMemberRequest) Validate() error {
@@ -129,6 +146,9 @@ func (r DEKRewrapForMemberRequest) Validate() error {
 	}
 	if r.OtherAccountID == "" && r.EnrollmentEvidence != nil {
 		return newValidationError("enrollment_evidence", "requires other_account_id")
+	}
+	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
+		return err
 	}
 	return validateKeyTransparencyEvidence(r.EnrollmentEvidence, "enrollment_evidence")
 }
@@ -165,6 +185,9 @@ type DEKUnwrapAndRewrapForManyRequest struct {
 	// OwnerAccountID scopes the pins. Required as soon as any recipient
 	// names an account.
 	OwnerAccountID string `json:"owner_account_id,omitempty"`
+	// GrantContext (0.0.58, optional) is the context of wrapped_for_me_b64;
+	// every new wrap carries the same label.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 // DEKRewrapRecipient is one wrap target. PublicKey is the PEM the DEK is
@@ -194,6 +217,9 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 		return newValidationError("recipients", "must not be empty")
 	}
 	if err := requireOptionalAccountUUID(r.OwnerAccountID, "owner_account_id"); err != nil {
+		return err
+	}
+	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
 		return err
 	}
 	return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)

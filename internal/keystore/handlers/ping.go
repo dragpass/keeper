@@ -20,8 +20,9 @@ func HandlePing(d Deps, req proto.PingRequest) proto.BaseResponse {
 			Hash:    version.BinaryHash,
 			Path:    version.BinaryPath,
 
-			ChatContract:     proto.ChatContract,
-			ChatCapabilities: slices.Clone(proto.ChatCapabilities),
+			ChatContract:      proto.ChatContract,
+			ChatCapabilities:  slices.Clone(proto.ChatCapabilities),
+			GroupCapabilities: slices.Clone(proto.GroupCapabilities),
 		},
 	}
 }

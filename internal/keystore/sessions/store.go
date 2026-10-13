@@ -36,9 +36,20 @@ const handleByteLen = 32
 type secretEntry struct {
 	secret    *memguard.LockedBuffer
 	expiresAt time.Time
-	// label is a non-secret tag fixed at Open (a group handle's org id) that
-	// later calls can require; empty when the opener named none.
-	label string
+	// label is non-secret context fixed at Open that later calls can require;
+	// the zero Label when the opener named none.
+	label Label
+}
+
+// Label is the non-secret context a group handle was opened with. OrgID is
+// the org the opener named; GrantPolicy, GroupID and DekVersion come from the
+// grant context the grant was opened under. A legacy handle has an empty
+// GrantPolicy.
+type Label struct {
+	OrgID       string
+	GrantPolicy string
+	GroupID     string
+	DekVersion  int
 }
 
 // Store is the shared base for opaque-handle session stores. The two existing
@@ -137,11 +148,11 @@ func (s *Store) Reap() int {
 // raw is taken zero-copy by memguard.NewBufferFromBytes and wiped — from the
 // caller's perspective, the raw bytes are no longer valid.
 func (s *Store) Open(raw []byte) (string, time.Time, error) {
-	return s.OpenLabeled(raw, "")
+	return s.OpenLabeled(raw, Label{})
 }
 
 // OpenLabeled is Open with a label that stays with the handle for its life.
-func (s *Store) OpenLabeled(raw []byte, label string) (string, time.Time, error) {
+func (s *Store) OpenLabeled(raw []byte, label Label) (string, time.Time, error) {
 	if err := s.validate(raw); err != nil {
 		return "", time.Time{}, err
 	}
@@ -193,11 +204,11 @@ func (s *Store) CloseAll() int {
 // mutex is held, so it must finish quickly and must not re-enter the store.
 // Expired handles are immediately destroy + delete + ErrExpired.
 func (s *Store) Use(handleID string, fn func(raw []byte) error) error {
-	return s.UseLabeled(handleID, func(raw []byte, _ string) error { return fn(raw) })
+	return s.UseLabeled(handleID, func(raw []byte, _ Label) error { return fn(raw) })
 }
 
 // UseLabeled is Use that also hands fn the label the handle was opened with.
-func (s *Store) UseLabeled(handleID string, fn func(raw []byte, label string) error) error {
+func (s *Store) UseLabeled(handleID string, fn func(raw []byte, label Label) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,6 +222,24 @@ func (s *Store) UseLabeled(handleID string, fn func(raw []byte, label string) er
 		return s.errExpired
 	}
 	return fn(entry.secret.Bytes(), entry.label)
+}
+
+// LabelOf returns the label of a live handle without touching its secret, so
+// a caller can refuse a request before it spends anything on it. Expired
+// handles are lazy-evicted.
+func (s *Store) LabelOf(handleID string) (Label, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[handleID]
+	if !ok {
+		return Label{}, s.errNotFound
+	}
+	if s.now().After(entry.expiresAt) {
+		entry.secret.Destroy()
+		delete(s.entries, handleID)
+		return Label{}, s.errExpired
+	}
+	return entry.label, nil
 }
 
 // Status returns handle existence + remaining TTL (ms). Expired handles are

@@ -46,7 +46,10 @@ type Deps struct {
 	// so App owns its lifetime and parallel tests do not share entries. A nil
 	// store fails closed: no challenge can be minted and none can be consumed.
 	MessageChallenges *MessageChallengeStore
-	KeyTransparency   keytransparency.Gate
+	// AuditAuthorizations is the process-local single-use record of the audit
+	// actions' receipts and permits. A nil store fails closed.
+	AuditAuthorizations *AuditAuthorizationStore
+	KeyTransparency     keytransparency.Gate
 }
 
 func (d Deps) Now() time.Time {

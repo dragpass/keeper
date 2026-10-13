@@ -153,10 +153,16 @@ type ArchiveUnwrapAndRewrapRequest struct {
 	RecipientAccountID   string                   `json:"recipient_account_id,omitempty"`
 	RotationStatements   []KeyRotationStatement   `json:"rotation_statements,omitempty"`
 	EnrollmentEvidence   *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	// GrantContext (0.0.58, optional) is the context of the archive grant; the
+	// re-grant carries the same label.
+	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
 func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 	if err := validateArchiveOrgID(r.OrgID); err != nil {
+		return err
+	}
+	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
 		return err
 	}
 	if _, err := requireBase64(r.WrappedForArchiveB64, "wrapped_for_archive_b64"); err != nil {

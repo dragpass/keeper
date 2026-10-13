@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 // HandleGroupEncrypt AES-GCM-seals the plaintext directly with the raw Group
@@ -35,7 +36,10 @@ func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseRespons
 	defer secure.Zeroize(plaintext)
 
 	var iv, ciphertext []byte
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
+	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
+		if isAuditOnlyLabel(label) {
+			return errHandleAuditOnly
+		}
 		i, c, err := crypto.SealAESGCM(d.Random(), groupDEK, plaintext, nil)
 		if err != nil {
 			return errors.New("encrypt failed: " + err.Error())
@@ -45,7 +49,7 @@ func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseRespons
 		return nil
 	})
 	if useErr != nil {
-		return sessionUseError(useErr, "group encrypt")
+		return handleSessionError(useErr, "group encrypt")
 	}
 
 	d.Logger.Println("group encrypt successful")

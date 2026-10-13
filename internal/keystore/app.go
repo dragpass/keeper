@@ -81,7 +81,10 @@ type Deps struct {
 	// MessageChallenges holds the process-local secure-message display
 	// challenges. Lives and dies with the process; never persisted.
 	MessageChallenges *handlers.MessageChallengeStore
-	KeyTransparency   keytransparency.Gate
+	// AuditAuthorizations holds the receipts and permits the audit actions
+	// consumed. Lives and dies with the process; never persisted.
+	AuditAuthorizations *handlers.AuditAuthorizationStore
+	KeyTransparency     keytransparency.Gate
 }
 
 // App is the single wiring container for the Keeper process. Handlers
@@ -97,6 +100,7 @@ type App struct {
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	Clipboard           clipboard.Clipboard
 	MessageChallenges   *handlers.MessageChallengeStore
+	AuditAuthorizations *handlers.AuditAuthorizationStore
 	KeyTransparency     keytransparency.Gate
 
 	// requestMu runs every handler one at a time in this process (Native
@@ -134,6 +138,7 @@ func NewApp(deps Deps) *App {
 		RecoveryKeySessions: deps.RecoveryKeySessions,
 		Clipboard:           deps.Clipboard,
 		MessageChallenges:   deps.MessageChallenges,
+		AuditAuthorizations: deps.AuditAuthorizations,
 		KeyTransparency:     deps.KeyTransparency,
 	}
 	if app.Store == nil {
@@ -164,6 +169,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.MessageChallenges == nil {
 		app.MessageChallenges = handlers.NewMessageChallengeStore()
+	}
+	if app.AuditAuthorizations == nil {
+		app.AuditAuthorizations = handlers.NewAuditAuthorizationStore()
 	}
 	if app.Clipboard == nil {
 		if testing.Testing() {

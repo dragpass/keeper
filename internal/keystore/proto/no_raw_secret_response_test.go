@@ -82,6 +82,8 @@ var rawSecretResponseCarveOuts = map[string]string{
 var rawSecretRequestCarveOuts = map[string]string{
 	"GroupEncryptRequest.plaintext_b64":               "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"GroupEncryptWithAADRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptAuditRequest.plaintext_b64":          "encrypt direction: the drag text to seal under an audit-only version's per-token key is the action's input; zeroized after sealing, never returned or logged.",
+	"MessageSealRequest.plaintext_b64":                "encrypt direction: the Secure Message to seal under the message AAD is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
 	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
 	"MLSEncryptRequest.plaintext_b64":                 "encrypt direction: the chat v2 message to encrypt as an MLS application message is the action's input; zeroized after sealing, never returned or logged, not even by length.",

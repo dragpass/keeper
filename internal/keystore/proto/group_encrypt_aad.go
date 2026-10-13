@@ -32,5 +32,5 @@ func (r GroupEncryptWithAADRequest) Validate() error {
 	if _, err := requireBase64(r.AADB64, "aad_b64"); err != nil {
 		return err
 	}
-	return nil
+	return rejectReservedAAD(r.AADB64, "aad_b64")
 }

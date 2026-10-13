@@ -146,8 +146,15 @@ func SignData(privateKey *rsa.PrivateKey, data string) ([]byte, error) {
 
 // DecryptData decrypts the given encrypted data using the provided private key
 func DecryptData(privateKey *rsa.PrivateKey, encryptedData []byte) ([]byte, error) {
-	// Decrypt the data using RSA OAEP
-	decryptedData, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedData, nil)
+	return DecryptDataWithLabel(privateKey, encryptedData, nil)
+}
+
+// DecryptDataWithLabel is DecryptData with an RSA-OAEP label. A nil label is
+// the empty label, byte-identical to DecryptData. A grant wrapped under one
+// label does not open under another, which is what binds an audit-only Group
+// DEK grant to its policy.
+func DecryptDataWithLabel(privateKey *rsa.PrivateKey, encryptedData, label []byte) ([]byte, error) {
+	decryptedData, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedData, label)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt data: %v", err)
 	}
@@ -165,7 +172,12 @@ func DecryptData(privateKey *rsa.PrivateKey, encryptedData []byte) ([]byte, erro
 // process unless it was the caller's own copy to begin with (the caller
 // typically already holds it in the session cache).
 func EncryptData(publicKey *rsa.PublicKey, plaintext []byte) ([]byte, error) {
-	encryptedData, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, plaintext, nil)
+	return EncryptDataWithLabel(publicKey, plaintext, nil)
+}
+
+// EncryptDataWithLabel is EncryptData with an RSA-OAEP label (nil = empty).
+func EncryptDataWithLabel(publicKey *rsa.PublicKey, plaintext, label []byte) ([]byte, error) {
+	encryptedData, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, plaintext, label)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt data: %v", err)
 	}

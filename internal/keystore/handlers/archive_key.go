@@ -109,6 +109,7 @@ func archiveUnwrapWithSlot(
 	d Deps,
 	getKey func(keychain.SecretStore) (*memguard.LockedBuffer, error),
 	encrypted []byte,
+	gc *proto.GrantContext,
 ) ([]byte, error) {
 	privKeyBuf, err := getKey(d.Store)
 	if err != nil {
@@ -120,19 +121,19 @@ func archiveUnwrapWithSlot(
 	if err != nil {
 		return nil, err
 	}
-	return crypto.DecryptData(privKey, encrypted)
+	return unwrapGrant(privKey, encrypted, gc)
 }
 
 // unwrapWithOrgArchiveKey tries each org archive slot that may hold orgID's
 // key, most specific first. Trying a wrong key costs one failed RSA-OAEP
 // decrypt and reveals nothing. The returned error is the first slot's that
 // held a key, or ErrSecretNotFound when none did.
-func unwrapWithOrgArchiveKey(d Deps, orgID string, encrypted []byte) ([]byte, error) {
+func unwrapWithOrgArchiveKey(d Deps, orgID string, encrypted []byte, gc *proto.GrantContext) ([]byte, error) {
 	var firstErr error
 	for _, slot := range keychain.OrgArchiveActiveCandidates(orgID) {
 		groupDEK, err := archiveUnwrapWithSlot(d, func(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
 			return getArchiveSlotPrivateKeySecure(store, slot)
-		}, encrypted)
+		}, encrypted, gc)
 		if err == nil {
 			return groupDEK, nil
 		}
@@ -191,10 +192,10 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_for_archive_b64: "+err.Error())
 	}
 
-	groupDEK, orgErr := unwrapWithOrgArchiveKey(d, req.OrgID, encrypted)
+	groupDEK, orgErr := unwrapWithOrgArchiveKey(d, req.OrgID, encrypted, req.GrantContext)
 	if orgErr != nil {
 		var accErr error
-		groupDEK, accErr = archiveUnwrapWithSlot(d, GetAccountArchivePrivateKeySecure, encrypted)
+		groupDEK, accErr = archiveUnwrapWithSlot(d, GetAccountArchivePrivateKeySecure, encrypted, req.GrantContext)
 		if accErr != nil {
 			d.Logger.Printf("archive unwrap and rewrap error: org slot: %v; account slot: %v", orgErr, accErr)
 			// Neither slot worked. Prefer the org-slot error for the coarse
@@ -203,7 +204,7 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 			if resp := errs.Response(orgErr); resp.ErrorCode == string(errs.ErrCodeNotFound) {
 				return resp
 			}
-			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+orgErr.Error())
+			return grantOpenFailure(req.GrantContext, orgErr)
 		}
 		d.Logger.Println("archive unwrap and rewrap: org slot failed, account archive slot succeeded (handoff-received grant)")
 	}
@@ -213,7 +214,7 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, errors.New("unexpected group dek length (want 32)").Error())
 	}
 
-	newEncrypted, err := crypto.EncryptData(recipientPubKey, groupDEK)
+	newEncrypted, err := wrapGrant(recipientPubKey, groupDEK, req.GrantContext)
 	if err != nil {
 		d.Logger.Printf("archive unwrap and rewrap error: RSA-OAEP encrypt failed: %v", err)
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())

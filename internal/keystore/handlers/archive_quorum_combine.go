@@ -116,9 +116,9 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 			"reconstructed archive key failed to parse (insufficient or invalid shares)")
 	}
 
-	groupDEK, err := crypto.DecryptData(archivePriv, wrappedOldDEK)
+	groupDEK, err := unwrapGrant(archivePriv, wrappedOldDEK, req.GrantContext)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt of OLD DEK failed: "+err.Error())
+		return grantOpenFailure(req.GrantContext, err)
 	}
 	defer secure.Zeroize(groupDEK)
 
@@ -128,7 +128,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 
 	grants := make([]proto.QuorumRewrapGrant, len(pubs))
 	for i, pk := range pubs {
-		enc, encErr := crypto.EncryptData(pk, groupDEK)
+		enc, encErr := wrapGrant(pk, groupDEK, req.GrantContext)
 		if encErr != nil {
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure,
 				fmt.Sprintf("re-wrap for recipient %d failed: %v", i, encErr))

@@ -7,6 +7,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 const (
@@ -20,7 +21,7 @@ func openLabeledSession(t *testing.T, deps Deps, orgID string) (string, []byte) 
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	handle, _, err := deps.GroupSessions.OpenLabeled(append([]byte(nil), raw...), orgID)
+	handle, _, err := deps.GroupSessions.OpenLabeled(append([]byte(nil), raw...), sessions.Label{OrgID: orgID})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

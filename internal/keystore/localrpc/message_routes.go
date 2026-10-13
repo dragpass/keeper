@@ -24,7 +24,7 @@ var groupHandleRoutes = map[string]appRoute{
 		input:  func() any { return &proto.GroupSessionOpenRequest{} },
 	},
 	"/v1/message/seal": {
-		action: proto.ActionGroupEncryptWithAAD,
+		action: proto.ActionMessageSeal,
 		input:  func() any { return &appMessageSeal{} },
 		bind:   bindMessageSeal,
 	},
@@ -43,6 +43,14 @@ var groupHandleRoutes = map[string]appRoute{
 		input:      func() any { return &proto.GroupTranscryptForGuestRequest{} },
 		bind:       bindGuestTranscrypt,
 		plainLimit: guestTranscryptMaxRequestBytes,
+	},
+	// An audit token under an audit-only version: the request names the
+	// version and table and carries the server's decrypt permit. The action
+	// decodes strictly, so the App's bytes reach it unchanged.
+	"/v1/guest-share/transcrypt-audit": {
+		action:     proto.ActionGroupTranscryptAuditForGuest,
+		input:      func() any { return &proto.GroupTranscryptAuditForGuestRequest{} },
+		plainLimit: proto.AuditMaxRequestBytes,
 	},
 }
 
@@ -90,10 +98,12 @@ func bindMessageSeal(_ *Server, input any) (any, error) {
 	if err != nil || size < proto.MessagePlaintextMinBytes || size > proto.MessagePlaintextMaxBytes {
 		return nil, errAppRouteRefused
 	}
-	aad := proto.MessageAADCanonical(in.OrgID, in.GroupID, in.DekVersion, proto.MessageSchemaVersion, in.TokenExpiresAt)
-	return proto.GroupEncryptWithAADRequest{
-		GroupHandle:  in.GroupHandle,
-		PlaintextB64: in.PlaintextB64,
-		AADB64:       base64.StdEncoding.EncodeToString([]byte(aad)),
+	return proto.MessageSealRequest{
+		GroupHandle:    in.GroupHandle,
+		OrgID:          in.OrgID,
+		GroupID:        in.GroupID,
+		DekVersion:     in.DekVersion,
+		TokenExpiresAt: in.TokenExpiresAt,
+		PlaintextB64:   in.PlaintextB64,
 	}, nil
 }
