@@ -381,6 +381,7 @@ type appArchiveRewrap struct {
 	RecipientAccountID      string                       `json:"recipient_account_id,omitempty"`
 	RotationStatements      []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
 	AccountArchivePublicKey string                       `json:"account_archive_public_key,omitempty"`
+	GrantContext            *proto.GrantContext          `json:"grant_context,omitempty"`
 }
 
 func bindArchiveRewrap(s *Server, input any) (any, error) {
@@ -405,6 +406,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 			OwnerAccountID:       in.OwnerAccountID,
 			RecipientAccountID:   in.RecipientAccountID,
 			RotationStatements:   in.RotationStatements,
+			GrantContext:         in.GrantContext,
 		}, nil
 	}
 	target := in.AccountArchivePublicKey
@@ -425,6 +427,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 		OrgID:                in.OrgID,
 		WrappedForArchiveB64: in.WrappedForArchiveB64,
 		RecipientPublicKey:   target,
+		GrantContext:         in.GrantContext,
 	}, nil
 }
 
@@ -435,6 +438,7 @@ type appQuorumCombine struct {
 	WrappedOldDEKB64 string                      `json:"wrapped_old_dek_b64"`
 	OwnerAccountID   string                      `json:"owner_account_id"`
 	Recipients       []proto.DEKRewrapRecipient  `json:"recipients"`
+	GrantContext     *proto.GrantContext         `json:"grant_context,omitempty"`
 }
 
 func bindQuorumCombine(_ *Server, input any) (any, error) {
@@ -452,5 +456,6 @@ func bindQuorumCombine(_ *Server, input any) (any, error) {
 		WrappedOldDEKB64: in.WrappedOldDEKB64,
 		OwnerAccountID:   in.OwnerAccountID,
 		Recipients:       in.Recipients,
+		GrantContext:     in.GrantContext,
 	}, nil
 }
