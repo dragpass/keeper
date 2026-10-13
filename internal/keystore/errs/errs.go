@@ -63,6 +63,11 @@ const (
 	// it; nothing was written.
 	ErrCodeAccountKeyStaged ErrorCode = "account_key_staged"
 
+	// ErrCodeAccountKeyRotationPending: the operation needs the account key,
+	// but a rotation left a pending key the server may already hold. The App
+	// finishes or drops the rotation first; nothing was written.
+	ErrCodeAccountKeyRotationPending ErrorCode = "account_key_rotation_pending"
+
 	// ErrCodePeerKeyChanged: a wrap named a peer account whose public key no
 	// longer matches the pinned fingerprint, and no valid rotation chain
 	// explains the change (account key trust v1, D3 `changed`). Nothing was
