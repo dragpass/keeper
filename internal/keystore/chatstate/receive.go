@@ -91,6 +91,16 @@ type ReceiveCipher interface {
 	RosterReader
 }
 
+// ArchiveOpener is the optional half of a ReceiveCipher that opens a prior
+// epoch application message against the group as it stood in that epoch,
+// once Open has refused it with ErrSenderUnavailable: its sending leaf has
+// since been blanked or re-keyed, and the current tree can no longer name it.
+// The sender comes from that epoch's tree. Nothing about the current group
+// changes; the archive loses the key the message consumed.
+type ArchiveOpener interface {
+	OpenArchived(message []byte) (Opened, error)
+}
+
 // ReceiveRequest is one inbound message. Seq is the server's sequence, which
 // is what a re-read asks by and what the local history is keyed on.
 type ReceiveRequest struct {
@@ -167,11 +177,12 @@ type ReceiveResult struct {
 	EpochUnavailable bool
 
 	// SenderUnavailable is true for a message from a prior epoch whose
-	// sending leaf has since left the group or changed hands. The library
-	// keeps no credentials for a prior epoch and refuses to name such a
-	// sender, so the message does not open on this device. No plaintext, no
-	// position, no sender, and nothing was opened or written for it. Only
-	// ReceiveBatch reports it.
+	// sending leaf has since left the group or changed hands, and which could
+	// not be opened against the archive of its epoch either (ArchiveOpener):
+	// there is no archive, the message is numbered after the Commit that
+	// ended its epoch, or its position was already delivered here. No
+	// plaintext, no position, no sender, and nothing was opened or written for
+	// it. Only ReceiveBatch reports it.
 	SenderUnavailable bool
 
 	// Generation is the record's write counter after the confirmation, or the
@@ -343,6 +354,11 @@ const MaxReceiveBatch = 200
 // header's and is not authenticated. Believing a false one hides one message
 // from this device, which the server could do by not serving it.
 //
+// A fourth: a prior epoch message whose sending leaf has since been blanked or
+// re-keyed, which the library refuses to name (ErrSenderUnavailable). It is
+// opened against the archive of its epoch instead (receiveArchived) and,
+// failing that, answered as SenderUnavailable while the rest proceeds.
+//
 // On a conversation latched NeedsRekey a batch made only of re-reads is still
 // answered, from the history and without MLS (loadLatched), an evicted seq as
 // HistoryUnavailable and a pre-join one as BeforeJoin. A batch holding even
@@ -430,6 +446,9 @@ func (s *Store) ReceiveBatch(
 			if errors.Is(err, ErrEpochUnavailable) {
 				out = append(out, ReceiveResult{Application: true, EpochUnavailable: true, Generation: rec.Generation})
 				continue
+			}
+			if errors.Is(err, ErrSenderUnavailable) {
+				result, wrote, err = s.receiveArchived(conversationID, rec, wm, req, cipher, accept)
 			}
 			if errors.Is(err, ErrSenderUnavailable) {
 				out = append(out, ReceiveResult{Application: true, SenderUnavailable: true, Generation: rec.Generation})
@@ -529,6 +548,29 @@ func (s *Store) receiveOne(
 	conversationID string, rec *Record, wm ServerWatermark, req ReceiveRequest,
 	cipher ReceiveCipher, accept func([]byte) error,
 ) (ReceiveResult, bool, error) {
+	return s.receiveWith(conversationID, rec, wm, req, cipher, accept, false)
+}
+
+// receiveArchived is receiveOne for a message Open refused with
+// ErrSenderUnavailable, opened against the archived group of its epoch
+// instead (ArchiveOpener). It answers ErrSenderUnavailable, with nothing
+// opened, when the cipher has no archive to offer or the record says the
+// message came after the Commit that ended its epoch
+// (Record.archivedOpenAllowed).
+func (s *Store) receiveArchived(
+	conversationID string, rec *Record, wm ServerWatermark, req ReceiveRequest,
+	cipher ReceiveCipher, accept func([]byte) error,
+) (ReceiveResult, bool, error) {
+	if _, ok := cipher.(ArchiveOpener); !ok || !rec.archivedOpenAllowed(req) {
+		return ReceiveResult{}, false, ErrSenderUnavailable
+	}
+	return s.receiveWith(conversationID, rec, wm, req, cipher, accept, true)
+}
+
+func (s *Store) receiveWith(
+	conversationID string, rec *Record, wm ServerWatermark, req ReceiveRequest,
+	cipher ReceiveCipher, accept func([]byte) error, archived bool,
+) (ReceiveResult, bool, error) {
 	if len(req.Message) == 0 {
 		return ReceiveResult{}, false, errors.New("receive needs a message")
 	}
@@ -578,7 +620,15 @@ func (s *Store) receiveOne(
 	if err := cipher.Load(rec.GroupState); err != nil {
 		return ReceiveResult{}, false, err
 	}
-	opened, err := cipher.Open(req.Message)
+	var (
+		opened Opened
+		err    error
+	)
+	if archived {
+		opened, err = cipher.(ArchiveOpener).OpenArchived(req.Message)
+	} else {
+		opened, err = cipher.Open(req.Message)
+	}
 	if err != nil {
 		return ReceiveResult{}, false, err
 	}
@@ -607,6 +657,13 @@ func (s *Store) receiveOne(
 			opened.AuthenticatedData, position, opened.KeyGeneration,
 		); err != nil {
 			return ReceiveResult{}, false, err
+		}
+		// An archive is taken when its epoch ends, so a key this device
+		// consumed later through the prior epoch secrets is still in it. A
+		// position already delivered here is that message again under another
+		// seq, and it is not shown twice.
+		if archived && rec.receivedContains(position) {
+			return ReceiveResult{}, false, ErrSenderUnavailable
 		}
 		if accept != nil {
 			if err := accept(opened.Plaintext); err != nil {

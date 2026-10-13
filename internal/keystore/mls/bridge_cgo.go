@@ -102,6 +102,11 @@ int32_t dpmls_group_process(DpSession *handle,
                             uint64_t *epoch, uint32_t *sender_index,
                             uint8_t *removed, uint8_t *is_application,
                             uint32_t *key_generation, uint8_t *key_generation_known);
+int32_t dpmls_group_process_archived(DpSession *handle,
+                                     const uint8_t *message, size_t message_len,
+                                     DpBuf *out, DpBuf *authenticated_data, DpBuf *sender_identity,
+                                     uint64_t *epoch, uint32_t *sender_index,
+                                     uint32_t *key_generation, uint8_t *key_generation_known);
 int32_t dpmls_wire_form(const uint8_t *message, size_t message_len, uint8_t *out);
 
 int32_t dpmls_group_export_secret(DpSession *handle,
@@ -562,6 +567,49 @@ func (s *Session) Process(message []byte) (Processed, error) {
 	// Nil rather than zero when the library could not report it. The two are
 	// different answers and the fail-closed rule upstream of here depends on
 	// being able to tell them apart.
+	if generationKnwn != 0 {
+		known := uint32(generation)
+		out.KeyGeneration = &known
+	}
+	return out, nil
+}
+
+// ProcessArchived opens a prior epoch application message against the group
+// as it stood in that epoch (the Rust session's archive). It is only ever an
+// application message: SenderIdentity is the sending leaf's credential in
+// that epoch's tree.
+func (s *Session) ProcessArchived(message []byte) (Processed, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.live()
+	if err != nil {
+		return Processed{}, err
+	}
+	var (
+		buf            C.DpBuf
+		aad            C.DpBuf
+		identity       C.DpBuf
+		epoch          C.uint64_t
+		senderIndex    C.uint32_t
+		generation     C.uint32_t
+		generationKnwn C.uint8_t
+	)
+	rc := C.dpmls_group_process_archived(
+		h, bytePtr(message), C.size_t(len(message)),
+		&buf, &aad, &identity, &epoch, &senderIndex, &generation, &generationKnwn,
+	)
+	runtime.KeepAlive(message)
+	if rc != 0 {
+		return Processed{}, statusError(rc)
+	}
+	out := Processed{
+		Epoch:             uint64(epoch),
+		SenderLeafIndex:   uint32(senderIndex),
+		Application:       true,
+		AuthenticatedData: takeBuf(&aad),
+		SenderIdentity:    takeBuf(&identity),
+		Plaintext:         takeBuf(&buf),
+	}
 	if generationKnwn != 0 {
 		known := uint32(generation)
 		out.KeyGeneration = &known

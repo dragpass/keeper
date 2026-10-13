@@ -303,6 +303,28 @@ func (r *Record) noteConfirmedRemoval(seq, epoch uint64, commit []byte, removed 
 	}
 }
 
+// archivedOpenAllowed reports whether a prior epoch message may be opened
+// against the archive of the epoch its header names. The server takes a
+// message only in the epoch it currently confirms, so every message of epoch
+// E sits before the Commit that produced E+1 on the seq axis. A message of E
+// numbered after that Commit is one sent once E was over, and a member that
+// Commit removed still holds E's keys: it is refused. The bound is known when
+// this device applied that Commit from the handshake log, which records its
+// seq; a Commit this device confirmed as its own carries none, and the message
+// is then judged on its epoch alone, as mls-rs judges a prior epoch message
+// from a sender still in the group. A header that names no epoch is refused.
+func (r *Record) archivedOpenAllowed(req ReceiveRequest) bool {
+	if req.FramedEpoch == nil {
+		return false
+	}
+	for _, c := range r.ConfirmedCommits {
+		if c.Epoch == *req.FramedEpoch+1 && c.Seq != 0 {
+			return req.Seq < c.Seq
+		}
+	}
+	return true
+}
+
 func (r *Record) confirmedRemoval(seq, epoch uint64, commit []byte) ([]string, bool) {
 	for _, c := range r.ConfirmedCommits {
 		if c.Seq == seq && c.Epoch == epoch && c.CommitHash == commitHash(commit) {
