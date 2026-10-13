@@ -121,7 +121,11 @@ func TestHandleAuthSignupPrepareCreatesDeviceKeyInsideKeeper(t *testing.T) {
 
 func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
 	deps, _, store := newTestDeps(t)
-	const activePEM = "-----BEGIN PRIVATE KEY-----\nACTIVE-KEY\n-----END PRIVATE KEY-----"
+	active, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRSAKeyPair: %v", err)
+	}
+	activePEM := active.PrivateKey
 	if err := keychain.SavePrivateKey(store, activePEM); err != nil {
 		t.Fatalf("SavePrivateKey: %v", err)
 	}
@@ -151,6 +155,10 @@ func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
 		t.Fatal("wrapped keeper does not contain the active private key")
 	}
 	secure.Zeroize(decrypted)
+	canonical := proto.RecoveryKeyReissueCanonical(data.RecoveryKeyVersion, data.RecoveryAuthSeed, data.RecoveryWrappedKeeper)
+	if err := verifyStatementSignature([]byte(active.PublicKey), data.KeyProofSignature, canonical); err != nil {
+		t.Fatalf("key proof does not verify against the wrapped key's public key: %v", err)
+	}
 
 	encoded, err := json.Marshal(response)
 	if err != nil {
@@ -160,6 +168,40 @@ func TestHandleAuthRecoveryReissuePrepareKeepsRKOutOfResponse(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("reissue response contains forbidden secret field/value %q", forbidden)
 		}
+	}
+}
+
+// A rotation whose server complete may have landed but whose promote did
+// not: the active key may be the account's previous one, so wrapping it
+// under a new RK24 would hand the server an RK24 that recovers nothing.
+func TestHandleAuthRecoveryReissuePrepareRefusesWhileRotationPending(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	active, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRSAKeyPair: %v", err)
+	}
+	pending, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRSAKeyPair: %v", err)
+	}
+	if err := keychain.SavePrivateKey(store, active.PrivateKey); err != nil {
+		t.Fatalf("SavePrivateKey: %v", err)
+	}
+	if err := keychain.SavePendingPrivateKey(store, pending.PrivateKey); err != nil {
+		t.Fatalf("SavePendingPrivateKey: %v", err)
+	}
+	if err := keychain.SavePendingPublicKey(store, pending.PublicKey); err != nil {
+		t.Fatalf("SavePendingPublicKey: %v", err)
+	}
+
+	response := HandleAuthRecoveryReissuePrepare(deps, proto.AuthRecoveryReissuePrepareRequest{
+		Alias: "alice", RecoveryKey: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ",
+	})
+	if response.Success || response.ErrorCode != "account_key_rotation_pending" {
+		t.Fatalf("response = %+v, want account_key_rotation_pending", response)
+	}
+	if got, _ := keychain.GetPendingPrivateKey(store); got != pending.PrivateKey {
+		t.Fatal("refused reissue changed the pending key")
 	}
 }
 

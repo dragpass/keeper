@@ -20,6 +20,7 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodePasswordInvalid, "password_invalid"},
 		{ErrCodeSignupPending, "signup_pending"},
 		{ErrCodeAccountKeyStaged, "account_key_staged"},
+		{ErrCodeAccountKeyRotationPending, "account_key_rotation_pending"},
 		{ErrCodePeerKeyChanged, "peer_key_changed"},
 		{ErrCodePeerKeyUnverified, "peer_key_unverified"},
 		{ErrCodePeerKeyOwnerMismatch, "peer_key_owner_mismatch"},

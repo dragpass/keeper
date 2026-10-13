@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"unicode/utf8"
 
 	"github.com/awnumar/memguard"
@@ -167,6 +168,16 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 		}
 		return errs.CodeResponse(errs.ErrCodeAccountKeyStaged, "a signup is not complete on this device")
 	}
+	// A rotation the server may already have completed has not been promoted
+	// yet: the active key may be the account's previous key. The App resumes
+	// or drops the rotation first.
+	if _, err := keychain.GetPendingPrivateKey(d.Store); err == nil || !errors.Is(err, keychain.ErrSecretNotFound) {
+		secure.WipeString(&req.RecoveryKey)
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read the rotation state")
+		}
+		return errs.CodeResponse(errs.ErrCodeAccountKeyRotationPending, "a key rotation is not complete on this device")
+	}
 	recoveryKey := []byte(req.RecoveryKey)
 	secure.WipeString(&req.RecoveryKey)
 	defer secure.Zeroize(recoveryKey)
@@ -176,7 +187,7 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 	}
 	defer secure.Zeroize(wrapKey)
 
-	wrappedKeeper, response := wrapActivePrivateKeyWithKey(d, wrapKey)
+	wrappedKeeper, keyProof, response := wrapActivePrivateKeyWithProof(d, wrapKey, authSeed, recoverykey.Version)
 	if !response.Success {
 		return response
 	}
@@ -185,36 +196,36 @@ func HandleAuthRecoveryReissuePrepare(d Deps, req proto.AuthRecoveryReissuePrepa
 		RecoveryAuthSeed:      authSeed,
 		RecoveryWrappedKeeper: wrappedKeeper,
 		RecoveryKeyVersion:    recoverykey.Version,
+		KeyProofSignature:     keyProof,
 	}}
 }
 
-// wrapActivePrivateKeyWithKey AES-GCM-wraps the current active Keeper privkey
-// with wrapKey and returns the Base64 result. The keypair itself is unchanged
-// — only the wrap key is swapped, which is what an RK24 re-issue needs.
-//
-// The plaintext PEM is moved into memguard and the original string wiped, so
-// it lives on the Go heap as briefly as possible.
-func wrapActivePrivateKeyWithKey(d Deps, wrapKey []byte) (string, proto.BaseResponse) {
-	pemStr, err := keychain.GetPrivateKey(d.Store)
+// wrapActivePrivateKeyWithProof AES-GCM-wraps the current active Keeper
+// privkey with wrapKey and signs RecoveryKeyReissueCanonical with the same
+// key, read once, so the proof is from the key that was wrapped. The keypair
+// itself is unchanged; only the wrap key is swapped, which is what an RK24
+// re-issue needs.
+func wrapActivePrivateKeyWithProof(d Deps, wrapKey []byte, authSeed string, version uint) (string, string, proto.BaseResponse) {
+	privKeyBuf, err := getPrivateKeySecure(d.Store)
 	if err != nil {
 		d.Logger.Printf("wrap active private key error: keychain lookup: %v", err)
-		return "", errs.CodeResponse(errs.ErrCodeStorageFailure,
+		return "", "", errs.CodeResponse(errs.ErrCodeStorageFailure,
 			"active private key not found in keychain: "+err.Error())
 	}
-	if pemStr == "" {
-		return "", errs.CodeResponse(errs.ErrCodeNotFound,
-			"active private key empty in keychain")
-	}
-
-	privKeyBuf := memguard.NewBufferFromBytes([]byte(pemStr))
-	secure.WipeString(&pemStr)
 	defer privKeyBuf.Destroy()
+	if privKeyBuf.Size() == 0 {
+		return "", "", errs.CodeResponse(errs.ErrCodeNotFound, "active private key empty in keychain")
+	}
 
 	wrappedB64, err := crypto.AESGCMEncryptBase64(d.Random(), wrapKey, privKeyBuf.Bytes())
 	if err != nil {
 		d.Logger.Printf("wrap active private key error: AES-GCM wrap failed: %v", err)
-		return "", errs.CodeResponse(errs.ErrCodeCryptoFailure,
+		return "", "", errs.CodeResponse(errs.ErrCodeCryptoFailure,
 			"AES-GCM wrap failed: "+err.Error())
 	}
-	return wrappedB64, proto.BaseResponse{Success: true}
+	proof, err := signDataSecure(privKeyBuf, proto.RecoveryKeyReissueCanonical(version, authSeed, wrappedB64))
+	if err != nil {
+		return "", "", errs.CodeResponse(errs.ErrCodeCryptoFailure, "recovery key proof signature failed")
+	}
+	return wrappedB64, proof, proto.BaseResponse{Success: true}
 }
