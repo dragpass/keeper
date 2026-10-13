@@ -98,6 +98,10 @@ func (s *Session) Process(message []byte) (Processed, error) {
 	return Processed{}, ErrUnavailable
 }
 
+func (s *Session) ProcessArchived(message []byte) (Processed, error) {
+	return Processed{}, ErrUnavailable
+}
+
 func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, err error) {
 	return 0, 0, 0, ErrUnavailable
 }

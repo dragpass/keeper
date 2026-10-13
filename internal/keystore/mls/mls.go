@@ -137,6 +137,10 @@ type Processed struct {
 	// reaches its None by folding an extraction error into a default, so a
 	// substituted zero would be indistinguishable from a checked match.
 	KeyGeneration *uint32
+
+	// SenderIdentity is set only by ProcessArchived: the credential identity
+	// of the sending leaf in the tree of the epoch the message was sent in.
+	SenderIdentity []byte
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -796,6 +800,33 @@ func (c *Cipher) Open(message []byte) (chatstate.Opened, error) {
 		SenderLeafIndex:   processed.SenderLeafIndex,
 		Application:       processed.Application,
 		Removed:           processed.Removed,
+		AuthenticatedData: processed.AuthenticatedData,
+		KeyGeneration:     processed.KeyGeneration,
+		Plaintext:         processed.Plaintext,
+	}, nil
+}
+
+// OpenArchived opens a prior epoch application message that Open refused
+// with chatstate.ErrSenderUnavailable, against the group as it stood in that
+// epoch. The sender is the credential of the sending leaf in that epoch's
+// tree: whether they were a member is judged as of then, not by the roster
+// now, which may have blanked or re-keyed the leaf since.
+func (c *Cipher) OpenArchived(message []byte) (chatstate.Opened, error) {
+	processed, err := c.session.ProcessArchived(message)
+	if err != nil {
+		return chatstate.Opened{}, err
+	}
+	account, device, err := ParseCredentialIdentity(processed.SenderIdentity)
+	if err != nil {
+		secure.Zeroize(processed.Plaintext)
+		return chatstate.Opened{}, err
+	}
+	return chatstate.Opened{
+		SenderAccountID:   account,
+		SenderDeviceID:    device,
+		Epoch:             processed.Epoch,
+		SenderLeafIndex:   processed.SenderLeafIndex,
+		Application:       true,
 		AuthenticatedData: processed.AuthenticatedData,
 		KeyGeneration:     processed.KeyGeneration,
 		Plaintext:         processed.Plaintext,

@@ -1039,6 +1039,7 @@ pub unsafe extern "C" fn dpmls_group_process(
             sender_index: leaf,
             authenticated_data: aad,
             key_generation: gen,
+            sender_identity: _,
         } = {
             // SAFETY: the caller promises `handle` came from dpmls_session_new
             // and is not used concurrently, and that `message` points to
@@ -1059,6 +1060,64 @@ pub unsafe extern "C" fn dpmls_group_process(
             *key_generation_known = u8::from(gen.is_some());
             put(authenticated_data, aad)?;
             put(out, take_zeroizing(application))?;
+        }
+        Ok(DPMLS_OK)
+    })
+}
+
+/// Open a prior epoch application message against the archived group of its
+/// epoch (`Session::process_archived`). The outputs are `dpmls_group_process`'s
+/// for an application message, plus `sender_identity`: the credential identity
+/// of the sending leaf in that epoch's tree, which the current roster may no
+/// longer hold. No archive is `DPMLS_ERR_PRIOR_EPOCH_SENDER_UNAVAILABLE`.
+///
+/// # Safety
+/// Pointer rules as in `slice`; `handle` as in `session_of`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn dpmls_group_process_archived(
+    handle: *mut Session,
+    message: *const u8,
+    message_len: usize,
+    out: *mut DpBuf,
+    authenticated_data: *mut DpBuf,
+    sender_identity: *mut DpBuf,
+    epoch: *mut u64,
+    sender_index: *mut u32,
+    key_generation: *mut u32,
+    key_generation_known: *mut u8,
+) -> i32 {
+    guard(|| {
+        if epoch.is_null()
+            || sender_index.is_null()
+            || key_generation.is_null()
+            || key_generation_known.is_null()
+        {
+            return Ok(DPMLS_ERR_ARG);
+        }
+        let processed = {
+            // SAFETY: the caller promises `handle` came from dpmls_session_new
+            // and is not used concurrently, and that `message` points to
+            // `message_len` readable bytes for the duration of this call.
+            let (session, message) = unsafe { (session_of(handle)?, slice(message, message_len)?) };
+            session.process_archived(message)?
+        };
+        let gen = processed.key_generation;
+        // SAFETY: the four scalar outputs were checked for null above and the
+        // caller promises each is writable; the caller promises the three
+        // DpBuf outputs are writable, which `put` checks for null and
+        // overwrites without reading.
+        unsafe {
+            *epoch = processed.epoch;
+            *sender_index = processed.sender_index;
+            *key_generation = gen.unwrap_or(0);
+            *key_generation_known = u8::from(gen.is_some());
+            put(authenticated_data, processed.authenticated_data)?;
+            put(
+                sender_identity,
+                processed.sender_identity.unwrap_or_default(),
+            )?;
+            put(out, take_zeroizing(processed.application))?;
         }
         Ok(DPMLS_OK)
     })

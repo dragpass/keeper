@@ -17,9 +17,13 @@ use zeroize::Zeroizing;
 /// only bytes we can ever hold are the ones handed to `write`, and those arrive
 /// as a state plus a set of prior epochs rather than as one serialized object.
 /// Framing them ourselves is what lets `Record.GroupState` stay a single field.
-const MAGIC: &[u8; 8] = b"DPMLSGS2";
+const MAGIC: &[u8; 8] = b"DPMLSGS3";
+/// GS2 is GS3 without the archived epoch states. It reads as a group with no
+/// archive, which only means a prior epoch message from a departed sender is
+/// answered as before (sender unavailable) until the next transitions archive.
+const MAGIC_V2: &[u8; 8] = b"DPMLSGS2";
 const RETIRED_MAGIC_V1: &[u8; 8] = b"DPMLSGS1";
-const MAX_PRIOR_EPOCHS: usize = 16;
+pub(crate) const MAX_PRIOR_EPOCHS: usize = 16;
 const PRIOR_EPOCH_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 struct StoredEpoch {
@@ -33,6 +37,19 @@ struct Inner {
     state: Option<Zeroizing<Vec<u8>>>,
     epochs: BTreeMap<u64, StoredEpoch>,
     max_epoch_id_seen: Option<u64>,
+    /// The whole group state as it stood in each retained prior epoch, keyed
+    /// by that epoch. mls-rs keeps only signature public keys for a prior
+    /// epoch, so once a leaf is blanked or re-keyed it cannot name who sent a
+    /// message in that epoch (`MemberNotFound`). The archived state still has
+    /// that epoch's tree, so the message can be processed against the group
+    /// as it was then (`Session::process_archived`). An archive never outlives
+    /// its prior epoch (`prune`), so it widens nothing the prior epoch secrets
+    /// did not already keep.
+    archives: BTreeMap<u64, Zeroizing<Vec<u8>>>,
+    /// The state of the epoch a Commit is about to end, taken before it is
+    /// applied. The write that records that epoch as prior moves it into
+    /// `archives`; any other write drops it.
+    staged_archive: Option<(u64, Zeroizing<Vec<u8>>)>,
 }
 
 /// Take a lock even if an earlier holder panicked.
@@ -64,6 +81,8 @@ impl Inner {
         while self.epochs.len() > MAX_PRIOR_EPOCHS {
             self.epochs.pop_first();
         }
+        let epochs = &self.epochs;
+        self.archives.retain(|id, _| epochs.contains_key(id));
     }
 }
 
@@ -97,6 +116,58 @@ impl RecordStorage {
         inner.epochs.contains_key(&epoch)
     }
 
+    /// A storage holding one group state and nothing else: the throwaway
+    /// storage an archived epoch is loaded from.
+    pub fn seeded(group_id: &[u8], state: Zeroizing<Vec<u8>>) -> Self {
+        let storage = Self::default();
+        {
+            let mut inner = lock(&storage.0);
+            inner.group_id = group_id.to_vec();
+            inner.state = Some(state);
+        }
+        storage
+    }
+
+    /// The group state mls-rs last wrote.
+    pub fn current_state(&self) -> Option<Zeroizing<Vec<u8>>> {
+        lock(&self.0).state.clone()
+    }
+
+    /// Hold `state`, the group as it stands in `epoch`, for the write that
+    /// records `epoch` as a prior epoch.
+    pub fn stage_archive(&self, epoch: u64, state: Zeroizing<Vec<u8>>) {
+        lock(&self.0).staged_archive = Some((epoch, state));
+    }
+
+    pub fn archived_state(&self, group_id: &[u8], epoch: u64) -> Option<Zeroizing<Vec<u8>>> {
+        let mut inner = lock(&self.0);
+        if inner.group_id != group_id {
+            return None;
+        }
+        inner.prune(now_seconds());
+        inner.archives.get(&epoch).cloned()
+    }
+
+    /// Replace an archived state with the one processing a message from it
+    /// left behind, so the key that message consumed is gone from the archive
+    /// as well. An archive pruned meanwhile stays gone.
+    pub fn replace_archive(&self, epoch: u64, state: Zeroizing<Vec<u8>>) {
+        let mut inner = lock(&self.0);
+        if let Some(entry) = inner.archives.get_mut(&epoch) {
+            *entry = state;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn archived_epochs(&self) -> Vec<u64> {
+        lock(&self.0).archives.keys().copied().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drop_archives(&self) {
+        lock(&self.0).archives.clear();
+    }
+
     /// Serialize everything mls-rs has pushed down so far. None means the group
     /// has never been written, which is not the same as an empty group.
     pub fn encode(&self) -> Option<Zeroizing<Vec<u8>>> {
@@ -115,6 +186,11 @@ impl RecordStorage {
             out.extend_from_slice(&epoch.inserted_at.to_be_bytes());
             put_bytes(&mut out, &epoch.data);
         }
+        out.extend_from_slice(&(inner.archives.len() as u32).to_be_bytes());
+        for (id, state) in inner.archives.iter() {
+            out.extend_from_slice(&id.to_be_bytes());
+            put_bytes(&mut out, state);
+        }
         Some(out)
     }
 
@@ -130,7 +206,7 @@ impl RecordStorage {
                 "chat state MLS blob uses a retired development format; reset local chat state",
             );
         }
-        if magic != MAGIC {
+        if magic != MAGIC && magic != MAGIC_V2 {
             return Err("chat state MLS blob has an unknown magic");
         }
         let group_id = cur.take_prefixed()?.to_vec();
@@ -149,6 +225,13 @@ impl RecordStorage {
                 },
             );
         }
+        let mut archives = BTreeMap::new();
+        if magic == MAGIC {
+            for _ in 0..cur.take_u32()? {
+                let id = cur.take_u64()?;
+                archives.insert(id, Zeroizing::new(cur.take_prefixed()?.to_vec()));
+            }
+        }
         if !cur.done() {
             return Err("chat state MLS blob has trailing bytes");
         }
@@ -157,6 +240,8 @@ impl RecordStorage {
         inner.group_id = group_id.clone();
         inner.state = Some(state);
         inner.epochs = epochs;
+        inner.archives = archives;
+        inner.staged_archive = None;
         inner.max_epoch_id_seen = Some(max_epoch_id_seen).filter(|id| *id != u64::MAX);
         inner.prune(now_seconds());
         Ok(group_id)
@@ -197,6 +282,12 @@ impl GroupStateStorage for RecordStorage {
         inner.group_id = state.id;
         inner.state = Some(state.data);
         let now = now_seconds();
+        let staged = inner.staged_archive.take();
+        if let Some((id, archived)) = staged {
+            if epoch_inserts.iter().any(|rec| rec.id == id) {
+                inner.archives.insert(id, archived);
+            }
+        }
         for rec in epoch_inserts {
             inner.max_epoch_id_seen =
                 Some(inner.max_epoch_id_seen.map_or(rec.id, |id| id.max(rec.id)));
@@ -493,6 +584,72 @@ mod tests {
         let err = loaded.decode_into(&blob).unwrap_err();
         assert!(err.contains("retired development format"), "{err}");
         assert!(loaded.state(b"gid").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_staged_state_is_archived_only_by_the_write_that_retires_its_epoch() {
+        let mut s = RecordStorage::new();
+        s.write(state(b"gid", b"epoch 3"), vec![], vec![]).unwrap();
+        s.stage_archive(3, Zeroizing::new(b"epoch 3".to_vec()));
+        s.write(state(b"gid", b"epoch 3 again"), vec![], vec![])
+            .unwrap();
+        assert!(
+            s.archived_state(b"gid", 3).is_none(),
+            "a write that retires nothing archives nothing"
+        );
+
+        s.stage_archive(3, Zeroizing::new(b"epoch 3".to_vec()));
+        s.write(
+            state(b"gid", b"epoch 4"),
+            vec![EpochRecord::new(3, Zeroizing::new(b"e3".to_vec()))],
+            vec![],
+        )
+        .unwrap();
+        let loaded = RecordStorage::new();
+        loaded.decode_into(&s.encode().unwrap()).unwrap();
+        assert_eq!(
+            loaded.archived_state(b"gid", 3).unwrap().to_vec(),
+            b"epoch 3"
+        );
+        assert!(loaded.archived_state(b"other", 3).is_none());
+    }
+
+    #[test]
+    fn an_archive_is_pruned_with_its_prior_epoch() {
+        let mut s = RecordStorage::new();
+        s.stage_archive(1, Zeroizing::new(b"epoch 1".to_vec()));
+        s.write(
+            state(b"gid", b"epoch 2"),
+            vec![EpochRecord::new(1, Zeroizing::new(b"e1".to_vec()))],
+            vec![],
+        )
+        .unwrap();
+        let later = (2..=17)
+            .map(|id| EpochRecord::new(id, Zeroizing::new(vec![id as u8])))
+            .collect();
+        s.write(state(b"gid", b"epoch 18"), later, vec![]).unwrap();
+
+        assert!(s.epoch(b"gid", 1).unwrap().is_none());
+        assert!(s.archived_state(b"gid", 1).is_none());
+    }
+
+    #[test]
+    fn a_v2_blob_reads_as_a_group_with_no_archive() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(MAGIC_V2);
+        put_bytes(&mut blob, b"gid");
+        put_bytes(&mut blob, b"body");
+        blob.extend_from_slice(&1u64.to_be_bytes());
+        blob.extend_from_slice(&1u32.to_be_bytes());
+        blob.extend_from_slice(&1u64.to_be_bytes());
+        blob.extend_from_slice(&now_seconds().to_be_bytes());
+        put_bytes(&mut blob, b"e1");
+
+        let loaded = RecordStorage::new();
+        assert_eq!(loaded.decode_into(&blob).unwrap(), b"gid".to_vec());
+        assert_eq!(loaded.epoch(b"gid", 1).unwrap().unwrap().to_vec(), b"e1");
+        assert!(loaded.archived_epochs().is_empty());
+        assert_eq!(&loaded.encode().unwrap()[..MAGIC.len()], MAGIC);
     }
 
     #[test]

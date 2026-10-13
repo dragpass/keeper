@@ -593,13 +593,22 @@ func HandleMLSJoin(d Deps, payload json.RawMessage) proto.BaseResponse {
 //	the caller says nothing about binding: no AAD, no key, no position. MLS
 //	  framing and the sender's declaration, checked against the generation
 //	  the library derived, bind each message
-//	every plaintext is well-formed UTF-8
+//	only well-formed, non-empty UTF-8 is handed back as a plaintext. A message
+//	  that opens and is anything else (bytes a client of another version or a
+//	  misbehaving member sent) is answered as unsupported, under its sender,
+//	  with no plaintext, and the batch proceeds
 //	one failure refuses the whole batch with no partial plaintext and nothing
 //	  written
 //	every plaintext buffer is zeroized, nothing about one is logged
 // ────────────────────────────────────────────────────────────────────────
 
-var errDisplayNotText = errors.New("mls display plaintext is not UTF-8")
+// isDisplayText is what the display path hands back as a plaintext. The App
+// renders a message as text and takes an empty plaintext for a missing one,
+// so anything else is answered as unsupported rather than refusing the page:
+// one such message would otherwise stop every message after it from showing.
+func isDisplayText(plaintext []byte) bool {
+	return len(plaintext) > 0 && utf8.Valid(plaintext)
+}
 
 // HandleMLSEncrypt encrypts one application message through chatstate.Send:
 // the position is consumed, encrypted at and persisted in one locked section.
@@ -674,9 +683,10 @@ func HandleMLSMarkSent(d Deps, payload json.RawMessage) proto.BaseResponse {
 
 // HandleMLSDecryptBatchForAppDisplay opens a page of application messages
 // for the app's own screen, all or nothing but for a message of this device
-// that has no local copy, a message whose copy the history evicted, and a
-// message from before this device's leaf entered the group
-// (chatstate.ReceiveBatch).
+// that has no local copy, a message whose copy the history evicted, a
+// message from before this device's leaf entered the group, a prior epoch
+// message this device can no longer open (chatstate.ReceiveBatch), and a
+// message that opens and is not text (isDisplayText).
 func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.BaseResponse {
 	var req proto.MLSDecryptBatchForAppDisplayRequest
 	c, resp, ok := openMLSChat(d, payload, &req, proto.MLSDecryptMaxRequestBytes)
@@ -702,23 +712,15 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		}
 		reqs = append(reqs, req)
 	}
-	acceptText := func(plaintext []byte) error {
-		if !utf8.Valid(plaintext) {
-			return errDisplayNotText
-		}
-		return nil
-	}
-	results, err := c.store.ReceiveBatch(c.conv, c.wm, reqs, acceptText, mls.NewCipher(c.session, c.verifier(d, nil)))
+	// A message that is not text is still opened and sealed into the history
+	// like any other, so its key is consumed once and a re-read answers the
+	// same; only the response leaves its bytes out (isDisplayText).
+	results, err := c.store.ReceiveBatch(c.conv, c.wm, reqs, nil, mls.NewCipher(c.session, c.verifier(d, nil)))
 	defer func() {
 		for _, r := range results {
 			secure.Zeroize(r.Plaintext)
 		}
 	}()
-	if errors.Is(err, errDisplayNotText) {
-		d.Logger.Println("mls decrypt batch refused a plaintext that is not text")
-		return errs.CodeResponse(errs.ErrCodeChatMLSFailed,
-			"a message is not text; nothing was shown or written")
-	}
 	if err != nil {
 		return chatStateFailure(d, "mls decrypt batch", err)
 	}
@@ -756,10 +758,15 @@ func HandleMLSDecryptBatchForAppDisplay(d Deps, payload json.RawMessage) proto.B
 		if r.Sender.AccountID == "" || r.Sender.DeviceID == "" {
 			return chatStateFailure(d, "mls decrypt batch", chatstate.ErrHistoryUnavailable)
 		}
-		plaintexts[i] = base64.StdEncoding.EncodeToString(r.Plaintext)
+		state := proto.MLSDisplayItemStateShown
+		if isDisplayText(r.Plaintext) {
+			plaintexts[i] = base64.StdEncoding.EncodeToString(r.Plaintext)
+		} else {
+			state = proto.MLSDisplayItemStateUnsupported
+		}
 		items[i] = proto.MLSDisplayItem{
 			Seq:             req.Messages[i].Seq,
-			State:           proto.MLSDisplayItemStateShown,
+			State:           state,
 			SenderAccountID: r.Sender.AccountID,
 			SenderDeviceID:  r.Sender.DeviceID,
 			Epoch:           r.Position.Epoch,

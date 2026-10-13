@@ -1047,12 +1047,22 @@ const (
 
 	// MLSDisplayItemStateSenderUnavailable — the message is from a prior
 	// epoch and the leaf that sent it has since left the group or changed
-	// hands (removed, replaced, or re-keyed). MLS keeps no credentials for a
-	// prior epoch, so it cannot be attributed and does not open on this
-	// device. plaintext_b64 is "" at this index, the sender and position
-	// fields are empty and zero, and nothing was opened or written for it.
-	// The batch proceeds.
+	// hands (removed, replaced, or re-keyed), and this device cannot open it
+	// against the group as it stood in that epoch: it holds no archive of
+	// that epoch (the epoch ended before this Keeper archived epochs), or the
+	// message is numbered after the Commit that ended its epoch, so it was
+	// sent once the sender was out. plaintext_b64 is "" at this index, the
+	// sender and position fields are empty and zero, and nothing was opened
+	// or written for it. The batch proceeds.
 	MLSDisplayItemStateSenderUnavailable = "sender_unavailable"
+
+	// MLSDisplayItemStateUnsupported — the message opened, and what it holds
+	// is not text this Keeper hands back (not well-formed UTF-8, or empty):
+	// a client of another version, or a member sending something else.
+	// plaintext_b64 is "" at this index; the sender and position are the
+	// authenticated ones. It was opened and sealed into the history like any
+	// message, so a re-read answers the same. The batch proceeds (0.0.58).
+	MLSDisplayItemStateUnsupported = "unsupported"
 )
 
 // MLSDisplayItem is what the app may show about one decrypted message besides

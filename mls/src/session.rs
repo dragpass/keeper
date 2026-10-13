@@ -169,6 +169,11 @@ pub struct Processed {
     /// error, so a caller that substitutes zero here cannot tell "checked it"
     /// from "could not look".
     pub key_generation: Option<u32>,
+    /// The credential identity of the sending leaf, read from the tree of the
+    /// epoch the message was sent in. Only `process_archived` sets it: there
+    /// the current tree may no longer hold that leaf, so the caller cannot
+    /// read it from the roster as it does for every other message.
+    pub sender_identity: Option<Vec<u8>>,
 }
 
 pub fn generate_signature_key() -> Res<(Vec<u8>, Vec<u8>)> {
@@ -284,6 +289,27 @@ pub fn key_package_not_after(key_package: &[u8]) -> Res<u64> {
         .seconds_since_epoch())
 }
 
+fn build_client(
+    gate: &LeafGate,
+    storage: &RecordStorage,
+    rules: &AuthorityRules,
+    custody: &KeyPackageCustody,
+    signing_identity: &SigningIdentity,
+    secret_key: SignatureSecretKey,
+) -> Client<Config> {
+    Client::builder()
+        .extension_type(LEAF_DECLARATION_EXTENSION.into())
+        .extension_type(ROLES_EXTENSION.into())
+        .key_package_lifetime(KEY_PACKAGE_LIFETIME)
+        .crypto_provider(RustCryptoProvider::default())
+        .identity_provider(gate.clone())
+        .group_state_storage(storage.clone())
+        .mls_rules(rules.clone())
+        .key_package_repo(custody.clone())
+        .signing_identity(signing_identity.clone(), secret_key, CIPHER_SUITE)
+        .build()
+}
+
 impl Session {
     pub fn new(
         identity: &[u8],
@@ -320,21 +346,14 @@ impl Session {
         // The capability is advertised by every leaf this client makes, which
         // is what RFC 9420 §7.2 requires of a leaf that carries the extension
         // and what lets a group list it in required_capabilities.
-        let client = Client::builder()
-            .extension_type(LEAF_DECLARATION_EXTENSION.into())
-            .extension_type(ROLES_EXTENSION.into())
-            .key_package_lifetime(KEY_PACKAGE_LIFETIME)
-            .crypto_provider(RustCryptoProvider::default())
-            .identity_provider(gate.clone())
-            .group_state_storage(storage.clone())
-            .mls_rules(rules.clone())
-            .key_package_repo(custody.clone())
-            .signing_identity(
-                signing_identity.clone(),
-                secret_key.to_vec().into(),
-                CIPHER_SUITE,
-            )
-            .build();
+        let client = build_client(
+            &gate,
+            &storage,
+            &rules,
+            &custody,
+            &signing_identity,
+            secret_key.to_vec().into(),
+        );
 
         Ok(Self {
             client,
@@ -823,6 +842,7 @@ impl Session {
     /// Promote the pending Commit to confirmed. Called only once the server's
     /// CAS has said this Commit is the one that won its epoch.
     pub fn apply_pending_commit(&mut self) -> Res<()> {
+        self.stage_outgoing_epoch()?;
         self.group_mut()?
             .apply_pending_commit()
             .map_err(|e| err("apply commit", e))?;
@@ -916,7 +936,11 @@ impl Session {
     /// caller reloads from the record, which never saw it.
     pub fn process(&mut self, message: &[u8]) -> Res<Processed> {
         let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        let message_epoch = msg.epoch();
         let mut prior_epoch = false;
+        if matches!(msg.wire_format(), mls_rs::WireFormat::PublicMessage) {
+            self.stage_outgoing_epoch()?;
+        }
         if matches!(msg.wire_format(), mls_rs::WireFormat::PrivateMessage) {
             if let Some(epoch) = msg.epoch() {
                 let group = self.group_mut()?;
@@ -954,13 +978,20 @@ impl Session {
             sender_index: 0,
             authenticated_data: Vec::new(),
             key_generation: None,
+            sender_identity: None,
         };
+        out.epoch = group.current_epoch();
         match received {
             ReceivedMessage::ApplicationMessage(m) => {
                 out.sender_index = m.sender_index;
                 out.authenticated_data = m.authenticated_data.clone();
                 out.key_generation = m.unauthenticated_key_generation;
                 out.application = Some(Zeroizing::new(m.data().to_vec()));
+                // The epoch the message was sent in, which for a prior epoch
+                // message is not the one the group is at now. It is part of
+                // the position the caller dedupes on, and the archived path
+                // reports the same epoch for the same message.
+                out.epoch = message_epoch.unwrap_or(out.epoch);
             }
             ReceivedMessage::Commit(c) => {
                 out.removed = matches!(c.effect, CommitEffect::Removed { .. });
@@ -968,8 +999,155 @@ impl Session {
             }
             _ => {}
         }
-        out.epoch = group.current_epoch();
         Ok(out)
+    }
+
+    /// Open a prior epoch application message against the group as it stood
+    /// in that epoch, for a message `process` refused because its sending leaf
+    /// has since been blanked or re-keyed.
+    ///
+    /// mls-rs keeps only the signature public keys of a prior epoch, and
+    /// refuses such a message (`MemberNotFound`) rather than name it after the
+    /// leaf's present holder. The archived state is that epoch's whole group,
+    /// so here the message is processed as a current epoch message of it:
+    /// decrypted with that epoch's secret tree, its signature checked against
+    /// that epoch's tree, and its sender read from the credential that tree
+    /// holds at the sending leaf. Membership is judged as of that epoch, never
+    /// the current one.
+    ///
+    /// No archive for the epoch is refused with the sender-unavailable marker:
+    /// the transition happened before archives existed, or the archive was
+    /// pruned with its prior epoch. Anything but an application message is
+    /// refused and the archive is left as it was. On success the archive is
+    /// replaced by the state the processing left, so the consumed key is
+    /// deleted there too, and nothing about the current group changes.
+    pub fn process_archived(&mut self, message: &[u8]) -> Res<Processed> {
+        let msg = MlsMessage::from_bytes(message).map_err(|e| err("message decode", e))?;
+        if !matches!(msg.wire_format(), mls_rs::WireFormat::PrivateMessage) {
+            return Err("mls: process archived: not a PrivateMessage".to_string());
+        }
+        let epoch = msg
+            .epoch()
+            .ok_or_else(|| "mls: process archived: the message names no epoch".to_string())?;
+        let group = self.group_mut()?;
+        let group_id = group.group_id().to_vec();
+        if epoch >= group.current_epoch() {
+            return Err("mls: process archived: not a prior epoch message".to_string());
+        }
+        let Some(state) = self.storage.archived_state(&group_id, epoch) else {
+            return Err(format!(
+                "mls: process archived: {PRIOR_EPOCH_SENDER_UNAVAILABLE}"
+            ));
+        };
+
+        let archive = RecordStorage::seeded(&group_id, state);
+        let client = build_client(
+            &self.gate,
+            &archive,
+            &self.rules,
+            &self.custody,
+            &self.signing_identity,
+            self.signer.clone(),
+        );
+        let mut then = client
+            .load_group(&group_id)
+            .map_err(|e| err("load archived group", e))?;
+        if then.current_epoch() != epoch {
+            return Err("mls: process archived: the archive is of another epoch".to_string());
+        }
+        let admitted = then
+            .roster()
+            .members_iter()
+            .map(|m| m.signing_identity)
+            .collect();
+        self.gate.enforce(admitted)?;
+        self.rules.enforce(Vec::new())?;
+        let received = then.process_incoming_message(msg);
+        self.disarm()?;
+        let received = received.map_err(|e| match e {
+            MlsError::CantProcessMessageFromSelf => format!("mls: process archived: {FROM_SELF}"),
+            e => err("process archived", e),
+        })?;
+        let ReceivedMessage::ApplicationMessage(m) = received else {
+            return Err("mls: process archived: not an application message".to_string());
+        };
+        let sender_identity = leaves_of(&then)
+            .into_iter()
+            .find(|l| l.index == m.sender_index)
+            .map(|l| l.identity)
+            .ok_or_else(|| {
+                "mls: process archived: the sending leaf is not in that epoch".to_string()
+            })?;
+
+        then.write_to_storage()
+            .map_err(|e| err("write archived group", e))?;
+        let advanced = archive
+            .current_state()
+            .ok_or_else(|| "mls: process archived: the archive stayed empty".to_string())?;
+        self.storage.replace_archive(epoch, advanced);
+
+        Ok(Processed {
+            epoch,
+            removed: false,
+            sender_index: m.sender_index,
+            authenticated_data: m.authenticated_data.clone(),
+            key_generation: m.unauthenticated_key_generation,
+            application: Some(Zeroizing::new(m.data().to_vec())),
+            sender_identity: Some(sender_identity),
+        })
+    }
+
+    /// Take the group as it stands now, before a Commit may end its epoch,
+    /// for the archive (`RecordStorage::stage_archive`). The write makes the
+    /// storage hold exactly the in-memory group, including keys consumed since
+    /// the last flush.
+    ///
+    /// A pending Commit is left out of the archive: it carries the next
+    /// epoch's secrets, which the archive has no use for and which would make
+    /// it half as large again.
+    fn stage_outgoing_epoch(&mut self) -> Res<()> {
+        let group = self.group_mut()?;
+        let epoch = group.current_epoch();
+        let group_id = group.group_id().to_vec();
+        let pending = group.has_pending_commit();
+        group
+            .write_to_storage()
+            .map_err(|e| err("write to storage", e))?;
+        let Some(state) = self.storage.current_state() else {
+            return Ok(());
+        };
+        let state = if pending {
+            self.without_pending_commit(&group_id, state)?
+        } else {
+            state
+        };
+        self.storage.stage_archive(epoch, state);
+        Ok(())
+    }
+
+    fn without_pending_commit(
+        &self,
+        group_id: &[u8],
+        state: Zeroizing<Vec<u8>>,
+    ) -> Res<Zeroizing<Vec<u8>>> {
+        let copy = RecordStorage::seeded(group_id, state);
+        let client = build_client(
+            &self.gate,
+            &copy,
+            &self.rules,
+            &self.custody,
+            &self.signing_identity,
+            self.signer.clone(),
+        );
+        let mut group = client
+            .load_group(group_id)
+            .map_err(|e| err("load group copy", e))?;
+        group.clear_pending_commit();
+        group
+            .write_to_storage()
+            .map_err(|e| err("write group copy", e))?;
+        copy.current_state()
+            .ok_or_else(|| "mls: the group copy stayed empty".to_string())
     }
 
     /// Where this device's application ratchet stands: the epoch, this
@@ -2172,6 +2350,98 @@ mod tests {
             panic!("a message from a removed leaf was attributed");
         };
         assert!(e.contains(PRIOR_EPOCH_SENDER_UNAVAILABLE), "{e}");
+    }
+
+    /// Alice removes bob with her own Commit and comes back from the stored
+    /// blob, holding a message bob sent before the remove.
+    fn bob_removed_after_sending(text: &[u8]) -> (Session, Vec<u8>) {
+        let (mut alice, mut bob) = pair();
+        let from_bob = bob.encrypt(text, b"ad").unwrap();
+        let bob_leaf = leaf_named(&mut alice, b"bob");
+        alice.approve_removals(vec![removal(&bob_leaf)]);
+        alice.commit_remove_members(&[bob_leaf.index]).unwrap();
+        alice.apply_pending_commit().unwrap();
+        let blob = alice.flush().unwrap();
+        alice.load(&blob).unwrap();
+        (alice, from_bob)
+    }
+
+    // The archive of the epoch the remove ended opens bob's message under
+    // bob's own credential from that epoch's tree, and only once.
+    #[test]
+    fn a_removed_senders_prior_epoch_message_opens_from_the_archive() {
+        let (mut alice, from_bob) = bob_removed_after_sending(b"before the remove");
+        assert!(alice.process(&from_bob).is_err());
+
+        let opened = alice.process_archived(&from_bob).unwrap();
+        assert_eq!(
+            opened.application.as_deref().map(Vec::as_slice),
+            Some(&b"before the remove"[..])
+        );
+        assert_eq!(opened.sender_identity.as_deref(), Some(&b"bob"[..]));
+        assert_eq!(opened.epoch, 1);
+        assert_eq!(opened.authenticated_data, b"ad");
+        assert!(opened.key_generation.is_some());
+        assert_eq!(alice.epoch().unwrap(), 2, "the current group did not move");
+
+        // The consumed key is gone from the archive, across a write too.
+        let blob = alice.flush().unwrap();
+        alice.load(&blob).unwrap();
+        assert!(alice.process_archived(&from_bob).is_err());
+    }
+
+    // The Commit that ended epoch 1 was alice's own and pending until applied;
+    // the archive of epoch 1 does not carry it.
+    #[test]
+    fn an_archive_carries_no_pending_commit() {
+        let (alice, _) = bob_removed_after_sending(b"before the remove");
+        let group_id = b"g".to_vec();
+        let state = alice.storage.archived_state(&group_id, 1).unwrap();
+        let copy = RecordStorage::seeded(&group_id, state);
+        let client = build_client(
+            &alice.gate,
+            &copy,
+            &alice.rules,
+            &alice.custody,
+            &alice.signing_identity,
+            alice.signer.clone(),
+        );
+        let archived = client.load_group(&group_id).unwrap();
+        assert_eq!(archived.current_epoch(), 1);
+        assert!(!archived.has_pending_commit());
+    }
+
+    #[test]
+    fn without_an_archive_the_message_stays_sender_unavailable() {
+        let (mut alice, from_bob) = bob_removed_after_sending(b"before the remove");
+        alice.storage.drop_archives();
+
+        let Err(e) = alice.process_archived(&from_bob) else {
+            panic!("opened without the archive of its epoch");
+        };
+        assert!(e.contains(PRIOR_EPOCH_SENDER_UNAVAILABLE), "{e}");
+    }
+
+    // The archive is pruned with its prior epoch: past the retention, the
+    // message is too old to open at all.
+    #[test]
+    fn an_archive_does_not_outlive_its_prior_epoch() {
+        let (mut alice, from_bob) = bob_removed_after_sending(b"before the remove");
+        for _ in 0..crate::storage::MAX_PRIOR_EPOCHS {
+            alice.commit_update().unwrap();
+            alice.apply_pending_commit().unwrap();
+            let blob = alice.flush().unwrap();
+            alice.load(&blob).unwrap();
+        }
+        let archived = alice.storage.archived_epochs();
+        assert!(!archived.contains(&1), "{archived:?}");
+        assert!(archived.len() <= crate::storage::MAX_PRIOR_EPOCHS);
+
+        let Err(e) = alice.process(&from_bob) else {
+            panic!("a message older than the retention opened");
+        };
+        assert!(e.contains(PRIOR_EPOCH_UNAVAILABLE), "{e}");
+        assert!(alice.process_archived(&from_bob).is_err());
     }
 
     const ROOM: &[u8] = b"dragpass room name";
