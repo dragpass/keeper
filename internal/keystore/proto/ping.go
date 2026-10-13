@@ -33,7 +33,8 @@ var ChatCapabilities = []string{
 // reads it to tell a member to update Keeper before it tries an audit-only
 // grant, and an older Keeper that tried anyway would fail the OAEP label.
 var GroupCapabilities = []string{
-	"audit_only_v1", // grant_context labels, the three audit actions, table receipts and decrypt permits
+	"audit_only_v1",   // grant_context labels, the three audit actions, table receipts and decrypt permits
+	"decrypt_only_v1", // decrypt-only grant labels, handles that seal nothing, narrow_to_decrypt_only
 }
 
 type PingResponseData struct {

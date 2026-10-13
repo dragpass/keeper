@@ -40,6 +40,9 @@ func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseRespons
 		if isAuditOnlyLabel(label) {
 			return errHandleAuditOnly
 		}
+		if isDecryptOnlyLabel(label) {
+			return errHandleDecryptOnly
+		}
 		i, c, err := crypto.SealAESGCM(d.Random(), groupDEK, plaintext, nil)
 		if err != nil {
 			return errors.New("encrypt failed: " + err.Error())

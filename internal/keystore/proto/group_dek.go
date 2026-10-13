@@ -67,6 +67,9 @@ func (r GroupDEKGenerateAndOpenRequest) Validate() error {
 	if err := requirePEM(r.MyPublicKey, "my_public_key"); err != nil {
 		return err
 	}
+	if r.GrantContext.IsDecryptOnly() {
+		return newValidationError("grant_context.policy", "a new Group DEK is never decrypt-only")
+	}
 	return validateGrantContext(r.GrantContext, "grant_context")
 }
 
@@ -188,6 +191,21 @@ type DEKUnwrapAndRewrapForManyRequest struct {
 	// GrantContext (0.0.58, optional) is the context of wrapped_for_me_b64;
 	// every new wrap carries the same label.
 	GrantContext *GrantContext `json:"grant_context,omitempty"`
+	// NarrowToDecryptOnly (0.0.58, optional) wraps every recipient under the
+	// decrypt-only label of the same org / group / version instead. It only
+	// narrows: grant_context must name a legacy grant. The audit switch uses
+	// it to retire legacy versions so they keep opening tokens but seal none.
+	NarrowToDecryptOnly bool `json:"narrow_to_decrypt_only,omitempty"`
+}
+
+// OutputGrantContext is the context every new wrap carries.
+func (r DEKUnwrapAndRewrapForManyRequest) OutputGrantContext() *GrantContext {
+	if !r.NarrowToDecryptOnly || r.GrantContext == nil {
+		return r.GrantContext
+	}
+	out := *r.GrantContext
+	out.Policy = GrantPolicyDecryptOnlyV1
+	return &out
 }
 
 // DEKRewrapRecipient is one wrap target. PublicKey is the PEM the DEK is
@@ -221,6 +239,9 @@ func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	}
 	if err := validateGrantContext(r.GrantContext, "grant_context"); err != nil {
 		return err
+	}
+	if r.NarrowToDecryptOnly && (r.GrantContext == nil || r.GrantContext.Policy != GrantPolicyLegacy) {
+		return newValidationError("narrow_to_decrypt_only", "requires a legacy grant_context")
 	}
 	return validateRewrapRecipients(r.Recipients, r.OwnerAccountID)
 }

@@ -131,6 +131,8 @@ type appManyRewrap struct {
 	OwnerAccountID  string              `json:"owner_account_id"`
 	Recipients      []appManyRecipient  `json:"recipients"`
 	GrantContext    *proto.GrantContext `json:"grant_context,omitempty"`
+	// NarrowToDecryptOnly — the audit switch retiring a legacy version.
+	NarrowToDecryptOnly bool `json:"narrow_to_decrypt_only,omitempty"`
 }
 
 // appManyRecipient without an account id is pin-exempt, as it is on the
@@ -206,10 +208,11 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 		})
 	}
 	return proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64: in.WrappedForMeB64,
-		OwnerAccountID:  in.OwnerAccountID,
-		Recipients:      recipients,
-		GrantContext:    in.GrantContext,
+		WrappedForMeB64:     in.WrappedForMeB64,
+		OwnerAccountID:      in.OwnerAccountID,
+		Recipients:          recipients,
+		GrantContext:        in.GrantContext,
+		NarrowToDecryptOnly: in.NarrowToDecryptOnly,
 	}, nil
 }
 

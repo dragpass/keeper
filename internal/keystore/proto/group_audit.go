@@ -26,6 +26,10 @@ import (
 const (
 	GrantPolicyLegacy      = "legacy"
 	GrantPolicyAuditOnlyV1 = "audit_only_v1"
+	// GrantPolicyDecryptOnlyV1 — a legacy version an audit switch retired. Its
+	// grants are rewrapped under a label naming this policy, and a handle
+	// opened from one opens existing tokens but seals nothing under the DEK.
+	GrantPolicyDecryptOnlyV1 = "decrypt_only_v1"
 )
 
 // Canonical domains. Each is the first slot of a pipe-joined canonical whose
@@ -74,6 +78,9 @@ const (
 	// GroupPolicyNotAuditOnly — an audit action on a handle that was not opened
 	// from an audit-only grant, or whose org / group / version differ.
 	GroupPolicyNotAuditOnly = "GROUP_POLICY_NOT_AUDIT_ONLY"
+	// GroupPolicyDecryptOnly — a seal (group_encrypt, group_encrypt_with_aad,
+	// message_seal) on a handle opened from a decrypt-only grant.
+	GroupPolicyDecryptOnly = "GROUP_POLICY_DECRYPT_ONLY"
 	// GroupGrantPolicyMismatch — a grant did not open under the audit-only
 	// label it was presented with. Either the grant was wrapped without the
 	// label (a broken or tampered rotation) or it is not this account's grant.
@@ -113,12 +120,23 @@ func (c *GrantContext) IsAuditOnly() bool {
 	return c != nil && c.Policy == GrantPolicyAuditOnlyV1
 }
 
+// IsDecryptOnly reports whether c names the decrypt-only policy.
+func (c *GrantContext) IsDecryptOnly() bool {
+	return c != nil && c.Policy == GrantPolicyDecryptOnlyV1
+}
+
+// IsLabeled reports whether a grant under c carries an OAEP label: every
+// policy but legacy does.
+func (c *GrantContext) IsLabeled() bool {
+	return c.IsAuditOnly() || c.IsDecryptOnly()
+}
+
 func validateGrantContext(c *GrantContext, field string) error {
 	if c == nil {
 		return nil
 	}
-	if c.Policy != GrantPolicyLegacy && c.Policy != GrantPolicyAuditOnlyV1 {
-		return newValidationError(field+".policy", "must be legacy or audit_only_v1")
+	if c.Policy != GrantPolicyLegacy && c.Policy != GrantPolicyAuditOnlyV1 && c.Policy != GrantPolicyDecryptOnlyV1 {
+		return newValidationError(field+".policy", "must be legacy, audit_only_v1 or decrypt_only_v1")
 	}
 	if err := requireMessageUUID(c.OrgID, field+".org_id"); err != nil {
 		return err
@@ -130,11 +148,11 @@ func validateGrantContext(c *GrantContext, field string) error {
 }
 
 // GroupDEKGrantLabel is the RSA-OAEP label of a grant: nil for legacy, the
-// policy canonical for audit-only.
+// policy canonical for audit-only and decrypt-only.
 //
-//	dragpass.group-dek|1|policy=audit_only_v1|org=<org>|group=<group>|v=<n>
+//	dragpass.group-dek|1|policy=<audit_only_v1|decrypt_only_v1>|org=<org>|group=<group>|v=<n>
 func GroupDEKGrantLabel(c *GrantContext) []byte {
-	if !c.IsAuditOnly() {
+	if !c.IsLabeled() {
 		return nil
 	}
 	return []byte(strings.Join([]string{

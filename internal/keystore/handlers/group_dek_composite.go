@@ -135,7 +135,7 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 
 	groupDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("dek rewrap for member error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		d.Logger.Printf("dek rewrap for member error: RSA-OAEP decrypt failed (labeled=%t)", req.GrantContext.IsLabeled())
 		return grantOpenFailure(req.GrantContext, err)
 	}
 	defer secure.Zeroize(groupDEK)
@@ -230,7 +230,7 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 
 	groupDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP decrypt failed (labeled=%t)", req.GrantContext.IsLabeled())
 		return grantOpenFailure(req.GrantContext, err)
 	}
 	defer secure.Zeroize(groupDEK)
@@ -239,9 +239,12 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, errors.New("unexpected group dek length (want 32)").Error())
 	}
 
+	// Narrowing wraps under the decrypt-only label; otherwise every wrap keeps
+	// the label the grant opened with.
+	outContext := req.OutputGrantContext()
 	wraps := make([]string, len(recipientKeys))
 	for i, pub := range recipientKeys {
-		newEncrypted, err := wrapGrant(pub, groupDEK, req.GrantContext)
+		newEncrypted, err := wrapGrant(pub, groupDEK, outContext)
 		if err != nil {
 			d.Logger.Printf("dek unwrap and rewrap for many error: RSA-OAEP encrypt failed [%d]: %v", i, err)
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP encrypt failed: "+err.Error())

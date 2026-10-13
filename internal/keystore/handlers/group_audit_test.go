@@ -125,6 +125,7 @@ type auditFixture struct {
 	handle string
 	gc     *proto.GrantContext
 	store  keychain.SecretStore
+	pubPEM string
 }
 
 func newAuditFixture(t *testing.T) *auditFixture {
@@ -138,7 +139,7 @@ func newAuditFixture(t *testing.T) *auditFixture {
 	deps.ServerKeyVerifier = msgTestVerifier{version: 1, public: &key.PublicKey}
 	v := loadAuditVectors(t)
 	pubPEM, _ := setupHandlerKeyPair(t, store)
-	f := &auditFixture{deps: deps, clock: clock, key: key, v: v, table: mustHex(t, v.TableHex), store: store}
+	f := &auditFixture{deps: deps, clock: clock, key: key, v: v, table: mustHex(t, v.TableHex), store: store, pubPEM: pubPEM}
 	if _, _, err := keychain.SetAccountBinding(store, v.AccountID, "alice", true); err != nil {
 		t.Fatal(err)
 	}
