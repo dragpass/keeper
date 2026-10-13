@@ -55,6 +55,10 @@ type AuthRecoveryReissuePrepareResponseData struct {
 	RecoveryAuthSeed      string `json:"recovery_auth_seed"`
 	RecoveryWrappedKeeper string `json:"recovery_wrapped_keeper"`
 	RecoveryKeyVersion    uint   `json:"recovery_key_version"`
+	// KeyProofSignature signs RecoveryKeyReissueCanonical with the wrapped
+	// key; the server stores the RK24 only if it verifies against the
+	// account's current public key.
+	KeyProofSignature string `json:"key_proof_signature"`
 }
 
 type AuthRecoveryBeginRequest struct {
