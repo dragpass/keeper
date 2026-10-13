@@ -124,6 +124,7 @@ type auditFixture struct {
 	table  []byte
 	handle string
 	gc     *proto.GrantContext
+	store  keychain.SecretStore
 }
 
 func newAuditFixture(t *testing.T) *auditFixture {
@@ -137,7 +138,10 @@ func newAuditFixture(t *testing.T) *auditFixture {
 	deps.ServerKeyVerifier = msgTestVerifier{version: 1, public: &key.PublicKey}
 	v := loadAuditVectors(t)
 	pubPEM, _ := setupHandlerKeyPair(t, store)
-	f := &auditFixture{deps: deps, clock: clock, key: key, v: v, table: mustHex(t, v.TableHex)}
+	f := &auditFixture{deps: deps, clock: clock, key: key, v: v, table: mustHex(t, v.TableHex), store: store}
+	if _, _, err := keychain.SetAccountBinding(store, v.AccountID, "alice", true); err != nil {
+		t.Fatal(err)
+	}
 	f.gc = &proto.GrantContext{Policy: proto.GrantPolicyAuditOnlyV1, OrgID: v.OrgID, GroupID: v.GroupID, DekVersion: v.DekVersion}
 	f.handle = f.openWith(t, f.wrapToMe(t, pubPEM, f.gc), f.gc)
 	return f
@@ -535,6 +539,68 @@ func TestAuditAuthorizationRefusals(t *testing.T) {
 			}
 			wantCode(t, resp, proto.AuditNotAuthorized)
 		})
+	}
+}
+
+// A receipt or permit the server signed for another account is refused
+// before it is spent, and so is any authorization on a device with no
+// signed-in account binding. The one for this device's account works.
+func TestAuditAuthorizationMustNameThisDevicesAccount(t *testing.T) {
+	const other = "22222222-2222-4222-8222-222222222222"
+	f := newAuditFixture(t)
+
+	enc := HandleGroupEncryptAudit(f.deps, payloadOf(t, f.encryptRequest(
+		f.receipt(t, func(r *proto.AuditTableReceipt) { r.AccountID = other }))))
+	wantCode(t, enc, proto.AuditAccountMismatch)
+
+	// The right account's receipt for the same table was not burned.
+	enc = HandleGroupEncryptAudit(f.deps, payloadOf(t, f.encryptRequest(f.receipt(t, nil))))
+	if !enc.Success {
+		t.Fatalf("encrypt with this account's receipt: %+v", enc)
+	}
+	sealed := enc.Data.(proto.GroupEncryptResponseData)
+	iv, _ := base64.StdEncoding.DecodeString(sealed.IVB64)
+	ct, _ := base64.StdEncoding.DecodeString(sealed.CiphertextB64)
+
+	dec := HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t,
+		f.permit(t, func(p *proto.AuditDecryptPermit) { p.AccountID = other }), iv, ct)))
+	wantCode(t, dec, proto.AuditAccountMismatch)
+	tr := proto.GroupTranscryptAuditForGuestRequest{
+		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
+		TableID: f.v.TableID, TableB64: base64.StdEncoding.EncodeToString(f.table),
+		Permit: f.permit(t, func(p *proto.AuditDecryptPermit) { p.AccountID = other }),
+		IVB64:  sealed.IVB64, CiphertextB64: sealed.CiphertextB64,
+	}
+	wantCode(t, HandleGroupTranscryptAuditForGuest(f.deps, payloadOf(t, tr)), proto.AuditAccountMismatch)
+
+	dec = HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, f.permit(t, nil), iv, ct)))
+	if !dec.Success {
+		t.Fatalf("decrypt with this account's permit: %+v", dec)
+	}
+
+	// Signed out: refused, whatever account the permit names.
+	if _, _, err := keychain.SignOutAccountBinding(f.store); err != nil {
+		t.Fatal(err)
+	}
+	permit := f.permit(t, func(p *proto.AuditDecryptPermit) { p.PermitID = other })
+	wantCode(t, HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, permit, iv, ct))),
+		proto.AuditAccountUnbound)
+
+	// No binding at all: refused.
+	if err := keychain.DeleteAccountBinding(f.store); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, permit, iv, ct))),
+		proto.AuditAccountUnbound)
+	wantCode(t, HandleGroupEncryptAudit(f.deps, payloadOf(t, f.encryptRequest(f.receipt(t, nil)))),
+		proto.AuditAccountUnbound)
+
+	// Signed in again: the permit refused above was not spent.
+	if _, _, err := keychain.SetAccountBinding(f.store, f.v.AccountID, "alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if dec := HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, permit, iv, ct))); !dec.Success {
+		t.Fatalf("decrypt after signing in again: %+v", dec)
 	}
 }
 

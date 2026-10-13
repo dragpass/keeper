@@ -12,6 +12,7 @@ import (
 	"time"
 
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -24,7 +25,10 @@ const (
 // external share refused on that handle, and the audit external share served
 // under a permit. The generate route carries the context too.
 func TestAppAuditOnlyGrantRoutes(t *testing.T) {
-	server, _, own, session, csrf := newKeyedRouteServer(t)
+	server, store, own, session, csrf := newKeyedRouteServer(t)
+	if _, _, err := keychain.SetAccountBinding(store, routePeer, "alice", true); err != nil {
+		t.Fatal(err)
+	}
 	groupDEK := bytes.Repeat([]byte{0x42}, 32)
 	gc := map[string]any{"policy": "audit_only_v1", "org_id": routeOwner, "group_id": routeGroup, "dek_version": 5}
 	label := proto.GroupDEKGrantLabel(&proto.GrantContext{

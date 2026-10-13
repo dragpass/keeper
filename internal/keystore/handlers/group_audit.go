@@ -10,6 +10,7 @@
 //	    group and version
 //	  → the receipt / permit names the same table, org, group, version and the
 //	    SHA-256 of the table bytes the caller sent
+//	  → its account_id is the account this device's binding records, signed in
 //	  → its window holds (issued_at <= now+5, now < expires_at, fixed span)
 //	  → the server signature verifies under the named key version
 //	  → it is consumed, once, in this process
@@ -35,6 +36,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
@@ -71,6 +73,9 @@ func HandleGroupEncryptAudit(d Deps, payload json.RawMessage) proto.BaseResponse
 		r.DekVersion == tc.DekVersion && r.TableSHA256 == hex.EncodeToString(tableSum[:])
 	if !bound {
 		return auditNotAuthorized(d, "receipt binding")
+	}
+	if resp, ok := auditAccountMatches(d, r.AccountID); !ok {
+		return resp
 	}
 	if resp, ok := auditAuthorize(d, r.IssuedAt, r.ExpiresAt, proto.AuditTableReceiptTTLSeconds,
 		proto.AuditTableReceiptCanonical(r), r.Signature, r.ServerKeyVersion, "receipt|"+r.TableID); !ok {
@@ -166,6 +171,9 @@ func openAuditToken(
 	if !bound {
 		return nil, auditNotAuthorized(d, "permit binding"), false
 	}
+	if resp, ok := auditAccountMatches(d, p.AccountID); !ok {
+		return nil, resp, false
+	}
 	if resp, ok := auditAuthorize(d, p.IssuedAt, p.ExpiresAt, proto.AuditDecryptPermitTTLSeconds,
 		proto.AuditDecryptPermitCanonical(p), p.Signature, p.ServerKeyVersion, "permit|"+p.PermitID); !ok {
 		return nil, resp, false
@@ -224,6 +232,32 @@ func auditPreflight(d Deps, tc proto.AuditTokenContext) ([]byte, proto.BaseRespo
 		return nil, auditInvalidInput("table_b64 must be 256 bytes of standard Base64"), false
 	}
 	return table, proto.BaseResponse{}, true
+}
+
+// auditAccountMatches holds a receipt or permit to the account this device
+// is signed in to, as its account binding records. It runs before anything
+// is consumed. The binding is a hint any Native Messaging caller can rewrite
+// (account_binding_set), so this keeps an honest device from spending
+// another account's authorization (the server would log the other account
+// as the reader or writer); it does not stop a tampered Extension that
+// rewrites the binding first.
+func auditAccountMatches(d Deps, accountID string) (proto.BaseResponse, bool) {
+	binding, present, err := keychain.GetAccountBinding(d.Store)
+	if err != nil {
+		d.Logger.Printf("group audit: account binding unreadable: %s", deviceIdentityErrorClass(err))
+		return deviceIdentityErrorResponse(err), false
+	}
+	if !present || binding.SignedOut || binding.AccountID == "" {
+		d.Logger.Println("group audit refused: no signed-in account binding on this device")
+		return errs.CodeResponse(errs.ErrorCode(proto.AuditAccountUnbound),
+			"this device has no signed-in account to match the audit authorization to"), false
+	}
+	if binding.AccountID != accountID {
+		d.Logger.Println("group audit refused: the authorization was issued to another account")
+		return errs.CodeResponse(errs.ErrorCode(proto.AuditAccountMismatch),
+			"the audit authorization was issued to another account"), false
+	}
+	return proto.BaseResponse{}, true
 }
 
 // auditAuthorize checks the window and the signature of a receipt or permit

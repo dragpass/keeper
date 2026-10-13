@@ -83,6 +83,12 @@ const (
 	// AuditNotAuthorized — receipt / permit binding, window, signature, or
 	// single-use failure. One code for all of them.
 	AuditNotAuthorized = "AUDIT_NOT_AUTHORIZED"
+	// AuditAccountMismatch — the receipt / permit names another account than
+	// the one this device's account binding records.
+	AuditAccountMismatch = "AUDIT_ACCOUNT_MISMATCH"
+	// AuditAccountUnbound — this device has no account binding, or it is
+	// signed out, so no receipt / permit can be matched to an account.
+	AuditAccountUnbound = "AUDIT_ACCOUNT_UNBOUND"
 	// AuditBusy — the process-local single-use record is full.
 	AuditBusy = "AUDIT_BUSY"
 	// AuditDecryptFailed — GCM tag failure under the derived token key.
