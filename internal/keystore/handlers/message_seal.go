@@ -9,6 +9,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
+	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 // HandleMessageSeal seals a Secure Message under the message AAD it builds
@@ -27,13 +28,16 @@ func HandleMessageSeal(d Deps, req proto.MessageSealRequest) proto.BaseResponse 
 		req.OrgID, req.GroupID, req.DekVersion, proto.MessageSchemaVersion, req.TokenExpiresAt,
 	))
 	var iv, ciphertext []byte
-	useErr := d.GroupSessions.Use(req.GroupHandle, func(groupDEK []byte) error {
+	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
+		if isDecryptOnlyLabel(label) {
+			return errHandleDecryptOnly
+		}
 		var err error
 		iv, ciphertext, err = crypto.SealAESGCM(d.Random(), groupDEK, plaintext, aad)
 		return err
 	})
 	if useErr != nil {
-		return sessionUseError(useErr, "message seal")
+		return handleSessionError(useErr, "message seal")
 	}
 	d.Logger.Println("message seal successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupEncryptResponseData{

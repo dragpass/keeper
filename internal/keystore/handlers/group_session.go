@@ -42,7 +42,7 @@ func HandleGroupSessionOpen(d Deps, req proto.GroupSessionOpenRequest) proto.Bas
 
 	rawDEK, err := unwrapGrant(privKey, encrypted, req.GrantContext)
 	if err != nil {
-		d.Logger.Printf("group session open error: RSA-OAEP decrypt failed (audit_only=%t)", req.GrantContext.IsAuditOnly())
+		d.Logger.Printf("group session open error: RSA-OAEP decrypt failed (labeled=%t)", req.GrantContext.IsLabeled())
 		return grantOpenFailure(req.GrantContext, err)
 	}
 	if len(rawDEK) != 32 {

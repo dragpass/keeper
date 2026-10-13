@@ -22,9 +22,20 @@ import (
 // on an audit-only handle; handleSessionError turns it into its error code.
 var errHandleAuditOnly = errors.New("group handle is audit-only")
 
+// errHandleDecryptOnly is what a seal's session closure returns on a handle
+// opened from a decrypt-only grant.
+var errHandleDecryptOnly = errors.New("group handle is decrypt-only")
+
 // isAuditOnlyLabel reports whether a handle was opened from an audit-only grant.
 func isAuditOnlyLabel(label sessions.Label) bool {
 	return label.GrantPolicy == proto.GrantPolicyAuditOnlyV1
+}
+
+// isDecryptOnlyLabel reports whether a handle was opened from a decrypt-only
+// grant: a legacy version an audit switch retired. It opens existing tokens and
+// seals nothing under the Group DEK.
+func isDecryptOnlyLabel(label sessions.Label) bool {
+	return label.GrantPolicy == proto.GrantPolicyDecryptOnlyV1
 }
 
 // handleLabel is what a handle remembers about the grant it was opened from.
@@ -51,13 +62,13 @@ func wrapGrant(pub *rsa.PublicKey, groupDEK []byte, gc *proto.GrantContext) ([]b
 	return crypto.EncryptDataWithLabel(pub, groupDEK, proto.GroupDEKGrantLabel(gc))
 }
 
-// grantOpenFailure is the answer to a grant that did not open. Under the
-// audit-only label it gets its own code: the Extension reports it, since a
-// grant wrapped without the label is a rotation nobody can use.
+// grantOpenFailure is the answer to a grant that did not open. Under a policy
+// label (audit-only or decrypt-only) it gets its own code: the Extension
+// reports it, since a grant wrapped without the label is one nobody can use.
 func grantOpenFailure(gc *proto.GrantContext, err error) proto.BaseResponse {
-	if gc.IsAuditOnly() {
+	if gc.IsLabeled() {
 		return errs.CodeResponse(errs.ErrorCode(proto.GroupGrantPolicyMismatch),
-			"the grant did not open under the audit-only policy it was presented with")
+			"the grant did not open under the policy it was presented with")
 	}
 	return errs.CodeResponse(errs.ErrCodeCryptoFailure, "RSA-OAEP decrypt failed: "+err.Error())
 }
@@ -67,6 +78,10 @@ func handleSessionError(err error, context string) proto.BaseResponse {
 	if errors.Is(err, errHandleAuditOnly) {
 		return errs.CodeResponse(errs.ErrorCode(proto.GroupPolicyAuditOnly),
 			"this group handle was opened from an audit-only grant; use the audit action")
+	}
+	if errors.Is(err, errHandleDecryptOnly) {
+		return errs.CodeResponse(errs.ErrorCode(proto.GroupPolicyDecryptOnly),
+			"this group handle was opened from a decrypt-only grant; it seals nothing")
 	}
 	return sessionUseError(err, context)
 }

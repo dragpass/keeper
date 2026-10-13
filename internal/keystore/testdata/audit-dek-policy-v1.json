@@ -18,6 +18,7 @@
   "dek_version": 3,
   "description": "Audit-only Group DEK version golden vectors (v1). Test-only values. The same file is checked in to dragpass-keeper, ariadne and dragpass; each repository's test reproduces the parts it implements.",
   "grant_label_audit_only_v1": "dragpass.group-dek|1|policy=audit_only_v1|org=22222222-2222-4222-8222-222222222222|group=33333333-3333-4333-8333-333333333333|v=3",
+  "grant_label_decrypt_only_v1": "dragpass.group-dek|1|policy=decrypt_only_v1|org=22222222-2222-4222-8222-222222222222|group=33333333-3333-4333-8333-333333333333|v=3",
   "grant_label_legacy": null,
   "group_dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "group_id": "33333333-3333-4333-8333-333333333333",
