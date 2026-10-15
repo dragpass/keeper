@@ -12,6 +12,9 @@ const (
 	ActionAuthRecoveryReissuePrepare = "auth_recovery_reissue_prepare"
 	ActionAuthRecoveryBegin          = "auth_recovery_begin"
 	ActionAuthRecoveryPrepare        = "auth_recovery_prepare"
+	// OrgEmergencySeedDerive derives the organization emergency recovery code
+	// seed (App only). It writes nothing and opens no handle.
+	ActionOrgEmergencySeedDerive = "org_emergency_seed_derive"
 	// AuthRecoveryAbort drops the keypair a prepare staged, once the server
 	// refused the recovery. It removes the staged pair only when its public
 	// key is the one named, so the keyring returns to its pre-prepare bytes.

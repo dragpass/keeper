@@ -31,6 +31,12 @@ var authLoginRoutes = map[string]appRoute{
 		action: proto.ActionRequestKeyGenerate,
 		input:  func() any { return &proto.RequestKeyGenerateRequest{} },
 	},
+	// The organization emergency recovery code typed into the App, derived
+	// to the seed the server compares. Nothing is stored.
+	"/v1/auth/org-emergency/seed": {
+		action: proto.ActionOrgEmergencySeedDerive,
+		input:  func() any { return &proto.OrgEmergencySeedDeriveRequest{} },
+	},
 	"/v1/auth/signup/prepare": {
 		action: proto.ActionAuthSignupPrepare,
 		input:  func() any { return &proto.AuthSignupPrepareRequest{} },

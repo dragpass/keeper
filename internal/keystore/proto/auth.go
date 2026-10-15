@@ -148,3 +148,24 @@ func (r AuthRecoveryAbortRequest) Validate() error {
 type AuthRecoveryAbortResponseData struct {
 	Discarded bool `json:"discarded"`
 }
+
+// OrgEmergencySeedDeriveRequest carries the organization emergency recovery
+// code the owner typed into the App. The code is request-only: nothing in
+// Keeper stores it or the seed.
+type OrgEmergencySeedDeriveRequest struct {
+	OrgID string `json:"org_id"`
+	Code  string `json:"code"`
+}
+
+func (r OrgEmergencySeedDeriveRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	return requireString(r.Code, "code")
+}
+
+// OrgEmergencySeedDeriveResponseData is the Base64 seed the App sends to the
+// server, which keeps only its Argon2id hash.
+type OrgEmergencySeedDeriveResponseData struct {
+	Seed string `json:"seed"`
+}
