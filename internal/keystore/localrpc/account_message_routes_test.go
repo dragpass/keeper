@@ -252,83 +252,13 @@ func TestAppSecureMessageRoutesSealUnderTheMessageAADAndDisplayUnderAPermit(t *t
 	}
 }
 
-// A drag token re-encrypts to the guest format without its plaintext in any
-// answer; the guest key opens it.
-func TestAppGuestShareTranscryptReturnsOnlyTheGuestCiphertextAndKey(t *testing.T) {
-	server, _, own, session, csrf := newKeyedRouteServer(t)
-	groupDEK := bytes.Repeat([]byte{0x71}, 32)
-	handle := openRouteHandleForOrg(t, server, session, csrf, own, groupDEK, routeOwner)
-	const secret = "the vault code"
-	iv, ciphertext := gcmSeal(t, groupDEK, []byte(secret), nil)
-	salt := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 16))
-	request := map[string]any{
-		"group_handle": handle, "iv_b64": base64.StdEncoding.EncodeToString(iv),
-		"ciphertext_b64": base64.StdEncoding.EncodeToString(ciphertext), "expected_org_id": routeOwner,
-	}
-
-	code, result, body := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", request)
-	if code != http.StatusOK || !result.Success || strings.Contains(body, secret) {
-		t.Fatalf("transcrypt: %d %s", code, body)
-	}
-	out := decodeData[proto.GroupTranscryptForGuestResponseData](t, result)
-	key, _ := base64.RawURLEncoding.DecodeString(out.GuestKey)
-	guest, _ := base64.StdEncoding.DecodeString(out.GuestCiphertext)
-	if string(gcmOpen(t, key, guest[:12], guest[12:], nil)) != secret {
-		t.Fatal("the guest key does not open the guest ciphertext")
-	}
-
-	request["passphrase"] = "correct horse"
-	if code, refused, _ := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", request); code != http.StatusOK || refused.Success {
-		t.Fatalf("a passphrase without its salt: %d", code)
-	}
-	request["passphrase_salt"] = salt
-	code, result, body = callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", request)
-	if code != http.StatusOK || !result.Success || strings.Contains(body, "correct horse") {
-		t.Fatalf("passphrase transcrypt: %d %s", code, body)
-	}
-
-	// A message token is AAD-bound, so the non-AAD transcrypt cannot open it.
-	messageIV, messageCiphertext := gcmSeal(t, groupDEK, []byte(secret), []byte("dragpass.message|1"))
-	request = map[string]any{
-		"group_handle": handle, "iv_b64": base64.StdEncoding.EncodeToString(messageIV),
-		"ciphertext_b64": base64.StdEncoding.EncodeToString(messageCiphertext), "expected_org_id": routeOwner,
-	}
-	if code, refused, body := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", request); code != http.StatusOK || refused.Success || strings.Contains(body, secret) {
-		t.Fatalf("an AAD-bound ciphertext transcrypted: %d %s", code, body)
-	}
-}
-
-// The App can paste any token, so the route transcrypts only under the org
-// the handle was opened for and refuses a request that names none.
-func TestAppGuestShareTranscryptIsBoundToTheHandleOrg(t *testing.T) {
+// The open route accepts a well-formed org_id and refuses a malformed one.
+func TestAppGroupDEKOpenChecksTheOrgID(t *testing.T) {
 	server, _, own, session, csrf := newKeyedRouteServer(t)
 	groupDEK := bytes.Repeat([]byte{0x72}, 32)
-	const secret = "org a only"
-	iv, ciphertext := gcmSeal(t, groupDEK, []byte(secret), nil)
-	request := func(handle string) map[string]any {
-		return map[string]any{
-			"group_handle": handle, "iv_b64": base64.StdEncoding.EncodeToString(iv),
-			"ciphertext_b64": base64.StdEncoding.EncodeToString(ciphertext),
-		}
+	if openRouteHandleForOrg(t, server, session, csrf, own, groupDEK, routeOwner) == "" {
+		t.Fatal("open with an org_id returned no handle")
 	}
-
-	orgA := openRouteHandleForOrg(t, server, session, csrf, own, groupDEK, routeOwner)
-	crossOrg := request(orgA)
-	crossOrg["expected_org_id"] = routePeer
-	if code, refused, body := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", crossOrg); code != http.StatusOK || refused.Success || refused.ErrorCode != "validation_error" || strings.Contains(body, "guest_key") {
-		t.Fatalf("org A's handle transcrypted under org B: %d %s", code, body)
-	}
-
-	if code, _, body := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", request(orgA)); code != http.StatusBadRequest {
-		t.Fatalf("transcrypt without expected_org_id: %d %s", code, body)
-	}
-
-	unlabeled := request(openRouteHandle(t, server, session, csrf, own, groupDEK))
-	unlabeled["expected_org_id"] = routeOwner
-	if code, refused, body := callRoute(t, server, session, csrf, "/v1/guest-share/transcrypt", unlabeled); code != http.StatusOK || refused.Success {
-		t.Fatalf("a handle opened without org_id transcrypted: %d %s", code, body)
-	}
-
 	if code, _, body := callRoute(t, server, session, csrf, "/v1/group-dek/open",
 		map[string]string{"encrypted_group_dek": wrapTo(t, own, groupDEK), "org_id": "not-an-org"}); code != http.StatusOK || strings.Contains(body, `"success":true`) {
 		t.Fatalf("open with a malformed org_id: %d %s", code, body)

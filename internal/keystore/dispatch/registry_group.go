@@ -37,14 +37,9 @@ func groupActions() map[string]action {
 		// into the GCM tag to prevent ciphertext swap across contexts.
 		proto.ActionGroupEncryptWithAAD: wrap(handlers.HandleGroupEncryptWithAAD),
 
-		// org token → external guest share re-encryption (Keeper-owned re-encrypt
-		// sink; plaintext / Group DEK never enter the JS heap).
-		proto.ActionGroupTranscryptForGuest: wrap(handlers.HandleGroupTranscryptForGuest),
-
 		// Audit-only version actions. Strict decoders, like the message
 		// actions: each request is bound into a server signature.
 		proto.ActionGroupEncryptAudit:            direct(handlers.HandleGroupEncryptAudit),
 		proto.ActionGroupDecryptAuditToClipboard: direct(handlers.HandleGroupDecryptAuditToClipboard),
-		proto.ActionGroupTranscryptAuditForGuest: direct(handlers.HandleGroupTranscryptAuditForGuest),
 	}
 }

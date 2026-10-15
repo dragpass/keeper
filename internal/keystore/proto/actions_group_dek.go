@@ -90,29 +90,10 @@ const (
 	// is public context material (not secret). The raw Group DEK never crosses IPC.
 	ActionGroupEncryptWithAAD = "group_encrypt_with_aad"
 
-	// GroupTranscryptForGuest: re-encrypts an org Group-DEK token as an
-	// external guest share without ever returning plaintext to the Extension
-	// JS heap. Mirrors GroupDecryptToClipboard's input (group_handle + iv +
-	// ciphertext) but the sink is a one-time guest key K re-encryption instead
-	// of the clipboard.
-	//
-	// The Keeper unwraps the raw Group DEK behind the opaque handle, decrypts
-	// the token inside a memguard-protected buffer, generates a fresh random
-	// 32B guest key K, and AES-GCM-re-encrypts under a key derived from K
-	// (optionally strengthened with a passphrase via HKDF(K ‖ PBKDF2(pass))).
-	// The plaintext is zeroized the moment re-encryption completes.
-	//   Inputs: group_handle, iv_b64(12B), ciphertext_b64,
-	//           passphrase?(string), passphrase_salt?(base64, app-generated)
-	//   Output: {guest_ciphertext (base64 IV‖ct), guest_key (base64url K)}
-	// The output is byte-compatible with the admin SPA guest viewer
-	// (app/src/shared/lib/guest-share-crypto.ts). Plaintext / Group DEK never
-	// appear in the response.
-	ActionGroupTranscryptForGuest = "group_transcrypt_for_guest"
-
 	// Audit-only Group DEK versions (0.0.58). A handle opened from a grant
-	// whose grant_context names audit_only_v1 refuses group_encrypt,
-	// group_decrypt_to_clipboard and group_transcrypt_for_guest with
-	// GROUP_POLICY_AUDIT_ONLY, and serves only these three. Each takes the
+	// whose grant_context names audit_only_v1 refuses group_encrypt and
+	// group_decrypt_to_clipboard with GROUP_POLICY_AUDIT_ONLY, and serves only
+	// these two. Each takes the
 	// version and table structurally (org_id, group_id, dek_version, table_id,
 	// table_b64) and never an AAD; the Keeper builds the AAD
 	// `dragpass.drag.audit|1|<org>|<group>|<dek_version>|<table_id>` and the
@@ -131,9 +112,4 @@ const (
 	//           clipboard_ttl_ms
 	//   Output: {copied, clipboard_ttl_ms}
 	ActionGroupDecryptAuditToClipboard = "group_decrypt_audit_to_clipboard"
-	// GroupTranscryptAuditForGuest
-	//   Inputs: the token context, permit, iv_b64, ciphertext_b64,
-	//           passphrase?, passphrase_salt?
-	//   Output: {guest_ciphertext, guest_key}
-	ActionGroupTranscryptAuditForGuest = "group_transcrypt_audit_for_guest"
 )

@@ -1,6 +1,5 @@
-// group_audit.go — the three drag actions for an audit-only Group DEK version:
-// group_encrypt_audit, group_decrypt_audit_to_clipboard,
-// group_transcrypt_audit_for_guest.
+// group_audit.go — the two drag actions for an audit-only Group DEK version:
+// group_encrypt_audit and group_decrypt_audit_to_clipboard.
 //
 // Each runs the same checks in the same order before any key is used:
 //
@@ -121,39 +120,6 @@ func HandleGroupDecryptAuditToClipboard(d Deps, payload json.RawMessage) proto.B
 		return resp
 	}
 	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "group decrypt audit to clipboard")
-}
-
-// HandleGroupTranscryptAuditForGuest opens one audit token and re-encrypts it
-// for an external guest share. The plaintext lives only between the two.
-func HandleGroupTranscryptAuditForGuest(d Deps, payload json.RawMessage) proto.BaseResponse {
-	d.Logger.Println("group transcrypt audit for guest request processing...")
-	var req proto.GroupTranscryptAuditForGuestRequest
-	if resp, ok := decodeAuditRequest(payload, &req); !ok {
-		return resp
-	}
-	defer secure.WipeString(&req.Passphrase)
-	var salt []byte
-	if req.PassphraseSalt != "" {
-		var resp proto.BaseResponse
-		var ok bool
-		if salt, resp, ok = decodeBase64(req.PassphraseSalt, "passphrase_salt"); !ok {
-			return resp
-		}
-	}
-	plaintext, resp, ok := openAuditToken(d, req.TokenContext(), req.Permit, req.IVB64, req.CiphertextB64)
-	if !ok {
-		return resp
-	}
-	defer secure.Zeroize(plaintext)
-	guestCiphertext, guestKey, err := encryptForGuest(d.Random(), plaintext, req.Passphrase, salt)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "guest re-encrypt failed")
-	}
-	d.Logger.Println("group transcrypt audit for guest successful")
-	return proto.BaseResponse{Success: true, Data: proto.GroupTranscryptForGuestResponseData{
-		GuestCiphertext: guestCiphertext,
-		GuestKey:        guestKey,
-	}}
 }
 
 // openAuditToken runs the permit checks, consumes the permit and opens the
