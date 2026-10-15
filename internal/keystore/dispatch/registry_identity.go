@@ -19,6 +19,7 @@ func identityActions() map[string]action {
 		proto.ActionAuthRecoveryPrepare:        wrap(handlers.HandleAuthRecoveryPrepare),
 		proto.ActionAuthRecoveryAbort:          wrap(handlers.HandleAuthRecoveryAbort),
 		proto.ActionAuthSignupAbort:            wrap(handlers.HandleAuthSignupAbort),
+		proto.ActionOrgEmergencySeedDerive:     wrap(handlers.HandleOrgEmergencySeedDerive).appOnlyAction(),
 
 		proto.ActionAuthLoginPendingSignAlias:     wrap(handlers.HandleAuthLoginPendingSignAlias),
 		proto.ActionAuthLoginPendingSignChallenge: wrap(handlers.HandleAuthLoginPendingSignChallenge),
