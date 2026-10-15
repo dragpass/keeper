@@ -21,7 +21,7 @@
 //   - output: IV(12B) and ciphertext_with_tag
 //   - error: key length != 32 → "key must be 32 bytes (AES-256)"; IV read
 //   - usage: every AES-GCM seal in Keeper (DEK wraps, drag tokens,
-//     credential payloads, guest shares).
+//     credential payloads).
 //   - `OpenAESGCM(key, iv, ciphertext, aad) ([]byte, error)`
 //   - error: key length / IV length / GCM auth tag (aad mismatch included)
 //   - `AESGCMEncryptBase64(random, key, plaintext) (string, error)` /

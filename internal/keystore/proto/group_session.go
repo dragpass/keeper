@@ -17,9 +17,9 @@ package proto
 type GroupSessionOpenRequest struct {
 	EncryptedGroupDEK string `json:"encrypted_group_dek"`
 	// OrgID (0.0.58, optional) names the org whose grant this is. Keeper cannot
-	// check it against the wrapped DEK; it stays on the handle so a later
-	// group_transcrypt_for_guest with expected_org_id refuses a handle opened
-	// for another org (or for none).
+	// check it against the wrapped DEK. With GrantContext it must equal the
+	// context's org; without one nothing reads it, and it is accepted so the
+	// App's open request keeps its shape.
 	OrgID string `json:"org_id,omitempty"`
 	// GrantContext (0.0.58, optional) names the version this grant belongs to
 	// and the policy it was wrapped under; absent is legacy (empty OAEP label).

@@ -178,8 +178,6 @@ var pinnedAppRoutes = []string{
 	"/v1/group-dek/open",
 	"/v1/group-dek/rewrap-for-many",
 	"/v1/group-dek/rewrap-for-member",
-	"/v1/guest-share/transcrypt",
-	"/v1/guest-share/transcrypt-audit",
 	"/v1/key-transparency/monitor",
 	"/v1/key-transparency/status",
 	"/v1/message/display",

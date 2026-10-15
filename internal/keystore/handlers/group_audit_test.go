@@ -368,9 +368,6 @@ func TestAuditOnlyHandleRefusesTheAADFreeDragActions(t *testing.T) {
 	wantCode(t, HandleGroupDecryptToClipboard(f.deps, proto.GroupDecryptToClipboardRequest{
 		GroupHandle: f.handle, IVB64: iv, CiphertextB64: ct, ClipboardTTLMs: 10_000,
 	}), proto.GroupPolicyAuditOnly)
-	wantCode(t, HandleGroupTranscryptForGuest(f.deps, proto.GroupTranscryptForGuestRequest{
-		GroupHandle: f.handle, IVB64: iv, CiphertextB64: ct,
-	}), proto.GroupPolicyAuditOnly)
 
 	// The credential seal and the message seal still work on it.
 	if resp := HandleGroupEncryptWithAAD(f.deps, proto.GroupEncryptWithAADRequest{
@@ -406,7 +403,7 @@ func TestAuditActionsRefuseALegacyOrForeignHandle(t *testing.T) {
 
 // ─── Audit actions ───────────────────────────────────────────────────────
 
-func TestAuditEncryptDecryptTranscryptRoundTrip(t *testing.T) {
+func TestAuditEncryptDecryptRoundTrip(t *testing.T) {
 	f := newAuditFixture(t)
 	enc := HandleGroupEncryptAudit(f.deps, payloadOf(t, f.encryptRequest(f.receipt(t, nil))))
 	if !enc.Success {
@@ -433,23 +430,6 @@ func TestAuditEncryptDecryptTranscryptRoundTrip(t *testing.T) {
 		t.Fatal("plaintext in the clipboard response")
 	}
 
-	tr := proto.GroupTranscryptAuditForGuestRequest{
-		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: 3,
-		TableID: f.v.TableID, TableB64: base64.StdEncoding.EncodeToString(f.table),
-		Permit: f.permit(t, func(p *proto.AuditDecryptPermit) { p.PermitID = f.v.AccountID }),
-		IVB64:  sealed.IVB64, CiphertextB64: sealed.CiphertextB64,
-	}
-	guest := HandleGroupTranscryptAuditForGuest(f.deps, payloadOf(t, tr))
-	if !guest.Success {
-		t.Fatalf("transcrypt: %+v", guest)
-	}
-	g := guest.Data.(proto.GroupTranscryptForGuestResponseData)
-	key, _ := base64.RawURLEncoding.DecodeString(g.GuestKey)
-	payload, _ := base64.StdEncoding.DecodeString(g.GuestCiphertext)
-	pt, err := crypto.OpenAESGCM(key, payload[:12], payload[12:], nil)
-	if err != nil || string(pt) != f.v.Plaintext {
-		t.Fatalf("guest share did not open: %v", err)
-	}
 }
 
 func TestAuditTokenKeyDependsOnTheTable(t *testing.T) {
@@ -566,13 +546,6 @@ func TestAuditAuthorizationMustNameThisDevicesAccount(t *testing.T) {
 	dec := HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t,
 		f.permit(t, func(p *proto.AuditDecryptPermit) { p.AccountID = other }), iv, ct)))
 	wantCode(t, dec, proto.AuditAccountMismatch)
-	tr := proto.GroupTranscryptAuditForGuestRequest{
-		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
-		TableID: f.v.TableID, TableB64: base64.StdEncoding.EncodeToString(f.table),
-		Permit: f.permit(t, func(p *proto.AuditDecryptPermit) { p.AccountID = other }),
-		IVB64:  sealed.IVB64, CiphertextB64: sealed.CiphertextB64,
-	}
-	wantCode(t, HandleGroupTranscryptAuditForGuest(f.deps, payloadOf(t, tr)), proto.AuditAccountMismatch)
 
 	dec = HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, f.permit(t, nil), iv, ct)))
 	if !dec.Success {

@@ -54,8 +54,6 @@ const (
 	AuditShuffleTableBytes = 256
 
 	// AuditMaxRequestBytes caps the audit actions before they are decoded.
-	// Matches the guest transcrypt route ceiling: an audit token body is at
-	// most the size the server lets a guest share carry.
 	AuditMaxRequestBytes = 1024 * 1024
 )
 
@@ -386,45 +384,6 @@ func (r GroupDecryptAuditToClipboardRequest) Validate() error {
 	}
 	if err := validateClipboardTTL(r.ClipboardTTLMs); err != nil {
 		return err
-	}
-	return r.Permit.Validate()
-}
-
-// GroupTranscryptAuditForGuestRequest re-encrypts one audit token for an
-// external guest share. The org of the external-share policy is the request's
-// org_id, which must equal the handle's.
-type GroupTranscryptAuditForGuestRequest struct {
-	GroupHandle    string             `json:"group_handle"`
-	OrgID          string             `json:"org_id"`
-	GroupID        string             `json:"group_id"`
-	DekVersion     int                `json:"dek_version"`
-	TableID        string             `json:"table_id"`
-	TableB64       string             `json:"table_b64"`
-	Permit         AuditDecryptPermit `json:"permit"`
-	IVB64          string             `json:"iv_b64"`
-	CiphertextB64  string             `json:"ciphertext_b64"`
-	Passphrase     string             `json:"passphrase,omitempty"`
-	PassphraseSalt string             `json:"passphrase_salt,omitempty"`
-}
-
-func (r GroupTranscryptAuditForGuestRequest) TokenContext() AuditTokenContext {
-	return AuditTokenContext{r.GroupHandle, r.OrgID, r.GroupID, r.DekVersion, r.TableID, r.TableB64}
-}
-
-func (r GroupTranscryptAuditForGuestRequest) Validate() error {
-	if err := r.TokenContext().validate(); err != nil {
-		return err
-	}
-	if err := validateAuditSealed(r.IVB64, r.CiphertextB64); err != nil {
-		return err
-	}
-	if (r.Passphrase == "") != (r.PassphraseSalt == "") {
-		return newValidationError("passphrase_salt", "passphrase and passphrase_salt must be provided together")
-	}
-	if r.PassphraseSalt != "" {
-		if _, err := requireBase64(r.PassphraseSalt, "passphrase_salt"); err != nil {
-			return err
-		}
 	}
 	return r.Permit.Validate()
 }

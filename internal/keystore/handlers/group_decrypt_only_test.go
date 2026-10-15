@@ -59,8 +59,7 @@ func TestDecryptOnlyHandleRefusesEverySealAndKeepsDecrypting(t *testing.T) {
 	req.GroupHandle = handle
 	wantCode(t, HandleGroupEncryptAudit(f.deps, payloadOf(t, req)), proto.GroupPolicyNotAuditOnly)
 
-	// A token sealed before the switch (AAD-free, raw DEK) still opens and can
-	// still be shared with a guest.
+	// A token sealed before the switch (AAD-free, raw DEK) still opens.
 	iv, ct, err := crypto.SealAESGCM(f.deps.Random(), mustHex(t, f.v.GroupDEKHex), []byte("pre-switch"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -70,12 +69,6 @@ func TestDecryptOnlyHandleRefusesEverySealAndKeepsDecrypting(t *testing.T) {
 		CiphertextB64: base64.StdEncoding.EncodeToString(ct), ClipboardTTLMs: 10_000,
 	}); !resp.Success {
 		t.Fatalf("decrypt on a decrypt-only handle: %+v", resp)
-	}
-	if resp := HandleGroupTranscryptForGuest(f.deps, proto.GroupTranscryptForGuestRequest{
-		GroupHandle: handle, IVB64: base64.StdEncoding.EncodeToString(iv),
-		CiphertextB64: base64.StdEncoding.EncodeToString(ct),
-	}); !resp.Success {
-		t.Fatalf("guest transcrypt on a decrypt-only handle: %+v", resp)
 	}
 }
 

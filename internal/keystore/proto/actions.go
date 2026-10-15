@@ -17,7 +17,7 @@
 //   actions_server_keys.go   — server public-key trust anchor & multi-version
 //                              server-key infrastructure.
 //   actions_group_dek.go     — Group DEK ops and group sessions,
-//                              decrypt-to-clipboard, guest transcrypt.
+//                              decrypt-to-clipboard.
 //   actions_archive.go       — per-org / per-account archive keypairs +
 //                              break-glass re-grant.
 //   actions_archive_quorum.go— archive-key admin quorum (Shamir N-of-M).

@@ -7,17 +7,10 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// guestTranscryptMaxRequestBytes leaves room for the largest org token a guest
-// share can hold: the server keeps at most 256 KiB of guest ciphertext, and the
-// org token's ciphertext is the same size before re-encryption.
-const guestTranscryptMaxRequestBytes = 512 * 1024
-
 // groupHandleRoutes open a group DEK grant into a handle and use it for the
-// Secure Message and the external share, as the Extension background does.
-// No route here takes an AAD or returns a key: the message seal builds its
-// AAD from structured fields, the display actions build theirs inside the
-// handler, and the guest transcrypt returns only the guest ciphertext and the
-// one-time guest key.
+// Secure Message, as the Extension background does. No route here takes an
+// AAD or returns a key: the message seal builds its AAD from structured
+// fields, and the display actions build theirs inside the handler.
 var groupHandleRoutes = map[string]appRoute{
 	"/v1/group-dek/open": {
 		action: proto.ActionGroupSessionOpen,
@@ -38,31 +31,6 @@ var groupHandleRoutes = map[string]appRoute{
 		input:      func() any { return &proto.GroupDecryptWithAadForAppDisplayRequest{} },
 		plainLimit: proto.MessageDisplayMaxRequestBytes,
 	},
-	"/v1/guest-share/transcrypt": {
-		action:     proto.ActionGroupTranscryptForGuest,
-		input:      func() any { return &proto.GroupTranscryptForGuestRequest{} },
-		bind:       bindGuestTranscrypt,
-		plainLimit: guestTranscryptMaxRequestBytes,
-	},
-	// An audit token under an audit-only version: the request names the
-	// version and table and carries the server's decrypt permit. The action
-	// decodes strictly, so the App's bytes reach it unchanged.
-	"/v1/guest-share/transcrypt-audit": {
-		action:     proto.ActionGroupTranscryptAuditForGuest,
-		input:      func() any { return &proto.GroupTranscryptAuditForGuestRequest{} },
-		plainLimit: proto.AuditMaxRequestBytes,
-	},
-}
-
-// bindGuestTranscrypt requires the org the App applied the external-share
-// policy for. The App can paste any token, so the route never transcrypts one
-// without naming the org its handle must have been opened for.
-func bindGuestTranscrypt(_ *Server, input any) (any, error) {
-	in := input.(*proto.GroupTranscryptForGuestRequest)
-	if !validUUID(in.ExpectedOrgID) || in.ExpectedOrgID == nilUUID {
-		return nil, errAppRouteRefused
-	}
-	return *in, nil
 }
 
 // appMessageSeal names the message, never its AAD, so the route cannot seal
