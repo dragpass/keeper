@@ -128,6 +128,7 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/login/restore-device-master",
 	"/v1/auth/login/sign-alias",
 	"/v1/auth/login/sign-challenge",
+	"/v1/auth/org-emergency/seed",
 	"/v1/auth/password/rewrap",
 	"/v1/auth/recovery-key/reissue-prepare",
 	"/v1/auth/recovery/abort",

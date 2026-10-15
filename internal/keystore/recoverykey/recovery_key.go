@@ -74,6 +74,27 @@ func Derive(input []byte, alias string, version uint) (authSeedB64 string, wrapK
 	return base64.StdEncoding.EncodeToString(authSeed), wrapKey, nil
 }
 
+// OrgEmergencyAuthInfo is the HKDF info of the organization emergency recovery
+// code seed. It differs from the account recovery info and the salt carries an
+// "org:" prefix, so the same 24 characters never give an account recovery seed.
+const OrgEmergencyAuthInfo = "dragpass-org-emergency-auth-v1"
+
+// DeriveOrgEmergencySeed derives the 32-byte seed the server compares with the
+// Argon2id hash it stored for the organization's emergency code. There is no
+// wrap key: the code protects nothing, it only proves knowledge. The caller
+// validates orgID and owns (and zeroizes) the returned bytes.
+func DeriveOrgEmergencySeed(input []byte, orgID string) ([]byte, error) {
+	if orgID == "" {
+		return nil, errors.New("org id must not be empty")
+	}
+	normalized, err := Normalize(input)
+	if err != nil {
+		return nil, err
+	}
+	defer zeroize(normalized)
+	return hkdfBytes(normalized, []byte("org:"+orgID), OrgEmergencyAuthInfo)
+}
+
 func hkdfBytes(input, salt []byte, info string) ([]byte, error) {
 	return hkdf.Key(sha256.New, input, salt, info, derivedKeyLength)
 }
