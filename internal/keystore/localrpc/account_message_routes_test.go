@@ -34,20 +34,6 @@ func newKeyedRouteServer(t *testing.T) (*Server, *testdouble.MemorySecretStore, 
 	return server, store, own.PublicKey, session, csrf
 }
 
-func gcmSeal(t *testing.T, key, plaintext, aad []byte) (iv, ciphertext []byte) {
-	t.Helper()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	iv = bytes.Repeat([]byte{7}, gcm.NonceSize())
-	return iv, gcm.Seal(nil, iv, plaintext, aad)
-}
-
 func gcmOpen(t *testing.T, key, iv, ciphertext, aad []byte) []byte {
 	t.Helper()
 	block, err := aes.NewCipher(key)
