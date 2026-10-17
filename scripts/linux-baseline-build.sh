@@ -3,10 +3,10 @@
 #
 # Runs as root inside an ubuntu:20.04 container (glibc 2.31) of the same
 # architecture as the binary, with the repository mounted at the working
-# directory and a Linux Go toolchain mounted at /usr/local/go. A cgo binary
-# needs the glibc symbol versions of the machine it was linked on, so building
-# on the oldest supported distribution is what lets it run there and on
-# anything newer.
+# directory. A Linux Go toolchain can be mounted at /usr/local/go; otherwise,
+# GO_VERSION selects the Linux toolchain to download. A cgo binary needs the
+# glibc symbol versions of the machine it was linked on, so building on the
+# oldest supported distribution lets it run there and on anything newer.
 #
 #   usage: scripts/linux-baseline-build.sh amd64|arm64 [VERSION]
 #
@@ -33,11 +33,33 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-  gcc libc6-dev libx11-dev make curl ca-certificates >/dev/null
+  gcc libc6-dev libx11-dev make curl ca-certificates coreutils jq tar >/dev/null
+
+if [ ! -x /usr/local/go/bin/go ]; then
+  go_version="${GO_VERSION:?GO_VERSION is required when /usr/local/go is not mounted}"
+  case "$arch" in
+    amd64) go_arch=amd64 ;;
+    arm64) go_arch=arm64 ;;
+  esac
+  curl --proto '=https' --tlsv1.2 -sSfL \
+    'https://go.dev/dl/?mode=json&include=all' \
+    -o /tmp/go-downloads.json
+  go_filename="go${go_version}.linux-${go_arch}.tar.gz"
+  go_sha256="$(jq -er --arg version "go${go_version}" --arg filename "$go_filename" \
+    '[.[] | select(.version == $version) | .files[] | select(.filename == $filename) | .sha256] | if length == 1 then .[0] else error("Go archive checksum not found") end' \
+    /tmp/go-downloads.json)"
+  curl --proto '=https' --tlsv1.2 -sSfL \
+    "https://go.dev/dl/${go_filename}" \
+    -o /tmp/go.tar.gz
+  printf '%s  %s\n' "$go_sha256" /tmp/go.tar.gz | sha256sum --check
+  tar -C /tmp -xzf /tmp/go.tar.gz
+  export PATH="/tmp/go/bin:$PATH"
+fi
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
   | sh -s -- -y -q --profile minimal --default-toolchain "${RUST_TOOLCHAIN:-stable}"
-export PATH="/usr/local/go/bin:$HOME/.cargo/bin:$PATH"
+export PATH="/usr/local/go/bin:/tmp/go/bin:$HOME/.cargo/bin:$PATH"
+export MLS="${MLS:-1}"
 export GOCACHE=/tmp/go-cache
 # The container has no git, and the worktree's .git may point at a host path.
 export GOFLAGS=-buildvcs=false
