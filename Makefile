@@ -144,19 +144,38 @@ $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
 
 build-linux: build-linux-amd64 build-linux-arm64
 
-# With MLS these are cgo builds for the host's own arch and libc. The release
-# binaries come from scripts/linux-baseline-build.sh, which runs these targets
-# inside ubuntu:20.04 so the result needs nothing newer than glibc 2.31.
-
+# On macOS, make build/pkg/release requires Docker for Linux builds. Each
+# architecture uses the Ubuntu 20.04 release image and sets up its Go/Rust
+# toolchains inside the container.
 build-linux-amd64: $(LINUX_BIN_AMD64)
-$(LINUX_BIN_AMD64): main.go go.mod $(LINUX_MLS_LIB)
-	@echo "Building Linux amd64 binary: $(LINUX_BIN_AMD64)..."
-	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=amd64 go build $(MLS_GO_TAGS) -o $(LINUX_BIN_AMD64) .
-
 build-linux-arm64: $(LINUX_BIN_ARM64)
-$(LINUX_BIN_ARM64): main.go go.mod $(LINUX_MLS_LIB)
-	@echo "Building Linux arm64 binary: $(LINUX_BIN_ARM64)..."
-	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=arm64 go build $(MLS_GO_TAGS) -o $(LINUX_BIN_ARM64) .
+
+$(LINUX_BIN_AMD64): LINUX_ARCH := amd64
+$(LINUX_BIN_ARM64): LINUX_ARCH := arm64
+
+ifeq ($(shell uname -s),Darwin)
+LINUX_BASELINE_IMAGE ?= ubuntu:20.04
+LINUX_GO_VERSION ?= $(shell awk '$$1 == "toolchain" { toolchain = $$2 } $$1 == "go" { language = $$2 } END { version = toolchain; if (version == "" || version == "default") version = language; sub(/^go/, "", version); print version }' go.mod)
+ifeq ($(strip $(LINUX_GO_VERSION)),)
+$(error Could not determine Go version from go.mod)
+endif
+
+# macOS cannot supply the Linux C toolchain or glibc headers needed by the
+# release cgo binaries. Build each architecture in its matching baseline image.
+$(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64): main.go go.mod
+	@docker run --rm --platform linux/$(LINUX_ARCH) \
+		-v "$$PWD:/work" -w /work \
+		-e HOST_UID="$$(id -u)" -e HOST_GID="$$(id -g)" \
+		-e GO_VERSION="$(LINUX_GO_VERSION)" \
+		-e MLS="$(MLS)" \
+		"$(LINUX_BASELINE_IMAGE)" \
+		scripts/linux-baseline-build.sh "$(LINUX_ARCH)" "$(VERSION)"
+.PHONY: $(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64)
+else
+$(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64): main.go go.mod $(LINUX_MLS_LIB)
+	@echo "Building Linux $(LINUX_ARCH) binary: $@..."
+	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=$(LINUX_ARCH) go build $(MLS_GO_TAGS) -o $@ .
+endif
 
 pkg-macos: pkg-macos-amd64 pkg-macos-arm64
 
