@@ -128,14 +128,18 @@ pkg: pkg-macos pkg-windows pkg-linux
 build-macos: build-macos-amd64 build-macos-arm64
 
 build-macos-amd64: $(MAC_BIN_AMD64)
-$(MAC_BIN_AMD64): main.go go.mod $(MAC_MLS_LIB)
-	@echo "Building macOS x86_64 binary: $(MAC_BIN_AMD64)..."
-	@CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build $(MLS_GO_TAGS) -o $(MAC_BIN_AMD64) .
-
 build-macos-arm64: $(MAC_BIN_ARM64)
-$(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
-	@echo "Building macOS arm64 binary: $(MAC_BIN_ARM64)..."
-	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(MLS_GO_TAGS) -o $(MAC_BIN_ARM64) .
+
+# MAC_ARCH names the Go arch and build root, MAC_LABEL the user-facing arch.
+# The macOS package targets below set the same values for their binaries.
+$(MAC_BIN_AMD64) $(MAC_PKG_AMD64): MAC_ARCH := amd64
+$(MAC_BIN_AMD64) $(MAC_PKG_AMD64): MAC_LABEL := x86_64
+$(MAC_BIN_ARM64) $(MAC_PKG_ARM64): MAC_ARCH := arm64
+$(MAC_BIN_ARM64) $(MAC_PKG_ARM64): MAC_LABEL := arm64
+
+$(MAC_BIN_AMD64) $(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
+	@echo "Building macOS $(MAC_LABEL) binary: $@..."
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=$(MAC_ARCH) go build $(MLS_GO_TAGS) -o $@ .
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
@@ -180,42 +184,31 @@ endif
 pkg-macos: pkg-macos-amd64 pkg-macos-arm64
 
 pkg-macos-amd64: $(MAC_PKG_AMD64)
-$(MAC_PKG_AMD64): $(MAC_BIN_AMD64)
-	@echo "Creating macOS x86_64 package structure in ./build_root_macos_amd64..."
-	@rm -rf build_root_macos_amd64
-	@mkdir -p build_root_macos_amd64/Library/Application\ Support/DragPass
-	@mkdir -p build_root_macos_amd64/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
-	@cp $(MAC_BIN_AMD64) build_root_macos_amd64/Library/Application\ Support/DragPass/dragpass-keeper
-	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/Library/Application Support/DragPass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > build_root_macos_amd64/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
-
-	@echo "Creating output directory: $(MAC_PKG_DIR)..."
-	@mkdir -p $(MAC_PKG_DIR)
-
-	@echo "Building macOS x86_64 package: $(MAC_PKG_AMD64)..."
-	@pkgbuild --root ./build_root_macos_amd64 \
-            --identifier $(PKG_IDENTIFIER) \
-            --version $(VERSION) \
-            $(MAC_PKG_AMD64)
-	@echo "Successfully built $(MAC_PKG_AMD64)"
-
 pkg-macos-arm64: $(MAC_PKG_ARM64)
+
+$(MAC_PKG_AMD64): $(MAC_BIN_AMD64)
 $(MAC_PKG_ARM64): $(MAC_BIN_ARM64)
-	@echo "Creating macOS arm64 package structure in ./build_root_macos_arm64..."
-	@rm -rf build_root_macos_arm64
-	@mkdir -p build_root_macos_arm64/Library/Application\ Support/DragPass
-	@mkdir -p build_root_macos_arm64/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
-	@cp $(MAC_BIN_ARM64) build_root_macos_arm64/Library/Application\ Support/DragPass/dragpass-keeper
-	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/Library/Application Support/DragPass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > build_root_macos_arm64/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
+$(MAC_PKG_AMD64) $(MAC_PKG_ARM64): MAC_ROOT = build_root_macos_$(MAC_ARCH)
+$(MAC_PKG_AMD64): MAC_BIN := $(MAC_BIN_AMD64)
+$(MAC_PKG_ARM64): MAC_BIN := $(MAC_BIN_ARM64)
+
+$(MAC_PKG_AMD64) $(MAC_PKG_ARM64):
+	@echo "Creating macOS $(MAC_LABEL) package structure in ./$(MAC_ROOT)..."
+	@rm -rf $(MAC_ROOT)
+	@mkdir -p $(MAC_ROOT)/Library/Application\ Support/DragPass
+	@mkdir -p $(MAC_ROOT)/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
+	@cp $(MAC_BIN) $(MAC_ROOT)/Library/Application\ Support/DragPass/dragpass-keeper
+	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/Library/Application Support/DragPass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > $(MAC_ROOT)/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.dragpass.keeper.json
 
 	@echo "Creating output directory: $(MAC_PKG_DIR)..."
 	@mkdir -p $(MAC_PKG_DIR)
 
-	@echo "Building macOS arm64 package: $(MAC_PKG_ARM64)..."
-	@pkgbuild --root ./build_root_macos_arm64 \
+	@echo "Building macOS $(MAC_LABEL) package: $@..."
+	@pkgbuild --root ./$(MAC_ROOT) \
             --identifier $(PKG_IDENTIFIER) \
             --version $(VERSION) \
-            $(MAC_PKG_ARM64)
-	@echo "Successfully built $(MAC_PKG_ARM64)"
+            $@
+	@echo "Successfully built $@"
 
 pkg-windows: $(WIN_PKG)
 $(WIN_PKG): $(WIN_BIN) setup.iss
@@ -235,46 +228,35 @@ pkg-linux: pkg-linux-amd64 pkg-linux-arm64
 DEB_DEPENDS := libc6 (>= 2.31), libgcc-s1
 
 pkg-linux-amd64: $(LINUX_DEB_AMD64)
-$(LINUX_DEB_AMD64): $(LINUX_BIN_AMD64)
-	@echo "Creating Linux amd64 package structure in ./build_root_linux_amd64..."
-	@rm -rf build_root_linux_amd64
-	@mkdir -p build_root_linux_amd64/opt/dragpass
-	@mkdir -p build_root_linux_amd64/etc/opt/chrome/native-messaging-hosts
-	@mkdir -p build_root_linux_amd64/etc/chromium/native-messaging-hosts
-	@cp $(LINUX_BIN_AMD64) build_root_linux_amd64/opt/dragpass/dragpass-keeper
-	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/opt/dragpass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > build_root_linux_amd64/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json
-	@cp build_root_linux_amd64/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json \
-		build_root_linux_amd64/etc/chromium/native-messaging-hosts/com.dragpass.keeper.json
-
-	@echo "Creating output directory: $(LINUX_PKG_DIR)..."
-	@mkdir -p $(LINUX_PKG_DIR)
-
-	@echo "Building DEB amd64 package via Docker: $(LINUX_DEB_AMD64)..."
-	@mkdir -p build_root_linux_amd64/DEBIAN
-	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_amd64/DEBIAN/control
-	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build build_root_linux_amd64 /work/$(LINUX_DEB_AMD64)"
-	@echo "Successfully built $(LINUX_DEB_AMD64)"
-
 pkg-linux-arm64: $(LINUX_DEB_ARM64)
+
+$(LINUX_DEB_AMD64): $(LINUX_BIN_AMD64)
 $(LINUX_DEB_ARM64): $(LINUX_BIN_ARM64)
-	@echo "Creating Linux arm64 package structure in ./build_root_linux_arm64..."
-	@rm -rf build_root_linux_arm64
-	@mkdir -p build_root_linux_arm64/opt/dragpass
-	@mkdir -p build_root_linux_arm64/etc/opt/chrome/native-messaging-hosts
-	@mkdir -p build_root_linux_arm64/etc/chromium/native-messaging-hosts
-	@cp $(LINUX_BIN_ARM64) build_root_linux_arm64/opt/dragpass/dragpass-keeper
-	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/opt/dragpass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > build_root_linux_arm64/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json
-	@cp build_root_linux_arm64/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json \
-		build_root_linux_arm64/etc/chromium/native-messaging-hosts/com.dragpass.keeper.json
+$(LINUX_DEB_AMD64): DEB_ARCH := amd64
+$(LINUX_DEB_AMD64): DEB_BIN := $(LINUX_BIN_AMD64)
+$(LINUX_DEB_ARM64): DEB_ARCH := arm64
+$(LINUX_DEB_ARM64): DEB_BIN := $(LINUX_BIN_ARM64)
+$(LINUX_DEB_AMD64) $(LINUX_DEB_ARM64): DEB_ROOT = build_root_linux_$(DEB_ARCH)
+
+$(LINUX_DEB_AMD64) $(LINUX_DEB_ARM64):
+	@echo "Creating Linux $(DEB_ARCH) package structure in ./$(DEB_ROOT)..."
+	@rm -rf $(DEB_ROOT)
+	@mkdir -p $(DEB_ROOT)/opt/dragpass
+	@mkdir -p $(DEB_ROOT)/etc/opt/chrome/native-messaging-hosts
+	@mkdir -p $(DEB_ROOT)/etc/chromium/native-messaging-hosts
+	@cp $(DEB_BIN) $(DEB_ROOT)/opt/dragpass/dragpass-keeper
+	@echo "{\n  \"name\": \"com.dragpass.keeper\",\n  \"description\": \"DragPass Device Key Storage\",\n  \"path\": \"/opt/dragpass/dragpass-keeper\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://$(EXTENSION_ID)/\"\n  ]\n}" > $(DEB_ROOT)/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json
+	@cp $(DEB_ROOT)/etc/opt/chrome/native-messaging-hosts/com.dragpass.keeper.json \
+		$(DEB_ROOT)/etc/chromium/native-messaging-hosts/com.dragpass.keeper.json
 
 	@echo "Creating output directory: $(LINUX_PKG_DIR)..."
 	@mkdir -p $(LINUX_PKG_DIR)
 
-	@echo "Building DEB arm64 package via Docker: $(LINUX_DEB_ARM64)..."
-	@mkdir -p build_root_linux_arm64/DEBIAN
-	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: arm64\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > build_root_linux_arm64/DEBIAN/control
-	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build build_root_linux_arm64 /work/$(LINUX_DEB_ARM64)"
-	@echo "Successfully built $(LINUX_DEB_ARM64)"
+	@echo "Building DEB $(DEB_ARCH) package via Docker: $@..."
+	@mkdir -p $(DEB_ROOT)/DEBIAN
+	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: $(DEB_ARCH)\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > $(DEB_ROOT)/DEBIAN/control
+	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build $(DEB_ROOT) /work/$@"
+	@echo "Successfully built $@"
 
 sign:
 	@echo "Signing release artifacts with GPG..."
