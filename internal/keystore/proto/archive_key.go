@@ -114,16 +114,6 @@ type AccountArchiveKeyGenerateResponseData struct {
 	Fingerprint string `json:"fingerprint"` // hex(sha256(public key PEM))
 }
 
-type AccountArchiveKeyStatusRequest struct{}
-
-func (r AccountArchiveKeyStatusRequest) Validate() error { return nil }
-
-type AccountArchiveKeyStatusResponseData struct {
-	HasActive   bool   `json:"has_active"`
-	PublicKey   string `json:"publickey,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-}
-
 // ArchiveUnwrapAndRewrapRequest — break-glass re-grant composite.
 //
 // WrappedForArchiveB64: Base64 of an OLD Group DEK RSA-OAEP-wrapped to the org

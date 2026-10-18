@@ -334,7 +334,6 @@ var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_generate":         archiveEmptyRoute(proto.ActionArchiveKeyGenerate),
 	"/v1/archive/archive_key_status":           {action: proto.ActionArchiveKeyStatus, input: func() any { return &proto.ArchiveKeyStatusRequest{} }},
 	"/v1/archive/account_archive_key_generate": archiveEmptyRoute(proto.ActionAccountArchiveKeyGenerate),
-	"/v1/archive/account_archive_key_status":   archiveEmptyRoute(proto.ActionAccountArchiveKeyStatus),
 	"/v1/archive/archive_key_rotate_begin":     {action: proto.ActionArchiveKeyRotateBegin, input: func() any { return &proto.ArchiveKeyRotateBeginRequest{} }},
 	"/v1/archive/archive_key_rotate_commit":    {action: proto.ActionArchiveKeyRotateCommit, input: func() any { return &proto.ArchiveKeyRotateCommitRequest{} }},
 	"/v1/archive/archive_key_rotate_abort":     {action: proto.ActionArchiveKeyRotateAbort, input: func() any { return &proto.ArchiveKeyRotateAbortRequest{} }},
