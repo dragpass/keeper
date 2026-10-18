@@ -48,24 +48,6 @@ func TestHandleAccountArchiveKeyGenerate_IdempotentAndSeparateSlot(t *testing.T)
 	}
 }
 
-func TestHandleAccountArchiveKeyStatus(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-
-	before := HandleAccountArchiveKeyStatus(deps, proto.AccountArchiveKeyStatusRequest{})
-	if !before.Success || before.Data.(proto.AccountArchiveKeyStatusResponseData).HasActive {
-		t.Fatal("status before generate should be has_active=false")
-	}
-
-	gen := HandleAccountArchiveKeyGenerate(deps, proto.AccountArchiveKeyGenerateRequest{})
-	genData := gen.Data.(proto.AccountArchiveKeyGenerateResponseData)
-
-	after := HandleAccountArchiveKeyStatus(deps, proto.AccountArchiveKeyStatusRequest{})
-	afterData := after.Data.(proto.AccountArchiveKeyStatusResponseData)
-	if !afterData.HasActive || afterData.PublicKey != genData.PublicKey || afterData.Fingerprint != genData.Fingerprint {
-		t.Fatal("status after generate should return the generated key meta")
-	}
-}
-
 // A grant wrapped to the ACCOUNT archive key (the ownership-handoff shape —
 // grants are re-wrapped to the new owner's account directory key) must still
 // unwrap via archive_unwrap_and_rewrap even though the ORG slot holds an

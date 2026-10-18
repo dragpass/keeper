@@ -56,17 +56,15 @@ const (
 
 	// Per-account Archive / Recovery receiving keypair actions.
 	//
-	// AccountArchiveKeyGenerate / AccountArchiveKeyStatus: same idempotent
-	// generate / status contract as the org archive actions, but against the
-	// dedicated ACCOUNT slot (account_archive_private_key). This is the key
-	// whose public half the account publishes to the server directory
+	// AccountArchiveKeyGenerate: same idempotent generate contract as the org
+	// archive action, but against the dedicated ACCOUNT slot
+	// (account_archive_private_key). This is the key whose public half the account publishes to the server directory
 	// (account_archive_keys) to receive ownership-handoff grants and archive
 	// quorum Shamir shares. Kept as separate actions (rather than a slot
 	// parameter on archive_key_*) because the two keys have different
 	// lifecycles: the org key is deleted by archive_key_split when quorum is
 	// enabled, while the account key must survive that wipe.
 	ActionAccountArchiveKeyGenerate = "account_archive_key_generate"
-	ActionAccountArchiveKeyStatus   = "account_archive_key_status"
 
 	// ArchiveUnwrapAndRewrap: break-glass re-grant composite. Unwrap an OLD
 	// Group DEK that was wrapped to the org archive public key

@@ -110,7 +110,6 @@ var pinnedAppRoutes = []string{
 	"/v1/account/binding",
 	"/v1/account/binding/signout",
 	"/v1/archive/account_archive_key_generate",
-	"/v1/archive/account_archive_key_status",
 	"/v1/archive/archive_key_generate",
 	"/v1/archive/archive_key_rotate_abort",
 	"/v1/archive/archive_key_rotate_begin",
@@ -701,7 +700,7 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	for _, path := range []string{
-		"/v1/archive/archive_key_status", "/v1/archive/account_archive_key_generate", "/v1/archive/account_archive_key_status",
+		"/v1/archive/archive_key_status", "/v1/archive/account_archive_key_generate",
 		"/v1/archive/archive_key_generate", "/v1/archive/archive_key_rotate_abort", "/v1/archive/archive_session_begin",
 		"/v1/archive/archive_session_end",
 	} {

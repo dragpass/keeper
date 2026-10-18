@@ -61,21 +61,3 @@ func HandleAccountArchiveKeyGenerate(d Deps, req proto.AccountArchiveKeyGenerate
 		Fingerprint: fingerprintBase64Public(keyPair.PublicKey),
 	}}
 }
-
-// HandleAccountArchiveKeyStatus reports account archive key presence + public
-// key + fingerprint. Absence is normal (not yet published to the directory).
-func HandleAccountArchiveKeyStatus(d Deps, req proto.AccountArchiveKeyStatusRequest) proto.BaseResponse {
-	d.Logger.Println("account archive key status processing...")
-
-	pub, err := keychain.GetAccountArchivePublicKey(d.Store)
-	if err != nil || pub == "" {
-		return proto.BaseResponse{Success: true, Data: proto.AccountArchiveKeyStatusResponseData{
-			HasActive: false,
-		}}
-	}
-	return proto.BaseResponse{Success: true, Data: proto.AccountArchiveKeyStatusResponseData{
-		HasActive:   true,
-		PublicKey:   pub,
-		Fingerprint: fingerprintBase64Public(pub),
-	}}
-}

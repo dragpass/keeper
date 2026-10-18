@@ -25,6 +25,5 @@ func archiveActions() map[string]action {
 
 		// per-account Archive / Recovery receiving keypair actions
 		proto.ActionAccountArchiveKeyGenerate: wrap(handlers.HandleAccountArchiveKeyGenerate),
-		proto.ActionAccountArchiveKeyStatus:   wrap(handlers.HandleAccountArchiveKeyStatus),
 	}
 }
