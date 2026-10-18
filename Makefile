@@ -315,13 +315,51 @@ checksums:
 #    required). Useful for resetting to a clean state when schema or encoding
 #    changes during development. To preserve an enrolled state, replace the
 #    binary manually instead of running refresh.
+#
+# `make refresh` only lists the Keychain items it would delete and exits.
+# `make refresh CONFIRM=1` deletes them, then rebuilds and reinstalls.
 MAC_INSTALL_PATH := /Library/Application Support/DragPass/dragpass-keeper
 LINUX_INSTALL_PATH := /opt/dragpass/dragpass-keeper
 
-# Keychain Service name and account list used by Keeper.
-# (Keep in sync with dragpass-keeper/config/config.go.)
+# Keychain service and slot names used by Keeper: config/config.go, plus
+# chat-runtime-epoch (internal/keystore/chat_runtime.go).
+# config/makefile_slots_test.go fails when these drift from config.go.
 KEEPER_KEYCHAIN_SERVICE := com.dragpass.keeper
-KEEPER_KEYCHAIN_ACCOUNTS := device_key keeper_private_key keeper_public_key server_public_key session_code pending_keeper_private_key pending_keeper_public_key
+KEEPER_KEYCHAIN_ACCOUNTS := \
+	device_key device_id account_binding session_code \
+	keeper_private_key keeper_public_key \
+	pending_keeper_private_key pending_keeper_public_key \
+	pending_recovery_keeper_private_key pending_recovery_keeper_public_key \
+	pending_signup_prepare_input pending_signup_personal_device_wrapped_dek \
+	personal_device_wrapped_dek pending_personal_key_bundle \
+	server_public_key_active_version server_public_key_root_fingerprint \
+	request_signing_private_key request_signing_public_key \
+	pending_request_signing_private_key pending_request_signing_public_key \
+	mls_leaf_signature_key mls_leaf_signature_key_pending \
+	org_archive_private_key org_archive_public_key \
+	org_archive_private_key_staging org_archive_public_key_staging \
+	org_archive_session_private_key org_archive_session_public_key \
+	account_archive_private_key account_archive_public_key \
+	key-transparency-checkpoint-anchor peer-key-policy peer-key-owner \
+	chat-runtime-epoch
+# Slots whose names end in an id (server key version, org id, peer account,
+# event digest, chat owner tag). Found by listing the Keychain.
+KEEPER_KEYCHAIN_ACCOUNT_PREFIXES := \
+	server_public_key_v \
+	org_archive_private_key: org_archive_public_key: \
+	org_archive_private_key_staging: org_archive_public_key_staging: \
+	peer-pin: peer-pin-index: mls-leaf-newest: \
+	key-transparency-known-event: key-transparency-pending-event: \
+	chat-state-seal: chat-state-anchor:
+SECURITY ?= security
+KEYCHAIN_SLOTS = KEEPER_KEYCHAIN_SERVICE="$(KEEPER_KEYCHAIN_SERVICE)" \
+	KEEPER_KEYCHAIN_ACCOUNTS="$(KEEPER_KEYCHAIN_ACCOUNTS)" \
+	KEEPER_KEYCHAIN_ACCOUNT_PREFIXES="$(KEEPER_KEYCHAIN_ACCOUNT_PREFIXES)" \
+	SECURITY="$(SECURITY)" sh scripts/keychain-slots.sh
+# A recipe line that names $(MAKE) runs even under `make -n`, and refresh is
+# one line, so `make -n refresh CONFIRM=1` used to purge the Keychain. Going
+# through another variable keeps -n a dry run.
+REFRESH_SUBMAKE = $(MAKE)
 
 refresh:
 	@OS=$$(uname -s); ARCH=$$(uname -m); \
@@ -342,13 +380,23 @@ refresh:
 			INSTALL_PATH="$(LINUX_INSTALL_PATH)" ;; \
 		*) echo "Unsupported OS for refresh: $$OS (use make pkg-windows for Windows)"; exit 1 ;; \
 	esac; \
+	if [ "$(CONFIRM)" != "1" ]; then \
+		echo "make refresh would delete the Keychain items below, rebuild $$BIN and install it to $$INSTALL_PATH."; \
+		case "$$OS" in \
+			Darwin) $(KEYCHAIN_SLOTS) list ;; \
+			Linux) \
+				echo "Secret Service items under service $(KEEPER_KEYCHAIN_SERVICE), cleared if present:"; \
+				for acct in $(KEEPER_KEYCHAIN_ACCOUNTS); do echo "  will clear: $$acct"; done; \
+				echo "  (slots named with an id are not cleared on Linux)" ;; \
+		esac; \
+		echo ""; \
+		echo "Nothing was deleted. Run 'make refresh CONFIRM=1' to proceed."; \
+		exit 0; \
+	fi; \
 	echo "Refreshing Keeper: $$OS/$$ARCH → $$INSTALL_PATH"; \
 	echo "Purging Keychain entries (service=$(KEEPER_KEYCHAIN_SERVICE))..."; \
 	case "$$OS" in \
-		Darwin) \
-			for acct in $(KEEPER_KEYCHAIN_ACCOUNTS); do \
-				security delete-generic-password -s "$(KEEPER_KEYCHAIN_SERVICE)" -a "$$acct" >/dev/null 2>&1 && echo "  deleted: $$acct" || echo "  (absent): $$acct"; \
-			done ;; \
+		Darwin) $(KEYCHAIN_SLOTS) delete ;; \
 		Linux) \
 			if command -v secret-tool >/dev/null 2>&1; then \
 				for acct in $(KEEPER_KEYCHAIN_ACCOUNTS); do \
@@ -359,7 +407,7 @@ refresh:
 			fi ;; \
 	esac; \
 	rm -f $$BIN; \
-	$(MAKE) $$TARGET; \
+	$(REFRESH_SUBMAKE) $$TARGET; \
 	if [ ! -f "$$BIN" ]; then echo "Build failed: $$BIN not found"; exit 1; fi; \
 	echo "Installing (sudo required)..."; \
 	sudo install -m 0755 $$BIN "$$INSTALL_PATH"; \
