@@ -76,16 +76,6 @@ func proxiedFrame(t *testing.T, server *Server, frame string) proto.BaseResponse
 	return result
 }
 
-func holderOf(t *testing.T, data any) string {
-	t.Helper()
-	raw, _ := json.Marshal(data)
-	var decoded struct {
-		Holder string `json:"holder"`
-	}
-	_ = json.Unmarshal(raw, &decoded)
-	return decoded.Holder
-}
-
 func claimLease(t *testing.T, server *Server, session, csrf, holder string) routeResult {
 	t.Helper()
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/runtime/claim", map[string]string{"holder_id": holder})
