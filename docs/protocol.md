@@ -1880,7 +1880,15 @@ validated fields and requires byte-for-byte equality before checking the leaf
 commitment, RFC 6962 inclusion proof, log signature, fresh witness quorum, and
 monotonic consistency against its locally persisted checkpoint. Evidence is
 not included in the existing chat-state permit signature canonical; its
-authority comes from the log and witness signatures. A mismatch,
+authority comes from the log and witness signatures. The list must hold a
+proof for every leaf the operation brings in, so the app gathers it for the
+conversation's current members plus the accounts the operation adds: the
+invitees of an Add or create this device builds (`mls_group_create`,
+`mls_commit_build` `add`, `replace`, `rejoin`), and the members a received
+Commit declares in its `commit_attestation` (`mls_process`,
+`mls_commit_confirm` `superseded`). The leaves a Welcome's tree already holds
+are not entering leaves and need none (`mls_join`). The app sends the proofs of
+one permit under one checkpoint. A mismatch,
 missing proof, stale quorum, rollback, or fork fails closed before a pin or MLS
 state change is persisted. This does not verify first-observation TOFU and does
 not by itself provide independent client gossip or protect against a quorum
