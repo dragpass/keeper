@@ -11,8 +11,8 @@
 // picks. The group is named by the conversation, the leaf by the device's own
 // key, and every position by the MLS state.
 //
-// Action rationale: actions_mls_chat.go. Design: dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-v2-mls-integration.md §12.2.
+// Action rationale: actions_mls_chat.go. Contract: docs/protocol.md "MLS chat
+// (chat v2 MLS actions)".
 
 package proto
 
@@ -1312,9 +1312,7 @@ type ChatStateRekeyLatchedData struct {
 //
 // PlaintextB64 is the second TestNoRawSecretInResponseTypes carve-out (the
 // first is 0.0.29's GroupDecryptWithAadForAppDisplayResponseData.plaintext_b64).
-// See the carve-out comment in no_raw_secret_response_test.go and
-// dragpass-control-plane docs/exec-plans/active/dragpass-chat-v2-mls-integration.md
-// M6.3.
+// See the carve-out comment in no_raw_secret_response_test.go.
 //
 // Items is the metadata of each plaintext, parallel to PlaintextB64, and no
 // plaintext of its own. mls_room_name_open leaves it out.

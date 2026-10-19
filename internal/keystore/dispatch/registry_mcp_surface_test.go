@@ -10,9 +10,8 @@
 // user-JWT routes issue, and the set of actions MCP may call is pinned here so
 // growing it is a visible decision rather than a line in a diff.
 //
-// The list comes from the audit in dragpass-control-plane
-// docs/security/adr-ratchet-state-storage.md §3.2, which walked every Keeper
-// call in packages/mcp: a version gate, the group-session pair, and the two
+// The list comes from an audit that walked every Keeper call in
+// packages/mcp: a version gate, the group-session pair, and the two
 // credential sinks. Everything MCP asks the Keeper for is a credential.
 //
 // This test cannot reach into the TypeScript package, so it does not claim to.

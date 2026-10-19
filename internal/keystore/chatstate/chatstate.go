@@ -9,9 +9,8 @@
 // three with chunking, journals, and index entries would put the key-reuse
 // defect in the paper. The trade is written down: the bulk moves from OS
 // keyring protection to file permissions plus a seal key, and the seal key
-// stays in the keyring so the files alone open nothing. Rationale and the
-// alternatives that were rejected: dragpass-control-plane
-// docs/security/adr-ratchet-state-storage.md S3-S7.
+// stays in the keyring so the files alone open nothing. The action contract
+// is docs/protocol.md "Conversation state (chat v2 ratchet storage)".
 //
 // Four properties this package owes the layer above, none of which MLS can
 // restore once broken:

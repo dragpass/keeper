@@ -30,8 +30,7 @@
 // written inside it are real pins over real peer fingerprints. Substituting a
 // peer key under a consistently-lied-about owner still lands on `changed`.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.1.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package handlers
 
@@ -99,8 +98,7 @@ func requirePeerKeyOwner(d Deps, ownerAccountID string) (proto.BaseResponse, boo
 // it behind the extension options page and nowhere else: no SPA route, no
 // content script, no path a server response can steer. The Keeper cannot
 // enforce that — it does not know which of the four surfaces that spawn it is
-// on the other end of its stdio loop (docs/security/adr-ratchet-state-storage.md
-// §3.1) — so the restriction is a client-side obligation, stated in
+// on the other end of its stdio loop — so the restriction is a client-side obligation, stated in
 // docs/protocol.md and in the action's constant, not a check made here.
 //
 // Pins survive. A device that changes owners keeps the previous owner's

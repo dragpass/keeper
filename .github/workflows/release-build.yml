@@ -6,8 +6,12 @@
 #
 # Every binary links the MLS library (-tags mls) and is checked for it:
 #   - the Go build settings must carry -tags=mls;
-#   - scripts/release-probe.sh starts the binary, pings it, and requires the
-#     "MLS library linked" line that only a working C ABI link produces.
+#   - scripts/release-probe.sh starts the binary, asks for its version, and
+#     requires the "MLS library linked" line that only a working C ABI link
+#     produces.
+# No binary may carry the E2E mode: `make check-release-no-e2e` rejects the
+# keeper_e2e tag and E2E-only code, and the probe requires the binary to
+# refuse KEEPER_E2E_MODE.
 # Linux binaries are built inside ubuntu:20.04 and must need no newer glibc
 # than 2.31. The .deb is installed and probed on ubuntu:20.04 and debian:11.
 name: release-build
@@ -16,7 +20,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: Package version (X.Y.Z), also the version ping must report.
+        description: Package version (X.Y.Z), also the version the probe must report.
         required: true
         type: string
       size-baseline:
@@ -62,6 +66,7 @@ jobs:
             echo "$bin: $archs"
             [ "$archs" = "${pair##*:}" ]
             go version -m "$bin" | grep -q -- '-tags=mls'
+            make check-release-no-e2e BIN="$bin"
           done
       - name: install Rosetta for the x86_64 probe
         run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
@@ -141,6 +146,7 @@ jobs:
       - name: mls tag and glibc baseline
         run: |
           go version -m "${{ matrix.bin }}" | grep -q -- '-tags=mls'
+          make check-release-no-e2e BIN="${{ matrix.bin }}"
           scripts/check-glibc-baseline.sh "${{ matrix.bin }}" "$LINUX_MAX_GLIBC"
           dpkg-deb -f "output/linux/${{ matrix.bin }}.deb" Depends
       - name: install the .deb and probe on ubuntu:20.04 and debian:11
@@ -209,6 +215,7 @@ jobs:
       - name: mls tag and system-only DLL imports
         run: |
           go version -m dragpass-keeper.exe | grep -q -- '-tags=mls'
+          make check-release-no-e2e BIN=dragpass-keeper.exe
           dlls="$(x86_64-w64-mingw32-objdump -p dragpass-keeper.exe | sed -n 's/.*DLL Name: //p' | sort -u)"
           echo "$dlls"
           if printf '%s\n' "$dlls" | grep -qi '^lib'; then

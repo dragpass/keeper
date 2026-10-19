@@ -17,8 +17,7 @@ package keychain
 // the pins, reached through the same SecretStore interface, and the only
 // callers are the two policy actions and the wrap enforcement path.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.5.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 import (
 	"encoding/json"

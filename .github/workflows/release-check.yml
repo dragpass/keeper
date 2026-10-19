@@ -81,6 +81,7 @@ jobs:
             echo "$bin: $archs, $(wc -c < "$bin") bytes"
             [ "$archs" = "${pair##*:}" ]
             go version -m "$bin" | grep -q -- '-tags=mls'
+            make check-release-no-e2e BIN="$bin"
             scripts/release-probe.sh "$bin" "${{ needs.version.outputs.version }}"
           done
 

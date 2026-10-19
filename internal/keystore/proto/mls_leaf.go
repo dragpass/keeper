@@ -8,8 +8,7 @@
 // Every field names a device, not an account. Only one leaf per account exists
 // today, but a verifier never learns that from this format.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-v2-mls-integration.md §5.2, §5.3, §12.2.
+// Contract: docs/protocol.md "MLS leaf declaration and leaf verification".
 
 package proto
 

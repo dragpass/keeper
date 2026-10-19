@@ -4,8 +4,8 @@
 // Its own domain fragment: these actions are the only ones that touch the
 // sealed chat state directory outside the MLS actions, and every one but the
 // purge is gated on a conversation-state permit. Storage:
-// internal/keystore/chatstate. Design: dragpass-control-plane
-// docs/security/adr-ratchet-state-storage.md.
+// internal/keystore/chatstate. Contract: docs/protocol.md "Conversation state
+// (chat v2 ratchet storage)".
 //
 // **Why the gated ones demand a server-signed permit.** The dispatcher has
 // one action registry and the Keeper cannot tell who launched it — extension

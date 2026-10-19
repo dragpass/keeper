@@ -10,8 +10,8 @@
 // was ever reserved — is the handler's or the store's, and runs regardless of
 // what Validate accepted.
 //
-// Contract: dragpass-control-plane docs/security/adr-ratchet-state-storage.md
-// S1-S7. Action rationale: actions_chat_state.go.
+// Contract: docs/protocol.md "Conversation state (chat v2 ratchet storage)".
+// Action rationale: actions_chat_state.go.
 
 package proto
 

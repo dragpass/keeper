@@ -147,7 +147,8 @@ func finalizeClipboardCopy(d Deps, plaintext []byte, ttlMs int64, logName string
 //
 // The production OSClipboard does not export a hash accessor, so the type
 // assertion gates this naturally — it only returns a normal response when
-// main.go swapped in a MemoryClipboard under KEEPER_E2E_MODE.
+// main.go swapped in a MemoryClipboard under KEEPER_E2E_MODE. Only a
+// keeper_e2e build registers the action (dispatch/registry_e2e.go).
 func HandleClipboardGetLastHash(d Deps, _ proto.ClipboardGetLastHashRequest) proto.BaseResponse {
 	d.Logger.Println("clipboard get last hash request processing...")
 

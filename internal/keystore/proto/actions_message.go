@@ -8,8 +8,8 @@
 // response in the whole protocol), so they keep their own actions_* /
 // registry_* fragment pair rather than riding on the Group DEK catalog.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/secure-message-overlay-implementation.md §3.
+// Contract: docs/protocol.md "Secure message display (app-display plaintext
+// carve-out)".
 
 package proto
 
@@ -50,9 +50,10 @@ const (
 	//
 	// This is the protocol's **only** plaintext-returning response and the first
 	// TestNoRawSecretInResponseTypes carve-out since 0.0.11. The approved scope
-	// of that exception is exactly this response type; see
-	// docs/security/secure-message-overlay-proposed-boundary.md §4 in
-	// dragpass-control-plane. Every clipboard action still returns no plaintext.
+	// of that exception is exactly this response type; see docs/protocol.md
+	// "Secure message display (app-display plaintext carve-out)" and the
+	// control-plane docs/agent-guide/security-model.md "Secure Message Overlay".
+	// Every clipboard action still returns no plaintext.
 	//
 	// What keeps the exception narrow is that the caller cannot choose what gets
 	// opened:
