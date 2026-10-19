@@ -70,7 +70,7 @@ func builtMLSKeeper(t *testing.T) string {
 			name += ".exe"
 		}
 		mlsKeeperBinary = filepath.Join(dir, name)
-		build := exec.Command("go", "build", "-tags", "mls", "-o", mlsKeeperBinary, ".")
+		build := exec.Command("go", "build", "-tags", "mls keeper_e2e", "-o", mlsKeeperBinary, ".")
 		build.Dir = filepath.Join("..", "..", "..")
 		build.Env = append(os.Environ(), "CGO_ENABLED=1")
 		if out, err := build.CombinedOutput(); err != nil {

@@ -1,3 +1,5 @@
+//go:build keeper_e2e
+
 package clipboard
 
 import "testing"

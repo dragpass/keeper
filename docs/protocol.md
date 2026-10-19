@@ -2577,8 +2577,9 @@ refused before running, so the host re-proves and retries once). Responses are
 sealed with AAD `"dragpass-keeper-native-proxy-response-v2\n" + instance + "\n"
 + request nonce`. A listener that cannot prove the secret (another account's
 Keeper, a protocol 1 owner, a port squatter) receives nothing: the host serves
-its own stdio instead. With `KEEPER_E2E_MODE=1` and no
-`DRAGPASS_KEEPER_LOCAL_DIR`, Keeper never joins the shared address and
+its own stdio instead. E2E mode exists only in a build with the `keeper_e2e`
+tag; a release build exits when any `KEEPER_E2E_*` variable is set. With
+`KEEPER_E2E_MODE=1` and no `DRAGPASS_KEEPER_LOCAL_DIR`, Keeper never joins the shared address and
 `--app-service` refuses to start. An isolated e2e Keeper (both set) may move to
 another `127.0.0.1` port with `DRAGPASS_KEEPER_LOCAL_ADDRESS`, so real-process
 tests never touch a Keeper the developer runs; the app itself only uses

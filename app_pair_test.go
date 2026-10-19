@@ -116,19 +116,3 @@ func TestAppRotateSecretIssuesANewPairingKey(t *testing.T) {
 		t.Fatal("accepted an unknown app command")
 	}
 }
-
-func TestE2EModeKeepsOffTheSharedLocalAddressUnlessIsolated(t *testing.T) {
-	env := map[string]string{}
-	getenv := func(key string) string { return env[key] }
-	if !localRPCEnabled(getenv) {
-		t.Fatal("production Keeper must take part in the shared local owner")
-	}
-	env[e2eEnvVar] = "1"
-	if localRPCEnabled(getenv) {
-		t.Fatal("an e2e Keeper with a mock keyring must not proxy to or serve the real local address")
-	}
-	env[localsecret.DirEnvVar] = t.TempDir()
-	if !localRPCEnabled(getenv) {
-		t.Fatal("an e2e Keeper with an isolated local secret may use local RPC")
-	}
-}

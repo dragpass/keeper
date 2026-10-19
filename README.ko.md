@@ -748,10 +748,12 @@ Credentials:
 ## Test Mode (KEEPER_E2E_MODE)
 
 사용자의 실제 OS Keychain을 건드리지 않고 회원가입/로그인 전체 흐름을 검증해야
-하는 종단간 테스트를 위해, Keeper 프로세스를 실행하는 환경에서
-`KEEPER_E2E_MODE=1`을 설정합니다. 이 모드가 활성화되면 다음과 같이 동작합니다.
+하는 종단간 테스트를 위해, Keeper를 `keeper_e2e` 태그로 빌드하고
+(`make build-e2e-macos-arm64`가 `dragpass-keeper-e2e-macos-arm64`를 만듭니다)
+그 프로세스를 실행하는 환경에서 `KEEPER_E2E_MODE=1`을 설정합니다. 이 모드가
+활성화되면 다음과 같이 동작합니다.
 
-- `main.init()`이 `github.com/zalando/go-keyring`의 `keyring.MockInit()`을 호출합니다
+- `configureE2E`(`e2e_mode.go`)가 `github.com/zalando/go-keyring`의 `keyring.MockInit()`을 호출합니다
 - 모든 `keyring.Set/Get/Delete` 연산이 프로세스 로컬 인메모리 맵으로 향합니다
 - `EnsureServerPublicKey`가 하드코딩된 서버 공개키를 mock에 기록합니다
 - OS Keychain은 읽거나 쓰지 않습니다
@@ -760,8 +762,14 @@ Credentials:
 시작 시 stderr에 `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
 를 기록하므로, 운영 환경에서 실수로 활성화된 경우 쉽게 찾아낼 수 있습니다.
 
-**운영 빌드에는 영향을 주지 않습니다.** 이 환경 변수는 런타임에 확인되므로 동일한
-바이너리가 두 모드 모두에서 동작합니다.
+**릴리스 빌드에는 테스트 모드가 없습니다.** mock 키링, 키링 파일 미러, 클립보드
+전환, 테스트 전용 `clipboard_get_last_hash` 액션은 `keeper_e2e` 태그가 있을 때만
+컴파일되며, 어떤 릴리스 타깃도 이 태그를 쓰지 않습니다. 릴리스 바이너리는
+`KEEPER_E2E_*` 변수가 하나라도 설정되어 있으면 시작 단계에서 종료하므로, 테스트가
+릴리스 바이너리를 잡더라도 실제 Keychain으로 넘어가지 않습니다.
+`make check-release-no-e2e BIN=<binary>`는 태그로 빌드된 바이너리를 거부하고,
+릴리스 워크플로가 이를 실행하며, `scripts/release-probe.sh`는 시작 거부를
+확인합니다. `make test-e2e-tag`는 태그를 붙여 테스트를 실행합니다.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
@@ -772,13 +780,13 @@ popup과 서비스 워커(SW)가 각각 `connectNative`로 자신만의 Keeper �
 ADMIN_CREATE_ORG에 실패합니다.
 
 `KEEPER_E2E_MODE=1`에 *더해서* `KEEPER_E2E_KEYRING_FILE=/path/to/keyring.json`을
-설정하면 `storage.go`가 모든 Set/Get/Delete를 JSON 파일
-(`internal/keystore/krfile.go`)에 미러링합니다. 이제 같은 파일 경로를 공유하는
+설정하면 모든 Set/Get/Delete를 JSON 파일
+(`internal/keystore/keychain/file_mirror.go`)에 미러링합니다. 이제 같은 파일 경로를 공유하는
 모든 Keeper 프로세스가 동일한 키링 항목을 보게 됩니다. 파일은 시작 시 mock 맵에
 로드되고, Set/Delete가 일어날 때마다 다시 기록됩니다.
 
 이 플래그는 opt-in 방식이며 mock 프로바이더가 활성화된 경우에만 의미가 있습니다.
-운영 빌드에서 파일 저장을 활성화하지는 않습니다. 자동화 픽스처는
+릴리스 빌드에는 파일 미러가 없습니다. 자동화 픽스처는
 `user-data-dir/e2e-keyring.json` 아래에 테스트별 경로를 생성하므로 각 테스트
 실행이 서로 격리됩니다.
 
@@ -806,9 +814,8 @@ e2e 실행은 복호화된 평문을 머신 페이스트보드에 씁니다.
 시작 시 stderr에 `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
 (recording opt-in; clipboard_get_last_hash unavailable)`을 남깁니다.
 
-**`KEEPER_E2E_MODE=1`이 아니면 무시됩니다.** 이 변수는 `main.init()`의 e2e
-분기 안에서만 읽습니다. 운영 프로세스는 이미 OS 클립보드를 쓰므로 플래그가
-동작을 바꾸거나 약화시킬 수 없습니다.
+**`keeper_e2e` 빌드에서 `KEEPER_E2E_MODE=1`이 아니면 무시됩니다.** 릴리스 빌드는
+다른 `KEEPER_E2E_*` 변수와 마찬가지로 시작 단계에서 거부합니다.
 
 ## Production Clipboard Smoke (DRAGPASS_KEEPER_CLIPBOARD_E2E)
 

@@ -14,11 +14,12 @@ import (
 )
 
 // Update together. Bump this number inside the same handler-change PR so
-// add/remove intent is obvious during review.
-const ExpectedRegisteredActionCount = 113
+// add/remove intent is obvious during review. It counts the release surface;
+// the test-only actions of a keeper_e2e build (e2eActions) come on top.
+const ExpectedRegisteredActionCount = 112
 
 func TestActionRegistry_Count(t *testing.T) {
-	if got := len(actionRegistry); got != ExpectedRegisteredActionCount {
+	if got := len(actionRegistry) - len(e2eActions()); got != ExpectedRegisteredActionCount {
 		t.Fatalf("actionRegistry count = %d, want %d\n"+
 			"if you added a new action or removed an existing one, "+
 			"bump ExpectedRegisteredActionCount along with it.",

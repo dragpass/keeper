@@ -27,11 +27,15 @@ LINUX_SIG_ARM64 := $(LINUX_DEB_ARM64).sig
 
 CHECKSUMS_FILE := output/checksums.txt
 
-.PHONY: test test-verbose test-cover test-clipboard-e2e
+.PHONY: test test-verbose test-cover test-clipboard-e2e test-e2e-tag
 
 # ── Tests ───────────────────────────────────────────
 test:
 	go test ./... -count=1
+
+# The same suite with the keeper_e2e tag: the E2E-only code and its tests.
+test-e2e-tag:
+	go test -tags keeper_e2e ./... -count=1
 
 test-verbose:
 	go test ./... -count=1 -v
@@ -68,12 +72,14 @@ MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 
 ifeq ($(MLS),1)
 MLS_GO_TAGS := -tags mls
+E2E_GO_TAGS := -tags "mls keeper_e2e"
 LINUX_CGO := 1
 MAC_MLS_LIB := mls-lib-macos
 WIN_MLS_LIB := mls-lib-windows
 LINUX_MLS_LIB := mls-lib
 else
 MLS_GO_TAGS :=
+E2E_GO_TAGS := -tags keeper_e2e
 LINUX_CGO := 0
 MAC_MLS_LIB :=
 WIN_MLS_LIB :=
@@ -140,6 +146,36 @@ $(MAC_BIN_ARM64) $(MAC_PKG_ARM64): MAC_LABEL := arm64
 $(MAC_BIN_AMD64) $(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
 	@echo "Building macOS $(MAC_LABEL) binary: $@..."
 	@CGO_ENABLED=1 GOOS=darwin GOARCH=$(MAC_ARCH) go build $(MLS_GO_TAGS) -o $@ .
+
+# ── E2E builds ──────────────────────────────────────
+# The browser E2E harness (dragpass tests/e2e-extension) needs the mock
+# keyring, the keyring file mirror, and the test-only actions, which exist only
+# with the keeper_e2e tag. These binaries have their own names so no package
+# target can pick one up, and no release target sets the tag.
+MAC_E2E_BIN_AMD64 := dragpass-keeper-e2e-macos-x86_64
+MAC_E2E_BIN_ARM64 := dragpass-keeper-e2e-macos-arm64
+
+.PHONY: build-e2e-macos-amd64 build-e2e-macos-arm64 check-release-no-e2e
+
+build-e2e-macos-amd64: $(MAC_MLS_LIB)
+	@echo "Building macOS x86_64 E2E binary: $(MAC_E2E_BIN_AMD64)..."
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build $(E2E_GO_TAGS) -o $(MAC_E2E_BIN_AMD64) .
+
+build-e2e-macos-arm64: $(MAC_MLS_LIB)
+	@echo "Building macOS arm64 E2E binary: $(MAC_E2E_BIN_ARM64)..."
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(E2E_GO_TAGS) -o $(MAC_E2E_BIN_ARM64) .
+
+# Fails when BIN was built with the keeper_e2e tag or carries E2E-only code.
+# The strings survive a stripped binary (-s -w), unlike symbols.
+E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash
+
+check-release-no-e2e:
+	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }
+	@if go version -m "$(BIN)" | grep -q 'keeper_e2e'; then echo "$(BIN) was built with the keeper_e2e tag" >&2; exit 1; fi
+	@for s in $(E2E_ONLY_STRINGS); do \
+		if LC_ALL=C grep -aq "$$s" "$(BIN)"; then echo "$(BIN) carries E2E-only code ($$s)" >&2; exit 1; fi; \
+	done
+	@echo "$(BIN): no keeper_e2e tag and no E2E-only code"
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)

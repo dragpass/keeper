@@ -1,4 +1,4 @@
-//go:build darwin || linux || windows
+//go:build (darwin || linux || windows) && keeper_e2e
 
 // Two Keeper processes declaring at once: the condition the L1 review
 // reproduced. Each child is this test binary running one mls_leaf_declare
