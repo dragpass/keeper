@@ -166,8 +166,12 @@ build-e2e-macos-arm64: $(MAC_MLS_LIB)
 	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(E2E_GO_TAGS) -o $(MAC_E2E_BIN_ARM64) .
 
 # Fails when BIN was built with the keeper_e2e tag or carries E2E-only code.
-# The strings survive a stripped binary (-s -w), unlike symbols.
-E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash
+# The strings survive a stripped binary (-s -w), unlike symbols. Besides the
+# E2E mode they cover the dev App origin opt-in and the root key override; a
+# release build refuses those variables by prefix, so their full names never
+# reach it.
+E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash \
+	DRAGPASS_KEEPER_DEV_APP_ORIGIN KEEPER_ROOT_PUBLIC_KEY_BASE64
 
 check-release-no-e2e:
 	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }

@@ -574,24 +574,6 @@ func TestAppSessionRequiresPairingProof(t *testing.T) {
 	openTestSession(t, server)
 }
 
-func TestAppOriginsIncludeDevOriginOnlyOnOptIn(t *testing.T) {
-	env := map[string]string{}
-	getenv := func(key string) string { return env[key] }
-	for _, origin := range AppOrigins(getenv) {
-		if strings.HasPrefix(origin, "http://") {
-			t.Fatalf("production origins include %s", origin)
-		}
-	}
-	env[DevAppOriginEnvVar] = "http://localhost:5174"
-	found := false
-	for _, origin := range AppOrigins(getenv) {
-		found = found || origin == "http://localhost:5174"
-	}
-	if !found {
-		t.Fatal("dev origin missing after opt-in")
-	}
-}
-
 func TestLocalRPCDoesNotExposeArbitraryKeeperActions(t *testing.T) {
 	server := newTestServer(t)
 	session, csrf := openTestSession(t, server)

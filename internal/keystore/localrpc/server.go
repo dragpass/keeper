@@ -62,14 +62,13 @@ func Address(isolated bool, getenv func(string) string) (string, error) {
 
 const NativeExtensionOrigin = "chrome-extension://cmgjlocmnppfpknaipdfodjhbplnhimk"
 
-// DevAppOriginEnvVar opts one development App origin in. Production binaries
-// trust only the deployed App, so a page any local program serves on a dev
-// port cannot drive Keeper.
-const DevAppOriginEnvVar = "DRAGPASS_KEEPER_DEV_APP_ORIGIN"
-
+// AppOrigins lists the origins allowed to open an App session: the deployed
+// App and the Extension. Only a keeper_e2e build adds a development origin
+// (dev_origin_e2e.go), so a page any local program serves on a dev port
+// cannot drive a release Keeper.
 func AppOrigins(getenv func(string) string) []string {
 	origins := []string{"https://app.dragpass.io", NativeExtensionOrigin}
-	if dev := strings.TrimSpace(getenv(DevAppOriginEnvVar)); dev != "" {
+	if dev := devAppOrigin(getenv); dev != "" {
 		origins = append(origins, dev)
 	}
 	return origins

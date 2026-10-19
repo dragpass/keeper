@@ -764,9 +764,13 @@ Credentials:
 
 **릴리스 빌드에는 테스트 모드가 없습니다.** mock 키링, 키링 파일 미러, 클립보드
 전환, 테스트 전용 `clipboard_get_last_hash` 액션은 `keeper_e2e` 태그가 있을 때만
-컴파일되며, 어떤 릴리스 타깃도 이 태그를 쓰지 않습니다. 릴리스 바이너리는
-`KEEPER_E2E_*` 변수가 하나라도 설정되어 있으면 시작 단계에서 종료하므로, 테스트가
-릴리스 바이너리를 잡더라도 실제 Keychain으로 넘어가지 않습니다.
+컴파일되며, 어떤 릴리스 타깃도 이 태그를 쓰지 않습니다. E2E 하네스가 쓰는 두 신뢰 재정의,
+`DRAGPASS_KEEPER_DEV_APP_ORIGIN`(로컬 App 개발 서버용 추가 App origin)과
+`KEEPER_ROOT_PUBLIC_KEY_BASE64`(`-ldflags`로 내장한 루트 키가 없을 때 쓰는 테스트
+루트 키)도 태그 빌드만 읽습니다. 릴리스 바이너리는 `KEEPER_E2E_*`,
+`DRAGPASS_KEEPER_DEV_*`, `KEEPER_ROOT_PUBLIC_KEY_*` 변수가 하나라도 설정되어 있으면
+시작 단계에서 종료하므로, 테스트가 릴리스 바이너리를 잡더라도 실제 Keychain으로
+넘어가지 않고, 환경 변수로 릴리스 Keeper의 신뢰 범위를 넓힐 수도 없습니다.
 `make check-release-no-e2e BIN=<binary>`는 태그로 빌드된 바이너리를 거부하고,
 릴리스 워크플로가 이를 실행하며, `scripts/release-probe.sh`는 시작 거부를
 확인합니다. `make test-e2e-tag`는 태그를 붙여 테스트를 실행합니다.

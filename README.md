@@ -837,9 +837,14 @@ on startup so accidental activation in production is easy to spot.
 **Release builds have no test mode.** The mock keyring, the keyring file
 mirror, the clipboard switch, and the test-only `clipboard_get_last_hash`
 action compile only with the `keeper_e2e` tag, which no release target sets.
-A release binary exits at startup when any `KEEPER_E2E_*` variable is set, so
-a test run that picks up a release binary cannot fall through to the real
-Keychain. `make check-release-no-e2e BIN=<binary>` rejects a binary built with
+The two trust overrides the E2E harness uses, `DRAGPASS_KEEPER_DEV_APP_ORIGIN`
+(an extra App origin for a local App dev server) and
+`KEEPER_ROOT_PUBLIC_KEY_BASE64` (a test root key when none is embedded with
+`-ldflags`), are read only by a tagged build too. A release binary exits at
+startup when any `KEEPER_E2E_*`, `DRAGPASS_KEEPER_DEV_*` or
+`KEEPER_ROOT_PUBLIC_KEY_*` variable is set, so a test run that picks up a
+release binary cannot fall through to the real Keychain, and the environment
+cannot widen whom a release Keeper trusts. `make check-release-no-e2e BIN=<binary>` rejects a binary built with
 the tag; the release workflows run it, and `scripts/release-probe.sh` requires
 the startup refusal. `make test-e2e-tag` runs the test suite with the tag.
 

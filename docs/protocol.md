@@ -2593,8 +2593,10 @@ another `127.0.0.1` port with `DRAGPASS_KEEPER_LOCAL_ADDRESS`, so real-process
 tests never touch a Keeper the developer runs; the app itself only uses
 `127.0.0.1:47623`.
 
-The development app origin is accepted only when
-`DRAGPASS_KEEPER_DEV_APP_ORIGIN` names it.
+The development app origin is accepted only by a `keeper_e2e` build and only
+when `DRAGPASS_KEEPER_DEV_APP_ORIGIN` names it. A release build trusts
+`https://app.dragpass.io` and the Extension origin alone, and exits at startup
+when any `DRAGPASS_KEEPER_DEV_*` variable is set.
 
 ### First peer pin with Key Transparency (0.0.57)
 

@@ -10,7 +10,9 @@
 // **Embedding methods**:
 //   - Production: at build time inject
 //     `-ldflags "-X github.com/.../keystore/anchor.rootPublicKeyPEMBase64=<base64>"`
-//   - Development: fall back to the `KEEPER_ROOT_PUBLIC_KEY_BASE64` env var
+//   - Tests: a keeper_e2e build falls back to the
+//     `KEEPER_ROOT_PUBLIC_KEY_BASE64` env var (root_pubkey_e2e.go); a release
+//     build never reads it and refuses to start when it is set (main)
 //   - If both are empty, RootMissing mode (skip signature verification,
 //     fingerprint TOFU pin) — a safety net for compatibility and gradual
 //     rollout.
@@ -38,16 +40,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 
 	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/golang-jwt/jwt/v4"
 )
 
 // rootPublicKeyPEMBase64 is the Base64 of the Root pubkey PEM injected at
-// build time via -ldflags. If empty, falls back to the
-// KEEPER_ROOT_PUBLIC_KEY_BASE64 env var. If that is also empty, RootMissing
-// mode.
+// build time via -ldflags. If empty, a keeper_e2e build falls back to an env
+// var (rootPublicKeyOverride). If that is also empty, RootMissing mode.
 //
 // **ldflags injection path**:
 //
@@ -55,16 +55,16 @@ import (
 var rootPublicKeyPEMBase64 string
 
 // ErrRootKeyNotConfigured is returned when the Root public key is not
-// embedded and not set in the env var.
-var ErrRootKeyNotConfigured = errors.New("root server public key not configured (build without -ldflags or KEEPER_ROOT_PUBLIC_KEY_BASE64 not set)")
+// embedded.
+var ErrRootKeyNotConfigured = errors.New("root server public key not configured (built without -ldflags)")
 
-// RootPublicKeyPEM returns the Root pubkey PEM string using
-// embedded/env priority. If neither is set, returns an empty string
+// RootPublicKeyPEM returns the Root pubkey PEM string, the embedded key
+// first. If neither is set, returns an empty string
 // (the caller branches).
 func RootPublicKeyPEM() (string, error) {
 	source := rootPublicKeyPEMBase64
 	if source == "" {
-		source = os.Getenv("KEEPER_ROOT_PUBLIC_KEY_BASE64")
+		source = rootPublicKeyOverride()
 	}
 	if source == "" {
 		return "", nil
