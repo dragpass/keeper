@@ -1,4 +1,4 @@
-//go:build darwin || linux || windows
+//go:build (darwin || linux || windows) && keeper_e2e
 
 // Two Keeper processes ensuring the device id at once, each with its own
 // candidate (the App's old id and the Extension's old id). Each child is

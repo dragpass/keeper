@@ -1,4 +1,4 @@
-//go:build darwin || linux || windows
+//go:build (darwin || linux || windows) && keeper_e2e
 
 // The KeyPackage race across two Keeper processes: one generates, the other
 // promotes a staged rotation. Each child is this test binary running one

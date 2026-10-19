@@ -1,7 +1,7 @@
 // registry_core.go — core / uncategorized action registrations.
 //
-// Mirrors proto/actions.go: the health-check ping and the test-only clipboard
-// hash query, neither of which belongs to a specific domain.
+// Mirrors proto/actions.go: the health-check ping, which belongs to no
+// specific domain. The test-only clipboard hash query is in registry_e2e.go.
 
 package dispatch
 
@@ -13,9 +13,5 @@ import (
 func coreActions() map[string]action {
 	return map[string]action{
 		proto.ActionPing: wrap(handlers.HandlePing).onMCP(),
-
-		// test-only — query SHA-256 hash recorded in MemoryClipboard under
-		// KEEPER_E2E_MODE.
-		proto.ActionClipboardGetLastHash: wrap(handlers.HandleClipboardGetLastHash),
 	}
 }

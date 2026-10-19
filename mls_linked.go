@@ -3,6 +3,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 )
@@ -16,10 +18,13 @@ import (
 // through Version() rather than a constant means the answer comes back across
 // the C ABI, so a broken link fails here rather than at the first send.
 func logMLSLibrary(app *keystore.App) {
+	app.Logger.Println(mlsLibraryReport())
+}
+
+func mlsLibraryReport() string {
 	version, err := mls.Version()
 	if err != nil {
-		app.Logger.Printf("Warning: MLS library did not answer: %v", err)
-		return
+		return fmt.Sprintf("Warning: MLS library did not answer: %v", err)
 	}
-	app.Logger.Printf("MLS library linked: %s", version)
+	return "MLS library linked: " + version
 }

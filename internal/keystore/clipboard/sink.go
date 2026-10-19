@@ -1,3 +1,5 @@
+//go:build keeper_e2e
+
 // sink.go — which clipboard backend a process should use.
 //
 // The decision is a pure function of two booleans so it can be unit tested
@@ -5,6 +7,9 @@
 // osclip.Init, which touches the developer's pasteboard on macOS and fails
 // asymmetrically on headless Linux CI — see app.go's testing.Testing()
 // carve-out for the same reasoning).
+//
+// Compiled only with the keeper_e2e build tag: a release build has no E2E
+// mode, so it always uses the OS clipboard.
 
 package clipboard
 

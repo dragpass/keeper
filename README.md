@@ -821,10 +821,11 @@ Credentials:
 ## Test Mode (KEEPER_E2E_MODE)
 
 For end-to-end tests that need to exercise the full signup/login flow without
-touching the user's real OS Keychain, set `KEEPER_E2E_MODE=1` in the
-environment that spawns the Keeper process. When enabled:
+touching the user's real OS Keychain, build Keeper with the `keeper_e2e` tag
+(`make build-e2e-macos-arm64` writes `dragpass-keeper-e2e-macos-arm64`) and set
+`KEEPER_E2E_MODE=1` in the environment that spawns it. When enabled:
 
-- `main.init()` calls `keyring.MockInit()` from `github.com/zalando/go-keyring`
+- `configureE2E` (`e2e_mode.go`) calls `keyring.MockInit()` from `github.com/zalando/go-keyring`
 - All `keyring.Set/Get/Delete` operations go to a process-local in-memory map
 - `EnsureServerPublicKey` writes the hardcoded server pubkey into the mock
 - The OS Keychain is never read or written
@@ -833,8 +834,14 @@ environment that spawns the Keeper process. When enabled:
 Stderr logs `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
 on startup so accidental activation in production is easy to spot.
 
-**Production builds are unaffected** — the env variable is checked at runtime,
-so the same binary works in both modes.
+**Release builds have no test mode.** The mock keyring, the keyring file
+mirror, the clipboard switch, and the test-only `clipboard_get_last_hash`
+action compile only with the `keeper_e2e` tag, which no release target sets.
+A release binary exits at startup when any `KEEPER_E2E_*` variable is set, so
+a test run that picks up a release binary cannot fall through to the real
+Keychain. `make check-release-no-e2e BIN=<binary>` rejects a binary built with
+the tag; the release workflows run it, and `scripts/release-probe.sh` requires
+the startup refusal. `make test-e2e-tag` runs the test suite with the tag.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
@@ -845,13 +852,13 @@ keypair in the popup's Keeper, but the SW's Keeper sees an empty keyring and
 fails ADMIN_CREATE_ORG with "secret not found".
 
 Setting `KEEPER_E2E_KEYRING_FILE=/path/to/keyring.json` *in addition to*
-`KEEPER_E2E_MODE=1` makes `storage.go` mirror every Set/Get/Delete to a JSON
-file (`internal/keystore/krfile.go`). All Keeper processes that share the
+`KEEPER_E2E_MODE=1` mirrors every Set/Get/Delete to a JSON
+file (`internal/keystore/keychain/file_mirror.go`). All Keeper processes that share the
 same file path now see the same keyring entries. The file is loaded into the
 mock map at startup and rewritten on every Set/Delete.
 
-This flag is opt-in and only meaningful with the mock provider active. It
-does not enable file storage in production builds. The automation fixture
+This flag is opt-in and only meaningful with the mock provider active. A
+release build has no file mirror. The automation fixture
 generates a per-test path under `user-data-dir/e2e-keyring.json` so test
 runs are isolated from each other.
 
@@ -879,9 +886,8 @@ returns `ErrCodeUnsupported` while this flag is active. Specs that assert via
 Stderr logs `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
 (recording opt-in; clipboard_get_last_hash unavailable)` on startup.
 
-**Ignored unless `KEEPER_E2E_MODE=1`.** The variable is read only inside the
-e2e branch of `main.init()`; a production process already uses the OS
-clipboard, so the flag cannot change or weaken its behaviour.
+**Ignored unless `KEEPER_E2E_MODE=1`** in a `keeper_e2e` build. A release
+build refuses it at startup like every other `KEEPER_E2E_*` variable.
 
 ## Production Clipboard Smoke (DRAGPASS_KEEPER_CLIPBOARD_E2E)
 

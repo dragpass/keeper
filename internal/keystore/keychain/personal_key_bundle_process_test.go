@@ -1,4 +1,4 @@
-//go:build darwin || linux || windows
+//go:build (darwin || linux || windows) && keeper_e2e
 
 package keychain
 

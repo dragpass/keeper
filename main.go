@@ -13,7 +13,6 @@ import (
 
 	"github.com/awnumar/memguard"
 	"github.com/dragpass/keeper/internal/keystore"
-	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
@@ -24,17 +23,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/service"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
-	"github.com/zalando/go-keyring"
 )
-
-// e2eMode makes the keeper use an in-memory MockKeyring instead of the
-// Keychain. Activated by setting the KEEPER_E2E_MODE=1 env var. When active:
-//   - All keyring.Set/Get/Delete operate on a process-local map
-//   - The user's OS Keychain entries are unaffected
-//   - All keys are lost on process exit (suitable for test isolation)
-//
-// Must never be enabled in production. Fixtures inject the env var explicitly.
-const e2eEnvVar = "KEEPER_E2E_MODE"
 
 // Items stored in the keystore:
 // - Server public key (saved on init)
@@ -76,53 +65,15 @@ const e2eEnvVar = "KEEPER_E2E_MODE"
 //     (zerolog, etc.) changes only one place.
 
 func newProcessApp() *keystore.App {
-	var app *keystore.App
 	// An unusable trust file does not stop the process: the extension would
 	// only see a dead host. The Keeper keeps running and refuses every key
 	// change with key_transparency_trust_invalid instead.
 	deps := keystore.Deps{KeyTransparency: keytransparency.LoadGateFromEnv()}
-	// e2e mode: use an in-memory mock instead of the Keychain. Must be
-	// called before EnsureServerPublicKey (so that the server pubkey is
-	// saved into the mock).
-	if os.Getenv(e2eEnvVar) == "1" {
-		keyring.MockInit()
-		// In E2E mode, use the in-memory MemoryClipboard instead of the OS
-		// clipboard. User clipboard is unaffected, and the
-		// clipboard_get_last_hash action can query the SHA-256 hash.
-		//
-		// KEEPER_E2E_OS_CLIPBOARD=1 opts back into the real OS clipboard for
-		// the marketing hero recorder, which needs the content script's
-		// navigator.clipboard.readText() to see the decrypted plaintext.
-		// The env var is read only inside this branch, so it is structurally
-		// a no-op in production. See clipboard/sink.go.
-		sink := clipboard.SelectSink(true, os.Getenv(clipboard.E2EOSClipboardEnvVar) == "1")
-		if sink == clipboard.SinkOS {
-			deps.Clipboard = clipboard.NewProductionClipboard()
-		} else {
-			deps.Clipboard = clipboard.NewMemoryClipboard()
-		}
-		app = keystore.NewApp(deps)
-		app.Logger.Println("KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)")
-		if sink == clipboard.SinkOS {
-			app.Logger.Println("KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard (recording opt-in; clipboard_get_last_hash unavailable)")
-		} else {
-			app.Logger.Println("KEEPER_E2E_MODE=1: using MemoryClipboard (no OS clipboard access)")
-		}
-
-		// Optional: if KEEPER_E2E_KEYRING_FILE is set, load the file into
-		// the mock. Used so fixtures can share keyring entries between the
-		// popup process and the SW process. See internal/keystore/krfile.go
-		// comments for details.
-		if filePath := os.Getenv("KEEPER_E2E_KEYRING_FILE"); filePath != "" {
-			if err := keystore.LoadE2EKeyringFile(filePath); err != nil {
-				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE load failed (continuing): %v", err)
-			} else {
-				app.Logger.Printf("KEEPER_E2E_KEYRING_FILE=%s loaded into mock keyring", filePath)
-			}
-		}
-	}
-	if os.Getenv(e2eEnvVar) != "1" {
-		app = keystore.NewApp(deps)
+	// Nil unless this is a keeper_e2e build running in E2E mode (e2e_mode.go).
+	finishE2E := configureE2E(&deps)
+	app := keystore.NewApp(deps)
+	if finishE2E != nil {
+		finishE2E(app)
 	}
 	if err := deps.KeyTransparency.ConfigErr; err != nil {
 		app.Logger.Printf("key transparency is required but unusable; key changes are refused: %v", err)
@@ -135,6 +86,13 @@ func newProcessApp() *keystore.App {
 }
 
 func main() {
+	if err := refuseE2EEnvironment(os.Environ()); err != nil {
+		log.Fatal(err)
+	}
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		printVersion(os.Stdout)
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "service" {
 		executable, err := os.Executable()
 		if err != nil {
@@ -177,7 +135,7 @@ func main() {
 	defer stop()
 	var listener net.Listener
 	var secret localsecret.Secret
-	address, err := localrpc.Address(os.Getenv(e2eEnvVar) == "1" && os.Getenv(localsecret.DirEnvVar) != "", os.Getenv)
+	address, err := localrpc.Address(e2eModeEnabled(os.Getenv) && os.Getenv(localsecret.DirEnvVar) != "", os.Getenv)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -233,7 +191,7 @@ func main() {
 
 	// Group DEK opaque handle reaper. Sweeps every 1 minute and destroys
 	// LockedBuffers, even for handles that the Extension forgot to close
-	// explicitly. Started identically in tests (KEEPER_E2E_MODE) — keeps flow
+	// explicitly. Started identically in a keeper_e2e build — keeps flow
 	// consistent with production.
 	app.GroupSessions.StartReaper(sessions.GroupSessionReaperInterval)
 
@@ -273,7 +231,7 @@ func main() {
 // address unless the test isolated the local secret: otherwise it could proxy
 // its traffic to a developer's real Keeper and real Keychain.
 func localRPCEnabled(getenv func(string) string) bool {
-	return getenv(e2eEnvVar) != "1" || getenv(localsecret.DirEnvVar) != ""
+	return !e2eModeEnabled(getenv) || getenv(localsecret.DirEnvVar) != ""
 }
 
 func runNativeProxyMessageLoop(proxy *localrpc.NativeProxy) {

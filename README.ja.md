@@ -750,10 +750,12 @@ Credentials:
 ## テストモード（KEEPER_E2E_MODE）
 
 ユーザーの実際の OS Keychain に触れずにサインアップ／ログインの全フローを実行する
-エンドツーエンドテストのために、Keeper プロセスを起動する環境で
-`KEEPER_E2E_MODE=1` を設定してください。有効にすると次のように動作します。
+エンドツーエンドテストのために、Keeper を `keeper_e2e` タグ付きでビルドし
+（`make build-e2e-macos-arm64` が `dragpass-keeper-e2e-macos-arm64` を作ります）、
+そのプロセスを起動する環境で `KEEPER_E2E_MODE=1` を設定してください。有効にすると
+次のように動作します。
 
-- `main.init()` が `github.com/zalando/go-keyring` の `keyring.MockInit()` を呼び出します
+- `configureE2E`（`e2e_mode.go`）が `github.com/zalando/go-keyring` の `keyring.MockInit()` を呼び出します
 - すべての `keyring.Set/Get/Delete` 操作は、プロセスローカルのインメモリマップへ送られます
 - `EnsureServerPublicKey` はハードコードされたサーバー公開鍵をモックに書き込みます
 - OS Keychain の読み書きは一切行われません
@@ -762,8 +764,14 @@ Credentials:
 起動時に stderr へ `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
 とログ出力されるため、本番環境での誤った有効化を見つけやすくなっています。
 
-**本番ビルドには影響しません** — この環境変数は実行時にチェックされるため、
-同じバイナリが両方のモードで動作します。
+**リリースビルドにはテストモードがありません。** モックキーリング、キーリング
+ファイルミラー、クリップボード切り替え、テスト専用の `clipboard_get_last_hash`
+アクションは `keeper_e2e` タグ付きのときだけコンパイルされ、どのリリースターゲットも
+このタグを使いません。リリースバイナリは `KEEPER_E2E_*` 変数が一つでも設定されていると
+起動時に終了するため、テストがリリースバイナリを拾っても実際の Keychain には
+進みません。`make check-release-no-e2e BIN=<binary>` はタグ付きでビルドされた
+バイナリを拒否し、リリースワークフローがこれを実行し、`scripts/release-probe.sh` は
+起動時の拒否を確認します。`make test-e2e-tag` はタグ付きでテストを実行します。
 
 ### KEEPER_E2E_KEYRING_FILE（複数プロセス間でのキーリング共有）
 
@@ -774,13 +782,13 @@ Keeper に鍵ペアを永続化しますが、SW 側の Keeper は空のキー�
 "secret not found" で ADMIN_CREATE_ORG に失敗します。
 
 `KEEPER_E2E_MODE=1` に *加えて* `KEEPER_E2E_KEYRING_FILE=/path/to/keyring.json` を
-設定すると、`storage.go` がすべての Set/Get/Delete を JSON ファイル
-（`internal/keystore/krfile.go`）へミラーリングします。同じファイルパスを共有する
+設定すると、すべての Set/Get/Delete を JSON ファイル
+（`internal/keystore/keychain/file_mirror.go`）へミラーリングします。同じファイルパスを共有する
 すべての Keeper プロセスが、同一のキーリングエントリを参照できるようになります。
 ファイルは起動時にモックマップへ読み込まれ、Set/Delete のたびに書き戻されます。
 
 このフラグはオプトインであり、モックプロバイダーが有効なときにのみ意味を持ちます。
-本番ビルドでファイルストレージを有効にすることはありません。自動化フィクスチャは
+リリースビルドにはファイルミラーがありません。自動化フィクスチャは
 `user-data-dir/e2e-keyring.json` の下にテストごとのパスを生成するため、テスト実行同士が
 互いに分離されます。
 
@@ -808,9 +816,8 @@ sink だけを実 OS クリップボードへ戻します。
 起動時に stderr へ `KEEPER_E2E_OS_CLIPBOARD=1: using the real OS clipboard
 (recording opt-in; clipboard_get_last_hash unavailable)` を出力します。
 
-**`KEEPER_E2E_MODE=1` でなければ無視されます。** この変数は `main.init()` の
-e2e 分岐の中でのみ読まれます。本番プロセスはすでに OS クリップボードを使うため、
-このフラグが挙動を変えたり弱めたりすることはありません。
+**`keeper_e2e` ビルドで `KEEPER_E2E_MODE=1` でなければ無視されます。** リリース
+ビルドは他の `KEEPER_E2E_*` 変数と同様に起動時に拒否します。
 
 ## 本番クリップボードスモークテスト（DRAGPASS_KEEPER_CLIPBOARD_E2E）
 

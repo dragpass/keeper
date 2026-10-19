@@ -134,6 +134,7 @@ var actionFragments = []actionFragment{
 	mlsChatActions,
 	archiveActions,
 	archiveQuorumActions,
+	e2eActions,
 }
 
 // actionRegistry maps action strings to their entries, assembled from the

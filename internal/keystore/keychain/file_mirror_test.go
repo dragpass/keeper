@@ -1,3 +1,5 @@
+//go:build keeper_e2e
+
 package keychain
 
 import (

@@ -1,3 +1,5 @@
+//go:build keeper_e2e
+
 package keychain
 
 // file_mirror.go: when KEEPER_E2E_KEYRING_FILE is set, the mock keyring is
@@ -23,9 +25,9 @@ package keychain
 //   - File locking is intentionally skipped — fixtures call sequentially, so
 //     the race window is narrow. Add an fcntl lock if races appear.
 //
-// **Production safety**: in production, both KEEPER_E2E_MODE and FILE are
-// unset. The default branch is the OS Keychain as-is. File mirroring is only
-// active when both env vars are set.
+// **Production safety**: this file is compiled only with the keeper_e2e build
+// tag. A release build uses file_mirror_release.go, which never reads
+// KEEPER_E2E_KEYRING_FILE.
 
 import (
 	"encoding/json"

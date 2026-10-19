@@ -55,7 +55,7 @@ func builtKeeper(t *testing.T) string {
 			name += ".exe"
 		}
 		keeperBinary = filepath.Join(keeperBuildDir, name)
-		build := exec.Command("go", "build", "-o", keeperBinary, ".")
+		build := exec.Command("go", "build", "-tags", "keeper_e2e", "-o", keeperBinary, ".")
 		build.Dir = filepath.Join("..", "..", "..")
 		if out, err := build.CombinedOutput(); err != nil {
 			keeperBuildErr = fmt.Errorf("build the keeper: %v\n%s", err, out)

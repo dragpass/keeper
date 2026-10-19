@@ -5,11 +5,11 @@
 //
 // chatstate's own process tests (chat_state_process_test.go) kill a helper
 // that runs the store against a fake cipher. These run the release entry
-// point instead: `go build -tags "mls keeper_killseam"` of the module root,
-// framed Native Messaging on stdin / stdout exactly as Chrome speaks it, every
-// permit and challenge signed by a test server key the Keeper's own verifier
-// checks, and the only thing standing in for ariadne is this test deciding
-// which rows exist.
+// point instead: `go build -tags "mls keeper_killseam keeper_e2e"` of the
+// module root, framed Native Messaging on stdin / stdout exactly as Chrome
+// speaks it, every permit and challenge signed by a test server key the
+// Keeper's own verifier checks, and the only thing standing in for ariadne is
+// this test deciding which rows exist.
 //
 // **Why a seam and not a timed kill.** Every point below lies between two
 // fsyncs of one call, microseconds apart; no signal sent from outside lands
@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	binaryPath = filepath.Join(dir, "dragpass-keeper-killseam"+binarySuffix)
-	build := exec.Command("go", "build", "-tags", "mls keeper_killseam", "-o", binaryPath, ".")
+	build := exec.Command("go", "build", "-tags", "mls keeper_killseam keeper_e2e", "-o", binaryPath, ".")
 	build.Dir = filepath.Join("..", "..", "..")
 	build.Env = append(os.Environ(), "CGO_ENABLED=1")
 	if out, err := build.CombinedOutput(); err != nil {
