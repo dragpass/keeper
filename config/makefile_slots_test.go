@@ -68,7 +68,9 @@ func configSlots(t *testing.T) (accounts, prefixes []string) {
 
 func makeVar(t *testing.T, makefile, name string) []string {
 	t.Helper()
-	joined := strings.ReplaceAll(makefile, "\\\n", " ")
+	// A Windows checkout (core.autocrlf) ends lines with CRLF.
+	joined := strings.ReplaceAll(makefile, "\r\n", "\n")
+	joined = strings.ReplaceAll(joined, "\\\n", " ")
 	m := regexp.MustCompile(`(?m)^` + name + `\s*:=(.*)$`).FindStringSubmatch(joined)
 	if m == nil {
 		t.Fatalf("Makefile has no %s", name)
@@ -87,5 +89,17 @@ func assertSameSet(t *testing.T, name string, got, want []string) {
 		if !slices.Contains(want, g) {
 			t.Errorf("%s lists %q, which is not a current slot", name, g)
 		}
+	}
+}
+
+// A Windows checkout with core.autocrlf turns every Makefile line ending into
+// CRLF; continuation lines must still join into one value.
+func TestMakeVarReadsCRLFContinuationLines(t *testing.T) {
+	makefile := "A := \\\r\n\tone two \\\r\n\tthree\r\nB := four\r\n"
+	if got, want := makeVar(t, makefile, "A"), []string{"one", "two", "three"}; !slices.Equal(got, want) {
+		t.Errorf("A = %q, want %q", got, want)
+	}
+	if got, want := makeVar(t, makefile, "B"), []string{"four"}; !slices.Equal(got, want) {
+		t.Errorf("B = %q, want %q", got, want)
 	}
 }
