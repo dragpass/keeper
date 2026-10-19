@@ -9,7 +9,7 @@ import (
 )
 
 func TestE2EBuildAcceptsE2EEnvironment(t *testing.T) {
-	if err := refuseE2EEnvironment([]string{"KEEPER_E2E_MODE=1", "KEEPER_E2E_KEYRING_FILE=/tmp/keyring.json"}); err != nil {
+	if err := refuseE2EEnvironment([]string{"KEEPER_E2E_MODE=1", "KEEPER_E2E_KEYRING_FILE=/tmp/keyring.json", "DRAGPASS_KEEPER_DEV_APP_ORIGIN=http://localhost:5174", "KEEPER_ROOT_PUBLIC_KEY_BASE64=cm9vdA=="}); err != nil {
 		t.Fatalf("a keeper_e2e build must run in E2E mode: %v", err)
 	}
 }

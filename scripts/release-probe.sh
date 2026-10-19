@@ -9,7 +9,8 @@
 # `dragpass-keeper version` touches neither the OS keychain nor the clipboard,
 # so the probe runs on a bare CI machine or container and touches no user
 # state. A release binary has no in-memory keyring: only a build with the
-# keeper_e2e tag honours KEEPER_E2E_MODE, and a release build must exit on it.
+# keeper_e2e tag honours KEEPER_E2E_MODE, DRAGPASS_KEEPER_DEV_APP_ORIGIN and
+# KEEPER_ROOT_PUBLIC_KEY_BASE64, and a release build must exit on each.
 set -eu
 
 bin="${1:?usage: $0 BINARY VERSION}"
@@ -18,15 +19,21 @@ want="${2:?usage: $0 BINARY VERSION}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-if KEEPER_E2E_MODE=1 "$bin" version >"$tmp/e2e-out" 2>"$tmp/e2e-err"; then
-  echo "probe: $bin ran with KEEPER_E2E_MODE=1; a release build must refuse it" >&2
-  exit 1
-fi
-if ! grep -q 'release build without E2E support' "$tmp/e2e-err"; then
-  echo "probe: $bin failed under KEEPER_E2E_MODE=1 without the release refusal" >&2
-  cat "$tmp/e2e-err" >&2
-  exit 1
-fi
+# Each switch only a keeper_e2e build reads: the E2E mode, the dev App origin
+# and the root key override.
+for switch in KEEPER_E2E_MODE=1 \
+  DRAGPASS_KEEPER_DEV_APP_ORIGIN=http://localhost:5174 \
+  KEEPER_ROOT_PUBLIC_KEY_BASE64=cm9vdA==; do
+  if env "$switch" "$bin" version >"$tmp/e2e-out" 2>"$tmp/e2e-err"; then
+    echo "probe: $bin ran with $switch; a release build must refuse it" >&2
+    exit 1
+  fi
+  if ! grep -q 'release build without E2E support' "$tmp/e2e-err"; then
+    echo "probe: $bin failed under $switch without the release refusal" >&2
+    cat "$tmp/e2e-err" >&2
+    exit 1
+  fi
+done
 
 "$bin" version >"$tmp/body" 2>"$tmp/err" || true
 if ! grep -qx "version: $want" "$tmp/body"; then
@@ -39,4 +46,4 @@ if ! grep -q 'MLS library linked: ' "$tmp/body"; then
   cat "$tmp/body" "$tmp/err" >&2
   exit 1
 fi
-echo "probe: $bin version $want, $(grep -o 'MLS library linked: .*' "$tmp/body"), refuses E2E mode"
+echo "probe: $bin version $want, $(grep -o 'MLS library linked: .*' "$tmp/body"), refuses E2E switches"
