@@ -123,7 +123,10 @@ type appMemberRewrap struct {
 	OwnerAccountID     string                       `json:"owner_account_id"`
 	OtherAccountID     string                       `json:"other_account_id"`
 	RotationStatements []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
-	GrantContext       *proto.GrantContext          `json:"grant_context,omitempty"`
+	// The peer's enrollment proof, which a first pin needs under Key
+	// Transparency (protocol.md, "First peer pin with Key Transparency").
+	EnrollmentEvidence *proto.KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	GrantContext       *proto.GrantContext            `json:"grant_context,omitempty"`
 }
 
 type appManyRewrap struct {
@@ -140,10 +143,11 @@ type appManyRewrap struct {
 // the active key) or the org archive key, which is an org resource with no
 // account to pin (threat model §4.11 accepted gap).
 type appManyRecipient struct {
-	AccountID          string                       `json:"account_id,omitempty"`
-	PublicKey          string                       `json:"public_key"`
-	RotationStatements []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
-	OrgArchive         bool                         `json:"org_archive,omitempty"`
+	AccountID          string                         `json:"account_id,omitempty"`
+	PublicKey          string                         `json:"public_key"`
+	RotationStatements []proto.KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence *proto.KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	OrgArchive         bool                           `json:"org_archive,omitempty"`
 }
 
 func bindGenerateToOwnKey(s *Server, input any) (any, error) {
@@ -166,6 +170,7 @@ func bindMemberRewrap(_ *Server, input any) (any, error) {
 		OwnerAccountID:     in.OwnerAccountID,
 		OtherAccountID:     in.OtherAccountID,
 		RotationStatements: in.RotationStatements,
+		EnrollmentEvidence: in.EnrollmentEvidence,
 		GrantContext:       in.GrantContext,
 	}, nil
 }
@@ -186,7 +191,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 			}
 		case recipient.OrgArchive:
 			archives++
-			if archives > 1 || len(recipient.RotationStatements) > 0 {
+			if archives > 1 || len(recipient.RotationStatements) > 0 || recipient.EnrollmentEvidence != nil {
 				return nil, errAppRouteRefused
 			}
 		default:
@@ -197,7 +202,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 				}
 				own = key
 			}
-			if recipient.PublicKey != own || len(recipient.RotationStatements) > 0 {
+			if recipient.PublicKey != own || len(recipient.RotationStatements) > 0 || recipient.EnrollmentEvidence != nil {
 				return nil, errAppRouteRefused
 			}
 		}
@@ -205,6 +210,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 			AccountID:          recipient.AccountID,
 			PublicKey:          recipient.PublicKey,
 			RotationStatements: recipient.RotationStatements,
+			EnrollmentEvidence: recipient.EnrollmentEvidence,
 		})
 	}
 	return proto.DEKUnwrapAndRewrapForManyRequest{

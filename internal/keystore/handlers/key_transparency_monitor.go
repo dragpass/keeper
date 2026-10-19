@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
@@ -41,6 +42,9 @@ func HandleKeyTransparencyMonitor(d Deps, request proto.KeyTransparencyMonitorRe
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeStorageFailure, "key transparency event state is unavailable")
 		}
+		if !known && verified.SourceType == keytransparency.StatementAccountKeyEnrollment {
+			known = isOwnActiveKey(d, verified.Fingerprint)
+		}
 		response.Events = append(response.Events, proto.KeyTransparencyMonitorEventResult{
 			EventID: event.EventID, SourceType: verified.SourceType, DeviceID: verified.DeviceID,
 			Fingerprint: verified.Fingerprint, Reason: verified.Reason, KnownOnThisDevice: known,
@@ -49,4 +53,16 @@ func HandleKeyTransparencyMonitor(d Deps, request proto.KeyTransparencyMonitorRe
 		response.CheckpointSize = checkpoint.Checkpoint.Size
 	}
 	return proto.BaseResponse{Success: true, Data: response}
+}
+
+// isOwnActiveKey reports whether fingerprint is the account key this Keeper
+// holds. An enrollment of that key is this device's own signup: the statement
+// was verified to carry that key's signature, which only a holder of the
+// private key can make, and signup stages no statement for the digest record.
+func isOwnActiveKey(d Deps, fingerprint string) bool {
+	own, err := keychain.GetPublicKey(d.Store)
+	if err != nil || own == "" {
+		return false
+	}
+	return crypto.AccountKeyFingerprint([]byte(own)) == fingerprint
 }

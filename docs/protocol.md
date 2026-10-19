@@ -1836,7 +1836,7 @@ like `voluntary`.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`key_transparency_status`|_empty_|`{ configured, first_pin_enforced, trust_error?, anchored, origin?, tree_size?, root_hash? }`|Report whether fixed log and 2-of-3 witness trust is loaded, first peer pins require enrollment proof, and the highest checkpoint this Keeper verified and persisted. `trust_error: "invalid"` means a trust file is configured but unusable and every key change is being refused. The status makes no claim about witness independence: a verified proof is a server-side record, and clients label it that way. The status does not fetch or refresh the log. The App receives status metadata only, not `root_hash`.|
-|`key_transparency_monitor` (App local RPC only)|`account_id`, `events: [{ event_id, source_type, evidence }]`|`{ account_id, checked, checkpoint_size, events: [{ event_id, source_type, device_id?, fingerprint, reason, known_on_this_device }] }`|For each self-account event, verifies the account-key enrollment, account-key rotation, or MLS leaf-binding statement and its signatures, inclusion proof, fresh witness quorum, and checkpoint monotonicity before comparing the statement digest with this device's locally accepted-event markers. `known_on_this_device:false` means first seen here, not malicious. This does not prove the server returned a complete event list or prove non-inclusion. It is deliberately not a Native Messaging action.|
+|`key_transparency_monitor` (App local RPC only)|`account_id`, `events: [{ event_id, source_type, evidence }]`|`{ account_id, checked, checkpoint_size, events: [{ event_id, source_type, device_id?, fingerprint, reason, known_on_this_device }] }`|For each self-account event, verifies the account-key enrollment, account-key rotation, or MLS leaf-binding statement and its signatures, inclusion proof, fresh witness quorum, and checkpoint monotonicity before comparing the statement digest with this device's locally accepted-event markers. An enrollment of the account key this Keeper holds is also known: its statement carries that key's signature, and signup stages no marker. `known_on_this_device:false` means first seen here, not malicious. This does not prove the server returned a complete event list or prove non-inclusion. It is deliberately not a Native Messaging action.|
 |`peer_key_pin_list`|`owner_account_id`|`{ pins: [{ account_id, fingerprint, state, first_seen_at, last_seen_at, verified_at? }] }`|Every pin this owner holds on this device, in index order. No pins is an empty list, not an error. Only the count is logged.|
 |`peer_key_pin_get`|`owner_account_id`, `account_id`|`{ found, pin? }`|One pin. Absence is data rather than `not_found` — the caller uses it to decide whether fetching a rotation chain is worth it at all, since a first observation is trust-on-first-use and a chain would prove nothing.|
 |`peer_key_pin_verify`|`owner_account_id`, `account_id`, `fingerprint` (hex 64), `public_key` (PEM), `safety_number_b64?` (32 bytes; 0.0.55)|`{ state: "verified", fingerprint }`|Settle a fingerprint a human compared out of band. The Keeper recomputes the fingerprint from the PEM and refuses with `crypto_failure` if it differs, leaving the pin untouched: if the user checked A while the server is serving B, promoting B would launder exactly the substitution the model exists to catch. Works on a peer with no pin yet. (0.0.55, design Q10) With `safety_number_b64` — the pairwise safety number a human compared or scanned — the Keeper also recomputes the number from its own key and `public_key` and refuses a mismatch with `crypto_failure`, leaving the pin untouched: a number read off another pair, or off a key the server has since swapped, settles nothing.|
@@ -1880,7 +1880,15 @@ validated fields and requires byte-for-byte equality before checking the leaf
 commitment, RFC 6962 inclusion proof, log signature, fresh witness quorum, and
 monotonic consistency against its locally persisted checkpoint. Evidence is
 not included in the existing chat-state permit signature canonical; its
-authority comes from the log and witness signatures. A mismatch,
+authority comes from the log and witness signatures. The list must hold a
+proof for every leaf the operation brings in, so the app gathers it for the
+conversation's current members plus the accounts the operation adds: the
+invitees of an Add or create this device builds (`mls_group_create`,
+`mls_commit_build` `add`, `replace`, `rejoin`), and the members a received
+Commit declares in its `commit_attestation` (`mls_process`,
+`mls_commit_confirm` `superseded`). The leaves a Welcome's tree already holds
+are not entering leaves and need none (`mls_join`). The app sends the proofs of
+one permit under one checkpoint. A mismatch,
 missing proof, stale quorum, rollback, or fork fails closed before a pin or MLS
 state change is persisted. This does not verify first-observation TOFU and does
 not by itself provide independent client gossip or protect against a quorum
@@ -2344,8 +2352,8 @@ route-specific request shape; unknown fields are 400.
 |`/v1/peer-key/pin`|`peer_key_pin_get`||
 |`/v1/group-dek/generate`|`group_dek_generate_and_open`|Takes `{}`; the wrap is to this Keeper's active key, never a caller key.|
 |`/v1/group-dek/close`|`group_session_close`||
-|`/v1/group-dek/rewrap-for-member`|`dek_rewrap_for_member`|`owner_account_id` and `other_account_id` are required, so the pin is always enforced. 512 KiB cap.|
-|`/v1/group-dek/rewrap-for-many`|`dek_unwrap_and_rewrap_for_many`|Only `recipients[]`; the unenforced `recipient_public_keys[]` does not exist here. A recipient without `account_id` must be this Keeper's active key or carry `org_archive: true` (at most one, no chain), the same pin exemption as Native Messaging. `grant_context` and `narrow_to_decrypt_only` (0.0.58) pass through. 512 KiB cap.|
+|`/v1/group-dek/rewrap-for-member`|`dek_rewrap_for_member`|`owner_account_id` and `other_account_id` are required, so the pin is always enforced. `enrollment_evidence` passes through for a first pin under Key Transparency. 512 KiB cap.|
+|`/v1/group-dek/rewrap-for-many`|`dek_unwrap_and_rewrap_for_many`|Only `recipients[]`; the unenforced `recipient_public_keys[]` does not exist here. A recipient without `account_id` must be this Keeper's active key or carry `org_archive: true` (at most one, no chain, no `enrollment_evidence`), the same pin exemption as Native Messaging. An account recipient's `enrollment_evidence` passes through for a first pin under Key Transparency. `grant_context` and `narrow_to_decrypt_only` (0.0.58) pass through. 512 KiB cap.|
 
 Every other session route keeps the 8 KiB request cap.
 
