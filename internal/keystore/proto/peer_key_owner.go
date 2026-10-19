@@ -6,8 +6,7 @@
 // guess, and there is nothing to confirm against — the next request records
 // the new owner by using it.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.1.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package proto
 

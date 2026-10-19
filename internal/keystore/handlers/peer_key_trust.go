@@ -25,8 +25,7 @@
 // the key is, and the policy only decides how much the device insists on
 // before wrapping to it.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.2.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package handlers
 

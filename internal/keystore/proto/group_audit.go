@@ -11,8 +11,7 @@
 // None of this reaches back: tokens made before the rotation, and devices
 // that already hold the earlier version's grant, keep opening those tokens.
 //
-// Contract: dragpass-control-plane docs/security/threat-model.md §4.13 and
-// docs/protocol.md "Audit-only Group DEK versions".
+// Contract: docs/protocol.md "Audit-only Group DEK versions".
 
 package proto
 

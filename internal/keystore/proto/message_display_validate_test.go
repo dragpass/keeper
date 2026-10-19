@@ -7,8 +7,9 @@
 // open or fails signature verification. A literal is the only assertion that
 // catches that, and it is the one D2 matches against.
 //
-// The golden values come from dragpass-control-plane
-// docs/testing/fixtures/secure-message-overlay-v1.json (test-only key and IV).
+// The golden values are the synthetic, test-only secure-message vector that
+// handlers/message_display_test.go and dragpass
+// packages/token-format/lib/message-token.test.ts also pin.
 
 package proto
 

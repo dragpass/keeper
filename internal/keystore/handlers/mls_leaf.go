@@ -1,8 +1,7 @@
 // mls_leaf.go — the MLS leaf declaration: producing one (mls_leaf_declare) and
 // checking one (VerifyLeafDeclaration).
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-v2-mls-integration.md §5.2, §5.3, §12.2.
+// Contract: docs/protocol.md "MLS leaf declaration and leaf verification".
 
 package handlers
 

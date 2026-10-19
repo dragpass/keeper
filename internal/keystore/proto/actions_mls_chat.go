@@ -7,8 +7,8 @@
 // state inside the record is now read and written, by the Keeper only. No
 // action here carries the group state, a secret, or a key across IPC in either
 // direction. Storage: internal/keystore/chatstate. MLS: internal/keystore/mls.
-// Design: dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-v2-mls-integration.md §7 and §12.2.
+// Design: docs/protocol.md "MLS chat (chat v2 MLS actions)" and the
+// control-plane docs/agent-guide/security-model.md "In-App Chat (MLS)".
 //
 // **Every one of them is all or nothing.** A refusal — permit, validation,
 // §5.3, MLS, storage — persists nothing: no group state, no pending Commit, no

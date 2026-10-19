@@ -13,8 +13,8 @@
 // next wrap, and an ordinary recovery would lock the account out of invites,
 // rotations, and DMs across the whole org.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §5, §6.6.
+// Contract: docs/protocol.md "User keypair rotation" and "Peer account key pins
+// (account key trust v1)".
 
 package handlers
 

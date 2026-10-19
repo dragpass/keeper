@@ -1,16 +1,16 @@
 // account_key_trust_fixture_test.go — the cross-repo account key trust vector.
 //
-// testdata/account-key-trust-v1.json is copied to dragpass-control-plane
-// docs/testing/fixtures/ and read by the TypeScript side too. Its whole job is
+// testdata/account-key-trust-v1.json is copied to ariadne
+// internal/testutil/keyrotationfixture/testdata/, and dragpass inlines its
+// values in packages/token-format/lib/account-key-fingerprint.test.ts. Its whole job is
 // to pin bytes that three independent implementations have to agree on: the
 // fingerprint of a PEM, the canonical string a statement signs, and the
 // signatures over it. The formula only works if the bytes are identical, and a
 // mismatch is silent — two repos simply stop recognising each other's
 // fingerprints. This test is the Go half of that agreement.
 //
-// Field names here must stay exactly as the contract lists them
-// (dragpass-control-plane docs/exec-plans/active/account-key-trust-implementation.md
-// §9); the TS consumer reads the same keys.
+// Field names here must stay exactly as the ariadne copy and the TS test read
+// them.
 
 package keystore
 

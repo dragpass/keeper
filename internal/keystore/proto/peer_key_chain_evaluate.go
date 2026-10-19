@@ -7,8 +7,7 @@
 // material, no wrap output, only a fingerprint (a hash of public material), a
 // state word, and a boolean.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.2, §6.4.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package proto
 

@@ -22,9 +22,8 @@
 //	  → the plaintext is well-formed UTF-8 of a sane size
 //	  → the token still has not expired
 //
-// The order is the contract (dragpass-control-plane
-// docs/exec-plans/active/secure-message-overlay-implementation.md §3), not an
-// implementation detail. Consumption sits where it does deliberately: after the
+// The order is the contract (docs/protocol.md "Secure message display
+// (app-display plaintext carve-out)"), not an implementation detail. Consumption sits where it does deliberately: after the
 // permit verifies, so a caller holding a bad signature cannot burn somebody's
 // challenge, and before the decrypt, so a tag failure cannot be retried against
 // the same authorization.
