@@ -7,8 +7,7 @@
 // needs the PEM precisely so it can refuse to take the caller's word for what
 // that PEM hashes to.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.2, §6.4.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package handlers
 

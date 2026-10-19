@@ -5,8 +5,7 @@
 // extension options page that owns the toggle. That is what makes it a
 // defence against the server rather than another value the server supplies.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.5.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package handlers
 

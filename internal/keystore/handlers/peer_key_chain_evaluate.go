@@ -28,8 +28,7 @@
 // Strict mode deliberately does not apply here; the reasoning is on the
 // applyPeerKeyPolicy call site below.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.2, §6.4, §6.5.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package handlers
 

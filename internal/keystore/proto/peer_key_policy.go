@@ -4,8 +4,7 @@
 // ids: the policy is about this device and says nothing about who is signed in
 // or whom they talk to.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.5.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package proto
 

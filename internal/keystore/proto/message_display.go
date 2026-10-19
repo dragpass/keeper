@@ -5,10 +5,9 @@
 // the Keeper needs to rebuild the AAD by itself — and the display request adds
 // the server-signed permit. There is deliberately no aad_b64, no domain, and no
 // canonical field: the caller describes *which* message it is, never *how* it
-// is bound. See actions_message.go for the security model and
-// dragpass-control-plane
-// docs/exec-plans/active/secure-message-overlay-implementation.md §1 / §3 for
-// the contract these types implement.
+// is bound. See actions_message.go for the security model and docs/protocol.md
+// "Secure message display (app-display plaintext carve-out)" for the contract
+// these types implement.
 //
 // Validate() here is structural only — formats, ranges, and the fixed schema
 // version. Everything that needs state (the challenge map, the signature, the
@@ -245,9 +244,9 @@ func (r GroupDecryptWithAadForAppDisplayRequest) Validate() error {
 //
 // This single field is the protocol's only raw-secret response and the first
 // TestNoRawSecretInResponseTypes carve-out since 0.0.11. The exception is
-// approved for this response type alone; the rationale, the exposure table, and
-// the invariants it must not widen live in dragpass-control-plane
-// docs/security/secure-message-overlay-proposed-boundary.md.
+// approved for this response type alone; the rationale and the invariants it
+// must not widen are in docs/protocol.md "Secure message display (app-display
+// plaintext carve-out)".
 type GroupDecryptWithAadForAppDisplayResponseData struct {
 	PlaintextB64 string `json:"plaintext_b64"` // secret in RESPONSE — the approved display carve-out; never logged
 }

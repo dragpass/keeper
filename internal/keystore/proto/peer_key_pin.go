@@ -7,8 +7,7 @@
 // recompute the fingerprint itself rather than take the caller's word for it,
 // and a public key is public material.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.4.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package proto
 

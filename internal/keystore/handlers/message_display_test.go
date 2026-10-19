@@ -2,11 +2,11 @@
 // at every refusal.
 //
 // The golden vector (key, IV, AAD, ciphertext, tag) and both negative
-// ciphertexts come from dragpass-control-plane
-// docs/testing/fixtures/secure-message-overlay-v1.json. They are test-only
-// values; the literals live here rather than being read from that file because
-// this repo is built and tested on its own, and a fixture the test cannot reach
-// is a fixture the test silently skips.
+// ciphertexts are synthetic, test-only values; dragpass
+// packages/token-format/lib/message-token.test.ts pins the same vector. The
+// literals live here rather than in a shared file because this repo is built
+// and tested on its own, and a fixture the test cannot reach is a fixture the
+// test silently skips.
 //
 // The negatives matter as much as the positive: `negative_non_aad` and
 // `negative_credential` are the same plaintext under the same key with no AAD

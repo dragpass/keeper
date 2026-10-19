@@ -8,8 +8,7 @@
 // consult, and the record is the only thing on this device a malicious server
 // cannot reach.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §6.4.
+// Contract: docs/protocol.md "Peer account key pins (account key trust v1)".
 
 package proto
 
@@ -124,8 +123,7 @@ const (
 	// a caller who can clear the record can then pick the namespace the
 	// owner check exists to fix. The Keeper cannot enforce that itself: it
 	// does not know who launched it (four surfaces spawn the same binary over
-	// the same stdio loop — see docs/security/adr-ratchet-state-storage.md
-	// §3.1), so this is a client-side obligation stated here rather than a
+	// the same stdio loop), so this is a client-side obligation stated here rather than a
 	// check.
 	//
 	// Pins are left behind, so switching back to a previous owner finds their

@@ -12,8 +12,8 @@
 // of it, and the rotation and recovery responses produce single statements —
 // so it lives in its own file rather than in whichever one needed it first.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/account-key-trust-implementation.md §5, §6.2, §6.6.
+// Contract: docs/protocol.md "User keypair rotation" and "Peer account key pins
+// (account key trust v1)".
 
 package proto
 

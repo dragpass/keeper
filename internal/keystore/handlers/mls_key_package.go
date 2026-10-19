@@ -1,8 +1,8 @@
 // mls_key_package.go — mls_key_package_generate: single-use KeyPackages for
 // this device's active leaf, with their private keys kept in the owner's pool.
 //
-// Contract: dragpass-control-plane
-// docs/exec-plans/active/dragpass-chat-v2-mls-integration.md §5.3, §12.2.
+// Contract: docs/protocol.md "MLS leaf declaration and leaf verification" and
+// "MLS chat (chat v2 MLS actions)".
 
 package handlers
 
