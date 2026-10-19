@@ -2348,8 +2348,8 @@ route-specific request shape; unknown fields are 400.
 |`/v1/peer-key/pin`|`peer_key_pin_get`||
 |`/v1/group-dek/generate`|`group_dek_generate_and_open`|Takes `{}`; the wrap is to this Keeper's active key, never a caller key.|
 |`/v1/group-dek/close`|`group_session_close`||
-|`/v1/group-dek/rewrap-for-member`|`dek_rewrap_for_member`|`owner_account_id` and `other_account_id` are required, so the pin is always enforced. 512 KiB cap.|
-|`/v1/group-dek/rewrap-for-many`|`dek_unwrap_and_rewrap_for_many`|Only `recipients[]`; the unenforced `recipient_public_keys[]` does not exist here. A recipient without `account_id` must be this Keeper's active key or carry `org_archive: true` (at most one, no chain), the same pin exemption as Native Messaging. `grant_context` and `narrow_to_decrypt_only` (0.0.58) pass through. 512 KiB cap.|
+|`/v1/group-dek/rewrap-for-member`|`dek_rewrap_for_member`|`owner_account_id` and `other_account_id` are required, so the pin is always enforced. `enrollment_evidence` passes through for a first pin under Key Transparency. 512 KiB cap.|
+|`/v1/group-dek/rewrap-for-many`|`dek_unwrap_and_rewrap_for_many`|Only `recipients[]`; the unenforced `recipient_public_keys[]` does not exist here. A recipient without `account_id` must be this Keeper's active key or carry `org_archive: true` (at most one, no chain, no `enrollment_evidence`), the same pin exemption as Native Messaging. An account recipient's `enrollment_evidence` passes through for a first pin under Key Transparency. `grant_context` and `narrow_to_decrypt_only` (0.0.58) pass through. 512 KiB cap.|
 
 Every other session route keeps the 8 KiB request cap.
 
