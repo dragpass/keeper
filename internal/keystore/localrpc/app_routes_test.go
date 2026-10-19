@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -373,5 +374,60 @@ func TestAppGroupDEKRoutesTakeTheirOwnSizeCap(t *testing.T) {
 		"alias": strings.Repeat("a", maxRequestBytes), "recovery_key": "x",
 	}); code != http.StatusBadRequest {
 		t.Fatalf("an oversized recovery request was accepted: %d", code)
+	}
+}
+
+// The App's first pin of a peer under Key Transparency carries the peer's
+// enrollment proof; the pin-enforced App wraps must hand it to the handler
+// instead of refusing the body.
+func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
+	evidence := &proto.KeyTransparencyEvidence{
+		StatementB64: "c3RhdGVtZW50", SaltB64: "c2FsdA==", CheckpointB64: "Y2hlY2twb2ludA==",
+		LeafIndex: 3, InclusionProofB64: []string{}, PreviousTreeSize: 2, ConsistencyProofB64: []string{},
+	}
+	bound, err := bindMemberRewrap(nil, &appMemberRewrap{
+		WrappedForMeB64: "d3JhcHBlZA==", OtherPublicKey: "peer", OwnerAccountID: routeOwner,
+		OtherAccountID: routePeer, EnrollmentEvidence: evidence,
+	})
+	if err != nil {
+		t.Fatalf("bind member rewrap: %v", err)
+	}
+	if got := bound.(proto.DEKRewrapForMemberRequest).EnrollmentEvidence; got != evidence {
+		t.Fatalf("member rewrap evidence = %v, want the App's", got)
+	}
+	bound, err = bindManyRewrap(nil, &appManyRewrap{
+		WrappedForMeB64: "d3JhcHBlZA==", OwnerAccountID: routeOwner,
+		Recipients: []appManyRecipient{{AccountID: routePeer, PublicKey: "peer", EnrollmentEvidence: evidence}},
+	})
+	if err != nil {
+		t.Fatalf("bind many rewrap: %v", err)
+	}
+	if got := bound.(proto.DEKUnwrapAndRewrapForManyRequest).Recipients[0].EnrollmentEvidence; got != evidence {
+		t.Fatalf("many rewrap evidence = %v, want the App's", got)
+	}
+	// Only an account recipient is pinned; the org archive key takes no proof.
+	if _, err := bindManyRewrap(nil, &appManyRewrap{
+		WrappedForMeB64: "d3JhcHBlZA==", OwnerAccountID: routeOwner,
+		Recipients: []appManyRecipient{{PublicKey: "archive", OrgArchive: true, EnrollmentEvidence: evidence}},
+	}); !errors.Is(err, errAppRouteRefused) {
+		t.Fatalf("archive recipient with evidence: %v, want refused", err)
+	}
+
+	// Through the route: the body with the proof decodes (no Key
+	// Transparency trust here, so the wrap itself goes ahead).
+	server := newTestServer(t)
+	store := server.app.Store.(*testdouble.MemorySecretStore)
+	own := routeKeypair(t)
+	_ = keychain.SavePrivateKey(store, own.PrivateKey)
+	_ = keychain.SavePublicKey(store, own.PublicKey)
+	session, csrf := openTestSession(t, server)
+	peer := routeKeypair(t)
+	code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-member", map[string]any{
+		"wrapped_for_me_b64": wrapTo(t, own.PublicKey, bytes.Repeat([]byte{0x44}, 32)),
+		"other_public_key":   peer.PublicKey, "owner_account_id": routeOwner, "other_account_id": routePeer,
+		"enrollment_evidence": evidence,
+	})
+	if code != http.StatusOK || !result.Success {
+		t.Fatalf("member rewrap with enrollment evidence: %d %s", code, body)
 	}
 }
