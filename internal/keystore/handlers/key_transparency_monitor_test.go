@@ -147,6 +147,54 @@ func TestKeyTransparencyMonitorVerifiesAccountEnrollment(t *testing.T) {
 	}
 }
 
+// The enrollment of the key this Keeper holds is its own signup: the
+// statement carries that key's signature, which only a holder of the private
+// key can make. Signup stages no statement, so the digest record alone would
+// report every account's own enrollment as unfamiliar.
+func TestKeyTransparencyMonitorKnowsTheEnrollmentOfItsOwnKey(t *testing.T) {
+	accountID := "00000000-0000-4000-8000-000000000001"
+	pair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pem := []byte(pair.PublicKey)
+	fingerprint := keepercrypto.AccountKeyFingerprint(pem)
+	privateKey, err := keepercrypto.ParsePrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := keepercrypto.SignData(privateKey, proto.AccountKeyEnrollmentCanonical(accountID, fingerprint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := keytransparency.EncodeAccountKeyEnrollmentStatement(accountID, fingerprint, pem, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, trust := signedStatementEvidence(t, statement)
+	deps, _, _ := newTestDeps(t)
+	deps.KeyTransparency = keytransparency.Gate{Trust: trust}
+	if err := keychain.SavePublicKey(deps.Store, pair.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	request := proto.KeyTransparencyMonitorRequest{
+		AccountID: accountID,
+		Events: []proto.KeyTransparencyMonitorEventRequest{{
+			EventID: "00000000-0000-4000-8000-000000000002", SourceType: keytransparency.StatementAccountKeyEnrollment,
+			Evidence: evidence,
+		}},
+	}
+
+	response := HandleKeyTransparencyMonitor(deps, request)
+
+	if !response.Success {
+		t.Fatalf("monitor failed: %s (%s)", response.Error, response.ErrorCode)
+	}
+	if event := response.Data.(proto.KeyTransparencyMonitorResponse).Events[0]; !event.KnownOnThisDevice {
+		t.Fatalf("the enrollment of this Keeper's own key reads as unfamiliar: %+v", event)
+	}
+}
+
 func signedStatementEvidence(t *testing.T, statement []byte) (proto.KeyTransparencyEvidence, *keytransparency.Trust) {
 	t.Helper()
 	logPrivate, logPublic, err := note.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x31}, 4096)), "dragpass.test/log")
