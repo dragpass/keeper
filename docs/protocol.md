@@ -671,6 +671,17 @@ same file is in ariadne and dragpass).
 |`credential_http_request`|exactly one of `group_handle`, `encrypted_dek_b64`, or `use_local_personal_dek=true`; `iv_b64`, `ciphertext_b64`, `aad_b64`, `target_url`, `method`, `header_template` (placeholders only), `query_template?` (placeholders only), `body_b64?`, signed `policy`|`{ status_code, headers (redacted), body_b64 (redacted), truncated }`|Decrypt-to-tool HTTP sink. The local personal mode reads the device-wrapped personal DEK from the Keeper Keychain, so MCP receives no DEK material. Verifies the RSA-PSS server policy, enforces its exact target and request shape, blocks private-network SSRF and redirects, injects the decrypted credential locally, and returns only a bounded redacted response. `header_template` and `query_template` must each equal the signed policy's copy; at least one of the two must be non-empty. Rendered `query_template` values are appended to `target_url`'s query (`target_url` itself is never substituted) and join the redaction set.|
 |`credential_exec_request`|exactly one of `group_handle`, `encrypted_dek_b64`, or `use_local_personal_dek=true`; `iv_b64`, `ciphertext_b64`, `aad_b64`, `executable` (absolute path), `args?` (argv[1:]), `cwd` (absolute, must exist), `env_template` (placeholders only), signed `policy`|`{ exit_code, stdout_b64 (redacted), stderr_b64 (redacted), truncated, timed_out }`|Decrypt-to-tool exec sink (0.0.28). Opens the same sealed payload the HTTP sink opens and injects the decrypted credential into one child process's environment. The signed policy carries `exec_executable` / `exec_argv` / `exec_cwd` / `env_template`, and all four must equal the request exactly or no process starts — there is no network target to pin here, so what the signature binds is the command a human approved. No shell and no PATH lookup (the executable is spawned by absolute path); the child's environment is a fixed allowlist (`PATH HOME USER LOGNAME SHELL LANG LC_ALL TMPDIR TZ TERM`) plus the injected variable, so the caller's own `DRAGPASS_API_TOKEN` never reaches it; the secret goes to the environment and never to argv; the child runs in its own process group, killed as a group on the 60s timeout and again once the child has exited, so a grandchild left in that group does not outlive the request (one that calls `setsid` escapes); each stream is capped at 1 MiB with `truncated`; stdout and stderr are masked for any echo of the credential. A non-zero exit is data, not an error — it returns on a successful response. Refused with `unsupported` on Windows, which has no process-group kill.|
 
+**Test-only local target.** A build with both `keeper_e2e` and
+`keeper_e2e_localtarget` (`make build-e2e-localtarget`) lets the HTTP sink
+connect to a loopback address on the ports listed in
+`KEEPER_E2E_LOCAL_TARGET_PORTS`, and adds the PEM in
+`KEEPER_E2E_LOCAL_TARGET_CA_FILE` to a copy of the system roots. TLS
+verification stays on, and the policy, target, query and body checks run
+before any connection as in every other build. Every other build keeps the
+connect-time refusal of loopback and private addresses and trusts only the
+system roots; a release binary refuses to start with either variable set and
+`make check-release-no-e2e` rejects the tagged binary.
+
 ### Secure message display (app-display plaintext carve-out)
 
 Two actions, one reveal. `message_display_prepare` validates a message context

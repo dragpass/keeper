@@ -834,6 +834,15 @@ touching the user's real OS Keychain, build Keeper with the `keeper_e2e` tag
 Stderr logs `KEEPER_E2E_MODE=1: using in-memory keyring (no OS Keychain access)`
 on startup so accidental activation in production is easy to spot.
 
+**Local credential target (real-stack verification only).** `make
+build-e2e-localtarget` writes `dragpass-keeper-e2e-localtarget`, built with the
+`keeper_e2e` and `keeper_e2e_localtarget` tags. Only that binary lets the
+credential HTTP sink connect to loopback, and only on the ports in
+`KEEPER_E2E_LOCAL_TARGET_PORTS` (comma-separated); `KEEPER_E2E_LOCAL_TARGET_CA_FILE`
+adds one PEM to a copy of the system roots, with TLS verification still on.
+Signature, target, query and body checks are unchanged. `make
+test-e2e-localtarget` runs the suite with both tags.
+
 **Release builds have no test mode.** The mock keyring, the keyring file
 mirror, the clipboard switch, and the test-only `clipboard_get_last_hash`
 action compile only with the `keeper_e2e` tag, which no release target sets.

@@ -192,13 +192,18 @@ func newSecureHTTPClient(timeout time.Duration) *http.Client {
 		Control: func(_, address string, _ syscall.RawConn) error {
 			// address is "IP:port" with the host already resolved to a literal
 			// IP by the dialer — this is the TOCTOU-safe checkpoint.
-			host, _, err := net.SplitHostPort(address)
+			host, portText, err := net.SplitHostPort(address)
 			if err != nil {
 				return fmt.Errorf("credential_http_request: cannot parse dial address")
 			}
 			ip := net.ParseIP(host)
 			if testAllowLoopbackDial && ip != nil && ip.IsLoopback() {
 				return nil // test seam only; false in production
+			}
+			// Allows nothing outside a keeper_e2e_localtarget build
+			// (credential_localtarget_release.go).
+			if port, perr := strconv.Atoi(portText); perr == nil && localTargetDialAllowed(ip, port) {
+				return nil
 			}
 			if isBlockedIP(ip) {
 				return fmt.Errorf("credential_http_request: connection to non-public address blocked")
@@ -207,6 +212,11 @@ func newSecureHTTPClient(timeout time.Duration) *http.Client {
 		},
 	}
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	// nil (system roots) outside a keeper_e2e_localtarget build. When set, it
+	// is the system roots plus one test CA; verification is never skipped.
+	if roots := localTargetRootCAs(); roots != nil {
+		tlsCfg.RootCAs = roots
+	}
 	if testTLSConfigHook != nil {
 		testTLSConfigHook(tlsCfg)
 	}

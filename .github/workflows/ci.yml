@@ -40,6 +40,9 @@ jobs:
       # The E2E-only code (mock keyring, keyring file mirror, test-only
       # actions) and its tests compile only with the keeper_e2e tag.
       - run: go test -tags keeper_e2e ./... -count=1
+      # The test-only local credential target (loopback on listed ports, an
+      # added test CA) compiles only with both tags.
+      - run: go test -tags "keeper_e2e keeper_e2e_localtarget" ./internal/keystore/handlers/ -count=1
       - name: Windows scheduled Keeper service smoke test
         if: runner.os == 'Windows'
         shell: pwsh
@@ -165,6 +168,7 @@ jobs:
         run: test -z "$(gofmt -l $(git ls-files '*.go' ':!vendor/**'))"
       - run: go vet ./...
       - run: go vet -tags keeper_e2e ./...
+      - run: go vet -tags "keeper_e2e keeper_e2e_localtarget" ./...
       - name: key bundle subprocess race tests
         run: >-
           go test -race -tags keeper_e2e ./internal/keystore/keychain
