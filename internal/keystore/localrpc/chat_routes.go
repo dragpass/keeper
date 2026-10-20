@@ -276,9 +276,10 @@ func remarshal(from, into any) error {
 	return json.Unmarshal(raw, into)
 }
 
-// peerKeyRoutes is the key-trust panel. The requests are the actions' own;
-// what they let the App do (verify, turn strict mode off) is what the
-// Extension's panel does, under the App-origin limit of threat model §4.12.
+// peerKeyRoutes is the key-trust panel. The requests are the actions' own,
+// under the App-origin limit of threat model §4.12. List, verify, the safety
+// number and the chain evaluation are App-only actions; the policy pair is
+// also the Extension options page's.
 // peer_key_pin_forget is left out: forgetting a pin re-TOFUs a changed key,
 // and the key-trust UI no longer offers it (MLS hardening policy Q9 (a)).
 var peerKeyRoutes = map[string]appRoute{

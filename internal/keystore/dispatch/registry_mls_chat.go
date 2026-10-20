@@ -13,6 +13,9 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
+// Chat runs only in the App. The ungated reads and statements are App-only
+// too, except org_member_removal_sign, which the Extension's E2E member
+// fixture signs over Native Messaging.
 func mlsChatActions() map[string]action {
 	return map[string]action{
 		proto.MLSGroupCreate:               direct(handlers.HandleMLSGroupCreate).gated(),
@@ -25,13 +28,13 @@ func mlsChatActions() map[string]action {
 		proto.MLSEncrypt:                   direct(handlers.HandleMLSEncrypt).gated(),
 		proto.MLSMarkSent:                  direct(handlers.HandleMLSMarkSent).gated(),
 		proto.MLSDecryptBatchForAppDisplay: direct(handlers.HandleMLSDecryptBatchForAppDisplay).gated().returnsPlaintext(),
-		proto.MLSRoomNameSeal:              direct(handlers.HandleMLSRoomNameSeal).chatFree(),
+		proto.MLSRoomNameSeal:              direct(handlers.HandleMLSRoomNameSeal).chatFree().appOnlyAction(),
 		proto.MLSRoomNameOpen:              direct(handlers.HandleMLSRoomNameOpen).chatFree().appOnlyAction().returnsPlaintext(),
-		proto.MLSConversationStatus:        direct(handlers.HandleMLSConversationStatus).chatFree(),
-		proto.MLSEpochComparison:           direct(handlers.HandleMLSEpochComparison).chatFree(),
-		proto.MLSRejoinRequestSign:         direct(handlers.HandleMLSRejoinRequestSign).chatFree(),
-		proto.MLSLeaveRequestSign:          direct(handlers.HandleMLSLeaveRequestSign).chatFree(),
+		proto.MLSConversationStatus:        direct(handlers.HandleMLSConversationStatus).chatFree().appOnlyAction(),
+		proto.MLSEpochComparison:           direct(handlers.HandleMLSEpochComparison).chatFree().appOnlyAction(),
+		proto.MLSRejoinRequestSign:         direct(handlers.HandleMLSRejoinRequestSign).chatFree().appOnlyAction(),
+		proto.MLSLeaveRequestSign:          direct(handlers.HandleMLSLeaveRequestSign).chatFree().appOnlyAction(),
 		proto.OrgMemberRemovalSign:         wrap(handlers.HandleOrgMemberRemovalSign).chatFree(),
-		proto.MLSDeviceRevokeSign:          wrap(handlers.HandleMLSDeviceRevokeSign).chatFree(),
+		proto.MLSDeviceRevokeSign:          wrap(handlers.HandleMLSDeviceRevokeSign).chatFree().appOnlyAction(),
 	}
 }

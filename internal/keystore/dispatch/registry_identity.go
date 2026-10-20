@@ -38,18 +38,20 @@ func identityActions() map[string]action {
 
 		// one device id per machine and the account binding hint (0.0.58)
 		proto.ActionDeviceIDEnsure:        wrap(handlers.HandleDeviceIDEnsure),
-		proto.ActionAccountBindingSet:     wrap(handlers.HandleAccountBindingSet),
+		proto.ActionAccountBindingSet:     wrap(handlers.HandleAccountBindingSet).appOnlyAction(),
 		proto.ActionDeviceAccountStatus:   wrap(handlers.HandleDeviceAccountStatus),
 		proto.ActionDeviceSignout:         wrap(handlers.HandleDeviceSignout),
-		proto.ActionAccountBindingSignout: wrap(handlers.HandleAccountBindingSignout),
+		proto.ActionAccountBindingSignout: wrap(handlers.HandleAccountBindingSignout).appOnlyAction(),
 
-		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode),
+		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode).appOnlyAction(),
 
 		proto.ActionGetPublicKey: wrap(handlers.HandleGetPublicKey),
 
-		// voluntary user RSA keypair rotation (two-step)
-		proto.ActionRotateUserKeypairPrepare: wrap(handlers.HandleRotateUserKeypairPrepare),
-		proto.ActionRotateUserKeypairPromote: wrap(handlers.HandleRotateUserKeypairPromote),
+		// voluntary user RSA keypair rotation (two-step), run from the App's
+		// settings. Status and abort stay on Native Messaging: they change no
+		// key, and the Keeper-boundary browser E2E drives them there.
+		proto.ActionRotateUserKeypairPrepare: wrap(handlers.HandleRotateUserKeypairPrepare).appOnlyAction(),
+		proto.ActionRotateUserKeypairPromote: wrap(handlers.HandleRotateUserKeypairPromote).appOnlyAction(),
 
 		// user keypair rotation partial-failure recovery (status/abort)
 		proto.ActionRotateUserKeypairStatus: wrap(handlers.HandleRotateUserKeypairStatus),
@@ -65,12 +67,12 @@ func identityActions() map[string]action {
 		proto.ActionRecoverySign: wrap(handlers.HandleRecoverySign),
 
 		proto.ActionRecoverySessionOpen:  wrap(handlers.HandleRecoverySessionOpen),
-		proto.ActionRecoverySessionClose: wrap(handlers.HandleRecoverySessionClose),
+		proto.ActionRecoverySessionClose: wrap(handlers.HandleRecoverySessionClose).appOnlyAction(),
 
 		// personal (password-wrapped) DEK operations
-		proto.ActionDEKRotateToDeviceKey: wrap(handlers.HandleDEKRotateToDeviceKey),
+		proto.ActionDEKRotateToDeviceKey: wrap(handlers.HandleDEKRotateToDeviceKey).appOnlyAction(),
 		// Re-wrap DEK under a new password (deviceMaster / DEK itself unchanged).
-		proto.ActionDEKRotateToNewPassword:     wrap(handlers.HandleDEKRotateToNewPassword),
+		proto.ActionDEKRotateToNewPassword:     wrap(handlers.HandleDEKRotateToNewPassword).appOnlyAction(),
 		proto.ActionDEKUnwrapAndEncrypt:        wrap(handlers.HandleDEKUnwrapAndEncrypt),
 		proto.ActionDEKUnwrapAndEncryptWithAAD: wrap(handlers.HandleDEKUnwrapAndEncryptWithAAD),
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
@@ -95,9 +97,9 @@ func identityActions() map[string]action {
 		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare).gated(),
 		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote).gated(),
 		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort).gated(),
-		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus).chatFree(),
+		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus).chatFree().appOnlyAction(),
 		// the old device's approval of a takeover (design Q1)
-		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign).chatFree(),
+		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign).chatFree().appOnlyAction(),
 
 		// KeyPackages for the active leaf, gated by the purpose-bound
 		// KeyPackage challenge; their private keys go to the sealed pool.
