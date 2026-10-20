@@ -2571,7 +2571,8 @@ body `{ nonce, ct }`: the JSON request AES-256-GCM sealed (key
 A 200 answer is `{ nonce, ct }` sealed with AAD
 `"dragpass-keeper-app-response-v1\n" + origin + "\n" + session + "\n" + path +
 "\n" + request nonce`. The owner refuses a plaintext body, another key, another
-route or origin (403) and a repeated envelope nonce (409); the app accepts only
+route or origin, an unknown envelope field or data after the envelope (403)
+and a repeated envelope nonce (409); the app accepts only
 an answer that opens. A process that takes the port after the owner exits
 (another OS user, a squatter) cannot read a request, cannot answer one, and
 cannot open a new session; the app sees a failure and has to open a session
