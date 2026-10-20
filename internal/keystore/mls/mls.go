@@ -1341,10 +1341,17 @@ func (s *Session) processAuthorized(
 // binding checks. None of them is entering: the tree is the group as its
 // members already accepted it, so no expiry check runs, a superseded
 // declaration is refused only once its grace period has passed, and nothing
-// here advances the newest-declaration record.
+// here advances the newest-declaration record. The tree is held to one
+// active device per account (Q14), as every Commit is: no honest Keeper
+// builds a Commit that leaves two leaves of one account, so a Welcome to
+// such a tree comes from a client that is not one, and is refused before
+// anything is verified or pinned.
 func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 	leaves, err := s.joinCollect(welcome)
 	if err != nil {
+		return err
+	}
+	if err := requireOneLeafPerAccount(leaves); err != nil {
 		return err
 	}
 	if err := verifyLeaves(v, leaves); err != nil {
@@ -1360,6 +1367,28 @@ func (s *Session) JoinVerified(welcome []byte, v LeafVerifier) error {
 		return err
 	}
 	return recordVerified(v, leaves)
+}
+
+// ErrDuplicateAccountLeaves — a Welcome's tree holds more than one leaf of one
+// account (one active device per account, Q14). Nothing was joined.
+var ErrDuplicateAccountLeaves = errors.New("mls: the welcome's tree holds more than one leaf of an account")
+
+// requireOneLeafPerAccount refuses a tree in which any account holds more than
+// one leaf. A leaf whose identity does not parse is left to the leaf verifier,
+// which refuses it.
+func requireOneLeafPerAccount(leaves []Leaf) error {
+	seen := make(map[string]struct{}, len(leaves))
+	for _, l := range leaves {
+		account, _, err := ParseCredentialIdentity(l.Identity)
+		if err != nil {
+			continue
+		}
+		if _, dup := seen[account]; dup {
+			return ErrDuplicateAccountLeaves
+		}
+		seen[account] = struct{}{}
+	}
+	return nil
 }
 
 // ErrCreatorNotOwner — a Welcome to a room's first epoch whose roles name as

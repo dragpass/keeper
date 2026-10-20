@@ -365,26 +365,41 @@ func conversation(k *keeper, conv string) conversationPermit {
 // declaration her account key signed (a takeover declaration without the old
 // device's approval would do).
 func TestMLSMaliciousWelcome_ATreeWithTwoLeavesOfOneAccount(t *testing.T) {
-	e2eStateRoot(t)
-	alice, carol, mallory := newKeeper(t, e2eAlice), newKeeper(t, e2eCarol), newKeeper(t, advMallory)
-	carol2 := newTakeoverKeeper(t, carol, e2eDevice2)
-	carolDecl := leafDeclarationOf(t, carol)
-	carol2.declare(proto.MLSLeafReasonRotate, carolDecl.NotBefore+60)
-	adv := mlsadversary.Start(t, leafKeyOf(t, mallory), true)
-	adv.Create([]byte(e2eConv), chatstate.Roles{Kind: chatstate.RolesKindRoom, Owner: advMallory}.Encode())
-	_, welcome := adv.Build(mlsadversary.Commit{Adds: [][]byte{
-		keyPackageBytes(t, alice.keyPackage()),
-		keyPackageBytes(t, carol.keyPackage()),
-		keyPackageBytes(t, carol2.keyPackage()),
-	}, Apply: true})
-	resp := alice.call(proto.MLSJoin, proto.MLSJoinRequest{
-		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: advB64(welcome),
-	})
-	if resp.Success {
-		t.Fatalf("alice joined a tree holding two leaves of carol's account: %+v", resp.Data)
-	}
-	if st := alice.status(); st.HasGroupState {
-		t.Fatalf("the refused join left %+v", st)
+	for _, both := range []bool{true, false} {
+		e2eStateRoot(t)
+		alice, carol, mallory := newKeeper(t, e2eAlice), newKeeper(t, e2eCarol), newKeeper(t, advMallory)
+		carol2 := newTakeoverKeeper(t, carol, e2eDevice2)
+		carolDecl := leafDeclarationOf(t, carol)
+		carol2.declare(proto.MLSLeafReasonRotate, carolDecl.NotBefore+60)
+		adv := mlsadversary.Start(t, leafKeyOf(t, mallory), true)
+		adv.Create([]byte(e2eConv), chatstate.Roles{Kind: chatstate.RolesKindRoom, Owner: advMallory}.Encode())
+		adds := [][]byte{keyPackageBytes(t, alice.keyPackage()), keyPackageBytes(t, carol2.keyPackage())}
+		if both {
+			adds = append(adds, keyPackageBytes(t, carol.keyPackage()))
+		}
+		_, welcome := adv.Build(mlsadversary.Commit{Adds: adds, Apply: true})
+		resp := alice.call(proto.MLSJoin, proto.MLSJoinRequest{
+			Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: advB64(welcome),
+		})
+		if !both {
+			// Control: the same client's room with one leaf of Carol's.
+			if !resp.Success {
+				t.Fatalf("alice refused a tree with one leaf per account: %+v", resp)
+			}
+			continue
+		}
+		assertCode(t, resp, string(errs.ErrCodeChatMLSFailed))
+		if st := alice.status(); st.HasGroupState {
+			t.Fatalf("the refused join left %+v", st)
+		}
+		if n := alice.poolSize(); n != 1 {
+			t.Fatalf("alice's pool holds %d after the refused join; want the entry kept", n)
+		}
+		for _, account := range []string{e2eCarol, advMallory} {
+			if _, err := keychain.GetPeerKeyPin(alice.store, e2eAlice, account); err == nil {
+				t.Fatalf("the refused join pinned %s", account[:8])
+			}
+		}
 	}
 }
 
