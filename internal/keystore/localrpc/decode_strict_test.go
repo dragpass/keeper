@@ -36,3 +36,29 @@ func TestOpenSessionRefusesTrailingJSON(t *testing.T) {
 		t.Fatalf("a session open with trailing JSON: %d", code)
 	}
 }
+
+// The sealed envelope is the request body of every session route, so it too
+// is exactly one JSON object: bytes after it are refused, not ignored.
+func TestSealedEnvelopeRefusesTrailingData(t *testing.T) {
+	server := newTestServer(t)
+	session, csrf := openTestSession(t, server)
+	server.mu.Lock()
+	key := server.sessions[session].key
+	server.mu.Unlock()
+	seal := func() string {
+		envelope, err := sealEnvelope(key, appRequestAAD(testOrigin, session, "/v1/status"), []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(envelope)
+		return string(raw)
+	}
+	for _, trailing := range []string{"{}", seal(), `"x"`, "garbage"} {
+		if code := localRawRequest(server, http.MethodPost, "/v1/status", seal()+trailing, session, csrf).Code; code != http.StatusForbidden {
+			t.Fatalf("an envelope followed by %q: %d, want 403", trailing, code)
+		}
+	}
+	if code := localRawRequest(server, http.MethodPost, "/v1/status", seal()+"\n", session, csrf).Code; code != http.StatusOK {
+		t.Fatalf("an envelope with a trailing newline: %d, want 200", code)
+	}
+}
