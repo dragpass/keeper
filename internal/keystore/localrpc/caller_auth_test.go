@@ -584,3 +584,32 @@ func TestSigningRequestReplayAcrossSessions(t *testing.T) {
 		t.Fatalf("stale signing timestamp=%d, want 400", got)
 	}
 }
+
+// The pin owner Keeper recorded first holds for every App session: a second
+// session, or the same one, naming another account is refused before any pin
+// is read, and no App route can clear the record.
+func TestAppSessionsCannotSwitchThePinOwner(t *testing.T) {
+	server := newTestServer(t)
+	sessionA, csrfA := openTestSession(t, server)
+	sessionB, csrfB := openTestSession(t, server)
+	const otherOwner = "33333333-3333-4333-8333-333333333333"
+	if code, result, body := callRoute(t, server, sessionA, csrfA, "/v1/peer-key/pin-list", map[string]string{"owner_account_id": routeOwner}); code != http.StatusOK || !result.Success {
+		t.Fatalf("first owner: %d %s", code, body)
+	}
+	for _, s := range []struct{ session, csrf string }{{sessionA, csrfA}, {sessionB, csrfB}} {
+		for path, request := range map[string]any{
+			"/v1/peer-key/pin-list": map[string]string{"owner_account_id": otherOwner},
+			"/v1/peer-key/pin":      map[string]string{"owner_account_id": otherOwner, "account_id": routePeer},
+		} {
+			code, result, body := callRoute(t, server, s.session, s.csrf, path, request)
+			if code != http.StatusOK || result.Success || result.ErrorCode != "peer_key_owner_mismatch" {
+				t.Fatalf("%s with another owner: %d %s", path, code, body)
+			}
+		}
+	}
+	for _, path := range []string{"/v1/peer-key/owner-reset", "/v1/peer-key/peer_key_owner_reset", "/v1/chat/peer_key_owner_reset"} {
+		if got := localRequest(server, http.MethodPost, path, "{}", sessionA, csrfA).Code; got != http.StatusNotFound {
+			t.Fatalf("%s=%d, want 404", path, got)
+		}
+	}
+}
