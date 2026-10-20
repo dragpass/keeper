@@ -92,6 +92,7 @@ func TestOpenCredentialForSink_CleanupIsArmedOnEveryStage(t *testing.T) {
 				payload = credRejectPayload
 			}
 			common := credOpenCommon(t, groupRaw, handle, payload, credTestAAD)
+			common.policy = armCredentialPolicy(t, deps, common.policy, "", nil)
 			if tc.mutate != nil {
 				tc.mutate(&common)
 			}

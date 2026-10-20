@@ -35,10 +35,13 @@ package handlers
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
@@ -104,6 +107,13 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 			}
 			body = decoded
 		}
+		if err := requestQueryMatchesPolicy(req.TargetURL, req.Policy); err != nil {
+			return false, errs.CodeResponse(errs.ErrCodeValidation, err.Error())
+		}
+		if credentialBodyDigest(body) != req.Policy.BodySHA256 {
+			return false, errs.CodeResponse(errs.ErrCodeValidation,
+				"request body does not match signed body_sha256")
+		}
 		return true, proto.BaseResponse{}
 	}
 
@@ -157,6 +167,14 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		// doCredentialRequest already strips the request URL out of transport
 		// errors (unwrapURLError); masking is the second line, covering any
 		// future error path that reconstructs it.
+		var unknown *credentialOutcomeUnknownError
+		if errors.As(reqErr, &unknown) {
+			// The headers were written: the target may have acted. The nonce is
+			// spent, and the caller is told not to assume either outcome.
+			return errs.CodeResponse(errs.ErrCodeCredentialOutcomeUnknown,
+				maskSecrets("credential request outcome unknown: the request was sent and no usable response came back: "+
+					unknown.cause.Error(), injected))
+		}
 		return errs.CodeResponse(errs.ErrCodeInternal,
 			maskSecrets("credential request failed: "+reqErr.Error(), injected))
 	}
@@ -183,6 +201,30 @@ func doCredentialRequest(method, targetURL string, headers map[string]string, bo
 	if err != nil {
 		return proto.CredentialHTTPResponseData{}, unwrapURLError(err)
 	}
+	// Once the request headers are written the target may act on the request,
+	// so every failure after that point is an unknown outcome rather than a
+	// refusal. The callback can run on a transport goroutine.
+	var wroteHeaders atomic.Bool
+	httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { wroteHeaders.Store(true) },
+	}))
+	data, err := sendCredentialRequest(httpReq, headers, injected, timeout, maxRespBytes)
+	if err != nil && wroteHeaders.Load() {
+		return proto.CredentialHTTPResponseData{}, &credentialOutcomeUnknownError{cause: err}
+	}
+	return data, err
+}
+
+// credentialOutcomeUnknownError marks a failure after the request headers were
+// written. cause has already been stripped of the request URL.
+type credentialOutcomeUnknownError struct{ cause error }
+
+func (e *credentialOutcomeUnknownError) Error() string { return e.cause.Error() }
+
+// sendCredentialRequest performs the request built by doCredentialRequest and
+// reads and redacts the response.
+func sendCredentialRequest(httpReq *http.Request, headers map[string]string, injected []string,
+	timeout time.Duration, maxRespBytes int64) (proto.CredentialHTTPResponseData, error) {
 	for name, value := range headers {
 		httpReq.Header.Set(name, value)
 	}

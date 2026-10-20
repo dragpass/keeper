@@ -11,12 +11,13 @@
 // growing it is a visible decision rather than a line in a diff.
 //
 // The list comes from an audit that walked every Keeper call in
-// packages/mcp: a version gate, the group-session pair, and the two
-// credential sinks. Everything MCP asks the Keeper for is a credential.
+// packages/mcp: a version gate, the group-session pair, the two credential
+// sinks, and the execution-nonce prepare that makes each signed sink policy
+// single-use. Everything MCP asks the Keeper for is a credential use.
 //
 // This test cannot reach into the TypeScript package, so it does not claim to.
 // What it asserts is the Keeper half: the pinned set is real, it is exactly
-// five, and no chat or conversation action is in it.
+// six, and no chat or conversation action is in it.
 
 package dispatch
 
@@ -38,11 +39,15 @@ var mcpCallableActions = []string{
 	proto.ActionGroupSessionClose,
 	proto.ActionCredentialHTTPRequest,
 	proto.ActionCredentialExecRequest,
+	// Mints a process-local nonce and returns it. It reads no key and no
+	// secret; what it adds to the model's reach is the ability to make a
+	// signed policy usable, once, in this process.
+	proto.ActionCredentialExecutionPrepare,
 }
 
-func TestMCPCallableActions_AreRegisteredAndExactlyFive(t *testing.T) {
-	if len(mcpCallableActions) != 5 {
-		t.Fatalf("mcpCallableActions has %d entries, want 5 — widening the MCP "+
+func TestMCPCallableActions_AreRegisteredAndExactlySix(t *testing.T) {
+	if len(mcpCallableActions) != 6 {
+		t.Fatalf("mcpCallableActions has %d entries, want 6 — widening the MCP "+
 			"surface is a security decision, not a test update.", len(mcpCallableActions))
 	}
 	for _, action := range mcpCallableActions {

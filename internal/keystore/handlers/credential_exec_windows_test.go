@@ -34,7 +34,7 @@ func TestCredentialExec_UnsupportedOnWindows(t *testing.T) {
 	req := credExecRequest(t, groupRaw, handle,
 		"/usr/bin/gh", []string{"api", "user"}, "/tmp/work", nil)
 
-	resp := HandleCredentialExecRequest(deps, req)
+	resp := handleArmedExec(t, deps, req)
 	if resp.Success {
 		t.Fatal("credential_exec_request succeeded on a platform with no process-group kill")
 	}
@@ -63,7 +63,7 @@ func TestCredentialExec_UnsupportedOnWindows(t *testing.T) {
 func TestCredentialExec_UnsupportedBeforeValidation(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 
-	resp := HandleCredentialExecRequest(deps, proto.CredentialExecRequest{})
+	resp := handleArmedExec(t, deps, proto.CredentialExecRequest{})
 	if resp.Success {
 		t.Fatal("an empty credential_exec_request succeeded")
 	}

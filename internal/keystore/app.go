@@ -84,7 +84,10 @@ type Deps struct {
 	// AuditAuthorizations holds the receipts and permits the audit actions
 	// consumed. Lives and dies with the process; never persisted.
 	AuditAuthorizations *handlers.AuditAuthorizationStore
-	KeyTransparency     keytransparency.Gate
+	// CredentialNonces holds the credential execution nonces this process
+	// minted. Lives and dies with the process; never persisted.
+	CredentialNonces *handlers.CredentialNonceStore
+	KeyTransparency  keytransparency.Gate
 }
 
 // App is the single wiring container for the Keeper process. Handlers
@@ -101,6 +104,7 @@ type App struct {
 	Clipboard           clipboard.Clipboard
 	MessageChallenges   *handlers.MessageChallengeStore
 	AuditAuthorizations *handlers.AuditAuthorizationStore
+	CredentialNonces    *handlers.CredentialNonceStore
 	KeyTransparency     keytransparency.Gate
 
 	// requestMu runs every handler one at a time in this process (Native
@@ -139,6 +143,7 @@ func NewApp(deps Deps) *App {
 		Clipboard:           deps.Clipboard,
 		MessageChallenges:   deps.MessageChallenges,
 		AuditAuthorizations: deps.AuditAuthorizations,
+		CredentialNonces:    deps.CredentialNonces,
 		KeyTransparency:     deps.KeyTransparency,
 	}
 	if app.Store == nil {
@@ -172,6 +177,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.AuditAuthorizations == nil {
 		app.AuditAuthorizations = handlers.NewAuditAuthorizationStore()
+	}
+	if app.CredentialNonces == nil {
+		app.CredentialNonces = handlers.NewCredentialNonceStore()
 	}
 	if app.Clipboard == nil {
 		if testing.Testing() {
