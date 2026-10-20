@@ -279,6 +279,9 @@ func chatStateFailure(d Deps, stage string, err error) proto.BaseResponse {
 	case errors.Is(err, mls.ErrNoKeyPackageForWelcome):
 		code, message = errs.ErrCodeChatMLSWelcomeUnusable,
 			"this device holds no key package the welcome is addressed to; it has to be invited again"
+	case errors.Is(err, mls.ErrDuplicateAccountLeaves):
+		code, message = errs.ErrCodeChatMLSFailed,
+			"the welcome's tree holds more than one leaf of one account; nothing was joined"
 	case errors.Is(err, mls.ErrCreatorNotOwner):
 		code, message = errs.ErrCodeChatMLSFailed,
 			"the new room's roles do not name its creator as owner; nothing was joined"
