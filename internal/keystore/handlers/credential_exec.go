@@ -25,8 +25,10 @@
 //  3. HTTPS enforcement → no shell. The command is spawned by absolute path with
 //     no PATH lookup, and no field of the request is ever parsed as a shell
 //     string.
-//  4. redirect blocking → a new process group, killed as a group on timeout, so
-//     a grandchild cannot outlive the request holding the credential.
+//  4. redirect blocking → a new process group, killed as a group on timeout and
+//     again after the child exits, so a grandchild in that group cannot outlive
+//     the request holding the credential. A grandchild that calls setsid()
+//     leaves the group and is not reached.
 //  5. response size cap → 1 MiB per stream with a truncation flag.
 //  6. timeout → 60s, a Keeper-owned constant the caller cannot widen.
 //  7. response redaction → maskSecrets over stdout and stderr.
