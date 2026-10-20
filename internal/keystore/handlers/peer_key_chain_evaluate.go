@@ -73,10 +73,6 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 		if err := verifyRotationTransparency(d, req.RotationStatements); err != nil {
 			return keyTransparencyRefusal(d, err)
 		}
-	} else if existing == nil {
-		if err := verifyAccountEnrollmentTransparency(d, req.EnrollmentEvidence, req.AccountID, req.PublicKey); err != nil {
-			return keyTransparencyRefusal(d, err)
-		}
 	}
 
 	// The same call the wrap path makes, with the same arguments.
@@ -102,6 +98,12 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 			Advanced:          false,
 			PinnedFingerprint: outcome.PinnedFingerprint,
 		}}
+	}
+
+	// The same proof rule as the wrap path: a pin alone is not a log proof.
+	if err := requirePeerKeyProof(d, req.OwnerAccountID, req.AccountID, existing, &outcome.Pin,
+		req.PublicKey, req.EnrollmentEvidence); err != nil {
+		return keyTransparencyRefusal(d, err)
 	}
 
 	// "Moved" means the record now points at a different key than it did:

@@ -47,6 +47,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -228,6 +229,11 @@ func (v *MLSLeafVerifier) judge(
 				PinnedFingerprint:   outcome.PinnedFingerprint,
 			}
 		}
+		// No proof is required here (the leaves of a Welcome's tree need
+		// none), so a first-use pin carries no log proof and the wrap path
+		// will ask for one. A proof is recorded only below, for an entering
+		// leaf whose leaf binding the log proved.
+		carryPeerKeyProof(v.d, v.owner, accountID, existing, &outcome.Pin)
 		pins[accountID] = outcome.Pin
 		states[accountID] = outcome.State
 	}
@@ -243,6 +249,14 @@ func (v *MLSLeafVerifier) judge(
 				Reason:              "key transparency proof could not be verified",
 				KeyTransparencyCode: keyTransparencyErrorCode(err),
 			}
+		}
+		// The leaf binding statement names this account and carries this
+		// account key, and the log proved it: that is a log proof for the
+		// key, as an enrollment proof is. Only with a trust file, since
+		// without one nothing was verified.
+		if pin, ok := pins[accountID]; ok && v.d.KeyTransparency.Required() && pin.Fingerprint == observed {
+			pin.KeyTransparency = peerKeyProofRecord(v.d, v.owner, accountID, observed, keytransparency.StatementMLSLeafBinding)
+			pins[accountID] = pin
 		}
 	}
 
