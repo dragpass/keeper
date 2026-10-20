@@ -2,8 +2,9 @@ package errs
 
 const (
 	// ErrCodeCredentialNonceInvalid — the signed policy names an execution nonce
-	// this Keeper process did not mint, minted and already consumed, or minted
-	// and forgot (expired, or the process restarted). Nothing was opened and
+	// this Keeper's nonce map does not hold: never minted there (another
+	// device, OS user or standalone process), already consumed, or forgotten
+	// (expired, or the serving Keeper restarted). Nothing was opened and
 	// nothing was sent. The caller needs a new prepare and a new resolve.
 	ErrCodeCredentialNonceInvalid ErrorCode = "credential_nonce_invalid"
 

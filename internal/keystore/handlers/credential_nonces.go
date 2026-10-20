@@ -1,4 +1,4 @@
-// credential_nonces.go — the process-local execution nonces that make one
+// credential_nonces.go — the in-memory execution nonces that make one
 // signed credential policy usable once.
 //
 // credential_execution_prepare mints a nonce and remembers it here. The server
@@ -12,10 +12,17 @@
 //   - Nothing is persisted. A restart empties the map, so every policy that
 //     names an outstanding nonce becomes unusable; there is no record that a
 //     backup restore could roll back or a deletion could clear.
-//   - Another Keeper process (another MCP server, dragpass-run, another device
-//     of the same account) never minted the nonce and refuses it.
+//   - The map belongs to the App that serves the request. A Keeper launched
+//     for Native Messaging, MCP or dragpass-run forwards its requests to the
+//     shared owner when one runs (main.go, RoleProxy), so on one device and
+//     OS user every such launch shares the owner's map: a policy minted there
+//     runs once whichever launch submits it. A Keeper with another map (another
+//     device, another OS user, a standalone process, a restarted owner) has no
+//     entry for the nonce and refuses it.
 //
-// The map holds no key material: a nonce and a deadline.
+// Nothing in the signed policy names a device; refusal elsewhere rests only on
+// the nonce being absent from that map. The map holds no key material: a nonce
+// and a deadline.
 
 package handlers
 
@@ -32,7 +39,7 @@ const (
 	// The signed policy's own 5 minute expiry still applies on top.
 	credentialNonceTTL = 10 * time.Minute
 
-	// credentialMaxNonces — live nonces per process. A full map refuses a new
+	// credentialMaxNonces — live nonces per map. A full map refuses a new
 	// prepare rather than evicting an older nonce: eviction would let a caller
 	// cancel a use it does not own.
 	credentialMaxNonces = 256
@@ -40,7 +47,7 @@ const (
 
 var errCredentialNoncesFull = errors.New("credential execution nonce capacity reached")
 
-// CredentialNonceStore is the per-process nonce map. App owns one and injects
+// CredentialNonceStore is the nonce map of one serving App. App owns one and injects
 // it through Deps. A nil store fails closed: no nonce can be minted or consumed,
 // so the credential sinks are unavailable rather than unguarded.
 type CredentialNonceStore struct {

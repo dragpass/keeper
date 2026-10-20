@@ -39,9 +39,9 @@ var mcpCallableActions = []string{
 	proto.ActionGroupSessionClose,
 	proto.ActionCredentialHTTPRequest,
 	proto.ActionCredentialExecRequest,
-	// Mints a process-local nonce and returns it. It reads no key and no
+	// Mints an in-memory nonce and returns it. It reads no key and no
 	// secret; what it adds to the model's reach is the ability to make a
-	// signed policy usable, once, in this process.
+	// signed policy usable, once, through this Keeper's nonce map.
 	proto.ActionCredentialExecutionPrepare,
 }
 

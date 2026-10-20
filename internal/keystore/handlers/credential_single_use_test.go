@@ -180,10 +180,11 @@ func TestCredentialHTTP_ConcurrentSubmissionsOfOnePolicy_ExactlyOneRuns(t *testi
 	}
 }
 
-// A restarted Keeper, another Keeper process, or a Keeper on another device of
-// the same account has its own empty nonce map. None of them accepts a policy
-// whose nonce another process minted.
-func TestCredentialHTTP_NonceFromAnotherKeeperProcessRefused(t *testing.T) {
+// A Keeper serving from another nonce map (another device or OS user, a
+// standalone process) or a restarted owner has no entry for the nonce. This
+// simulates both with a separate store and a nil store in one process; it does
+// not run a second process, a proxy, or a real restart.
+func TestCredentialHTTP_NonceFromAnotherNonceMapRefused(t *testing.T) {
 	s := newSingleUseServer(t, nil)
 	deps, _, _ := newTestDeps(t)
 	req := singleUseRequest(t, deps, s, "", nil, mintCredentialNonce(t, deps))

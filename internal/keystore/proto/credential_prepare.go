@@ -1,7 +1,7 @@
 // credential_prepare.go — the request and response of
 // credential_execution_prepare, the first step of a credential use.
 //
-// The Keeper mints an execution nonce and remembers it in process memory. The
+// The Keeper mints an execution nonce and remembers it in memory. The
 // server signs that nonce into the credential policy, and the sink action that
 // presents the policy consumes it. Nothing here is key material.
 

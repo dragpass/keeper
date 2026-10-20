@@ -87,8 +87,8 @@ func openCredentialForSink(d Deps, common credentialRequestCommon,
 	// The request is the one the policy describes; spend the policy now, before
 	// the payload opens. A request refused above leaves the nonce in place (it
 	// never left), and from here on the nonce is gone whatever happens next, so
-	// one signed policy yields at most one attempt in this process and none in
-	// any other (credential_nonces.go).
+	// one signed policy yields at most one attempt through this nonce map and
+	// none through any other (credential_nonces.go).
 	if !d.CredentialNonces.Consume(common.policy.ExecutionNonce, d.Now()) {
 		return nil, cleanup, errs.CodeResponse(errs.ErrCodeCredentialNonceInvalid,
 			"credential execution nonce is unknown, expired, or already used"), false

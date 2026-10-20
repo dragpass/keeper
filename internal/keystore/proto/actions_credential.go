@@ -82,11 +82,12 @@ const (
 	ActionCredentialExecRequest = "credential_exec_request"
 
 	// CredentialExecutionPrepare: step one of a credential use. The Keeper
-	// mints a single-use execution nonce and keeps it in this process only.
+	// mints a single-use execution nonce and keeps it in memory, in the App
+	// that serves the request (the shared owner when launches are proxied).
 	// The MCP client sends it with the resolve, the server signs it into the
 	// policy, and credential_http_request / credential_exec_request consume it.
-	// A signed policy is therefore usable once, and only by the Keeper process
-	// that minted its nonce.
+	// A signed policy is therefore usable once, and only by a Keeper whose
+	// nonce map holds its nonce.
 	//
 	//   Inputs: none.
 	//   Output: execution_nonce (43 Base64URL characters), expires_at (RFC3339).
