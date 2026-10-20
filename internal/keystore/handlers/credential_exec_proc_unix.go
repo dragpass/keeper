@@ -39,3 +39,15 @@ func killProcessGroup(cmd *exec.Cmd) {
 	}
 	_ = cmd.Process.Kill()
 }
+
+// killLeftoverProcessGroup SIGKILLs whatever remains of the child's process
+// group after the child itself has exited and been reaped. The child was the
+// group leader (Setpgid with Pgid 0), so its pid is the group id. While any
+// member is alive the kernel keeps that id reserved, so the signal cannot reach
+// an unrelated group; when nothing is left, kill fails with ESRCH and that is
+// the expected outcome.
+func killLeftoverProcessGroup(pgid int) {
+	if pgid > 0 {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+}

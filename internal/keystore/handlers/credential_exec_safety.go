@@ -116,7 +116,9 @@ type execResult struct {
 //     that reaches "sh -c".
 //   - No inherited stdin. A credentialed child gets nothing to read.
 //   - Its own process group (applyProcessGroup), killed as a group on timeout
-//     (killProcessGroup) so a grandchild the child left sleeping dies too.
+//     (killProcessGroup) and again after a normal exit
+//     (killLeftoverProcessGroup), so a grandchild the child left running dies
+//     with the request either way.
 //   - Each stream is read through a LimitReader and flagged when it overflows.
 //   - A non-zero exit is data, not an error: it comes back as ExitCode. Only a
 //     timeout is special, reporting ExitCode -1 because the process never chose
@@ -173,8 +175,17 @@ func runCredentialExec(
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	// The child is the group leader, so its pid names the group. Read it now:
+	// after the reap the Process no longer answers for it.
+	pgid := cmd.Process.Pid
+
 	select {
 	case waitErr := <-done:
+		// A normal exit ends the request too. A grandchild the child detached
+		// (stdio redirected away, so the pipes closed) would otherwise keep
+		// running with the credential in its environment after the response
+		// has gone back.
+		killLeftoverProcessGroup(pgid)
 		return execResult{
 			ExitCode:  exitCodeOf(waitErr),
 			Stdout:    outBuf,
