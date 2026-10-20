@@ -142,10 +142,13 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 }
 
 // The App-only set is pinned: every gated action but the two revocations,
-// the room name display open, the Secure Message seal, and the organization
-// emergency code seed derivation.
+// the room name display open, the Secure Message seal, the organization
+// emergency code seed derivation, and account entry.
 func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 	want := []string{
+		"auth_login_pending_sign_alias", "auth_login_pending_sign_challenge",
+		"auth_recovery_abort", "auth_recovery_begin", "auth_recovery_prepare",
+		"auth_recovery_reissue_prepare", "auth_signup_abort", "auth_signup_prepare",
 		"chat_state_read_outbox",
 		"message_seal",
 		"mls_commit_build", "mls_commit_confirm",
