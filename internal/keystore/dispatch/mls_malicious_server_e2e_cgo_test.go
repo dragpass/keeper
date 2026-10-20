@@ -450,19 +450,19 @@ func (k *keeper) evaluatePeer(account, pem string) proto.BaseResponse {
 	})
 }
 
-// Key Transparency and a Welcome's tree, the stated limit (protocol.md, "Key
-// Transparency": the leaves a Welcome's tree already holds are not entering
-// leaves and need no proof). With the gate on, a modified client creates a
-// room holding Alice and a leaf that claims Bob's account under a key Bob
-// never had. Alice has never seen Bob, joins with no proof at all, and pins
-// that key on first use.
+// Key Transparency and a Welcome's tree (finding F2 of the MLS adversarial
+// verification). With the gate on, a modified client creates a room holding
+// Alice and a leaf that claims Bob's account under a key Bob never had. Alice
+// has never seen Bob and joins with no proof at all: the leaves a Welcome's
+// tree already holds are not entering leaves, so mls_join still pins that key
+// on first use. That is the MLS first-contact limit, and it stays.
 //
-// The pin is the one the wrap actions read. A Keeper with the gate on and no
-// pin for Bob refuses to take that key without Bob's enrollment proof
-// (0.0.57, "First peer pin with Key Transparency"); Alice's Keeper, after the
-// join, accepts it as the pinned key, with no proof. Pinned here so the gap
-// between the two first-pin rules is not mistaken for a guarantee.
-func TestMLSKeyTransparency_AWelcomeTreeLeafIsPinnedWithoutAProofAndTheWrapPathTrustsThatPin(t *testing.T) {
+// What must not follow is the wrap path trusting that pin. A Keeper with the
+// gate on and no pin for Bob refuses the key without Bob's enrollment proof
+// (0.0.57, "First peer pin with Key Transparency"); Alice's Keeper, holding the
+// joined pin, has to give the same answer, because no log proof stands behind
+// the pin.
+func TestMLSKeyTransparency_AWelcomeTreeLeafPinWithoutAProofIsRefusedByTheWrapPath(t *testing.T) {
 	e2eStateRoot(t)
 	trust := ktTrust(t)
 	alice, impostor, mallory := newKeeper(t, e2eAlice), newKeeper(t, e2eBob), newKeeper(t, advMallory)
@@ -494,11 +494,15 @@ func TestMLSKeyTransparency_AWelcomeTreeLeafIsPinnedWithoutAProofAndTheWrapPathT
 		pin.State != keychain.PeerKeyPinStateTOFU {
 		t.Fatalf("alice's pin for bob after the join = %+v, %v", pin, err)
 	}
-	resp := alice.evaluatePeer(e2eBob, impostorPEM)
-	if !resp.Success {
-		t.Fatalf("the wrap path's evaluation of the pinned key = %+v", resp)
+	if pin.KeyTransparencyVerified(e2eAlice, e2eBob) {
+		t.Fatalf("the joined pin claims a log proof nobody supplied: %+v", pin.KeyTransparency)
 	}
-	if got := resp.Data.(proto.PeerKeyChainEvaluateResponseData); got.State != string(keychain.PeerKeyPinStateTOFU) || got.Advanced {
-		t.Fatalf("the wrap path took the joined pin as %+v", got)
+
+	resp := alice.evaluatePeer(e2eBob, impostorPEM)
+	if resp.Success || string(resp.ErrorCode) != "key_transparency_unverified" {
+		t.Fatalf("the wrap path's evaluation of the joined pin = %+v; want key_transparency_unverified", resp)
+	}
+	if after, err := keychain.GetPeerKeyPin(alice.store, e2eAlice, e2eBob); err != nil || after != pin {
+		t.Fatalf("the refusal changed the pin: %+v -> %+v (%v)", pin, after, err)
 	}
 }

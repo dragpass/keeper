@@ -22,6 +22,11 @@ type PeerKeyPinInfo struct {
 	FirstSeenAt int64  `json:"first_seen_at"`
 	LastSeenAt  int64  `json:"last_seen_at"`
 	VerifiedAt  int64  `json:"verified_at,omitempty"`
+	// KeyTransparencyVerified reports whether a Key Transparency log proof
+	// verified this pin's current key for this owner. It is independent of
+	// State: with a trust file configured, the wrap actions ask for an
+	// enrollment proof whenever it is false.
+	KeyTransparencyVerified bool `json:"key_transparency_verified"`
 }
 
 // PeerKeyPinListRequest asks for every pin this owner holds on this device.

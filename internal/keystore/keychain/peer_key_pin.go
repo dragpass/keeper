@@ -81,6 +81,33 @@ type PeerKeyPin struct {
 	LastSeenAt              int64           `json:"last_seen_at"`
 	VerifiedAt              int64           `json:"verified_at,omitempty"`
 	LastRotationFingerprint string          `json:"last_rotation_fingerprint,omitempty"`
+	// KeyTransparency records that a Key Transparency log proof verified this
+	// pin's key. It is a separate fact from State: a pin can be stored, even
+	// `verified` by a human, and still have no log proof behind it. Absent
+	// means unverified, which is what every pin written before this field
+	// existed reads as.
+	KeyTransparency *PeerKeyTransparency `json:"key_transparency,omitempty"`
+}
+
+// PeerKeyTransparency names exactly what a verified log proof covered: this
+// owner's view of this account under this key. A record whose owner, account
+// or fingerprint is not the pin's own does not count.
+type PeerKeyTransparency struct {
+	OwnerAccountID string `json:"owner_account_id"`
+	AccountID      string `json:"account_id"`
+	Fingerprint    string `json:"fingerprint"`
+	// Source is the statement kind that proved it: account_key_enrollment,
+	// account_key_rotation or mls_leaf_binding.
+	Source     string `json:"source"`
+	VerifiedAt int64  `json:"verified_at"`
+}
+
+// KeyTransparencyVerified reports whether a log proof verified the key this
+// pin currently holds, for this owner and this peer account.
+func (p PeerKeyPin) KeyTransparencyVerified(ownerAccountID, peerAccountID string) bool {
+	kt := p.KeyTransparency
+	return kt != nil && kt.OwnerAccountID == ownerAccountID && kt.AccountID == peerAccountID &&
+		kt.Fingerprint != "" && kt.Fingerprint == p.Fingerprint
 }
 
 // PeerKeyPinEntry pairs a peer account id with its record, which is what a
