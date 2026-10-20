@@ -93,12 +93,16 @@ func enforcePeerKeyPins(
 			if err := verifyRotationTransparency(d, check.statements); err != nil {
 				return nil, keyTransparencyRefusal(d, err), false
 			}
-		} else if existing == nil {
-			if err := verifyAccountEnrollmentTransparency(d, check.enrollmentEvidence, check.accountID, check.publicKey); err != nil {
+		}
+		outcome := evaluatePeerKeyTrust(existing, check.accountID, check.observed, check.statements, now)
+		// The key the pin will hold needs a log proof, not just a pin
+		// (requirePeerKeyProof). A changed key is refused below as before.
+		if outcome.Allowed {
+			if err := requirePeerKeyProof(d, ownerAccountID, check.accountID, existing, &outcome.Pin,
+				check.publicKey, check.enrollmentEvidence); err != nil {
 				return nil, keyTransparencyRefusal(d, err), false
 			}
 		}
-		outcome := evaluatePeerKeyTrust(existing, check.accountID, check.observed, check.statements, now)
 		outcome = applyPeerKeyPolicy(outcome, policy.RequireVerifiedPeers)
 		if !outcome.Allowed {
 			d.Logger.Printf("peer key pin refused the wrap: %s", outcome.Reason)
@@ -157,14 +161,15 @@ func loadPeerKeyPin(store keychain.SecretStore, ownerAccountID, peerAccountID st
 
 // pinInfo projects a stored record onto the wire shape. last_rotation_fingerprint
 // stays behind.
-func pinInfo(accountID string, pin keychain.PeerKeyPin) proto.PeerKeyPinInfo {
+func pinInfo(ownerAccountID, accountID string, pin keychain.PeerKeyPin) proto.PeerKeyPinInfo {
 	return proto.PeerKeyPinInfo{
-		AccountID:   accountID,
-		Fingerprint: pin.Fingerprint,
-		State:       string(pin.State),
-		FirstSeenAt: pin.FirstSeenAt,
-		LastSeenAt:  pin.LastSeenAt,
-		VerifiedAt:  pin.VerifiedAt,
+		AccountID:               accountID,
+		Fingerprint:             pin.Fingerprint,
+		State:                   string(pin.State),
+		FirstSeenAt:             pin.FirstSeenAt,
+		LastSeenAt:              pin.LastSeenAt,
+		VerifiedAt:              pin.VerifiedAt,
+		KeyTransparencyVerified: pin.KeyTransparencyVerified(ownerAccountID, accountID),
 	}
 }
 
@@ -188,7 +193,7 @@ func HandlePeerKeyPinList(d Deps, req proto.PeerKeyPinListRequest) proto.BaseRes
 
 	pins := make([]proto.PeerKeyPinInfo, 0, len(entries))
 	for _, entry := range entries {
-		pins = append(pins, pinInfo(entry.AccountID, entry.Pin))
+		pins = append(pins, pinInfo(req.OwnerAccountID, entry.AccountID, entry.Pin))
 	}
 
 	// Count only. A pin list is a social graph, so the set itself does not go
@@ -219,7 +224,7 @@ func HandlePeerKeyPinGet(d Deps, req proto.PeerKeyPinGetRequest) proto.BaseRespo
 		return proto.BaseResponse{Success: true, Data: proto.PeerKeyPinGetResponseData{Found: false}}
 	}
 
-	info := pinInfo(req.AccountID, *pin)
+	info := pinInfo(req.OwnerAccountID, req.AccountID, *pin)
 	d.Logger.Println("peer key pin get successful")
 	return proto.BaseResponse{Success: true, Data: proto.PeerKeyPinGetResponseData{Found: true, Pin: &info}}
 }
@@ -290,6 +295,11 @@ func HandlePeerKeyPinVerify(d Deps, req proto.PeerKeyPinVerifyRequest) proto.Bas
 	pin.VerifiedAt = now
 	pin.LastSeenAt = now
 	pin.LastRotationFingerprint = ""
+	// A human comparison is not a log proof. A proof recorded for the key
+	// being confirmed stays; one for a different key is dropped.
+	if !pin.KeyTransparencyVerified(req.OwnerAccountID, req.AccountID) {
+		pin.KeyTransparency = nil
+	}
 
 	if err := keychain.SavePeerKeyPin(d.Store, req.OwnerAccountID, req.AccountID, pin); err != nil {
 		d.Logger.Printf("peer key pin verify error: failed to save pin: %v", err)
