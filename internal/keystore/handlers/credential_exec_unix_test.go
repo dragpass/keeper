@@ -456,3 +456,40 @@ func TestRunCredentialExec_TimeoutKillsTheGrandchild(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestRunCredentialExec_NormalExitKillsTheBackgroundGrandchild — safeguard 4
+// is about the request, not only the timeout. A child that detaches a
+// grandchild (stdio redirected away, so the pipes close) and exits at once
+// must not leave that grandchild running with the credential in its
+// environment after the response has gone back.
+func TestRunCredentialExec_NormalExitKillsTheBackgroundGrandchild(t *testing.T) {
+	sh := credExecFixtureShell(t)
+	args := []string{"-c", `sleep 30 >/dev/null 2>&1 </dev/null & printf "%s\n" "$!"`}
+
+	result, err := runCredentialExec(sh, args, t.TempDir(), cleanExecEnv(nil), 10*time.Second, defaultCredentialExecMaxStream)
+	if err != nil {
+		t.Fatalf("runCredentialExec: %v", err)
+	}
+	if result.TimedOut {
+		t.Fatal("timed_out = true; the child exits immediately")
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", result.ExitCode)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(result.Stdout)))
+	if convErr != nil || pid <= 0 {
+		t.Fatalf("could not read the grandchild pid from %q: %v", result.Stdout, convErr)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return // gone
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("grandchild pid %d outlived a request that exited normally", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
