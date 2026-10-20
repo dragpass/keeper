@@ -59,8 +59,9 @@ func (r SignRequestRequest) Validate() error {
 
 // SignAppSessionRefreshRequest carries the fields of a dp-app-refresh-v1
 // canonical. Keeper joins them itself, so a caller cannot get any other
-// string signed through this action. The Local RPC route fills Origin from
-// the paired session; a Native Messaging caller names it.
+// string signed through this action. The action is App-only: the Local RPC
+// route fills Origin from the paired session, and a Native Messaging frame,
+// which could name any origin, is refused before the handler.
 type SignAppSessionRefreshRequest struct {
 	Origin     string `json:"origin"`
 	Timestamp  string `json:"timestamp"`
