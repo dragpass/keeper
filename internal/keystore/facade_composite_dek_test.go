@@ -179,7 +179,8 @@ func TestHandleRequest_DEKRotateToDeviceKey_FullFlow(t *testing.T) {
 		`{"action":"dek_rotate_to_device_key","request_id":"r-rotate","payload":{"password":"login-pw","encrypted_dek_b64":%q}}`,
 		signupData.PasswordWrappedDEKB64,
 	)
-	rotateResp := app.HandleRequest([]byte(rotateMsg))
+	// dek_rotate_to_device_key is App-only (the App's sign-in restore route).
+	rotateResp := app.HandleAppRequest("session", "", []byte(rotateMsg))
 	if !rotateResp.Success {
 		t.Fatalf("rotate: %s", rotateResp.Error)
 	}

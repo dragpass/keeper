@@ -24,15 +24,16 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	_ = keychain.SaveArchivePrivateKey(store, archive.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
 	admins := []*crypto.KeyPair{routeKeypair(t), routeKeypair(t)}
-	split := server.app.HandleRequest([]byte(`{"action":"archive_key_split","payload":` + mustJSON(t, proto.ArchiveKeySplitRequest{
+	// The quorum actions are App-only: set up through the App caller.
+	split := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_key_split","payload":`+mustJSON(t, proto.ArchiveKeySplitRequest{
 		ThresholdN: 2, RecipientPublicKeys: []string{admins[0].PublicKey, admins[1].PublicKey},
-	}) + `}`))
+	})+`}`))
 	if !split.Success {
 		t.Fatalf("split: %+v", split)
 	}
 	var splitData proto.ArchiveKeySplitResponseData
 	_ = remarshal(split.Data, &splitData)
-	begun := server.app.HandleRequest([]byte(`{"action":"archive_session_begin"}`))
+	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin"}`))
 	var sessionData proto.ArchiveSessionBeginResponseData
 	_ = remarshal(begun.Data, &sessionData)
 	sessionPub, _ := crypto.ParsePublicKey(sessionData.SessionPublicKey)

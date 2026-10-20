@@ -11,12 +11,13 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
+// App-only: the break-glass quorum runs in the App's organization console.
 func archiveQuorumActions() map[string]action {
 	return map[string]action{
-		proto.ActionArchiveKeySplit:               wrap(handlers.HandleArchiveKeySplit),
-		proto.ActionArchiveShareRewrap:            wrap(handlers.HandleArchiveShareRewrap),
-		proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin),
-		proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd),
-		proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap),
+		proto.ActionArchiveKeySplit:               wrap(handlers.HandleArchiveKeySplit).appOnlyAction(),
+		proto.ActionArchiveShareRewrap:            wrap(handlers.HandleArchiveShareRewrap).appOnlyAction(),
+		proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin).appOnlyAction(),
+		proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd).appOnlyAction(),
+		proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
 	}
 }

@@ -9,7 +9,9 @@ import (
 
 func groupActions() map[string]action {
 	return map[string]action{
-		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf),
+		// The App's recovery: the handle it acts on is opened by an App-only
+		// recovery action.
+		proto.ActionDEKRewrapWithOldKeyToSelf: wrap(handlers.HandleDEKRewrapWithOldKeyToSelf).appOnlyAction(),
 
 		// Group DEK opaque handle
 		proto.ActionGroupSessionOpen:  wrap(handlers.HandleGroupSessionOpen).onMCP(),
