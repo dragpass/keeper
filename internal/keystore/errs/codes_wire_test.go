@@ -31,6 +31,8 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeKeyTransparencyUnverified, "key_transparency_unverified"},
 		{ErrCodeKeyTransparencyFork, "key_transparency_fork"},
 		{ErrCodeKeyTransparencyTrustInvalid, "key_transparency_trust_invalid"},
+		{ErrCodeCredentialNonceInvalid, "credential_nonce_invalid"},
+		{ErrCodeCredentialOutcomeUnknown, "credential_outcome_unknown"},
 		{ErrCodeChatStateInvalidInput, "CHAT_STATE_INVALID_INPUT"},
 		{ErrCodeChatStateNotAuthorized, "CHAT_STATE_NOT_AUTHORIZED"},
 		{ErrCodeChatStateLockTimeout, "CHAT_STATE_LOCK_TIMEOUT"},

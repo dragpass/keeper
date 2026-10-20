@@ -46,6 +46,10 @@ type Deps struct {
 	// so App owns its lifetime and parallel tests do not share entries. A nil
 	// store fails closed: no challenge can be minted and none can be consumed.
 	MessageChallenges *MessageChallengeStore
+	// CredentialNonces is the process-local single-use record behind the
+	// credential sinks (credential_execution_prepare → credential_http_request /
+	// credential_exec_request). A nil store fails closed.
+	CredentialNonces *CredentialNonceStore
 	// AuditAuthorizations is the process-local single-use record of the audit
 	// actions' receipts and permits. A nil store fails closed.
 	AuditAuthorizations *AuditAuthorizationStore

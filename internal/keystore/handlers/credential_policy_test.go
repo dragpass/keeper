@@ -13,7 +13,7 @@ import (
 
 func TestCanonicalCredentialPolicyMatchesServerFormat(t *testing.T) {
 	p := credTestPolicy([]string{"z.example", "a.example"}, []string{"POST", "GET"})
-	got := canonicalCredentialPolicy(p)
+	got := canonicalCredentialPolicyBody(p)
 	want := "entry_3|1|a.example,z.example|GET,POST|/*|13:Authorization23:Bearer {{secret.token}}|false|false|z.example|/x|POST|2100-01-01T00:00:00Z"
 	if got != want {
 		t.Fatalf("canonical policy = %q, want %q", got, want)
@@ -39,11 +39,11 @@ func credSharedFixturePolicy() proto.CredentialPolicy {
 	}
 }
 
-// TestCanonicalCredentialPolicy_SharedFixture — 공유 fixture 의 현재 canonical.
-// 이 리터럴이 바뀌면 이미 배포된 서버가 서명한 정책을 Keeper 가 더는 검증하지
-// 못한다는 뜻이다.
+// TestCanonicalCredentialPolicy_SharedFixture — the body (the part after the
+// version 2 binding fields) of the shared fixture. ariadne asserts the same
+// literal; a one-byte difference breaks every resolve signature.
 func TestCanonicalCredentialPolicy_SharedFixture(t *testing.T) {
-	got := canonicalCredentialPolicy(credSharedFixturePolicy())
+	got := canonicalCredentialPolicyBody(credSharedFixturePolicy())
 	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
 		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
 		"2026-07-18T12:00:00Z"
@@ -59,7 +59,7 @@ func TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate(t *testing.T) 
 	p := credSharedFixturePolicy()
 	p.HeaderTemplate = map[string]string{}
 	p.QueryTemplate = map[string]string{"api_key": "{{secret.token}}"}
-	got := canonicalCredentialPolicy(p)
+	got := canonicalCredentialPolicyBody(p)
 	want := "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
 		"|false|false|api.example.com|/v1/users|GET|" +
 		"2026-07-18T12:00:00Z|7:api_key16:{{secret.token}}"
@@ -68,13 +68,13 @@ func TestCanonicalCredentialPolicy_SharedFixtureWithQueryTemplate(t *testing.T) 
 	}
 }
 
-// TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat — nil 과 빈 map
-// 은 자리를 만들지 않는다. 여기가 깨지면 기존 credential 의 서명이 전부 깨진다.
+// TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat — nil and an
+// empty map add no slot to the body, on both sides.
 func TestCanonicalCredentialPolicy_EmptyQueryTemplateKeepsOldFormat(t *testing.T) {
-	base := canonicalCredentialPolicy(credSharedFixturePolicy())
+	base := canonicalCredentialPolicyBody(credSharedFixturePolicy())
 	empty := credSharedFixturePolicy()
 	empty.QueryTemplate = map[string]string{}
-	if got := canonicalCredentialPolicy(empty); got != base {
+	if got := canonicalCredentialPolicyBody(empty); got != base {
 		t.Fatalf("빈 query_template 이 canonical 을 바꿨다: %q, want %q", got, base)
 	}
 }
@@ -100,7 +100,7 @@ func credSharedExecFixturePolicy() proto.CredentialPolicy {
 // ariadne 의 TestCanonicalPolicyString_SharedExecFixture 가 같은 리터럴을 만든다.
 // 두 저장소가 한 자리라도 어긋나면 모든 exec resolve 의 서명 검증이 깨진다.
 func TestCanonicalCredentialPolicy_SharedExecFixture(t *testing.T) {
-	got := canonicalCredentialPolicy(credSharedExecFixturePolicy())
+	got := canonicalCredentialPolicyBody(credSharedExecFixturePolicy())
 	want := "11111111-1111-1111-1111-111111111111|3|||||false|false||||" +
 		"2026-07-18T12:00:00Z|11:/usr/bin/gh|11:/usr/bin/gh,3:api,4:user|9:/tmp/work|" +
 		"8:GH_TOKEN16:{{secret.token}}"
@@ -109,11 +109,10 @@ func TestCanonicalCredentialPolicy_SharedExecFixture(t *testing.T) {
 	}
 }
 
-// TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies — exec 필드가
-// 생긴 뒤에도 HTTP 정책의 canonical 은 바이트 단위로 같다. 0.0.27 이 서명 검증
-// 하던 문자열이 그대로여야 옛 서버가 서명한 정책이 계속 검증된다.
+// TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies — empty exec
+// fields add nothing to an HTTP policy's body.
 func TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies(t *testing.T) {
-	base := canonicalCredentialPolicy(credSharedFixturePolicy())
+	base := canonicalCredentialPolicyBody(credSharedFixturePolicy())
 	const want = "11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
 		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
 		"2026-07-18T12:00:00Z"
@@ -126,7 +125,7 @@ func TestCanonicalCredentialPolicy_ExecFieldsDoNotTouchHTTPPolicies(t *testing.T
 	empty.ExecExecutable = ""
 	empty.ExecArgv = nil
 	empty.ExecCwd = ""
-	if got := canonicalCredentialPolicy(empty); got != base {
+	if got := canonicalCredentialPolicyBody(empty); got != base {
 		t.Fatalf("빈 exec 필드가 canonical 을 바꿨다: %q, want %q", got, base)
 	}
 }
@@ -162,8 +161,8 @@ func TestCanonicalCredentialPolicy_ExecPathsAreLengthPrefixed(t *testing.T) {
 	b.ExecArgv = []string{"/usr/bin/gh|9:/tmp"}
 	b.ExecCwd = "/tmp|/work"
 
-	if canonicalCredentialPolicy(a) == canonicalCredentialPolicy(b) {
-		t.Fatalf("'|' 를 담은 경로 두 벌이 같은 canonical 이 됐다: %q", canonicalCredentialPolicy(a))
+	if canonicalCredentialPolicyBody(a) == canonicalCredentialPolicyBody(b) {
+		t.Fatalf("'|' 를 담은 경로 두 벌이 같은 canonical 이 됐다: %q", canonicalCredentialPolicyBody(a))
 	}
 }
 
@@ -260,5 +259,27 @@ func TestCredentialPolicyValidateRequiresSignatureEnvelope(t *testing.T) {
 	}
 	if err := req.Validate(); err == nil {
 		t.Fatal("unsigned credential policy must fail validation")
+	}
+}
+
+// TestCanonicalCredentialPolicy_SharedFixtureVersion2 — the version 2 canonical
+// of the shared fixture with a nonce, a query with a duplicate parameter and a
+// body digest. ariadne's TestCanonicalPolicyString_SharedFixtureVersion2 asserts
+// the same literal; the two must never differ by one byte.
+func TestCanonicalCredentialPolicy_SharedFixtureVersion2(t *testing.T) {
+	p := credSharedFixturePolicy()
+	p.PolicyVersion = 2
+	p.ExecutionNonce = "Zm9vYmFyLWNyZWRlbnRpYWwtbm9uY2UtZml4dHVyZTA"
+	p.TargetQuery = "a=1&b=2&b=3"
+	p.BodySHA256 = "4d4bbe59c6aad22442cde199a6a8a5f034405fcd78fb5a81c24ef249de1c45f1"
+	got := canonicalCredentialPolicy(p)
+	want := "dragpass.credential-policy|2|" +
+		"43:Zm9vYmFyLWNyZWRlbnRpYWwtbm9uY2UtZml4dHVyZTA|11:a=1&b=2&b=3|" +
+		"64:4d4bbe59c6aad22442cde199a6a8a5f034405fcd78fb5a81c24ef249de1c45f1|" +
+		"11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
+		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
+		"2026-07-18T12:00:00Z"
+	if got != want {
+		t.Fatalf("canonical policy = %q, want %q", got, want)
 	}
 }
