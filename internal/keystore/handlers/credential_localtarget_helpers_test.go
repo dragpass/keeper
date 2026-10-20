@@ -57,6 +57,7 @@ func localTargetRequest(t *testing.T, deps Deps, s *localTargetServer) proto.Cre
 	credJSON := `{"type":"api_token","label":"t","secret":{"token":"SUPER_SECRET_TOKEN_XYZ"}}`
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw, credJSON, credTestAAD)
 	policy := credTestPolicy([]string{hostOf(t, s.url)}, []string{"GET"})
+	policy = armCredentialPolicy(t, deps, policy, s.url+"/x", nil)
 	return proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,

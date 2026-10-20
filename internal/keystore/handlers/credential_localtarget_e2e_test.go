@@ -4,6 +4,8 @@ package handlers
 
 import (
 	"errors"
+
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"net"
 	"strconv"
 	"testing"
@@ -96,5 +98,25 @@ func TestLocalTarget_SignatureIsStillRequired(t *testing.T) {
 	}
 	if s.conns.Load() != 0 {
 		t.Fatalf("target saw %d connections, want 0", s.conns.Load())
+	}
+}
+
+// The local target changes the dial check only: one signed policy still runs
+// once.
+func TestLocalTarget_NonceIsStillSingleUse(t *testing.T) {
+	requireNoLocalTargetSeams(t)
+	s := newLocalTargetServer(t)
+	configureLocalTarget(t, strconv.Itoa(s.port), s.caFile)
+	deps, _, _ := newTestDeps(t)
+	req := localTargetRequest(t, deps, s)
+	if resp := HandleCredentialHTTPRequest(deps, req); !resp.Success {
+		t.Fatalf("first submission refused: %s (%s)", resp.Error, resp.ErrorCode)
+	}
+	resp := HandleCredentialHTTPRequest(deps, req)
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeCredentialNonceInvalid) {
+		t.Fatalf("second submission = %+v, want credential_nonce_invalid", resp)
+	}
+	if s.hits.Load() != 1 {
+		t.Fatalf("target saw %d requests, want 1", s.hits.Load())
 	}
 }
