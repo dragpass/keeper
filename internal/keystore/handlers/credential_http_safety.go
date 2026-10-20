@@ -4,7 +4,7 @@
 // each safeguard on its own.
 //
 // Resident helpers:
-//   - normalizeHost           — lowercase, strip port, strip trailing dot
+//   - effectiveAuthority      — lowercase hostname, trailing dot dropped, port or 443
 //   - hostAllowed / methodAllowed — policy re-validation (safeguard 1)
 //   - isBlockedIP             — SSRF private/loopback/link-local/ULA classifier (safeguard 2)
 //   - newSecureHTTPClient     — TLS-only, redirect-blocked, connect-time IP re-check client (safeguards 2/3/4/6)
@@ -61,31 +61,44 @@ var testTLSConfigHook func(*tls.Config)
 // the dedicated SSRF test leaves it false to prove loopback is refused.
 var testAllowLoopbackDial bool
 
-// normalizeHost lowercases the host, drops any port, and strips a single
-// trailing dot (the FQDN root label) so allowlist comparison is stable.
-func normalizeHost(host string) string {
-	host = strings.TrimSpace(host)
-	// Strip port if present. SplitHostPort fails when there is no port, in
-	// which case the original host is used as-is.
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+// effectiveAuthority is the one form a target host is compared in:
+// "<hostname>:<port>", with the hostname lower-cased and a single trailing dot
+// dropped, and the port taken from the authority or, when it has none, 443.
+// The sink is HTTPS-only (enforceHTTPSURL), so 443 is the only default there
+// is; this never makes a plain-HTTP port acceptable. IPv6 literals keep their
+// brackets through net.JoinHostPort. An authority that does not parse, or
+// whose port is not 1..65535, yields "" and matches nothing.
+//
+// ariadne's normalizeTargetHost stores and signs the same target with ":443"
+// dropped and any other port kept, so a signature over "host" means port 443
+// and one over "host:8443" means 8443, on both sides.
+func effectiveAuthority(authority string) string {
+	a := strings.ToLower(strings.TrimSpace(authority))
+	host, port := a, "443"
+	if h, p, err := net.SplitHostPort(a); err == nil {
+		host, port = h, p
+	} else if strings.HasPrefix(a, "[") && strings.HasSuffix(a, "]") {
+		host = a[1 : len(a)-1]
 	}
-	host = strings.ToLower(host)
 	host = strings.TrimSuffix(host, ".")
-	return host
+	n, err := strconv.Atoi(port)
+	if host == "" || err != nil || n < 1 || n > 65535 {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(n))
 }
 
-// hostAllowed reports whether host exactly matches one of the policy's allowed
-// hosts after normalization. There is no wildcard / suffix matching — exact
-// match only, so a policy for api.github.com cannot be widened to
-// evil.api.github.com.
+// hostAllowed reports whether host is one of the policy's allowed hosts,
+// compared as effective authorities (hostname and port). There is no wildcard
+// or suffix matching, so a policy for api.github.com cannot be widened to
+// evil.api.github.com, and an entry without a port allows 443 only.
 func hostAllowed(host string, allowed []string) bool {
-	h := normalizeHost(host)
+	h := effectiveAuthority(host)
 	if h == "" {
 		return false
 	}
 	for _, a := range allowed {
-		if normalizeHost(a) == h {
+		if effectiveAuthority(a) == h {
 			return true
 		}
 	}

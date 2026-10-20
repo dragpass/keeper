@@ -77,7 +77,7 @@ func credExecRoundTrip(
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 	req := credExecRequest(t, groupRaw, handle, executable, args, cwd, mutate)
 
-	resp := HandleCredentialExecRequest(deps, req)
+	resp := handleArmedExec(t, deps, req)
 	if !resp.Success {
 		return proto.CredentialExecResponseData{}, resp, log
 	}

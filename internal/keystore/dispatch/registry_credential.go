@@ -16,7 +16,8 @@ import (
 
 func credentialActions() map[string]action {
 	return map[string]action{
-		proto.ActionCredentialHTTPRequest: wrap(handlers.HandleCredentialHTTPRequest).onMCP(),
-		proto.ActionCredentialExecRequest: wrap(handlers.HandleCredentialExecRequest).onMCP(),
+		proto.ActionCredentialHTTPRequest:      wrap(handlers.HandleCredentialHTTPRequest).onMCP(),
+		proto.ActionCredentialExecRequest:      wrap(handlers.HandleCredentialExecRequest).onMCP(),
+		proto.ActionCredentialExecutionPrepare: wrap(handlers.HandleCredentialExecutionPrepare).onMCP(),
 	}
 }

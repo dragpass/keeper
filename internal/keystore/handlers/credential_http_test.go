@@ -86,7 +86,9 @@ func sealCredentialForTest(t *testing.T, groupRaw []byte, credJSON string, aad s
 		base64.StdEncoding.EncodeToString([]byte(aad))
 }
 
-// hostOf returns the host[:port] of a URL for use in allowed_hosts.
+// hostOf returns the authority (host:port) of a URL for use in allowed_hosts
+// and target_host. Test servers listen on a random port, and the port is part
+// of the target (effectiveAuthority).
 func hostOf(t *testing.T, rawURL string) string {
 	t.Helper()
 	i := strings.Index(rawURL, "://")
@@ -96,9 +98,6 @@ func hostOf(t *testing.T, rawURL string) string {
 	rest := rawURL[i+3:]
 	if s := strings.IndexByte(rest, '/'); s >= 0 {
 		rest = rest[:s]
-	}
-	if h, _, err := net.SplitHostPort(rest); err == nil {
-		return h
 	}
 	return rest
 }
@@ -142,7 +141,7 @@ func credTestRoundTrip(t *testing.T, method string, serverHandler http.HandlerFu
 	policy := credTestPolicy([]string{hostOf(t, ts.URL)}, allowedMethods)
 	policy.HeaderTemplate = headerTemplate
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -202,7 +201,7 @@ func TestCredentialHTTP_HostNotAllowed_Rejected(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"x"}}`, credTestAAD)
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -240,7 +239,7 @@ func TestCredentialHTTP_NonHTTPS_Rejected(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"x"}}`, credTestAAD)
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -276,7 +275,7 @@ func TestCredentialHTTP_PrivateIP_Blocked(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"x"}}`, credTestAAD)
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -338,7 +337,7 @@ func TestCredentialHTTP_ResponseTruncated(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"x"}}`, credTestAAD)
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -621,7 +620,7 @@ func TestCredentialHTTP_AADSwap_FailsOpen(t *testing.T) {
 		`{"type":"api_token","secret":{"token":"x"}}`, "org_9|entry_3|credential|1|1")
 	wrongAAD := base64.StdEncoding.EncodeToString([]byte("org_9|entry_4|credential|1|1"))
 
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,
@@ -655,7 +654,7 @@ func TestCredentialHTTP_UnknownSecretKey_Rejected(t *testing.T) {
 
 func TestCredentialHTTP_BadHandle_NotFound(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		IVB64:          base64.StdEncoding.EncodeToString(make([]byte, 12)),
 		CiphertextB64:  base64.StdEncoding.EncodeToString(make([]byte, 32)),

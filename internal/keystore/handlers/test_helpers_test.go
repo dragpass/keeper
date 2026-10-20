@@ -35,6 +35,7 @@ func newTestDeps(t *testing.T) (Deps, *testdouble.MemoryLogger, *testdouble.Memo
 		RecoverySessions:    sessions.NewRecoverySessionStore(sessions.RecoverySessionTTL),
 		RecoveryKeySessions: sessions.NewRecoveryKeySessionStore(sessions.RecoveryKeySessionTTL),
 		MessageChallenges:   NewMessageChallengeStore(),
+		CredentialNonces:    NewCredentialNonceStore(),
 	}, log, store
 }
 

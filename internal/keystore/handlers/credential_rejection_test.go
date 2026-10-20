@@ -271,7 +271,7 @@ func TestCredentialHTTP_RejectionStagesAreStable(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(t, groupRaw, &req)
 			}
-			assertCredRejection(t, HandleCredentialHTTPRequest(deps, req), log, tc.wantCode, tc.wantError)
+			assertCredRejection(t, handleArmedHTTP(t, deps, req), log, tc.wantCode, tc.wantError)
 		})
 	}
 }
@@ -460,7 +460,7 @@ func TestCredentialExec_RejectionStagesAreStable(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(t, groupRaw, &req)
 			}
-			assertCredRejection(t, HandleCredentialExecRequest(deps, req), log, tc.wantCode, tc.wantError)
+			assertCredRejection(t, handleArmedExec(t, deps, req), log, tc.wantCode, tc.wantError)
 		})
 	}
 }

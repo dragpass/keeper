@@ -70,6 +70,7 @@ func (a *App) HandlersDeps() handlers.Deps {
 		Clipboard:           a.Clipboard,
 		MessageChallenges:   a.MessageChallenges,
 		AuditAuthorizations: a.AuditAuthorizations,
+		CredentialNonces:    a.CredentialNonces,
 		KeyTransparency:     a.KeyTransparency,
 	}
 }

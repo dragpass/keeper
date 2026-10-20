@@ -96,7 +96,7 @@ func credQueryRoundTrip(
 	if mutate != nil {
 		mutate(&req)
 	}
-	return HandleCredentialHTTPRequest(deps, req), obs, log
+	return handleArmedHTTP(t, deps, req), obs, log
 }
 
 // assertNoSecretAnywhere fails when the secret, its percent-encoded form, or the
@@ -265,12 +265,12 @@ func TestCredentialHTTP_QueryTemplate_TransportErrorCarriesNoURL(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"`+credQuerySecret+`"}}`, credTestAAD)
 
-	policy := credTestPolicy([]string{"127.0.0.1"}, []string{"GET"})
+	policy := credTestPolicy([]string{"127.0.0.1:1"}, []string{"GET"})
 	policy.HeaderTemplate = map[string]string{}
 	policy.QueryTemplate = map[string]string{"api_key": "{{secret.token}}"}
 
 	// 아무도 듣지 않는 포트 — client.Do 가 dial 단계에서 실패한다.
-	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{
+	resp := handleArmedHTTP(t, deps, proto.CredentialHTTPRequest{
 		GroupHandle:    handle,
 		IVB64:          ivB64,
 		CiphertextB64:  ctB64,

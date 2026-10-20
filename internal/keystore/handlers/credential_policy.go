@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"sort"
@@ -14,7 +16,31 @@ import (
 
 const credentialPolicySignatureAlg = "rsa-pss-sha256"
 
+// credentialPolicyCanonicalPrefix opens every version 2 canonical. A version 1
+// canonical starts with an entry UUID, so no signature over one can verify as
+// the other.
+const credentialPolicyCanonicalPrefix = "dragpass.credential-policy|2|"
+
+// canonicalCredentialPolicy is the version 2 signing input:
+//
+//	dragpass.credential-policy|2|<len>:<execution_nonce>|<len>:<target_query>|<len>:<body_sha256>|<body>
+//
+// The three binding fields sit at fixed positions and are length-prefixed, so
+// a query or nonce containing "|" cannot move a boundary. <body> is the field
+// list every earlier format signed (canonicalCredentialPolicyBody). ariadne's
+// canonicalPolicyString builds the same bytes; both repositories assert the
+// same literal for a shared fixture.
 func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
+	return credentialPolicyCanonicalPrefix +
+		canonicalCredentialLengthPrefixed(p.ExecutionNonce) + "|" +
+		canonicalCredentialLengthPrefixed(p.TargetQuery) + "|" +
+		canonicalCredentialLengthPrefixed(p.BodySHA256) + "|" +
+		canonicalCredentialPolicyBody(p)
+}
+
+// canonicalCredentialPolicyBody is the target, template and command part of
+// the canonical.
+func canonicalCredentialPolicyBody(p proto.CredentialPolicy) string {
 	hosts := append([]string(nil), p.AllowedHosts...)
 	methods := append([]string(nil), p.AllowedMethods...)
 	paths := append([]string(nil), p.AllowedPathPatterns...)
@@ -35,10 +61,8 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		p.Method,
 		p.Expiry,
 	}
-	// Both trailing blocks are appended only when their template is non-empty, so
-	// every policy that injects into headers or cookies canonicalizes to exactly
-	// the bytes it did before either field existed — a signature made by a server
-	// that predates them still verifies. The slots are unambiguous: expiry is
+	// Both trailing blocks are appended only when their template is non-empty.
+	// The slots are unambiguous: expiry is
 	// RFC3339 (validated by time.Parse before this is called) and cannot contain
 	// "|", every part of both blocks is length-prefixed and self-delimiting, and
 	// a policy injects into exactly one place, so query and exec are never both
@@ -93,7 +117,8 @@ func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) 
 	if path == "" {
 		path = "/"
 	}
-	return normalizeHost(u.Host) == normalizeHost(p.TargetHost) &&
+	target := effectiveAuthority(u.Host)
+	return target != "" && target == effectiveAuthority(p.TargetHost) &&
 		path == p.TargetPath && strings.EqualFold(strings.TrimSpace(method), strings.TrimSpace(p.Method))
 }
 
@@ -133,6 +158,21 @@ func validateCredentialPolicyBinding(aad []byte, p proto.CredentialPolicy) error
 }
 
 func verifyCredentialPolicy(d Deps, aad []byte, p proto.CredentialPolicy) (bool, proto.BaseResponse) {
+	// Only version 2 binds the execution nonce, the query and the body. A policy
+	// in any other format is refused here, before its signature is checked, so
+	// there is no path on which an older format is accepted instead.
+	if p.PolicyVersion != proto.CredentialPolicyVersion {
+		return false, errs.CodeResponse(errs.ErrCodeValidation,
+			"credential policy version is not supported; only policy_version 2 is accepted")
+	}
+	if len(p.ExecutionNonce) != proto.CredentialExecutionNonceChars {
+		return false, errs.CodeResponse(errs.ErrCodeValidation,
+			"policy.execution_nonce must be "+strconv.Itoa(proto.CredentialExecutionNonceChars)+" Base64URL characters")
+	}
+	if !isCredentialBodyDigest(p.BodySHA256) {
+		return false, errs.CodeResponse(errs.ErrCodeValidation,
+			"policy.body_sha256 must be empty or 64 lowercase hex characters")
+	}
 	if p.SignatureAlg != credentialPolicySignatureAlg {
 		return false, errs.CodeResponse(errs.ErrCodeValidation, "unsupported credential policy signature algorithm")
 	}
@@ -147,4 +187,58 @@ func verifyCredentialPolicy(d Deps, aad []byte, p proto.CredentialPolicy) (bool,
 		return false, errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
 	}
 	return verifyServerSig(d, canonicalCredentialPolicy(p), p.Signature, p.ServerKeyVersion, "credential policy")
+}
+
+// isCredentialBodyDigest accepts "" (no body) or a lowercase hex SHA-256.
+func isCredentialBodyDigest(digest string) bool {
+	if digest == "" {
+		return true
+	}
+	if len(digest) != 64 {
+		return false
+	}
+	for i := 0; i < len(digest); i++ {
+		c := digest[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// credentialBodyDigest is the lowercase hex SHA-256 of the exact bytes the
+// request will carry, or "" when it carries none. The server signs the same
+// value over the bytes it received.
+func credentialBodyDigest(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// requestQueryMatchesPolicy checks that target_url carries exactly the signed
+// query, and in a form whose bytes are the bytes written on the request line:
+// no fragment, no empty "?", and only printable ASCII. The comparison is byte
+// for byte, so parameter order, duplicates and percent-encoding are all bound.
+func requestQueryMatchesPolicy(targetURL string, p proto.CredentialPolicy) error {
+	if strings.Contains(targetURL, "#") {
+		return fmt.Errorf("target_url must not carry a fragment")
+	}
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("invalid target_url")
+	}
+	if u.ForceQuery && u.RawQuery == "" {
+		return fmt.Errorf("target_url must not end with an empty query")
+	}
+	for i := 0; i < len(u.RawQuery); i++ {
+		if c := u.RawQuery[i]; c < 0x21 || c > 0x7e {
+			return fmt.Errorf("target_url query must be percent-encoded printable ASCII")
+		}
+	}
+	if u.RawQuery != p.TargetQuery {
+		return fmt.Errorf("request query does not match signed target_query")
+	}
+	return nil
 }
