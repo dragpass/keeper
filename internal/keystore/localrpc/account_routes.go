@@ -7,7 +7,7 @@ import (
 )
 
 // accountRoutes is the account key rotation and the device wipe the App runs
-// from its settings, the same actions the Native Messaging path offers.
+// from its settings. The rotation's prepare and promote are App-only actions.
 // The rotation's group DEK rewrap names no target: Keeper binds it to its own
 // pending key, so the App cannot point a self-wrap at any other key.
 var accountRoutes = map[string]appRoute{
