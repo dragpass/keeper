@@ -2,6 +2,7 @@ package localrpc
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -374,6 +375,43 @@ func TestMalformedSealedEnvelopesAreRefused(t *testing.T) {
 	server := newTestServer(t)
 	session, csrf := openTestSession(t, server)
 	good, _ := sealFor(t, server, session, "/v1/status", "{}")
+	assertMalformedEnvelopesRefused(t, server, session, csrf, good)
+}
+
+// An earlier "A"+ct[1:] tamper left the ciphertext unchanged whenever it
+// already started with "A" (about 1 run in 64). Force that case: the bit
+// flip must still change the ciphertext and the envelope must be refused.
+func TestFlippedCiphertextStartingWithAIsRefused(t *testing.T) {
+	server := newTestServer(t)
+	session, csrf := openTestSession(t, server)
+	for attempt := 0; attempt < 10_000; attempt++ {
+		good, _ := sealFor(t, server, session, "/v1/status", "{}")
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(good), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if ct, _ := envelope["ct"].(string); strings.HasPrefix(ct, "A") {
+			assertMalformedEnvelopesRefused(t, server, session, csrf, good)
+			return
+		}
+	}
+	t.Fatal("no sealed envelope with a ciphertext starting with A in 10000 attempts")
+}
+
+// flipCiphertextBit returns ct with the low bit of its first decoded byte
+// flipped, so the result always differs from ct and stays valid base64url.
+func flipCiphertextBit(t *testing.T, ct string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(ct)
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("ciphertext %q is not non-empty base64url: %v", ct, err)
+	}
+	raw[0] ^= 0x01
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func assertMalformedEnvelopesRefused(t *testing.T, server *Server, session, csrf, good string) {
+	t.Helper()
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(good), &envelope); err != nil {
 		t.Fatal(err)
@@ -386,6 +424,11 @@ func TestMalformedSealedEnvelopesAreRefused(t *testing.T) {
 		if value == nil {
 			delete(copied, key)
 		} else {
+			// A tamper that reproduces the original value would send
+			// the good envelope and test nothing.
+			if original, ok := envelope[key]; ok && fmt.Sprint(original) == fmt.Sprint(value) {
+				t.Fatalf("tampered %s equals the original %v", key, original)
+			}
 			copied[key] = value
 		}
 		raw, _ := json.Marshal(copied)
@@ -401,7 +444,7 @@ func TestMalformedSealedEnvelopesAreRefused(t *testing.T) {
 		"no ciphertext":               with("ct", nil),
 		"short nonce":                 with("nonce", "AAAA"),
 		"truncated ciphertext":        with("ct", ct[:len(ct)-4]),
-		"flipped ciphertext":          with("ct", "A"+ct[1:]),
+		"flipped ciphertext":          with("ct", flipCiphertextBit(t, ct)),
 		"nonce not base64url":         with("nonce", nonce[:len(nonce)-1]+"+"),
 		"not json":                    "action=status",
 		"json array":                  "[" + good + "]",
@@ -579,7 +622,14 @@ func TestSigningRequestReplayAcrossSessions(t *testing.T) {
 		t.Fatalf("the same signing nonce resealed on A=%d, want 409", got)
 	}
 	stale := strings.Replace(body, fmt.Sprintf(`"%d"`, server.now().Unix()), fmt.Sprintf(`"%d"`, server.now().Unix()-61), 1)
-	stale = strings.Replace(stale, "AAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBB", 1)
+	if stale == body {
+		t.Fatal("the stale timestamp replacement changed nothing")
+	}
+	reNonced := strings.Replace(stale, "AAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBB", 1)
+	if reNonced == stale {
+		t.Fatal("the nonce replacement changed nothing")
+	}
+	stale = reNonced
 	if got := localRequest(server, http.MethodPost, "/v1/request-signature", stale, sessionB, csrfB).Code; got != http.StatusBadRequest {
 		t.Fatalf("stale signing timestamp=%d, want 400", got)
 	}
