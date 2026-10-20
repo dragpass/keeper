@@ -358,6 +358,36 @@ func conversation(k *keeper, conv string) conversationPermit {
 	return conversationPermit{permit: p}
 }
 
+// A Welcome whose tree holds two leaves of one account. A modified client
+// creates a room and seats Carol's device and a second device of her account
+// side by side, which no honest Keeper builds and no receiver applies on a
+// Commit (one active device per account, Q14). Carol's second device holds a
+// declaration her account key signed (a takeover declaration without the old
+// device's approval would do).
+func TestMLSMaliciousWelcome_ATreeWithTwoLeavesOfOneAccount(t *testing.T) {
+	e2eStateRoot(t)
+	alice, carol, mallory := newKeeper(t, e2eAlice), newKeeper(t, e2eCarol), newKeeper(t, advMallory)
+	carol2 := newTakeoverKeeper(t, carol, e2eDevice2)
+	carolDecl := leafDeclarationOf(t, carol)
+	carol2.declare(proto.MLSLeafReasonRotate, carolDecl.NotBefore+60)
+	adv := mlsadversary.Start(t, leafKeyOf(t, mallory), true)
+	adv.Create([]byte(e2eConv), chatstate.Roles{Kind: chatstate.RolesKindRoom, Owner: advMallory}.Encode())
+	_, welcome := adv.Build(mlsadversary.Commit{Adds: [][]byte{
+		keyPackageBytes(t, alice.keyPackage()),
+		keyPackageBytes(t, carol.keyPackage()),
+		keyPackageBytes(t, carol2.keyPackage()),
+	}, Apply: true})
+	resp := alice.call(proto.MLSJoin, proto.MLSJoinRequest{
+		Permit: alice.permit(), OrgID: e2eOrg, ConversationID: e2eConv, WelcomeB64: advB64(welcome),
+	})
+	if resp.Success {
+		t.Fatalf("alice joined a tree holding two leaves of carol's account: %+v", resp.Data)
+	}
+	if st := alice.status(); st.HasGroupState {
+		t.Fatalf("the refused join left %+v", st)
+	}
+}
+
 func leafDeclarationOf(t *testing.T, k *keeper) proto.MLSLeafDeclaration {
 	t.Helper()
 	var decl proto.MLSLeafDeclaration
