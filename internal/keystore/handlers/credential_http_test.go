@@ -86,7 +86,9 @@ func sealCredentialForTest(t *testing.T, groupRaw []byte, credJSON string, aad s
 		base64.StdEncoding.EncodeToString([]byte(aad))
 }
 
-// hostOf returns the host[:port] of a URL for use in allowed_hosts.
+// hostOf returns the authority (host:port) of a URL for use in allowed_hosts
+// and target_host. Test servers listen on a random port, and the port is part
+// of the target (effectiveAuthority).
 func hostOf(t *testing.T, rawURL string) string {
 	t.Helper()
 	i := strings.Index(rawURL, "://")
@@ -96,9 +98,6 @@ func hostOf(t *testing.T, rawURL string) string {
 	rest := rawURL[i+3:]
 	if s := strings.IndexByte(rest, '/'); s >= 0 {
 		rest = rest[:s]
-	}
-	if h, _, err := net.SplitHostPort(rest); err == nil {
-		return h
 	}
 	return rest
 }

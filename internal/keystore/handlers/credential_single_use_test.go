@@ -406,7 +406,7 @@ func TestCredentialHTTP_RefusedBeforeSend_IsNotOutcomeUnknown(t *testing.T) {
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 	credJSON := `{"type":"api_token","label":"t","secret":{"token":"SUPER_SECRET_TOKEN_XYZ"}}`
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw, credJSON, credTestAAD)
-	policy := credTestPolicy([]string{"127.0.0.1"}, []string{"GET"})
+	policy := credTestPolicy([]string{"127.0.0.1:1"}, []string{"GET"})
 	policy.PolicyVersion = proto.CredentialPolicyVersion
 	policy.ExecutionNonce = mintCredentialNonce(t, deps)
 	resp := HandleCredentialHTTPRequest(deps, proto.CredentialHTTPRequest{

@@ -265,7 +265,7 @@ func TestCredentialHTTP_QueryTemplate_TransportErrorCarriesNoURL(t *testing.T) {
 	ivB64, ctB64, aadB64 := sealCredentialForTest(t, groupRaw,
 		`{"type":"api_token","secret":{"token":"`+credQuerySecret+`"}}`, credTestAAD)
 
-	policy := credTestPolicy([]string{"127.0.0.1"}, []string{"GET"})
+	policy := credTestPolicy([]string{"127.0.0.1:1"}, []string{"GET"})
 	policy.HeaderTemplate = map[string]string{}
 	policy.QueryTemplate = map[string]string{"api_key": "{{secret.token}}"}
 

@@ -117,7 +117,8 @@ func executionTargetMatches(targetURL, method string, p proto.CredentialPolicy) 
 	if path == "" {
 		path = "/"
 	}
-	return normalizeHost(u.Host) == normalizeHost(p.TargetHost) &&
+	target := effectiveAuthority(u.Host)
+	return target != "" && target == effectiveAuthority(p.TargetHost) &&
 		path == p.TargetPath && strings.EqualFold(strings.TrimSpace(method), strings.TrimSpace(p.Method))
 }
 
