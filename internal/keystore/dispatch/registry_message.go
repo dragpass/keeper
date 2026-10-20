@@ -21,8 +21,10 @@ import (
 
 func messageActions() map[string]action {
 	return map[string]action{
-		proto.ActionMessageDisplayPrepare:            direct(handlers.HandleMessageDisplayPrepare),
-		proto.ActionGroupDecryptWithAadForAppDisplay: direct(handlers.HandleGroupDecryptWithAadForAppDisplay).returnsPlaintext(),
+		// The Secure Message display is the App's screen: its plaintext answer
+		// goes to an authenticated App session only.
+		proto.ActionMessageDisplayPrepare:            direct(handlers.HandleMessageDisplayPrepare).appOnlyAction(),
+		proto.ActionGroupDecryptWithAadForAppDisplay: direct(handlers.HandleGroupDecryptWithAadForAppDisplay).returnsPlaintext().appOnlyAction(),
 		proto.ActionMessageSeal:                      wrap(handlers.HandleMessageSeal).appOnlyAction(),
 	}
 }

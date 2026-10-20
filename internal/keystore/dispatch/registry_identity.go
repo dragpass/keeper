@@ -82,8 +82,10 @@ func identityActions() map[string]action {
 		proto.ActionRequestKeyGenerate: wrap(handlers.HandleRequestKeyGenerate),
 		proto.ActionRequestKeyStatus:   wrap(handlers.HandleRequestKeyStatus),
 		proto.ActionSignRequest:        wrap(handlers.HandleSignRequest),
-		// the App's cookie session refresh (dp-app-refresh-v1)
-		proto.ActionSignAppSessionRefresh: wrap(handlers.HandleSignAppSessionRefresh),
+		// the App's cookie session refresh (dp-app-refresh-v1). App-only: the
+		// Local RPC route names the paired session's origin, while a Native
+		// Messaging frame would name any origin it liked.
+		proto.ActionSignAppSessionRefresh: wrap(handlers.HandleSignAppSessionRefresh).appOnlyAction(),
 		// request-signing key rotation
 		proto.ActionRotateRequestKeyPrepare: wrap(handlers.HandleRotateRequestKeyPrepare),
 		proto.ActionRotateRequestKeyPromote: wrap(handlers.HandleRotateRequestKeyPromote),

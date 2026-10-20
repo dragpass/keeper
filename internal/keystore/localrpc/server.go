@@ -323,9 +323,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		return appRequest{}, false
 	}
 	var envelope sealedEnvelope
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil || envelope.Nonce == "" || envelope.Sealed == "" ||
+	if err := decodeStrict(r.Body, &envelope); err != nil || envelope.Nonce == "" || envelope.Sealed == "" ||
 		envelope.Instance != "" || envelope.Timestamp != 0 {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return appRequest{}, false
