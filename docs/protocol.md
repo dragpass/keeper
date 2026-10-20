@@ -686,6 +686,17 @@ the body bytes (empty for no body), and `<body>` is the field list from
 (`canonicalCredentialPolicyBody`). ariadne builds the same bytes; both
 repositories assert the same literal on a shared fixture.
 
+**Test-only local target.** A build with both `keeper_e2e` and
+`keeper_e2e_localtarget` (`make build-e2e-localtarget`) lets the HTTP sink
+connect to a loopback address on the ports listed in
+`KEEPER_E2E_LOCAL_TARGET_PORTS`, and adds the PEM in
+`KEEPER_E2E_LOCAL_TARGET_CA_FILE` to a copy of the system roots. TLS
+verification stays on, and the policy, target, query and body checks run
+before any connection as in every other build. Every other build keeps the
+connect-time refusal of loopback and private addresses and trusts only the
+system roots; a release binary refuses to start with either variable set and
+`make check-release-no-e2e` rejects the tagged binary.
+
 ### Secure message display (app-display plaintext carve-out)
 
 Two actions, one reveal. `message_display_prepare` validates a message context

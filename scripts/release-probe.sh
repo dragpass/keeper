@@ -19,11 +19,13 @@ want="${2:?usage: $0 BINARY VERSION}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# Each switch only a keeper_e2e build reads: the E2E mode, the dev App origin
-# and the root key override.
+# Each switch only a keeper_e2e build reads: the E2E mode, the dev App origin,
+# the root key override, and the local credential target of a
+# keeper_e2e_localtarget build.
 for switch in KEEPER_E2E_MODE=1 \
   DRAGPASS_KEEPER_DEV_APP_ORIGIN=http://localhost:5174 \
-  KEEPER_ROOT_PUBLIC_KEY_BASE64=cm9vdA==; do
+  KEEPER_ROOT_PUBLIC_KEY_BASE64=cm9vdA== \
+  KEEPER_E2E_LOCAL_TARGET_PORTS=8443; do
   if env "$switch" "$bin" version >"$tmp/e2e-out" 2>"$tmp/e2e-err"; then
     echo "probe: $bin ran with $switch; a release build must refuse it" >&2
     exit 1

@@ -27,7 +27,7 @@ LINUX_SIG_ARM64 := $(LINUX_DEB_ARM64).sig
 
 CHECKSUMS_FILE := output/checksums.txt
 
-.PHONY: test test-verbose test-cover test-clipboard-e2e test-e2e-tag
+.PHONY: test test-verbose test-cover test-clipboard-e2e test-e2e-tag test-e2e-localtarget
 
 # ── Tests ───────────────────────────────────────────
 test:
@@ -36,6 +36,11 @@ test:
 # The same suite with the keeper_e2e tag: the E2E-only code and its tests.
 test-e2e-tag:
 	go test -tags keeper_e2e ./... -count=1
+
+# The suite with the test-only local credential target as well
+# (internal/keystore/handlers/credential_localtarget_e2e.go).
+test-e2e-localtarget:
+	go test -tags "keeper_e2e keeper_e2e_localtarget" ./... -count=1
 
 test-verbose:
 	go test ./... -count=1 -v
@@ -73,6 +78,8 @@ MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 ifeq ($(MLS),1)
 MLS_GO_TAGS := -tags mls
 E2E_GO_TAGS := -tags "mls keeper_e2e"
+E2E_LOCALTARGET_GO_TAGS := -tags "mls keeper_e2e keeper_e2e_localtarget"
+HOST_MLS_LIB := $(if $(filter Darwin,$(shell uname -s)),mls-lib-macos,mls-lib)
 LINUX_CGO := 1
 MAC_MLS_LIB := mls-lib-macos
 WIN_MLS_LIB := mls-lib-windows
@@ -80,6 +87,8 @@ LINUX_MLS_LIB := mls-lib
 else
 MLS_GO_TAGS :=
 E2E_GO_TAGS := -tags keeper_e2e
+E2E_LOCALTARGET_GO_TAGS := -tags "keeper_e2e keeper_e2e_localtarget"
+HOST_MLS_LIB :=
 LINUX_CGO := 0
 MAC_MLS_LIB :=
 WIN_MLS_LIB :=
@@ -155,7 +164,7 @@ $(MAC_BIN_AMD64) $(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
 MAC_E2E_BIN_AMD64 := dragpass-keeper-e2e-macos-x86_64
 MAC_E2E_BIN_ARM64 := dragpass-keeper-e2e-macos-arm64
 
-.PHONY: build-e2e-macos-amd64 build-e2e-macos-arm64 check-release-no-e2e
+.PHONY: build-e2e-macos-amd64 build-e2e-macos-arm64 build-e2e-localtarget check-release-no-e2e
 
 build-e2e-macos-amd64: $(MAC_MLS_LIB)
 	@echo "Building macOS x86_64 E2E binary: $(MAC_E2E_BIN_AMD64)..."
@@ -165,13 +174,23 @@ build-e2e-macos-arm64: $(MAC_MLS_LIB)
 	@echo "Building macOS arm64 E2E binary: $(MAC_E2E_BIN_ARM64)..."
 	@CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(E2E_GO_TAGS) -o $(MAC_E2E_BIN_ARM64) .
 
+# An E2E binary for the host that can also send credential requests to a local
+# HTTPS test server (loopback on KEEPER_E2E_LOCAL_TARGET_PORTS, TLS verified
+# against KEEPER_E2E_LOCAL_TARGET_CA_FILE). For real-stack verification only;
+# check-release-no-e2e rejects it.
+E2E_LOCALTARGET_BIN := dragpass-keeper-e2e-localtarget
+build-e2e-localtarget: $(HOST_MLS_LIB)
+	@echo "Building E2E local-target binary: $(E2E_LOCALTARGET_BIN)..."
+	@CGO_ENABLED=1 go build $(E2E_LOCALTARGET_GO_TAGS) -o $(E2E_LOCALTARGET_BIN) .
+
 # Fails when BIN was built with the keeper_e2e tag or carries E2E-only code.
 # The strings survive a stripped binary (-s -w), unlike symbols. Besides the
 # E2E mode they cover the dev App origin opt-in and the root key override; a
 # release build refuses those variables by prefix, so their full names never
 # reach it.
 E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash \
-	DRAGPASS_KEEPER_DEV_APP_ORIGIN KEEPER_ROOT_PUBLIC_KEY_BASE64
+	DRAGPASS_KEEPER_DEV_APP_ORIGIN KEEPER_ROOT_PUBLIC_KEY_BASE64 \
+	KEEPER_E2E_LOCAL_TARGET_PORTS KEEPER_E2E_LOCAL_TARGET_CA_FILE
 
 check-release-no-e2e:
 	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }
