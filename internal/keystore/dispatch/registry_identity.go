@@ -13,16 +13,19 @@ import (
 
 func identityActions() map[string]action {
 	return map[string]action{
-		proto.ActionAuthSignupPrepare:          wrap(handlers.HandleAuthSignupPrepare),
-		proto.ActionAuthRecoveryReissuePrepare: wrap(handlers.HandleAuthRecoveryReissuePrepare),
-		proto.ActionAuthRecoveryBegin:          wrap(handlers.HandleAuthRecoveryBegin),
-		proto.ActionAuthRecoveryPrepare:        wrap(handlers.HandleAuthRecoveryPrepare),
-		proto.ActionAuthRecoveryAbort:          wrap(handlers.HandleAuthRecoveryAbort),
-		proto.ActionAuthSignupAbort:            wrap(handlers.HandleAuthSignupAbort),
+		// Account entry is the App's: signup, recovery, RK24 reissue and the
+		// sign-in with a key one of them staged run only over the App's local
+		// RPC session. The Extension signs in with an active account key only.
+		proto.ActionAuthSignupPrepare:          wrap(handlers.HandleAuthSignupPrepare).appOnlyAction(),
+		proto.ActionAuthRecoveryReissuePrepare: wrap(handlers.HandleAuthRecoveryReissuePrepare).appOnlyAction(),
+		proto.ActionAuthRecoveryBegin:          wrap(handlers.HandleAuthRecoveryBegin).appOnlyAction(),
+		proto.ActionAuthRecoveryPrepare:        wrap(handlers.HandleAuthRecoveryPrepare).appOnlyAction(),
+		proto.ActionAuthRecoveryAbort:          wrap(handlers.HandleAuthRecoveryAbort).appOnlyAction(),
+		proto.ActionAuthSignupAbort:            wrap(handlers.HandleAuthSignupAbort).appOnlyAction(),
 		proto.ActionOrgEmergencySeedDerive:     wrap(handlers.HandleOrgEmergencySeedDerive).appOnlyAction(),
 
-		proto.ActionAuthLoginPendingSignAlias:     wrap(handlers.HandleAuthLoginPendingSignAlias),
-		proto.ActionAuthLoginPendingSignChallenge: wrap(handlers.HandleAuthLoginPendingSignChallenge),
+		proto.ActionAuthLoginPendingSignAlias:     wrap(handlers.HandleAuthLoginPendingSignAlias).appOnlyAction(),
+		proto.ActionAuthLoginPendingSignChallenge: wrap(handlers.HandleAuthLoginPendingSignChallenge).appOnlyAction(),
 
 		proto.ActionGenerateKeypair: wrap(handlers.HandleGenerateKeypair),
 

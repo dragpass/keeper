@@ -249,12 +249,13 @@ func leaseRequired() proto.BaseResponse {
 	}
 }
 
-// appCallerRequired refuses a Native Messaging frame an App-only action. The
-// caller is known from the transport the frame arrived on (HandleRequest
+// appCallerRequired refuses a Native Messaging frame an App-only action: chat,
+// account entry, or the emergency code seed. The wire code keeps its chat name.
+// The caller is known from the transport the frame arrived on (HandleRequest
 // versus an authenticated local RPC session), never from the request.
 func appCallerRequired() proto.BaseResponse {
 	return proto.BaseResponse{
-		Error:     "only the DragPass app may run this chat action",
+		Error:     "only the DragPass app may run this action",
 		ErrorCode: ErrCodeChatAppCallerRequired,
 	}
 }
