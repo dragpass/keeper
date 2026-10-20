@@ -132,7 +132,7 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 				t.Fatalf("%s ran although it was refused", action)
 			}
 		}
-		for _, action := range []string{"ping", "mls_leaf_status", "mls_conversation_status", "org_member_removal_sign", "getpublickey"} {
+		for _, action := range []string{"ping", "org_member_removal_sign", "getpublickey", "peer_key_pin_get", "rotate_user_keypair_status"} {
 			response := app.HandleRequest([]byte(`{"action":"` + action + `"}`))
 			if response.ErrorCode == ErrCodeChatAppCallerRequired || response.ErrorCode == ErrCodeChatRuntimeBusy {
 				t.Fatalf("%s was refused to the Extension (leased=%v): %+v", action, leased, response)
@@ -144,22 +144,37 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 // The App-only set is pinned: every gated action but the two revocations,
 // the room name display open, the Secure Message seal and display, the
 // organization emergency code seed derivation, the App session refresh
-// signature, and account entry.
+// signature, account entry, and the actions only App routes call
+// (appRouteOnlyActions).
 func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 	want := []string{
+		"account_archive_key_generate", "account_binding_set", "account_binding_signout",
+		"archive_key_rotate_abort", "archive_key_rotate_begin", "archive_key_rotate_commit",
+		"archive_key_split", "archive_key_status", "archive_quorum_combine_and_rewrap",
+		"archive_session_begin", "archive_session_end", "archive_share_rewrap",
+		"archive_unwrap_and_rewrap",
 		"auth_login_pending_sign_alias", "auth_login_pending_sign_challenge",
 		"auth_recovery_abort", "auth_recovery_begin", "auth_recovery_prepare",
 		"auth_recovery_reissue_prepare", "auth_signup_abort", "auth_signup_prepare",
 		"chat_state_read_outbox",
+		"dek_rewrap_with_old_key_to_self", "dek_rotate_to_device_key", "dek_rotate_to_new_password",
 		"group_decrypt_with_aad_for_app_display",
 		"message_display_prepare", "message_seal",
 		"mls_commit_build", "mls_commit_confirm",
-		"mls_conversation_forget_removed", "mls_decrypt_batch_for_app_display", "mls_encrypt",
+		"mls_conversation_forget_removed", "mls_conversation_status",
+		"mls_decrypt_batch_for_app_display", "mls_device_revoke_sign", "mls_encrypt",
+		"mls_epoch_comparison",
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",
 		"mls_key_package_generate",
-		"mls_leaf_abort", "mls_leaf_declare", "mls_leaf_promote",
-		"mls_mark_sent", "mls_process", "mls_room_name_open",
+		"mls_leaf_abort", "mls_leaf_declare", "mls_leaf_handover_sign", "mls_leaf_promote",
+		"mls_leaf_status", "mls_leave_request_sign",
+		"mls_mark_sent", "mls_process", "mls_rejoin_request_sign",
+		"mls_room_name_open", "mls_room_name_seal",
 		"org_emergency_seed_derive",
+		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number",
+		"recovery_session_close",
+		"rotate_user_keypair_prepare", "rotate_user_keypair_promote",
+		"savesessioncode",
 		"sign_app_session_refresh",
 	}
 	if got := dispatch.AppOnlyActions(); !slices.Equal(got, want) {
