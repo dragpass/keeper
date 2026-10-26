@@ -57,6 +57,8 @@ type CredentialExecRequest struct {
 	EnvTemplate map[string]string `json:"env_template"`
 
 	Policy CredentialPolicy `json:"policy"`
+	// ExecutionConfirmation — as in CredentialHTTPRequest.
+	ExecutionConfirmation *CredentialExecutionConfirmation `json:"execution_confirmation,omitempty"`
 }
 
 func (r CredentialExecRequest) Validate() error {

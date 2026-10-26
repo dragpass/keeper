@@ -105,6 +105,23 @@ type CredentialHTTPRequest struct {
 	BodyB64       string            `json:"body_b64,omitempty"` // request body, public material
 
 	Policy CredentialPolicy `json:"policy"`
+	// ExecutionConfirmation is required with a personal key source: the
+	// server's fresh word, given immediately before execution, that the token
+	// and the approval behind this policy are still good.
+	ExecutionConfirmation *CredentialExecutionConfirmation `json:"execution_confirmation,omitempty"`
+}
+
+// CredentialExecutionConfirmation is signed by the server key that signs the
+// policy, over "dragpass.credential-execution-confirmation|1|<len>:<nonce>|
+// <len>:<entry_id>|<expiry RFC3339>". It names the policy's execution nonce and
+// entry and lives for seconds.
+type CredentialExecutionConfirmation struct {
+	ExecutionNonce   string `json:"execution_nonce"`
+	EntryID          string `json:"entry_id"`
+	Expiry           string `json:"expiry"`
+	Signature        string `json:"signature"`
+	ServerKeyVersion uint   `json:"server_key_version"`
+	SignatureAlg     string `json:"signature_alg"`
 }
 
 // validateCredentialKeySource enforces "exactly one key source" and the shape of
