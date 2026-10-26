@@ -11,15 +11,28 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"syscall"
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-const nativeProxyTimeout = 10 * time.Second
+// nativeProxyTimeout is how long a proxy waits for the owner's answer to an
+// ordinary request.
+var nativeProxyTimeout = 10 * time.Second
+
+// nativeProxyActionWaits are the longer waits of the two credential sinks:
+// their own timeout (HTTP 30 s, exec 60 s) plus a margin, so the proxy and the
+// owner never give up on a request the sink is still running.
+var nativeProxyActionWaits = map[string]time.Duration{
+	proto.ActionCredentialHTTPRequest: 35 * time.Second,
+	proto.ActionCredentialExecRequest: 65 * time.Second,
+}
+
 const nativeOwnerWait = 5 * time.Second
 
 // NativeRole is what a Chrome-launched Keeper does after looking at the
@@ -38,6 +51,10 @@ const (
 )
 
 var errOwnerUnproven = errors.New("local listener did not prove the Keeper local secret")
+
+// ErrOwnerOutcomeUnknown — the owner received the request and no valid
+// answer came back: it may have run it.
+var ErrOwnerOutcomeUnknown = errors.New("local Keeper owner may have run the request; no answer came back")
 
 func AcquireNativeOwner(address string, secret localsecret.Secret) (NativeRole, net.Listener, *NativeProxy, error) {
 	role, listener, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), nativeOwnerWait)
@@ -189,16 +206,29 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 	if err != nil {
 		return proto.BaseResponse{}, errors.New("native message could not be sealed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), nativeProxyTimeout)
+	wait := nativeProxyWait(message)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	request, err := nativeProxyRequest(ctx, p.address, http.MethodPost, "/v1/native-proxy/message", bytes.NewReader(sealed))
 	if err != nil {
 		return proto.BaseResponse{}, errors.New("native message could not be prepared")
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := nativeProxyClient(nativeProxyTimeout).Do(request)
+	// Once the request is written, the owner may run it whatever happens to
+	// the answer. Failures from then on are an unknown outcome, not a refusal.
+	var written bool
+	request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) { written = info.Err == nil },
+	}))
+	afterWrite := func(message string) error {
+		if written {
+			return fmt.Errorf("%s: %w", message, ErrOwnerOutcomeUnknown)
+		}
+		return errors.New(message)
+	}
+	response, err := nativeProxyClient(wait).Do(request)
 	if err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner did not complete the request")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner did not complete the request")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusConflict {
@@ -212,15 +242,15 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, sealedLimit()+1))
 	if err != nil || int64(len(body)) > sealedLimit() {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned an invalid response")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned an invalid response")
 	}
 	plain, err := openProxyResponse(p.key, p.instance, requestNonce, body)
 	if err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned an unauthenticated response")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned an unauthenticated response")
 	}
 	var result proto.BaseResponse
 	if err := json.Unmarshal(plain, &result); err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned malformed response data")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned malformed response data")
 	}
 	return result, nil
 }
@@ -258,4 +288,47 @@ func nativeProxyClient(timeout time.Duration) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// nativeProxyWait is how long the proxy and the owner keep a request open: the
+// sink's wait for the two credential sinks, the ordinary wait otherwise.
+func nativeProxyWait(message []byte) time.Duration {
+	var envelope struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal(message, &envelope) == nil {
+		if wait, ok := nativeProxyActionWaits[envelope.Action]; ok {
+			return wait
+		}
+	}
+	return nativeProxyTimeout
+}
+
+// NativeProxyFailureResponse is what a proxying Keeper answers its own client
+// when Forward failed. A credential sink request the owner may have run is
+// answered as an unknown outcome under its request id, the same answer the
+// sink gives when its own transport fails after sending: the caller must not
+// treat it as a failure it can retry.
+func NativeProxyFailureResponse(message []byte, err error) proto.BaseResponse {
+	failed := proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+	if !errors.Is(err, ErrOwnerOutcomeUnknown) {
+		return failed
+	}
+	var envelope struct {
+		Action    string `json:"action"`
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal(message, &envelope) != nil {
+		return failed
+	}
+	switch envelope.Action {
+	case proto.ActionCredentialHTTPRequest, proto.ActionCredentialExecRequest:
+		return proto.BaseResponse{
+			Success:   false,
+			RequestID: envelope.RequestID,
+			Error:     "the Keeper owner may have run the request; the outcome is unknown",
+			ErrorCode: string(errs.ErrCodeCredentialOutcomeUnknown),
+		}
+	}
+	return failed
 }

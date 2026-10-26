@@ -129,6 +129,7 @@ func HandleCredentialHTTPRequest(d Deps, req proto.CredentialHTTPRequest) proto.
 		ciphertextB64: req.CiphertextB64,
 		aadB64:        req.AADB64,
 		policy:        req.Policy,
+		confirmation:  req.ExecutionConfirmation,
 		action:        "credential http request",
 	}, matchPolicy)
 	defer cleanup()

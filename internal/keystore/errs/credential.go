@@ -12,4 +12,10 @@ const (
 	// and then the transport failed. The target may have received and acted on
 	// the request. The nonce is spent; the caller must not retry automatically.
 	ErrCodeCredentialOutcomeUnknown ErrorCode = "credential_outcome_unknown"
+
+	// ErrCodeCredentialConfirmationInvalid — a personal-scope request carried no
+	// server confirmation, or one that is expired, unsigned, or names another
+	// nonce or entry. Nothing was opened and nothing was sent; the nonce is
+	// left in place.
+	ErrCodeCredentialConfirmationInvalid ErrorCode = "credential_confirmation_invalid"
 )
