@@ -206,7 +206,8 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 	if err != nil {
 		return proto.BaseResponse{}, errors.New("native message could not be sealed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), nativeProxyTimeout)
+	wait := nativeProxyWait(message)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	request, err := nativeProxyRequest(ctx, p.address, http.MethodPost, "/v1/native-proxy/message", bytes.NewReader(sealed))
 	if err != nil {
@@ -225,7 +226,7 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 		}
 		return errors.New(message)
 	}
-	response, err := nativeProxyClient(nativeProxyTimeout).Do(request)
+	response, err := nativeProxyClient(wait).Do(request)
 	if err != nil {
 		return proto.BaseResponse{}, afterWrite("local Keeper owner did not complete the request")
 	}
@@ -287,6 +288,20 @@ func nativeProxyClient(timeout time.Duration) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// nativeProxyWait is how long the proxy and the owner keep a request open: the
+// sink's wait for the two credential sinks, the ordinary wait otherwise.
+func nativeProxyWait(message []byte) time.Duration {
+	var envelope struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal(message, &envelope) == nil {
+		if wait, ok := nativeProxyActionWaits[envelope.Action]; ok {
+			return wait
+		}
+	}
+	return nativeProxyTimeout
 }
 
 // NativeProxyFailureResponse is what a proxying Keeper answers its own client

@@ -406,6 +406,11 @@ func (s *Server) serveNativeProxyMessage(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// A credential sink may run longer than the server-wide write deadline;
+	// the proxy waits for it (nativeProxyWait), so the owner must too.
+	if wait := nativeProxyWait(message); wait > s.writeTimeout {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
+	}
 	response, err := json.Marshal(s.app.HandleRequest(message))
 	secure.Zeroize(message)
 	if err != nil {

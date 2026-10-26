@@ -33,6 +33,7 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeKeyTransparencyTrustInvalid, "key_transparency_trust_invalid"},
 		{ErrCodeCredentialNonceInvalid, "credential_nonce_invalid"},
 		{ErrCodeCredentialOutcomeUnknown, "credential_outcome_unknown"},
+		{ErrCodeCredentialConfirmationInvalid, "credential_confirmation_invalid"},
 		{ErrCodeChatStateInvalidInput, "CHAT_STATE_INVALID_INPUT"},
 		{ErrCodeChatStateNotAuthorized, "CHAT_STATE_NOT_AUTHORIZED"},
 		{ErrCodeChatStateLockTimeout, "CHAT_STATE_LOCK_TIMEOUT"},
