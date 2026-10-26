@@ -109,6 +109,7 @@ func HandleCredentialExecRequest(d Deps, req proto.CredentialExecRequest) proto.
 		ciphertextB64: req.CiphertextB64,
 		aadB64:        req.AADB64,
 		policy:        req.Policy,
+		confirmation:  req.ExecutionConfirmation,
 		action:        "credential exec request",
 	}, matchPolicy)
 	defer cleanup()

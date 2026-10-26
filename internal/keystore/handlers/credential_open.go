@@ -33,6 +33,9 @@ type credentialRequestCommon struct {
 	ciphertextB64 string
 	aadB64        string
 	policy        proto.CredentialPolicy
+	// confirmation is the server's execution confirmation; required with a
+	// personal key source (credential_confirmation.go).
+	confirmation *proto.CredentialExecutionConfirmation
 	// action names the request in a session error message ("credential http
 	// request"). It is the only string in the prelude that differs by sink.
 	action string
@@ -83,6 +86,14 @@ func openCredentialForSink(d Deps, common credentialRequestCommon,
 	// The signed policy is trusted only after verification above.
 	if matched, failure := matchPolicy(); !matched {
 		return nil, cleanup, failure, false
+	}
+	// A personal DEK needs no further server grant, so the server's fresh
+	// confirmation is required here instead. Checked before the nonce is
+	// spent: a refused request leaves it in place.
+	if common.keySource.groupHandle == "" {
+		if confirmed, failure := verifyExecutionConfirmation(d, common.policy, common.confirmation); !confirmed {
+			return nil, cleanup, failure, false
+		}
 	}
 	// The request is the one the policy describes; spend the policy now, before
 	// the payload opens. A request refused above leaves the nonce in place (it
