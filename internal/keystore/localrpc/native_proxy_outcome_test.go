@@ -3,6 +3,7 @@ package localrpc
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"testing"
@@ -100,4 +101,28 @@ func startClosableTestOwner(t *testing.T, server *Server) (string, func()) {
 	}
 	t.Cleanup(closeOwner)
 	return server.host, closeOwner
+}
+
+func TestNativeProxyFailureResponseNamesAnUnknownCredentialOutcome(t *testing.T) {
+	unknown := fmt.Errorf("owner went away: %w", ErrOwnerOutcomeUnknown)
+	for _, action := range []string{"credential_http_request", "credential_exec_request"} {
+		got := NativeProxyFailureResponse([]byte(`{"action":"`+action+`","request_id":"r-9"}`), unknown)
+		if got.Success || got.ErrorCode != "credential_outcome_unknown" || got.RequestID != "r-9" {
+			t.Fatalf("%s: %+v, want credential_outcome_unknown for r-9", action, got)
+		}
+	}
+	// Nothing was sent, or the action is not a credential sink: the plain
+	// failure, as before.
+	for _, tc := range []struct {
+		message string
+		err     error
+	}{
+		{`{"action":"credential_http_request","request_id":"r-9"}`, errors.New("connection refused")},
+		{`{"action":"ping","request_id":"r-9"}`, unknown},
+	} {
+		got := NativeProxyFailureResponse([]byte(tc.message), tc.err)
+		if got.Success || got.ErrorCode != "" || got.Error != "Keeper owner request failed" {
+			t.Fatalf("%s / %v: %+v, want the plain failure", tc.message, tc.err, got)
+		}
+	}
 }

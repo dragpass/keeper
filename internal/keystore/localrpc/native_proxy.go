@@ -276,3 +276,9 @@ func nativeProxyClient(timeout time.Duration) *http.Client {
 		},
 	}
 }
+
+// NativeProxyFailureResponse is what a proxying Keeper answers its own client
+// when Forward failed.
+func NativeProxyFailureResponse(message []byte, err error) proto.BaseResponse {
+	return proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+}
