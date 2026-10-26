@@ -21,7 +21,18 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-const nativeProxyTimeout = 10 * time.Second
+// nativeProxyTimeout is how long a proxy waits for the owner's answer to an
+// ordinary request.
+var nativeProxyTimeout = 10 * time.Second
+
+// nativeProxyActionWaits are the longer waits of the two credential sinks:
+// their own timeout (HTTP 30 s, exec 60 s) plus a margin, so the proxy and the
+// owner never give up on a request the sink is still running.
+var nativeProxyActionWaits = map[string]time.Duration{
+	proto.ActionCredentialHTTPRequest: 35 * time.Second,
+	proto.ActionCredentialExecRequest: 65 * time.Second,
+}
+
 const nativeOwnerWait = 5 * time.Second
 
 // NativeRole is what a Chrome-launched Keeper does after looking at the
