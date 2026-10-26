@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"syscall"
 	"time"
 
@@ -200,9 +201,21 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 		return proto.BaseResponse{}, errors.New("native message could not be prepared")
 	}
 	request.Header.Set("Content-Type", "application/json")
+	// Once the request is written, the owner may run it whatever happens to
+	// the answer. Failures from then on are an unknown outcome, not a refusal.
+	var written bool
+	request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) { written = info.Err == nil },
+	}))
+	afterWrite := func(message string) error {
+		if written {
+			return fmt.Errorf("%s: %w", message, ErrOwnerOutcomeUnknown)
+		}
+		return errors.New(message)
+	}
 	response, err := nativeProxyClient(nativeProxyTimeout).Do(request)
 	if err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner did not complete the request")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner did not complete the request")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusConflict {
@@ -216,15 +229,15 @@ func (p *NativeProxy) forwardOnce(message []byte) (proto.BaseResponse, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, sealedLimit()+1))
 	if err != nil || int64(len(body)) > sealedLimit() {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned an invalid response")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned an invalid response")
 	}
 	plain, err := openProxyResponse(p.key, p.instance, requestNonce, body)
 	if err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned an unauthenticated response")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned an unauthenticated response")
 	}
 	var result proto.BaseResponse
 	if err := json.Unmarshal(plain, &result); err != nil {
-		return proto.BaseResponse{}, errors.New("local Keeper owner returned malformed response data")
+		return proto.BaseResponse{}, afterWrite("local Keeper owner returned malformed response data")
 	}
 	return result, nil
 }
