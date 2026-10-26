@@ -19,7 +19,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/localrpc"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proc"
-	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/service"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
@@ -247,7 +246,7 @@ func runNativeProxyMessageLoop(proxy *localrpc.NativeProxy) {
 		}
 		response, err := proxy.Forward(message)
 		if err != nil {
-			response = proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+			response = localrpc.NativeProxyFailureResponse(message, err)
 		}
 		if err := msgr.SendResponse(response); err != nil {
 			log.Printf("Native Messaging proxy could not write a response: %v", err)

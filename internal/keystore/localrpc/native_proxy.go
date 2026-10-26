@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -278,7 +279,30 @@ func nativeProxyClient(timeout time.Duration) *http.Client {
 }
 
 // NativeProxyFailureResponse is what a proxying Keeper answers its own client
-// when Forward failed.
+// when Forward failed. A credential sink request the owner may have run is
+// answered as an unknown outcome under its request id, the same answer the
+// sink gives when its own transport fails after sending: the caller must not
+// treat it as a failure it can retry.
 func NativeProxyFailureResponse(message []byte, err error) proto.BaseResponse {
-	return proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+	failed := proto.BaseResponse{Success: false, Error: "Keeper owner request failed"}
+	if !errors.Is(err, ErrOwnerOutcomeUnknown) {
+		return failed
+	}
+	var envelope struct {
+		Action    string `json:"action"`
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal(message, &envelope) != nil {
+		return failed
+	}
+	switch envelope.Action {
+	case proto.ActionCredentialHTTPRequest, proto.ActionCredentialExecRequest:
+		return proto.BaseResponse{
+			Success:   false,
+			RequestID: envelope.RequestID,
+			Error:     "the Keeper owner may have run the request; the outcome is unknown",
+			ErrorCode: string(errs.ErrCodeCredentialOutcomeUnknown),
+		}
+	}
+	return failed
 }

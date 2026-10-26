@@ -2164,7 +2164,7 @@ message. Codes are stable enums; messages are not.
 |`chat_runtime_lease_required`|An App route ran a gated chat action (or asked for a chat write signature) without its session holding the chat runtime lease, or without presenting an epoch. Nothing ran.|Claim `/v1/chat/runtime/claim` (sending the epoch the runtime holds), then retry.|
 |`chat_runtime_revoked`|(0.0.56) An App call presented a chat runtime epoch that a revocation replaced: `chat_state_purge` (Extension logout, or the App's own) or `reset_device_identity` ran since the epoch was granted. `data: { reason: "purged" \| "reset" }`. Nothing ran.|Stop that chat runtime, drop every operation it has in flight without retrying it, clear the App's chat records and tell the user chat was reset on this device. Never reclaim with the old epoch: that is refused the same way. A new runtime claims without an epoch.|
 |`credential_nonce_invalid`|`credential_http_request` / `credential_exec_request`: this Keeper's nonce map does not hold the policy's execution nonce: never minted there, already consumed, or expired (including a restart of the serving Keeper). Nothing was opened or sent.|Call `credential_execution_prepare` and resolve again. A once approval is already spent.|
-|`credential_outcome_unknown`|`credential_http_request`: the request headers were written and then the transport failed or the response could not be used. The target may have acted on the request. The nonce is spent.|Report the outcome as unknown. Do not retry automatically.|
+|`credential_outcome_unknown`|`credential_http_request`: the request headers were written and then the transport failed or the response could not be used. Either sink, through a Native Messaging proxy host: the owner took the request and no valid answer came back. The target may have acted on the request, or the command may have run. The nonce is spent.|Report the outcome as unknown. Do not retry automatically.|
 
 The `error` string is sanitized but **may include field names** (e.g.
 `wrap_key_b64: must be 32 bytes`). It never includes secret values. Mapping
@@ -2638,7 +2638,13 @@ Each message is AES-256-GCM sealed (key `HMAC(proxy key, "aead")`) as
 refuses a timestamp outside ±60 s, a repeated nonce, or another instance (409,
 refused before running, so the host re-proves and retries once). Responses are
 sealed with AAD `"dragpass-keeper-native-proxy-response-v2\n" + instance + "\n"
-+ request nonce`. A listener that cannot prove the secret (another account's
++ request nonce`. When the owner took a request and no valid answer came back
+(the connection failed after the request was written, the proxy's 10 s wait
+ran out, or the answer did not open), the host answers a
+`credential_http_request` or `credential_exec_request` with
+`credential_outcome_unknown` under the request's `request_id`: the owner may
+have run it. Any other failure is the plain `Keeper owner request failed`. A
+listener that cannot prove the secret (another account's
 Keeper, a protocol 1 owner, a port squatter) receives nothing: the host serves
 its own stdio instead. E2E mode exists only in a build with the `keeper_e2e`
 tag; a release build exits when any `KEEPER_E2E_*` variable is set. With
