@@ -39,6 +39,10 @@ const (
 
 var errOwnerUnproven = errors.New("local listener did not prove the Keeper local secret")
 
+// ErrOwnerOutcomeUnknown — the owner received the request and no valid
+// answer came back: it may have run it.
+var ErrOwnerOutcomeUnknown = errors.New("local Keeper owner may have run the request; no answer came back")
+
 func AcquireNativeOwner(address string, secret localsecret.Secret) (NativeRole, net.Listener, *NativeProxy, error) {
 	role, listener, proxy, err := acquireNativeOwnerAt(address, secret.NativeProxyKey(), nativeOwnerWait)
 	if proxy != nil {
