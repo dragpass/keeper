@@ -215,6 +215,13 @@ func SetAccountBinding(store SecretStore, accountID, alias string, renew bool) (
 		changed bool
 	)
 	err := withPersonalKeyBundleLock(store, func() error {
+		login, err := ReadChatLogin(store)
+		if err != nil {
+			return err
+		}
+		if login.Committing || login.Generation != "" {
+			return ErrChatLoginStale
+		}
 		current, _, err := GetAccountBinding(store)
 		if err != nil {
 			return err
@@ -357,12 +364,16 @@ func chatStateGenerationSlot(accountID string) string {
 	return "chat_state_generation_" + hex.EncodeToString(sum[:])
 }
 
-func rotateChatStateGeneration(store SecretStore, accountID string) (string, error) {
+func newChatGeneration() string {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", err
+		panic("chat generation entropy unavailable")
 	}
-	value := base64.RawURLEncoding.EncodeToString(nonce[:])
+	return base64.RawURLEncoding.EncodeToString(nonce[:])
+}
+
+func rotateChatStateGeneration(store SecretStore, accountID string) (string, error) {
+	value := newChatGeneration()
 	if err := store.Set(config.Service, chatStateGenerationSlot(accountID), value); err != nil {
 		return "", err
 	}

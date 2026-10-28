@@ -75,8 +75,9 @@ type chatRuntimeLease struct {
 	session string
 	expires time.Time
 	// leaseID names the current grant; a release must present it.
-	leaseID     string
-	extensionAt time.Time
+	bindingGeneration string
+	leaseID           string
+	extensionAt       time.Time
 	// epoch is loaded from the store on first use and moved by revocations.
 	epoch       chatRuntimeEpoch
 	epochLoaded bool
@@ -176,7 +177,7 @@ func (l *chatRuntimeLease) liveLocked(now time.Time) bool {
 }
 
 func (l *chatRuntimeLease) clearLocked() {
-	l.holder, l.session, l.expires, l.leaseID = "", "", time.Time{}, ""
+	l.holder, l.session, l.expires, l.leaseID, l.bindingGeneration = "", "", time.Time{}, "", ""
 }
 
 // ChatRuntimeClaim is the outcome of a claim. When Granted is false,
@@ -260,10 +261,12 @@ func (a *App) DropAllChatRuntimeSessions() {
 // granted. chatWrite gates an otherwise ungated action: the signature of a
 // chat write the App is about to send to the server.
 type chatRuntimeCaller struct {
-	app       bool
-	session   string
-	epoch     string
-	chatWrite bool
+	loginGeneration string
+	chatWork        bool
+	app             bool
+	session         string
+	epoch           string
+	chatWrite       bool
 }
 
 func leaseRequired() proto.BaseResponse {
@@ -291,6 +294,9 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		}
 		gated, revocation := dispatch.ChatRuntimeClass(action)
 		if !gated && !caller.chatWrite {
+			if caller.app && caller.chatWork {
+				return a.chatLoginAdmission(caller.loginGeneration)
+			}
 			return proto.BaseResponse{}, true
 		}
 		l := &a.chatRuntime
@@ -308,6 +314,9 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 			}
 			if !live || caller.session == "" || l.session != caller.session {
 				return leaseRequired(), false
+			}
+			if refusal, ok := a.chatLoginAdmission(caller.loginGeneration); !ok {
+				return refusal, false
 			}
 			if revokes {
 				a.revokeLocked(revocation)

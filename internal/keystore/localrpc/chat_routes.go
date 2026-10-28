@@ -153,7 +153,8 @@ var leaseIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22}$`)
 // a re-claim after a revocation is refused instead of handing it a new one.
 type chatRuntimeClaimInput struct {
 	chatRuntimeHolder
-	Epoch string `json:"epoch,omitempty"`
+	Epoch    string `json:"epoch,omitempty"`
+	Sequence uint64 `json:"sequence,omitempty"`
 }
 
 // runChatRuntimeClaim binds the lease to the calling session under s.mu, so a
@@ -170,8 +171,11 @@ func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseRe
 		s.mu.Unlock()
 		return proto.BaseResponse{}, errSessionGone
 	}
-	claim := s.app.ClaimChatRuntime(holder.HolderID, request.token, current.expires.Sub(now), holder.Epoch)
+	claim, bindingFailure := s.app.ClaimChatRuntimeBound(holder.HolderID, request.token, current.expires.Sub(now), holder.Epoch, request.generation, holder.Sequence)
 	s.mu.Unlock()
+	if bindingFailure != "" {
+		return proto.BaseResponse{Error: "chat session admission refused", ErrorCode: bindingFailure}, nil
+	}
 	if claim.Revoked != "" {
 		return keystore.ChatRuntimeRevokedResponse(claim.Revoked), nil
 	}
@@ -235,7 +239,7 @@ func runRoomRowNameSeal(s *Server, request appRequest, input any) (proto.BaseRes
 
 	// Generate, seal and close run as one unit, so no device sign-out closes
 	// the throwaway handle between them.
-	return s.handleSteps(request.token, "", func(step stepFunc) (proto.BaseResponse, error) {
+	return s.handleFencedSteps(request, "", func(step stepFunc) (proto.BaseResponse, error) {
 		own, err := readOwnPublicKey(step)
 		if err != nil {
 			return proto.BaseResponse{}, err

@@ -77,6 +77,13 @@ func HandleChatStatePurge(d Deps, payload json.RawMessage) proto.BaseResponse {
 	purged := false
 	err := keychain.WithKeychainProcessLock(d.Store, func() error {
 		if expected := req.ExpectedGenerationValue(); expected != "" {
+			state, err := keychain.ReadChatLogin(d.Store)
+			if err != nil {
+				return err
+			}
+			if state.Committing {
+				return keychain.ErrChatLoginStale
+			}
 			current, err := keychain.GetChatStateGeneration(d.Store, req.OwnerAccountID)
 			if err != nil {
 				return err

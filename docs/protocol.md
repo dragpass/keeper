@@ -2463,6 +2463,48 @@ The server writes an answer within 8 s. `/v1/chat/*`,
 create verifying 32 KeyPackages, a 200-message display batch, a call queued
 behind an Extension request); the read deadline is unchanged.
 
+**App login session fence.** Builds advertising `app_session_fence.v1`
+provide paired, sealed POST routes `/v1/account/chat-session/status`,
+`/prepare` and `/commit`. Status returns the durable generation and
+`preparation_sequence`. Prepare accepts an opaque `intent_id`, the captured
+`predecessor_generation` and `after_sequence`; the comparison is serialized
+with binding writes. A later prepare supersedes an earlier pending intent.
+Commit accepts that intent, `account_id` and `alias`. Repeating the same
+intent returns the same random generation. An interrupted commit blocks chat
+admission and conditional purge until the original intent completes.
+Legacy binding writes cannot replace a confirmed fenced session.
+
+The App captures the intent before authentication and binds it to the
+resulting login session. Cookie refresh may restore only that descriptor
+using exact session metadata and rotation equality; it does not prepare a
+new login. Binding failure preserves account login but blocks chat reads,
+decryption, sends and lease acquisition. A bounded retry reuses the intent.
+The App requires this capability and asks for an update on an older Keeper;
+it cannot establish this fence through a legacy binding route.
+
+Fenced chat requests carry `X-DragPass-Chat-Login-Generation`, included in
+both sealed request and response additional authenticated data as
+`<route>|chat-generation:<generation>`. Missing or stale generation is
+refused once a fenced session exists. This includes chat read signing,
+room-name operations and gated actions. Claims additionally carry a positive
+safe-integer `sequence`, allocated per generation and holder before dispatch
+under the owning Web Lock. Keeper persists a high-water value in a separate
+hashed generation/holder slot under the binding lock: equal or lower claims
+are refused, including after release, TTL expiry or process restart. Slots
+are not evicted; their metadata accumulates until separate lifecycle cleanup
+is designed. No arbitrary lifetime limit on tab holders is imposed.
+
+A confirmed commit revokes the previous local runtime. It does **not**
+invalidate permits already issued, cancel API requests already sent, or
+retract plaintext already obtained. Its receipt explicitly reports
+`previous_permits_invalidated:false` and `api_inflight_invalidated:false`.
+Consequently a purge marker with no known session generation remains
+blocking after fresh login; a successful binding alone cannot retire it.
+A marker with a known generation never borrows the profile's newer value.
+Old requests cannot purge or claim the new login's runtime. A late local
+cleanup clears only its captured IndexedDB namespace, and cancelled storage
+opens/transactions cannot recreate that namespace after cleanup.
+
 **Chat runtime lease.** The App and the Extension share one owner, but each
 runs its own chat orchestration (outbox, pending Commit retry,
 reconciliation), so only one may drive chat at a time. The lease is
@@ -2470,7 +2512,7 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
 
 |Route|Request|Answer|
 |---|---|---|
-|`/v1/chat/runtime/claim`|`{ holder_id, epoch? }` (`holder_id` base64url, 22..64 chars, one per App browser profile and shared by its tabs, which the Web Lock admits one at a time; per tab where the browser has no Web Locks; `epoch` the one this runtime already holds, omitted by a new runtime)|`{ expires_at, ttl_seconds, epoch, lease_id }` (`lease_id` 0.0.60); or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`; or `chat_runtime_revoked` when the sent `epoch` is stale|
+|`/v1/chat/runtime/claim`|`{ holder_id, epoch?, sequence? }` (`holder_id` base64url, 22..64 chars, one per App browser profile and shared by its tabs, which the Web Lock admits one at a time; per tab where the browser has no Web Locks; `epoch` the one this runtime already holds, omitted by a new runtime)|`{ expires_at, ttl_seconds, epoch, lease_id }` (`lease_id` 0.0.60); or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`; or `chat_runtime_revoked` when the sent `epoch` is stale|
 |`/v1/chat/runtime/release`|`{ holder_id, lease_id? }` (`lease_id` 0.0.60: the id of the grant being released, base64url, 22 chars)|`{ released }`|
 
 - TTL 60 s, never past the session it was claimed on. A claim with the same
