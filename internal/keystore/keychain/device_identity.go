@@ -13,6 +13,10 @@ package keychain
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -166,7 +170,9 @@ type AccountBinding struct {
 	AccountID  string `json:"account_id"`
 	Alias      string `json:"alias"`
 	Generation uint64 `json:"generation"`
-	SignedOut  bool   `json:"signed_out"`
+	// ChatStateGeneration is a separate slot, excluded from the legacy binding schema.
+	ChatStateGeneration string `json:"-"`
+	SignedOut           bool   `json:"signed_out"`
 }
 
 // GetAccountBinding reads the record without the lock. Absence is the bool.
@@ -184,6 +190,11 @@ func GetAccountBinding(store SecretStore) (AccountBinding, bool, error) {
 	if err := dec.Decode(&binding); err != nil || dec.More() || binding.V != accountBindingVersion {
 		return AccountBinding{}, false, ErrInvalidAccountBinding
 	}
+	generation, err := GetChatStateGeneration(store, binding.AccountID)
+	if err != nil {
+		return AccountBinding{}, false, err
+	}
+	binding.ChatStateGeneration = generation
 	return binding, true, nil
 }
 
@@ -216,6 +227,11 @@ func SetAccountBinding(store SecretStore, accountID, alias string, renew bool) (
 		next := AccountBinding{
 			V: accountBindingVersion, AccountID: accountID, Alias: alias,
 			Generation: current.Generation + 1,
+		}
+		// Rotate before publishing the binding: an uncertain write must never keep an old purge valid.
+		next.ChatStateGeneration, err = rotateChatStateGeneration(store, accountID)
+		if err != nil {
+			return err
 		}
 		if err := saveAccountBinding(store, next); err != nil {
 			return err
@@ -321,4 +337,34 @@ func saveAccountBinding(store SecretStore, binding AccountBinding) error {
 		return err
 	}
 	return store.Set(config.Service, config.AccountBinding, string(encoded))
+}
+
+// GetChatStateGeneration reads the account's incarnation without taking the
+// process lock. Callers that compare then delete must hold it through both.
+func GetChatStateGeneration(store SecretStore, accountID string) (string, error) {
+	if accountID == "" {
+		return "", nil
+	}
+	value, err := store.Get(config.Service, chatStateGenerationSlot(accountID))
+	if errors.Is(err, ErrSecretNotFound) {
+		return "", nil
+	}
+	return value, err
+}
+
+func chatStateGenerationSlot(accountID string) string {
+	sum := sha256.Sum256([]byte(accountID))
+	return "chat_state_generation_" + hex.EncodeToString(sum[:])
+}
+
+func rotateChatStateGeneration(store SecretStore, accountID string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	value := base64.RawURLEncoding.EncodeToString(nonce[:])
+	if err := store.Set(config.Service, chatStateGenerationSlot(accountID), value); err != nil {
+		return "", err
+	}
+	return value, nil
 }

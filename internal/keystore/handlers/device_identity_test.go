@@ -353,7 +353,11 @@ func TestDeviceAccountStatus_ReportsWithoutKeyMaterial(t *testing.T) {
 	got := resp.Data.(proto.DeviceAccountStatusResponseData)
 	publicKey, _ := keychain.GetPublicKey(store)
 	privateKey, _ := keychain.GetPrivateKey(store)
+	if got.ChatStateGeneration == "" {
+		t.Fatal("missing chat state generation")
+	}
 	want := proto.DeviceAccountStatusResponseData{
+		ConditionalChatPurge: true, ChatStateGeneration: got.ChatStateGeneration,
 		DeviceID: identityTestCandidate, AccountID: leafTestAccountID, Alias: identityTestAlias, Generation: 1,
 		AccountKeyFingerprint: crypto.AccountKeyFingerprint([]byte(publicKey)), DeviceMasterPresent: true,
 	}
@@ -367,7 +371,7 @@ func TestDeviceAccountStatus_EmptyDeviceWritesNothing(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	before := store.Snapshot()
 	got := deviceStatus(t, deps)
-	if got != (proto.DeviceAccountStatusResponseData{}) {
+	if got != (proto.DeviceAccountStatusResponseData{ConditionalChatPurge: true}) {
 		t.Fatalf("status on an empty keychain = %+v", got)
 	}
 	if !mapsEqual(before, store.Snapshot()) {
@@ -657,7 +661,7 @@ func TestResetDeviceIdentity_ClearsDeviceIDAndBinding(t *testing.T) {
 	if !strings.Contains(cleared, config.DeviceID) || !strings.Contains(cleared, config.AccountBinding) {
 		t.Fatalf("cleared = %s", cleared)
 	}
-	if status := deviceStatus(t, deps); status != (proto.DeviceAccountStatusResponseData{}) {
+	if status := deviceStatus(t, deps); status != (proto.DeviceAccountStatusResponseData{ConditionalChatPurge: true}) {
 		t.Fatalf("status after reset = %+v", status)
 	}
 	if next := ensureDeviceID(t, deps, ""); next.Source != "generated" || next.DeviceID == first.DeviceID {

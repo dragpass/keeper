@@ -33,6 +33,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -72,13 +73,29 @@ func HandleChatStatePurge(d Deps, payload json.RawMessage) proto.BaseResponse {
 	if resp, ok := decodeChatStateRequest(payload, &req); !ok {
 		return resp
 	}
-	removed, err := chatstate.Purge(d.Store, req.OwnerAccountID)
+	var removed int
+	purged := false
+	err := keychain.WithKeychainProcessLock(d.Store, func() error {
+		if expected := req.ExpectedGenerationValue(); expected != "" {
+			current, err := keychain.GetChatStateGeneration(d.Store, req.OwnerAccountID)
+			if err != nil {
+				return err
+			}
+			if current != expected {
+				return nil
+			}
+		}
+		var err error
+		removed, err = chatstate.Purge(d.Store, req.OwnerAccountID)
+		purged = err == nil
+		return err
+	})
 	if err != nil {
 		return chatStateFailure(d, "purge", err)
 	}
-	d.Logger.Printf("chat state purged for %d conversations", removed)
+	d.Logger.Printf("chat state purge finished: purged=%t conversations=%d", purged, removed)
 	return proto.BaseResponse{Success: true, Data: proto.ChatStatePurgeResponseData{
-		RemovedConversations: removed,
+		RemovedConversations: removed, Purged: purged,
 	}}
 }
 
