@@ -63,7 +63,7 @@ func chatRoutes() map[string]appRoute {
 			run:   runChatRuntimeClaim,
 		},
 		"/v1/chat/runtime/release": {
-			input: func() any { return &chatRuntimeHolder{} },
+			input: func() any { return &chatRuntimeReleaseInput{} },
 			run:   runChatRuntimeRelease,
 		},
 		"/v1/chat/room_row_name_seal": {
@@ -139,11 +139,22 @@ var holderIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
 
 func (h *chatRuntimeHolder) valid() bool { return holderIDPattern.MatchString(h.HolderID) }
 
+// chatRuntimeReleaseInput names the grant to end (lv74). lease_id is optional
+// on the wire so an older App's release decodes; without it nothing is
+// released.
+type chatRuntimeReleaseInput struct {
+	chatRuntimeHolder
+	LeaseID string `json:"lease_id,omitempty"`
+}
+
+var leaseIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22}$`)
+
 // chatRuntimeClaimInput carries the epoch a running runtime already holds, so
 // a re-claim after a revocation is refused instead of handing it a new one.
 type chatRuntimeClaimInput struct {
 	chatRuntimeHolder
-	Epoch string `json:"epoch,omitempty"`
+	Epoch    string `json:"epoch,omitempty"`
+	Sequence uint64 `json:"sequence,omitempty"`
 }
 
 // runChatRuntimeClaim binds the lease to the calling session under s.mu, so a
@@ -160,8 +171,11 @@ func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseRe
 		s.mu.Unlock()
 		return proto.BaseResponse{}, errSessionGone
 	}
-	claim := s.app.ClaimChatRuntime(holder.HolderID, request.token, current.expires.Sub(now), holder.Epoch)
+	claim, bindingFailure := s.app.ClaimChatRuntimeBound(holder.HolderID, request.token, current.expires.Sub(now), holder.Epoch, request.generation, holder.Sequence)
 	s.mu.Unlock()
+	if bindingFailure != "" {
+		return proto.BaseResponse{Error: "chat session admission refused", ErrorCode: bindingFailure}, nil
+	}
 	if claim.Revoked != "" {
 		return keystore.ChatRuntimeRevokedResponse(claim.Revoked), nil
 	}
@@ -176,16 +190,19 @@ func runChatRuntimeClaim(s *Server, request appRequest, input any) (proto.BaseRe
 		"expires_at":  claim.ExpiresAt.Unix(),
 		"ttl_seconds": int64(claim.ExpiresAt.Sub(s.app.Clock()).Seconds()),
 		"epoch":       claim.Epoch,
+		"lease_id":    claim.LeaseID,
 	}}, nil
 }
 
-func runChatRuntimeRelease(s *Server, _ appRequest, input any) (proto.BaseResponse, error) {
-	holder := input.(*chatRuntimeHolder)
-	if !holder.valid() {
+// runChatRuntimeRelease ends the lease only for the session that holds it and
+// the grant it names, so a release processed late cannot end a newer lease.
+func runChatRuntimeRelease(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
+	release := input.(*chatRuntimeReleaseInput)
+	if !release.valid() || (release.LeaseID != "" && !leaseIDPattern.MatchString(release.LeaseID)) {
 		return proto.BaseResponse{}, errAppRouteRefused
 	}
 	return proto.BaseResponse{Success: true, Data: map[string]bool{
-		"released": s.app.ReleaseChatRuntime(holder.HolderID),
+		"released": s.app.ReleaseChatRuntime(release.HolderID, request.token, release.LeaseID),
 	}}, nil
 }
 
@@ -222,7 +239,7 @@ func runRoomRowNameSeal(s *Server, request appRequest, input any) (proto.BaseRes
 
 	// Generate, seal and close run as one unit, so no device sign-out closes
 	// the throwaway handle between them.
-	return s.handleSteps(request.token, "", func(step stepFunc) (proto.BaseResponse, error) {
+	return s.handleFencedSteps(request, "", func(step stepFunc) (proto.BaseResponse, error) {
 		own, err := readOwnPublicKey(step)
 		if err != nil {
 			return proto.BaseResponse{}, err

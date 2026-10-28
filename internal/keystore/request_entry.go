@@ -51,6 +51,18 @@ func (a *App) HandleAppSteps(
 	})
 }
 
+// HandleAppFencedSteps carries the same captured generation through a composed chat route.
+func (a *App) HandleAppFencedSteps(session, epoch, generation string,
+	steps func(run func(msg []byte) proto.BaseResponse) (proto.BaseResponse, error),
+) (proto.BaseResponse, error) {
+	a.requestMu.Lock()
+	defer a.requestMu.Unlock()
+	caller := chatRuntimeCaller{app: true, session: session, epoch: epoch, loginGeneration: generation, chatWork: true}
+	return steps(func(msg []byte) proto.BaseResponse {
+		return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
+	})
+}
+
 func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse {
 	a.requestMu.Lock()
 	defer a.requestMu.Unlock()

@@ -99,6 +99,9 @@ var pinnedAppRoutes = []string{
 	"/v1/account-key/rotate/status",
 	"/v1/account/binding",
 	"/v1/account/binding/signout",
+	"/v1/account/chat-session/commit",
+	"/v1/account/chat-session/prepare",
+	"/v1/account/chat-session/status",
 	"/v1/archive/account_archive_key_generate",
 	"/v1/archive/archive_key_generate",
 	"/v1/archive/archive_key_rotate_abort",
@@ -250,6 +253,7 @@ func TestChatRuntimeClaimAndReleaseRoutes(t *testing.T) {
 	second, secondCSRF := openTestSession(t, server)
 
 	result := claimLease(t, server, first, firstCSRF, routeHolder)
+	leaseID := leaseIDOf(result.Data)
 	var granted struct {
 		ExpiresAt  int64 `json:"expires_at"`
 		TTLSeconds int   `json:"ttl_seconds"`
@@ -279,7 +283,7 @@ func TestChatRuntimeClaimAndReleaseRoutes(t *testing.T) {
 	if code != http.StatusOK || !released.Success || string(released.Data) != `{"released":false}` {
 		t.Fatalf("release by another holder: %d %+v", code, released)
 	}
-	code, released, _ = callRoute(t, server, first, firstCSRF, "/v1/chat/runtime/release", map[string]string{"holder_id": routeHolder})
+	code, released, _ = callRoute(t, server, first, firstCSRF, "/v1/chat/runtime/release", map[string]string{"holder_id": routeHolder, "lease_id": leaseID})
 	if code != http.StatusOK || string(released.Data) != `{"released":true}` {
 		t.Fatalf("release: %d %s", code, released.Data)
 	}

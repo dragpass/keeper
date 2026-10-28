@@ -16,6 +16,8 @@
 package proto
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"math"
 	"strconv"
 	"strings"
@@ -350,13 +352,32 @@ type ChatStateReadOutboxResponseData struct {
 // ChatStatePurgeRequest names the account whose state goes away. No permit: see
 // actions_chat_state.go.
 type ChatStatePurgeRequest struct {
-	OwnerAccountID string `json:"owner_account_id"`
+	ExpectedGeneration json.RawMessage `json:"expected_generation,omitempty"`
+	OwnerAccountID     string          `json:"owner_account_id"`
 }
 
 func (r ChatStatePurgeRequest) Validate() error {
+	if len(r.ExpectedGeneration) > 0 {
+		var value string
+		if err := json.Unmarshal(r.ExpectedGeneration, &value); err != nil || value == "" {
+			return newValidationError("expected_generation", "must be a nonempty generation")
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(value)
+		if err != nil || len(decoded) != 16 {
+			return newValidationError("expected_generation", "must be a 16-byte Base64URL generation")
+		}
+	}
 	return requireMessageUUID(r.OwnerAccountID, "owner_account_id")
 }
 
+// ExpectedGenerationValue is called only after Validate succeeds.
+func (r ChatStatePurgeRequest) ExpectedGenerationValue() string {
+	var value string
+	_ = json.Unmarshal(r.ExpectedGeneration, &value)
+	return value
+}
+
 type ChatStatePurgeResponseData struct {
-	RemovedConversations int `json:"removed_conversations"`
+	Purged               bool `json:"purged"`
+	RemovedConversations int  `json:"removed_conversations"`
 }

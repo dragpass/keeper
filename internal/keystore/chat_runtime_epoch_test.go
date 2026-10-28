@@ -47,7 +47,10 @@ func TestChatRuntimeEpochIsStableWithoutARevocation(t *testing.T) {
 	if renewed := claimed(t, app, clock, holderA, sessionA, epoch); renewed != epoch {
 		t.Fatalf("renewal moved the epoch: %q -> %q", epoch, renewed)
 	}
-	app.ReleaseChatRuntime(holderA)
+	held := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), epoch)
+	if !app.ReleaseChatRuntime(holderA, sessionA, held.LeaseID) {
+		t.Fatal("the holder could not release its lease")
+	}
 	if again := claimed(t, app, clock, holderB, sessionB, ""); again != epoch {
 		t.Fatalf("a re-claim moved the epoch: %q -> %q", epoch, again)
 	}

@@ -44,8 +44,9 @@ func (r *AccountBindingSetRequest) Validate() error {
 // AccountBindingSetResponseData says whether the record changed and what it
 // now holds.
 type AccountBindingSetResponseData struct {
-	Changed    bool   `json:"changed"`
-	Generation uint64 `json:"generation"`
+	ChatStateGeneration string `json:"chat_state_generation,omitempty"`
+	Changed             bool   `json:"changed"`
+	Generation          uint64 `json:"generation"`
 }
 
 // DeviceAccountStatusRequest takes no input.
@@ -54,6 +55,8 @@ type DeviceAccountStatusRequest struct{}
 // DeviceAccountStatusResponseData is what the Extension needs to decide
 // whether to sign itself in. The fingerprint is of the public account key.
 type DeviceAccountStatusResponseData struct {
+	ConditionalChatPurge  bool   `json:"conditional_chat_purge"`
+	ChatStateGeneration   string `json:"chat_state_generation,omitempty"`
 	DeviceID              string `json:"device_id,omitempty"`
 	AccountID             string `json:"account_id,omitempty"`
 	Alias                 string `json:"alias,omitempty"`

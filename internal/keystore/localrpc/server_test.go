@@ -83,13 +83,18 @@ var sessionEpochs sync.Map
 
 // sessionRequestWithEpoch sends epoch as the chat runtime epoch header ("" for
 // none).
-func sessionRequestWithEpoch(server *Server, method, path, body, session, csrf, origin string, seal bool, epoch string) *httptest.ResponseRecorder {
+func sessionRequestWithEpoch(server *Server, method, path, body, session, csrf, origin string, seal bool, epoch string, generations ...string) *httptest.ResponseRecorder {
+	generation := ""
+	if len(generations) > 0 {
+		generation = generations[0]
+	}
+	aadPath := chatFencedPath(path, generation)
 	server.mu.Lock()
 	current, open := server.sessions[session]
 	server.mu.Unlock()
 	requestNonce := ""
 	if seal && open && method == http.MethodPost {
-		envelope, err := sealEnvelope(current.key, appRequestAAD(current.origin, session, path), []byte(body))
+		envelope, err := sealEnvelope(current.key, appRequestAAD(current.origin, session, aadPath), []byte(body))
 		if err != nil {
 			panic(err)
 		}
@@ -111,6 +116,9 @@ func sessionRequestWithEpoch(server *Server, method, path, body, session, csrf, 
 	if epoch != "" {
 		request.Header.Set(chatRuntimeEpochHeader, epoch)
 	}
+	if generation != "" {
+		request.Header.Set(chatLoginGenerationHeader, generation)
+	}
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -121,7 +129,7 @@ func sessionRequestWithEpoch(server *Server, method, path, body, session, csrf, 
 		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 			panic(fmt.Sprintf("session answer is not sealed: %s", recorder.Body.String()))
 		}
-		plain, err := openEnvelope(current.key, envelope, appResponseAAD(current.origin, session, path, requestNonce))
+		plain, err := openEnvelope(current.key, envelope, appResponseAAD(current.origin, session, aadPath, requestNonce))
 		if err != nil {
 			panic(fmt.Sprintf("session answer does not open: %v", err))
 		}

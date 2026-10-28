@@ -197,7 +197,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-DragPass-Local-RPC, X-DragPass-CSRF, Authorization, "+chatRuntimeEpochHeader)
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-DragPass-Local-RPC, X-DragPass-CSRF, Authorization, "+chatRuntimeEpochHeader+", "+chatLoginGenerationHeader)
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodOptions {
 		if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
@@ -279,12 +279,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // appRequest is one opened, authenticated App request. epoch is the chat
 // runtime epoch the App presented ("" for none).
 type appRequest struct {
-	session session
-	token   string
-	path    string
-	nonce   string
-	plain   []byte
-	epoch   string
+	session    session
+	token      string
+	path       string
+	nonce      string
+	plain      []byte
+	epoch      string
+	generation string
 }
 
 // chatRuntimeEpochHeader carries the epoch the App's chat runtime was granted
@@ -293,6 +294,14 @@ type appRequest struct {
 // already authenticates the caller, and the value only lets Keeper tell work
 // from before a revocation apart from work after it.
 const chatRuntimeEpochHeader = "X-DragPass-Chat-Runtime-Epoch"
+const chatLoginGenerationHeader = "X-DragPass-Chat-Login-Generation"
+
+func chatFencedPath(path, generation string) string {
+	if generation == "" {
+		return path
+	}
+	return path + "|chat-generation:" + generation
+}
 
 var chatRuntimeEpochPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,43}\.[0-9]{1,20}$`)
 
@@ -317,6 +326,11 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return appRequest{}, false
 	}
+	generation := r.Header.Get(chatLoginGenerationHeader)
+	if generation != "" && !leaseIDPattern.MatchString(generation) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return appRequest{}, false
+	}
 	epoch := r.Header.Get(chatRuntimeEpochHeader)
 	if epoch != "" && !chatRuntimeEpochPattern.MatchString(epoch) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -328,7 +342,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return appRequest{}, false
 	}
-	plain, err := openEnvelope(current.key, envelope, appRequestAAD(current.origin, token, r.URL.Path))
+	plain, err := openEnvelope(current.key, envelope, appRequestAAD(current.origin, token, chatFencedPath(r.URL.Path, generation)))
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return appRequest{}, false
@@ -353,7 +367,7 @@ func (s *Server) openAppRequest(w http.ResponseWriter, r *http.Request) (appRequ
 		return appRequest{}, false
 	}
 	current.sealed[envelope.Nonce] = struct{}{}
-	return appRequest{session: current, token: token, path: r.URL.Path, nonce: envelope.Nonce, plain: plain, epoch: epoch}, true
+	return appRequest{session: current, token: token, path: r.URL.Path, nonce: envelope.Nonce, plain: plain, epoch: epoch, generation: generation}, true
 }
 
 // writeSealed answers under the session key, bound to the request it answers.
@@ -364,7 +378,7 @@ func (s *Server) writeSealed(w http.ResponseWriter, request appRequest, response
 		return
 	}
 	defer secure.Zeroize(plain)
-	sealed, err := sealEnvelope(request.session.key, appResponseAAD(request.session.origin, request.token, request.path, request.nonce), plain)
+	sealed, err := sealEnvelope(request.session.key, appResponseAAD(request.session.origin, request.token, chatFencedPath(request.path, request.generation), request.nonce), plain)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -587,7 +601,16 @@ func (s *Server) signRequest(w http.ResponseWriter, r *http.Request) {
 	if isChatWrite(input.Method, input.Path) {
 		sign = func(session, action string, payload []byte) (proto.BaseResponse, error) {
 			return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
-				return s.app.HandleAppChatWrite(session, request.epoch, msg)
+				return s.app.HandleAppFencedChatWrite(session, request.epoch, request.generation, msg)
+			})
+		}
+	}
+	if !isChatWrite(input.Method, input.Path) &&
+		(input.Path == "/api/v1/conversations" || strings.HasPrefix(input.Path, "/api/v1/conversations/") ||
+			strings.Contains(input.Path, "/chat/") || strings.Contains(input.Path, "/mls")) {
+		sign = func(session, action string, payload []byte) (proto.BaseResponse, error) {
+			return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
+				return s.app.HandleAppFencedRequest(session, request.epoch, request.generation, true, msg)
 			})
 		}
 	}
@@ -747,7 +770,7 @@ func (s *Server) handle(session, action string, payload []byte) (proto.BaseRespo
 // handleRequest is handle for an opened App request, presenting its epoch.
 func (s *Server) handleRequest(request appRequest, action string, payload []byte) (proto.BaseResponse, error) {
 	return s.dispatch(action, payload, func(msg []byte) proto.BaseResponse {
-		return s.app.HandleAppRequest(request.token, request.epoch, msg)
+		return s.app.HandleAppFencedRequest(request.token, request.epoch, request.generation, strings.HasPrefix(request.path, "/v1/chat/"), msg)
 	})
 }
 
@@ -759,6 +782,14 @@ type stepFunc func(action string, payload []byte) (proto.BaseResponse, error)
 // step; s.handle inside it would wait on the lock the steps hold.
 func (s *Server) handleSteps(session, epoch string, steps func(step stepFunc) (proto.BaseResponse, error)) (proto.BaseResponse, error) {
 	return s.app.HandleAppSteps(session, epoch, func(run func([]byte) proto.BaseResponse) (proto.BaseResponse, error) {
+		return steps(func(action string, payload []byte) (proto.BaseResponse, error) {
+			return s.dispatch(action, payload, run)
+		})
+	})
+}
+
+func (s *Server) handleFencedSteps(request appRequest, epoch string, steps func(step stepFunc) (proto.BaseResponse, error)) (proto.BaseResponse, error) {
+	return s.app.HandleAppFencedSteps(request.token, epoch, request.generation, func(run func([]byte) proto.BaseResponse) (proto.BaseResponse, error) {
 		return steps(func(action string, payload []byte) (proto.BaseResponse, error) {
 			return s.dispatch(action, payload, run)
 		})

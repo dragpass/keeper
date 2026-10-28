@@ -98,6 +98,7 @@ func startAppService(t *testing.T, dir, address string) *keeperProcess {
 		"PATH=" + os.Getenv("PATH"),
 		"SystemRoot=" + os.Getenv("SystemRoot"),
 		"USERPROFILE=" + filepath.Join(dir, "home"),
+		"APPDATA=" + filepath.Join(dir, "config"),
 	}
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr

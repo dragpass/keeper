@@ -58,7 +58,7 @@ func HandleAccountBindingSet(d Deps, req proto.AccountBindingSetRequest) proto.B
 	}
 	d.Logger.Printf("account binding set: changed=%t", changed)
 	return proto.BaseResponse{Success: true, Data: proto.AccountBindingSetResponseData{
-		Changed: changed, Generation: binding.Generation,
+		Changed: changed, Generation: binding.Generation, ChatStateGeneration: binding.ChatStateGeneration,
 	}}
 }
 
@@ -81,11 +81,13 @@ func HandleDeviceAccountStatus(d Deps, _ proto.DeviceAccountStatusRequest) proto
 		return deviceIdentityErrorResponse(err)
 	}
 	data := proto.DeviceAccountStatusResponseData{
-		DeviceID:   deviceID,
-		AccountID:  binding.AccountID,
-		Alias:      binding.Alias,
-		Generation: binding.Generation,
-		SignedOut:  binding.SignedOut,
+		DeviceID:             deviceID,
+		ChatStateGeneration:  binding.ChatStateGeneration,
+		ConditionalChatPurge: true,
+		AccountID:            binding.AccountID,
+		Alias:                binding.Alias,
+		Generation:           binding.Generation,
+		SignedOut:            binding.SignedOut,
 	}
 	if publicKey, err := keychain.GetPublicKey(d.Store); err == nil && publicKey != "" {
 		data.AccountKeyFingerprint = crypto.AccountKeyFingerprint([]byte(publicKey))
