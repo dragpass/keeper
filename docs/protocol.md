@@ -2433,7 +2433,7 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
 
 |Route|Request|Answer|
 |---|---|---|
-|`/v1/chat/runtime/claim`|`{ holder_id, epoch? }` (`holder_id` base64url, 22..64 chars, one per App tab; `epoch` the one this runtime already holds, omitted by a new runtime)|`{ expires_at, ttl_seconds, epoch, lease_id }` (`lease_id` 0.0.60); or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`; or `chat_runtime_revoked` when the sent `epoch` is stale|
+|`/v1/chat/runtime/claim`|`{ holder_id, epoch? }` (`holder_id` base64url, 22..64 chars, one per App browser profile and shared by its tabs, which the Web Lock admits one at a time; per tab where the browser has no Web Locks; `epoch` the one this runtime already holds, omitted by a new runtime)|`{ expires_at, ttl_seconds, epoch, lease_id }` (`lease_id` 0.0.60); or `success: false`, `error_code: chat_runtime_busy`, `data: { holder: "app" \| "extension" }`; or `chat_runtime_revoked` when the sent `epoch` is stale|
 |`/v1/chat/runtime/release`|`{ holder_id, lease_id? }` (`lease_id` 0.0.60: the id of the grant being released, base64url, 22 chars)|`{ released }`|
 
 - TTL 60 s, never past the session it was claimed on. A claim with the same
