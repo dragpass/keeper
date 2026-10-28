@@ -28,6 +28,13 @@
 // epoch check and the handler's write are one step with respect to the
 // revocation: an App handler already admitted finishes before the purge runs,
 // and none is admitted after it.
+//
+// Every grant (a first claim, a renewal, a move to another session) carries a
+// new random lease id, and a release names the one it ends (lv74). The holder
+// id is shared by the tabs of one App profile, so a release that reaches
+// Keeper late, after another tab or a later claim of the same tab got the
+// lease, finds another id and ends nothing. The id check and the clearing are
+// one step under the lease mutex.
 
 package keystore
 
@@ -63,10 +70,12 @@ func ChatRuntimeGatedActions() []string {
 }
 
 type chatRuntimeLease struct {
-	mu          sync.Mutex
-	holder      string
-	session     string
-	expires     time.Time
+	mu      sync.Mutex
+	holder  string
+	session string
+	expires time.Time
+	// leaseID names the current grant; a release must present it.
+	leaseID     string
 	extensionAt time.Time
 	// epoch is loaded from the store on first use and moved by revocations.
 	epoch       chatRuntimeEpoch
@@ -91,6 +100,14 @@ func (e chatRuntimeEpoch) token() string {
 const chatRuntimeEpochAccount = "chat-runtime-epoch"
 
 func newChatRuntimeEpochID() string {
+	raw := make([]byte, 16)
+	_, _ = rand.Read(raw)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// newChatRuntimeLeaseID is 16 random bytes, Base64URL without padding (22
+// characters). It is not a secret: it only tells one grant from the next.
+func newChatRuntimeLeaseID() string {
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	return base64.RawURLEncoding.EncodeToString(raw)
@@ -159,16 +176,18 @@ func (l *chatRuntimeLease) liveLocked(now time.Time) bool {
 }
 
 func (l *chatRuntimeLease) clearLocked() {
-	l.holder, l.session, l.expires = "", "", time.Time{}
+	l.holder, l.session, l.expires, l.leaseID = "", "", time.Time{}, ""
 }
 
 // ChatRuntimeClaim is the outcome of a claim. When Granted is false,
 // BusyHolder names who is in the way, or Revoked says the epoch the caller
 // held was revoked and why.
 type ChatRuntimeClaim struct {
-	Granted    bool
-	ExpiresAt  time.Time
-	Epoch      string
+	Granted   bool
+	ExpiresAt time.Time
+	Epoch     string
+	// LeaseID names this grant; only a release that presents it ends it.
+	LeaseID    string
 	BusyHolder string
 	Revoked    string
 }
@@ -196,15 +215,20 @@ func (a *App) ClaimChatRuntime(holderID, session string, sessionRemaining time.D
 	}
 	expires := now.Add(min(ChatRuntimeLeaseTTL, sessionRemaining))
 	l.holder, l.session, l.expires = holderID, session, expires
-	return ChatRuntimeClaim{Granted: true, ExpiresAt: expires, Epoch: epoch.token()}
+	// A new id for every grant, a renewal included: a release sent before
+	// this claim must not end what this claim got.
+	l.leaseID = newChatRuntimeLeaseID()
+	return ChatRuntimeClaim{Granted: true, ExpiresAt: expires, Epoch: epoch.token(), LeaseID: l.leaseID}
 }
 
-// ReleaseChatRuntime drops a live lease held by holderID.
-func (a *App) ReleaseChatRuntime(holderID string) bool {
+// ReleaseChatRuntime drops the live lease only when holderID holds it on
+// session under leaseID, the id of the grant being released. An empty
+// leaseID (an App from before lv74) releases nothing: the lease lapses.
+func (a *App) ReleaseChatRuntime(holderID, session, leaseID string) bool {
 	l := &a.chatRuntime
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !l.liveLocked(a.Clock()) || l.holder != holderID {
+	if leaseID == "" || !l.liveLocked(a.Clock()) || l.holder != holderID || l.session != session || l.leaseID != leaseID {
 		return false
 	}
 	l.clearLocked()

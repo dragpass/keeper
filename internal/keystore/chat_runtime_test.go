@@ -88,7 +88,8 @@ func TestChatRuntimeClaimRenewRebindAndRelease(t *testing.T) {
 	}
 
 	// The same holder from a reopened session moves the lease to that session.
-	if rebound := app.ClaimChatRuntime(holderA, sessionA2, farSession(clock), ""); !rebound.Granted {
+	rebound := app.ClaimChatRuntime(holderA, sessionA2, farSession(clock), "")
+	if !rebound.Granted || rebound.LeaseID == "" || rebound.LeaseID == renewed.LeaseID {
 		t.Fatalf("rebind: %+v", rebound)
 	}
 	if response := app.HandleAppRequest(sessionA, claim.Epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
@@ -98,13 +99,17 @@ func TestChatRuntimeClaimRenewRebindAndRelease(t *testing.T) {
 		t.Fatalf("the rebound session cannot run a gated action: %+v", response)
 	}
 
-	if app.ReleaseChatRuntime(holderB) {
+	if app.ReleaseChatRuntime(holderB, sessionB, rebound.LeaseID) {
 		t.Fatal("another holder released the lease")
 	}
-	if !app.ReleaseChatRuntime(holderA) {
+	// The old session's release, and one naming an earlier grant (lv74).
+	if app.ReleaseChatRuntime(holderA, sessionA, rebound.LeaseID) || app.ReleaseChatRuntime(holderA, sessionA2, renewed.LeaseID) || app.ReleaseChatRuntime(holderA, sessionA2, "") {
+		t.Fatal("a release for another session or grant ended the lease")
+	}
+	if !app.ReleaseChatRuntime(holderA, sessionA2, rebound.LeaseID) {
 		t.Fatal("the holder could not release its lease")
 	}
-	if app.ReleaseChatRuntime(holderA) {
+	if app.ReleaseChatRuntime(holderA, sessionA2, rebound.LeaseID) {
 		t.Fatal("a released lease was released twice")
 	}
 	if claim := app.ClaimChatRuntime(holderB, sessionB, farSession(clock), ""); !claim.Granted {
