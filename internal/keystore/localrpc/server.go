@@ -25,6 +25,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
+	"github.com/dragpass/keeper/internal/keystore/onlineauth"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 	"github.com/dragpass/keeper/internal/keystore/version"
@@ -82,6 +83,7 @@ type Server struct {
 	secret     localsecret.Secret
 	appKey     []byte
 	proxy      *proxyReceiver
+	onlineChat *onlineauth.Gate
 	mu         sync.Mutex
 	sessions   map[string]session
 	challenges map[string]time.Time
@@ -146,6 +148,10 @@ func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Serve
 	if err != nil {
 		return nil, err
 	}
+	onlineChat, err := onlineauth.New(app.ServerKeyVerifier, time.Now)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		app:        app,
 		origins:    allowed,
@@ -153,6 +159,7 @@ func New(app *keystore.App, origins []string, secret localsecret.Secret) (*Serve
 		secret:     secret,
 		appKey:     secret.AppPairingKey(),
 		proxy:      &proxyReceiver{key: secret.NativeProxyKey(), instance: instance, seen: make(map[string]time.Time)},
+		onlineChat: onlineChat,
 		sessions:   make(map[string]session),
 		challenges: make(map[string]time.Time),
 

@@ -157,6 +157,8 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_rejoin_request_sign",
 	"/v1/chat/mls_room_name_open",
 	"/v1/chat/mls_room_name_seal",
+	"/v1/chat/online/execute",
+	"/v1/chat/online/prepare",
 	"/v1/chat/org_member_removal_sign",
 	"/v1/chat/room_row_name_seal",
 	"/v1/chat/runtime/claim",
@@ -370,7 +372,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 26 {
+	if len(paths) != 25 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}
@@ -434,8 +436,8 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 		return map[string]any{"messages": messages}
 	}
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(200))
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 2 MB display batch did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("a 2 MB display batch bypassed the online gate: %d %.200s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(320)); code != http.StatusBadRequest {
 		t.Fatalf("a display batch past 3 MiB was accepted: %d", code)

@@ -54,6 +54,23 @@ func chatRoutes() map[string]appRoute {
 		displayCap = proto.MLSDecryptMaxRequestBytes
 	)
 	routes := map[string]appRoute{
+		"/v1/chat/online/prepare": {
+			input:      func() any { return &onlineChatInput{} },
+			plainLimit: displayCap + 1024,
+			run:        runOnlineChatPrepare,
+		},
+		"/v1/chat/online/execute": {
+			input:      func() any { return &onlineChatExecuteInput{} },
+			plainLimit: displayCap + 2048,
+			run:        runOnlineChatExecute,
+		},
+		"/v1/chat/mls_decrypt_batch_for_app_display": {
+			input:      func() any { return &proto.MLSDecryptBatchForAppDisplayRequest{} },
+			plainLimit: displayCap,
+			run: func(_ *Server, _ appRequest, _ any) (proto.BaseResponse, error) {
+				return proto.BaseResponse{Error: "current online authorization required", ErrorCode: "online_revocation_check_required"}, nil
+			},
+		},
 		"/v1/chat/capability": {
 			input: func() any { return &struct{}{} },
 			run:   runChatCapability,
@@ -85,7 +102,6 @@ func chatRoutes() map[string]appRoute {
 		{proto.MLSJoin, func() any { return &proto.MLSJoinRequest{} }, mlsCap},
 		{proto.MLSEncrypt, func() any { return &proto.MLSEncryptRequest{} }, stateCap},
 		{proto.MLSMarkSent, func() any { return &proto.MLSMarkSentRequest{} }, stateCap},
-		{proto.MLSDecryptBatchForAppDisplay, func() any { return &proto.MLSDecryptBatchForAppDisplayRequest{} }, displayCap},
 		{proto.MLSRoomNameSeal, func() any { return &proto.MLSRoomNameSealRequest{} }, stateCap},
 		{proto.MLSRoomNameOpen, func() any { return &proto.MLSRoomNameOpenRequest{} }, stateCap},
 		{proto.MLSConversationStatus, func() any { return &proto.MLSConversationStatusRequest{} }, stateCap},

@@ -2507,6 +2507,37 @@ Old requests cannot purge or claim the new login's runtime. A late local
 cleanup clears only its captured IndexedDB namespace, and cancelled storage
 opens/transactions cannot recreate that namespace after cleanup.
 
+**App MLS display online decision.** The paired App's direct
+`/v1/chat/mls_decrypt_batch_for_app_display` route refuses with
+`online_revocation_check_required`. The App uses sealed
+`/v1/chat/online/prepare` and `/v1/chat/online/execute` instead. Prepare
+validates the display request and current local login generation, then mints a
+32-byte challenge and an HMAC-SHA256 commitment over the action and exact
+serialized request. The HMAC key stays in Keeper memory; the API sees no
+request bytes or guessable bare digest. The App submits only the challenge and
+commitment to its signed, cookie-bound
+`POST /api/v1/conversations/:id/keeper-online-decision` request. The API
+rechecks the current App session, device and conversation membership under
+its account session fence and signs the result. Its `session_start_nanos` is
+a decimal JSON string so a browser cannot round the 64-bit value. The App
+relays the answer; it cannot authorize work with a success flag.
+
+Execute compares the decision's action, request commitment, account, stored
+device ID, App session binding, conversation and organization with the
+challenge and current local login. It verifies the server signature using
+the pinned versioned key and consumes the challenge once. Missing or invalid
+proof, loss of the local generation, expiry or a Keeper restart denies the
+display. No network wait occurs under `requestMu`; proof verification and
+the existing permit/MLS handler run under the same local lock. The decision
+expires 15 seconds after the API check and a challenge expires 15 seconds
+after preparation. Neither lifetime substitutes for the online check. A
+server check ordered after revocation commit denies; an operation whose
+server check preceded a concurrent commit may complete afterward. A relay
+that holds a valid answer within its delivery window is part of that
+overlap, so the execution time itself is not a new server linearization
+point. This path does not invalidate old permits globally or gate other
+chat, Group DEK, audit, credential or Extension/MCP actions.
+
 **Chat runtime lease.** The App and the Extension share one owner, but each
 runs its own chat orchestration (outbox, pending Commit retry,
 reconciliation), so only one may drive chat at a time. The lease is
