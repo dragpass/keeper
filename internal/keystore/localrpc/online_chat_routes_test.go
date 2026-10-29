@@ -105,6 +105,51 @@ func TestOnlineAppDisplayReachesHandlerOnlyWithServerDecision(t *testing.T) {
 	if second.ErrorCode != "online_revocation_check_required" || reached != 1 {
 		t.Fatal("a consumed decision reached protected work twice")
 	}
+
+	processRequest := proto.MLSProcessRequest{
+		Permit: permit, OrgID: routePeer, ConversationID: conv,
+		Seq: 1, Epoch: 1, CommitB64: base64.StdEncoding.EncodeToString([]byte("commit")),
+	}
+	processInput := map[string]any{
+		"request": processRequest, "app_binding": input.AppBinding, "device_id": deviceID,
+	}
+	processPrepared := callFencedRoute(t, s, session, csrf, generation, lease.Epoch,
+		"/v1/chat/online/process/prepare", processInput)
+	if !processPrepared.Success {
+		t.Fatalf("MLS process prepare refused: %s", processPrepared.ErrorCode)
+	}
+	var processChallenge struct{ Challenge, Commitment string }
+	if err := json.Unmarshal(processPrepared.Data, &processChallenge); err != nil || processChallenge.Challenge == "" {
+		t.Fatal("missing MLS process challenge")
+	}
+	processDecision := onlineauth.Decision{
+		Action: proto.MLSProcess, Challenge: processChallenge.Challenge,
+		Commitment: processChallenge.Commitment, AccountID: routeOwner, DeviceID: deviceID,
+		SessionStartNanos: 1800000000000000001, AppBinding: input.AppBinding,
+		ConversationID: conv, OrgID: routePeer, IssuedAtMs: now.UnixMilli(),
+		ExpiresAtMs: now.Add(15 * time.Second).UnixMilli(), ServerKeyVersion: 3,
+	}
+	processDigest := sha256.Sum256([]byte(processDecision.Canonical()))
+	processSignature, err := rsa.SignPSS(rand.Reader, private, crypto.SHA256, processDigest[:],
+		&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processDecision.Signature = base64.StdEncoding.EncodeToString(processSignature)
+	processReached := 0
+	s.onAction = func(action string, _ []byte, _ proto.BaseResponse) {
+		if action == proto.MLSProcess {
+			processReached++
+		}
+	}
+	processExecute := callFencedRoute(t, s, session, csrf, generation, lease.Epoch,
+		"/v1/chat/online/process/execute", map[string]any{
+			"request": processRequest, "app_binding": input.AppBinding,
+			"device_id": deviceID, "decision": processDecision,
+		})
+	if processExecute.Success || processExecute.ErrorCode == "online_revocation_check_required" || processReached != 1 {
+		t.Fatalf("signed process decision did not reach the existing permit gate: code %q, reached %d", processExecute.ErrorCode, processReached)
+	}
 }
 
 func TestOnlineExecuteDecodesExactAppBindingAnd64BitServerSession(t *testing.T) {
@@ -126,5 +171,15 @@ func TestOldAppDisplayRouteRefusesBeforeProtectedHandler(t *testing.T) {
 		"/v1/chat/mls_decrypt_batch_for_app_display", map[string]any{})
 	if code != http.StatusOK || result.Success || result.ErrorCode != "online_revocation_check_required" {
 		t.Fatalf("old display route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
+	}
+}
+
+func TestOldAppMLSProcessRouteRefusesBeforeProtectedHandler(t *testing.T) {
+	server := newTestServer(t)
+	session, csrf := openTestSession(t, server)
+	code, result, _ := callRoute(t, server, session, csrf,
+		"/v1/chat/mls_process", map[string]any{})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("old MLS process route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
 	}
 }

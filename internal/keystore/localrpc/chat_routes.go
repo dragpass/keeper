@@ -64,11 +64,28 @@ func chatRoutes() map[string]appRoute {
 			plainLimit: displayCap + 2048,
 			run:        runOnlineChatExecute,
 		},
+		"/v1/chat/online/process/prepare": {
+			input:      func() any { return &onlineProcessInput{} },
+			plainLimit: mlsCap + 1024,
+			run:        runOnlineProcessPrepare,
+		},
+		"/v1/chat/online/process/execute": {
+			input:      func() any { return &onlineProcessExecuteInput{} },
+			plainLimit: mlsCap + 2048,
+			run:        runOnlineProcessExecute,
+		},
 		"/v1/chat/mls_decrypt_batch_for_app_display": {
 			input:      func() any { return &proto.MLSDecryptBatchForAppDisplayRequest{} },
 			plainLimit: displayCap,
 			run: func(_ *Server, _ appRequest, _ any) (proto.BaseResponse, error) {
 				return proto.BaseResponse{Error: "current online authorization required", ErrorCode: "online_revocation_check_required"}, nil
+			},
+		},
+		"/v1/chat/mls_process": {
+			input:      func() any { return &proto.MLSProcessRequest{} },
+			plainLimit: mlsCap,
+			run: func(_ *Server, _ appRequest, _ any) (proto.BaseResponse, error) {
+				return onlineChatRefusal(), nil
 			},
 		},
 		"/v1/chat/capability": {
@@ -98,7 +115,6 @@ func chatRoutes() map[string]appRoute {
 		{proto.MLSConversationForgetRemoved, func() any { return &proto.MLSConversationForgetRemovedRequest{} }, stateCap},
 		{proto.MLSCommitBuild, func() any { return &proto.MLSCommitBuildRequest{} }, mlsCap},
 		{proto.MLSCommitConfirm, func() any { return &proto.MLSCommitConfirmRequest{} }, mlsCap},
-		{proto.MLSProcess, func() any { return &proto.MLSProcessRequest{} }, mlsCap},
 		{proto.MLSJoin, func() any { return &proto.MLSJoinRequest{} }, mlsCap},
 		{proto.MLSEncrypt, func() any { return &proto.MLSEncryptRequest{} }, stateCap},
 		{proto.MLSMarkSent, func() any { return &proto.MLSMarkSentRequest{} }, stateCap},
