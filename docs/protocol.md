@@ -2522,9 +2522,13 @@ its account session fence and signs the result. Its `session_start_nanos` is
 a decimal JSON string so a browser cannot round the 64-bit value. The App
 relays the answer; it cannot authorize work with a success flag.
 
-Execute compares the decision's action, request commitment, account, stored
-device ID, App session binding, conversation and organization with the
-challenge and current local login. It verifies the server signature using
+The App passes the device ID claimed by its access token in both sealed
+calls. This value is untrusted until the API verifies the App request and
+signs the current device ID in the decision; App browser device IDs need not
+exist in Keeper's separate device-ID slot. Execute compares the decision's
+action, request commitment, account, claimed device ID, App session binding,
+conversation and organization with the challenge and current local login. It
+verifies the server signature using
 the pinned versioned key and consumes the challenge once. Missing or invalid
 proof, loss of the local generation, expiry or a Keeper restart denies the
 display. No network wait occurs under `requestMu`; proof verification and

@@ -94,6 +94,25 @@ func TestGateRejectsChangedRequestAndLocalSession(t *testing.T) {
 	}
 }
 
+func TestGateRejectsDecisionForAnotherDevice(t *testing.T) {
+	now := time.Unix(1000, 0)
+	gate, err := New(testVerifier{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := testIdentity()
+	request := []byte("sealed")
+	challenge, commitment, err := gate.Prepare("mls_decrypt_batch_for_app_display", request, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := testDecision(challenge, commitment, now)
+	decision.DeviceID = "another-device"
+	if gate.VerifyAndConsume(decision, decision.Action, request, id) == nil {
+		t.Fatal("another device's online decision was accepted")
+	}
+}
+
 func TestGateRejectsExpiredAndUnsignedDecision(t *testing.T) {
 	now := time.Unix(1000, 0)
 	clock := now

@@ -26,11 +26,6 @@ func TestOnlineAppDisplayReachesHandlerOnlyWithServerDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	deviceID := routePeer
-	if _, _, err := keychain.EnsureDeviceID(s.app.Store, func() (string, keychain.DeviceIDSource, error) {
-		return deviceID, keychain.DeviceIDCandidate, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +63,7 @@ func TestOnlineAppDisplayReachesHandlerOnlyWithServerDecision(t *testing.T) {
 		Permit: permit, OrgID: routePeer, ConversationID: conv,
 		Messages: []proto.MLSDisplayMessage{{Seq: 1, CiphertextB64: base64.StdEncoding.EncodeToString([]byte("ciphertext"))}},
 	}
-	input := onlineChatInput{Request: request, AppBinding: "app-binding"}
+	input := onlineChatInput{Request: request, AppBinding: "app-binding", DeviceID: deviceID}
 	prepared := callFencedRoute(t, s, session, csrf, generation, lease.Epoch, "/v1/chat/online/prepare", input)
 	if !prepared.Success {
 		t.Fatalf("prepare refused: %s", prepared.ErrorCode)
