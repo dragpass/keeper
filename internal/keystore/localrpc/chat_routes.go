@@ -149,6 +149,11 @@ func chatRoutes() map[string]appRoute {
 	registerOnlineScopedAction[proto.MLSMarkSentRequest](routes, proto.MLSMarkSent, stateCap)
 	registerOnlineScopedAction[proto.MLSRoomNameOpenRequest](routes, proto.MLSRoomNameOpen, stateCap)
 	registerOnlineScopedAction[proto.MLSRoomNameSealRequest](routes, proto.MLSRoomNameSeal, stateCap)
+	registerOnlineScopedAction[proto.MLSConversationStatusRequest](routes, proto.MLSConversationStatus, stateCap)
+	registerOnlineScopedAction[proto.MLSEpochComparisonRequest](routes, proto.MLSEpochComparison, stateCap)
+	registerOnlineScopedAction[proto.MLSRejoinRequestSignRequest](routes, proto.MLSRejoinRequestSign, stateCap)
+	registerOnlineScopedAction[proto.MLSLeaveRequestSignRequest](routes, proto.MLSLeaveRequestSign, stateCap)
+	registerOnlineScopedAction[proto.ChatStateReadOutboxRequest](routes, proto.ChatStateReadOutbox, stateCap)
 	return routes
 }
 

@@ -2512,7 +2512,10 @@ opens/transactions cannot recreate that namespace after cleanup.
 `/v1/chat/mls_group_create`, `/v1/chat/mls_encrypt`,
 `/v1/chat/mls_commit_build`, `/v1/chat/mls_commit_confirm`,
 `/v1/chat/mls_join`, `/v1/chat/mls_mark_sent`,
-`/v1/chat/mls_room_name_open` and `/v1/chat/mls_room_name_seal`
+`/v1/chat/mls_room_name_open`, `/v1/chat/mls_room_name_seal`,
+`/v1/chat/mls_conversation_status`, `/v1/chat/mls_epoch_comparison`,
+`/v1/chat/mls_rejoin_request_sign`, `/v1/chat/mls_leave_request_sign`
+and `/v1/chat/chat_state_read_outbox`
 routes refuse with `online_revocation_check_required`. Display uses sealed
 `/v1/chat/online/prepare` and `/v1/chat/online/execute`; process uses
 `/v1/chat/online/process/prepare` and `/v1/chat/online/process/execute`;
@@ -2520,7 +2523,8 @@ group creation uses `/v1/chat/online/mls_group_create/prepare` and
 `/v1/chat/online/mls_group_create/execute`; message encryption uses
 `/v1/chat/online/mls_encrypt/prepare` and
 `/v1/chat/online/mls_encrypt/execute`. Commit build/confirm, join and mark
-sent, room-name open and room-name seal use `/v1/chat/online/<action>/prepare` and
+sent, room-name open/seal, conversation status, epoch comparison,
+rejoin/leave signing and outbox read use `/v1/chat/online/<action>/prepare` and
 `/v1/chat/online/<action>/execute` for their exact action name. The serialized request copy used
 for Keeper's private commitment is zeroized after each call.
 Prepare validates the scoped request and current local login generation, then

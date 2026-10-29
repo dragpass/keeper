@@ -157,19 +157,29 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_rejoin_request_sign",
 	"/v1/chat/mls_room_name_open",
 	"/v1/chat/mls_room_name_seal",
+	"/v1/chat/online/chat_state_read_outbox/execute",
+	"/v1/chat/online/chat_state_read_outbox/prepare",
 	"/v1/chat/online/execute",
 	"/v1/chat/online/mls_commit_build/execute",
 	"/v1/chat/online/mls_commit_build/prepare",
 	"/v1/chat/online/mls_commit_confirm/execute",
 	"/v1/chat/online/mls_commit_confirm/prepare",
+	"/v1/chat/online/mls_conversation_status/execute",
+	"/v1/chat/online/mls_conversation_status/prepare",
 	"/v1/chat/online/mls_encrypt/execute",
 	"/v1/chat/online/mls_encrypt/prepare",
+	"/v1/chat/online/mls_epoch_comparison/execute",
+	"/v1/chat/online/mls_epoch_comparison/prepare",
 	"/v1/chat/online/mls_group_create/execute",
 	"/v1/chat/online/mls_group_create/prepare",
 	"/v1/chat/online/mls_join/execute",
 	"/v1/chat/online/mls_join/prepare",
+	"/v1/chat/online/mls_leave_request_sign/execute",
+	"/v1/chat/online/mls_leave_request_sign/prepare",
 	"/v1/chat/online/mls_mark_sent/execute",
 	"/v1/chat/online/mls_mark_sent/prepare",
+	"/v1/chat/online/mls_rejoin_request_sign/execute",
+	"/v1/chat/online/mls_rejoin_request_sign/prepare",
 	"/v1/chat/online/mls_room_name_open/execute",
 	"/v1/chat/online/mls_room_name_open/prepare",
 	"/v1/chat/online/mls_room_name_seal/execute",
@@ -390,7 +400,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 16 {
+	if len(paths) != 11 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}
@@ -434,7 +444,7 @@ func TestChatActionRoutesRunWithTheLeaseAndKeepTheRawRequest(t *testing.T) {
 	// The route hands the handler the bytes it was sent, so the handler's
 	// strict decoder still sees (and refuses) a duplicate key.
 	duplicate := `{"org_id":"` + routeOwner + `","org_id":"` + routePeer + `"}`
-	response := localRequest(server, http.MethodPost, "/v1/chat/mls_conversation_status", duplicate, session, csrf)
+	response := localRequest(server, http.MethodPost, "/v1/chat/mls_group_discard_unaccepted", duplicate, session, csrf)
 	var status routeResult
 	_ = json.Unmarshal(response.Body.Bytes(), &status)
 	if response.Code != http.StatusOK || status.Success || status.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) || !strings.Contains(status.Error, "duplicate") {
