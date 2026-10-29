@@ -26,6 +26,13 @@ func TestOnlineAppDisplayReachesHandlerOnlyWithServerDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	deviceID := routePeer
+	storedDeviceID, _, err := keychain.EnsureDeviceID(s.app.Store,
+		func() (string, keychain.DeviceIDSource, error) {
+			return deviceID, keychain.DeviceIDCandidate, nil
+		})
+	if err != nil || storedDeviceID != deviceID {
+		t.Fatal("failed to bind test Keeper device identity")
+	}
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +71,29 @@ func TestOnlineAppDisplayReachesHandlerOnlyWithServerDecision(t *testing.T) {
 		Messages: []proto.MLSDisplayMessage{{Seq: 1, CiphertextB64: base64.StdEncoding.EncodeToString([]byte("ciphertext"))}},
 	}
 	input := onlineChatInput{Request: request, AppBinding: "app-binding", DeviceID: deviceID}
+	foreign := input
+	foreign.DeviceID = conv
+	foreignPrepare := callFencedRoute(t, s, session, csrf, generation, lease.Epoch,
+		"/v1/chat/online/prepare", foreign)
+	if foreignPrepare.Success || foreignPrepare.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("foreign device prepared local Keeper chat work: success %v, code %q",
+			foreignPrepare.Success, foreignPrepare.ErrorCode)
+	}
+	if err := keychain.DeleteDeviceID(s.app.Store); err != nil {
+		t.Fatal(err)
+	}
+	missingDevicePrepare := callFencedRoute(t, s, session, csrf, generation, lease.Epoch,
+		"/v1/chat/online/prepare", input)
+	if missingDevicePrepare.Success || missingDevicePrepare.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("missing Keeper device identity prepared chat work: success %v, code %q",
+			missingDevicePrepare.Success, missingDevicePrepare.ErrorCode)
+	}
+	if _, _, err := keychain.EnsureDeviceID(s.app.Store,
+		func() (string, keychain.DeviceIDSource, error) {
+			return deviceID, keychain.DeviceIDCandidate, nil
+		}); err != nil {
+		t.Fatal(err)
+	}
 	prepared := callFencedRoute(t, s, session, csrf, generation, lease.Epoch, "/v1/chat/online/prepare", input)
 	if !prepared.Success {
 		t.Fatalf("prepare refused: %s", prepared.ErrorCode)

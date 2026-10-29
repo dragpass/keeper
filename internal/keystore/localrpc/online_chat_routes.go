@@ -81,6 +81,10 @@ func onlineChatIdentity(s *Server, request appRequest, scoped onlineScopedReques
 	if scoped.Validate() != nil || appBinding == "" || !keychain.ValidDeviceID(deviceID) {
 		return onlineauth.Identity{}, nil, false
 	}
+	storedDeviceID, found, err := keychain.GetDeviceID(s.app.Store)
+	if err != nil || !found || storedDeviceID != deviceID {
+		return onlineauth.Identity{}, nil, false
+	}
 	permit, orgID, conversationID := scoped.ChatStateContext()
 	login, err := keychain.ReadChatLogin(s.app.Store)
 	if err != nil || login.Committing || login.Generation == "" || login.Generation != request.generation ||

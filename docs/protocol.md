@@ -2527,9 +2527,12 @@ sent, room-name open/seal, conversation status, epoch comparison,
 rejoin/leave signing and outbox read use `/v1/chat/online/<action>/prepare` and
 `/v1/chat/online/<action>/execute` for their exact action name. The serialized request copy used
 for Keeper's private commitment is zeroized after each call.
-Prepare validates the scoped request and current local login generation, then
-mints a 32-byte challenge and an HMAC-SHA256 commitment over the action and exact
-serialized request. The HMAC key stays in Keeper memory; the API sees no
+Prepare validates the scoped request, current local login generation and the
+device ID stored by this Keeper. Execute repeats those checks before consuming
+the signed decision; a missing or different local device ID fails closed.
+Prepare then mints a 32-byte challenge and an HMAC-SHA256 commitment over
+the action and exact serialized request. The HMAC key stays in Keeper
+memory; the API sees no
 request bytes or guessable bare digest. The App submits only the challenge and
 commitment to its signed, cookie-bound
 `POST /api/v1/conversations/:id/keeper-online-decision` request. The API
