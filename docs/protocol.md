@@ -2507,16 +2507,20 @@ Old requests cannot purge or claim the new login's runtime. A late local
 cleanup clears only its captured IndexedDB namespace, and cancelled storage
 opens/transactions cannot recreate that namespace after cleanup.
 
-**App MLS display, process, group-create and encrypt online decision.** The paired App's direct
+**App MLS protected-action online decision.** The paired App's direct
 `/v1/chat/mls_decrypt_batch_for_app_display`, `/v1/chat/mls_process`,
-`/v1/chat/mls_group_create` and `/v1/chat/mls_encrypt`
+`/v1/chat/mls_group_create`, `/v1/chat/mls_encrypt`,
+`/v1/chat/mls_commit_build`, `/v1/chat/mls_commit_confirm`,
+`/v1/chat/mls_join` and `/v1/chat/mls_mark_sent`
 routes refuse with `online_revocation_check_required`. Display uses sealed
 `/v1/chat/online/prepare` and `/v1/chat/online/execute`; process uses
 `/v1/chat/online/process/prepare` and `/v1/chat/online/process/execute`;
 group creation uses `/v1/chat/online/mls_group_create/prepare` and
 `/v1/chat/online/mls_group_create/execute`; message encryption uses
 `/v1/chat/online/mls_encrypt/prepare` and
-`/v1/chat/online/mls_encrypt/execute`. The serialized request copy used
+`/v1/chat/online/mls_encrypt/execute`. Commit build/confirm, join and mark
+sent use `/v1/chat/online/<action>/prepare` and
+`/v1/chat/online/<action>/execute` for their exact action name. The serialized request copy used
 for Keeper's private commitment is zeroized after each call.
 Prepare validates the scoped request and current local login generation, then
 mints a 32-byte challenge and an HMAC-SHA256 commitment over the action and exact

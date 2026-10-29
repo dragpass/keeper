@@ -143,6 +143,10 @@ func chatRoutes() map[string]appRoute {
 	}
 	registerOnlineScopedAction[proto.MLSGroupCreateRequest](routes, proto.MLSGroupCreate, mlsCap)
 	registerOnlineScopedAction[proto.MLSEncryptRequest](routes, proto.MLSEncrypt, stateCap)
+	registerOnlineScopedAction[proto.MLSCommitBuildRequest](routes, proto.MLSCommitBuild, mlsCap)
+	registerOnlineScopedAction[proto.MLSCommitConfirmRequest](routes, proto.MLSCommitConfirm, mlsCap)
+	registerOnlineScopedAction[proto.MLSJoinRequest](routes, proto.MLSJoin, mlsCap)
+	registerOnlineScopedAction[proto.MLSMarkSentRequest](routes, proto.MLSMarkSent, stateCap)
 	return routes
 }
 

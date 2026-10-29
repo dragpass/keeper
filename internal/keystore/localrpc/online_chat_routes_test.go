@@ -203,3 +203,16 @@ func TestOldAppMLSEncryptRouteRefusesBeforeProtectedHandler(t *testing.T) {
 		t.Fatalf("old MLS encrypt route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
 	}
 }
+
+func TestOldAppMLSStateMutationRoutesRequireOnlineDecision(t *testing.T) {
+	for _, action := range []string{proto.MLSCommitBuild, proto.MLSCommitConfirm, proto.MLSJoin, proto.MLSMarkSent} {
+		t.Run(action, func(t *testing.T) {
+			server := newTestServer(t)
+			session, csrf := openTestSession(t, server)
+			code, result, _ := callRoute(t, server, session, csrf, "/v1/chat/"+action, map[string]any{})
+			if code != http.StatusOK || result.Success || result.ErrorCode != "online_revocation_check_required" {
+				t.Fatalf("old MLS mutation route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
+			}
+		})
+	}
+}

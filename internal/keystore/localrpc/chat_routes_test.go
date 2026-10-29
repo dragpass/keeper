@@ -158,10 +158,18 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_room_name_open",
 	"/v1/chat/mls_room_name_seal",
 	"/v1/chat/online/execute",
+	"/v1/chat/online/mls_commit_build/execute",
+	"/v1/chat/online/mls_commit_build/prepare",
+	"/v1/chat/online/mls_commit_confirm/execute",
+	"/v1/chat/online/mls_commit_confirm/prepare",
 	"/v1/chat/online/mls_encrypt/execute",
 	"/v1/chat/online/mls_encrypt/prepare",
 	"/v1/chat/online/mls_group_create/execute",
 	"/v1/chat/online/mls_group_create/prepare",
+	"/v1/chat/online/mls_join/execute",
+	"/v1/chat/online/mls_join/prepare",
+	"/v1/chat/online/mls_mark_sent/execute",
+	"/v1/chat/online/mls_mark_sent/prepare",
 	"/v1/chat/online/prepare",
 	"/v1/chat/online/process/execute",
 	"/v1/chat/online/process/prepare",
@@ -378,7 +386,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 22 {
+	if len(paths) != 18 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}
@@ -456,8 +464,8 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 	code, result, body = callRoute(t, server, session, csrf, "/v1/chat/mls_commit_build", map[string]any{
 		"app_context_b64": strings.Repeat("A", 200_000),
 	})
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 200 KB commit build did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("a 200 KB commit build bypassed the online gate: %d %.200s", code, body)
 	}
 }
 
