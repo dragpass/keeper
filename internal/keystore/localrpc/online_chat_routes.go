@@ -6,6 +6,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/onlineauth"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 type onlineChatInput struct {
@@ -108,6 +109,7 @@ func runOnlineChatPrepare(s *Server, request appRequest, value any) (proto.BaseR
 }
 
 func onlineChatPrepare(s *Server, action string, identity onlineauth.Identity, encoded []byte) (proto.BaseResponse, error) {
+	defer secure.Zeroize(encoded)
 	challenge, commitment, err := s.onlineChat.Prepare(action, encoded, identity)
 	if err != nil {
 		return onlineChatRefusal(), nil
@@ -127,6 +129,7 @@ func onlineChatExecute(s *Server, request appRequest, action string, scoped onli
 	appBinding, deviceID string, decision onlineauth.Decision) (proto.BaseResponse, error) {
 	return s.handleFencedSteps(request, request.epoch, func(step stepFunc) (proto.BaseResponse, error) {
 		identity, encoded, ok := onlineChatIdentity(s, request, scoped, appBinding, deviceID)
+		defer secure.Zeroize(encoded)
 		if !ok || s.onlineChat.VerifyAndConsume(decision, action, encoded, identity) != nil {
 			return onlineChatRefusal(), nil
 		}

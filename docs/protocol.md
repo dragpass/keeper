@@ -2507,14 +2507,17 @@ Old requests cannot purge or claim the new login's runtime. A late local
 cleanup clears only its captured IndexedDB namespace, and cancelled storage
 opens/transactions cannot recreate that namespace after cleanup.
 
-**App MLS display, process and group-create online decision.** The paired App's direct
-`/v1/chat/mls_decrypt_batch_for_app_display`, `/v1/chat/mls_process` and
-`/v1/chat/mls_group_create`
+**App MLS display, process, group-create and encrypt online decision.** The paired App's direct
+`/v1/chat/mls_decrypt_batch_for_app_display`, `/v1/chat/mls_process`,
+`/v1/chat/mls_group_create` and `/v1/chat/mls_encrypt`
 routes refuse with `online_revocation_check_required`. Display uses sealed
 `/v1/chat/online/prepare` and `/v1/chat/online/execute`; process uses
 `/v1/chat/online/process/prepare` and `/v1/chat/online/process/execute`;
 group creation uses `/v1/chat/online/mls_group_create/prepare` and
-`/v1/chat/online/mls_group_create/execute`.
+`/v1/chat/online/mls_group_create/execute`; message encryption uses
+`/v1/chat/online/mls_encrypt/prepare` and
+`/v1/chat/online/mls_encrypt/execute`. The serialized request copy used
+for Keeper's private commitment is zeroized after each call.
 Prepare validates the scoped request and current local login generation, then
 mints a 32-byte challenge and an HMAC-SHA256 commitment over the action and exact
 serialized request. The HMAC key stays in Keeper memory; the API sees no
