@@ -141,6 +141,7 @@ func chatRoutes() map[string]appRoute {
 		path, route := chatActionRoute(r.action, r.input, r.limit)
 		routes[path] = route
 	}
+	registerOnlineScopedAction[proto.MLSGroupCreateRequest](routes, proto.MLSGroupCreate, mlsCap)
 	return routes
 }
 

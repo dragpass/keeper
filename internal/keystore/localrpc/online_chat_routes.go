@@ -35,6 +35,43 @@ type onlineScopedRequest interface {
 	ChatStateContext() (proto.ChatStatePermit, string, string)
 }
 
+type onlineScopedInput[T onlineScopedRequest] struct {
+	Request    T      `json:"request"`
+	AppBinding string `json:"app_binding"`
+	DeviceID   string `json:"device_id"`
+}
+
+type onlineScopedExecuteInput[T onlineScopedRequest] struct {
+	onlineScopedInput[T]
+	Decision onlineauth.Decision `json:"decision"`
+}
+
+func registerOnlineScopedAction[T onlineScopedRequest](routes map[string]appRoute, action string, limit int) {
+	prefix := "/v1/chat/online/" + action
+	routes[prefix+"/prepare"] = appRoute{
+		input: func() any { return &onlineScopedInput[T]{} }, plainLimit: limit + 1024,
+		run: func(s *Server, request appRequest, value any) (proto.BaseResponse, error) {
+			input := value.(*onlineScopedInput[T])
+			identity, encoded, ok := onlineChatIdentity(s, request, input.Request, input.AppBinding, input.DeviceID)
+			if !ok {
+				return onlineChatRefusal(), nil
+			}
+			return onlineChatPrepare(s, action, identity, encoded)
+		},
+	}
+	routes[prefix+"/execute"] = appRoute{
+		input: func() any { return &onlineScopedExecuteInput[T]{} }, plainLimit: limit + 2048,
+		run: func(s *Server, request appRequest, value any) (proto.BaseResponse, error) {
+			input := value.(*onlineScopedExecuteInput[T])
+			return onlineChatExecute(s, request, action, input.Request, input.AppBinding, input.DeviceID, input.Decision)
+		},
+	}
+	routes["/v1/chat/"+action] = appRoute{
+		input: func() any { var request T; return &request }, plainLimit: limit,
+		run: func(_ *Server, _ appRequest, _ any) (proto.BaseResponse, error) { return onlineChatRefusal(), nil },
+	}
+}
+
 func onlineChatRefusal() proto.BaseResponse {
 	return proto.BaseResponse{Error: "current online authorization required", ErrorCode: "online_revocation_check_required"}
 }

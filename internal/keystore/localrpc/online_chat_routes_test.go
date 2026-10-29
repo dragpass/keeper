@@ -183,3 +183,13 @@ func TestOldAppMLSProcessRouteRefusesBeforeProtectedHandler(t *testing.T) {
 		t.Fatalf("old MLS process route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
 	}
 }
+
+func TestOldAppMLSGroupCreateRouteRefusesBeforeProtectedHandler(t *testing.T) {
+	server := newTestServer(t)
+	session, csrf := openTestSession(t, server)
+	code, result, _ := callRoute(t, server, session, csrf,
+		"/v1/chat/mls_group_create", map[string]any{})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "online_revocation_check_required" {
+		t.Fatalf("old MLS group-create route admitted or used another gate: HTTP %d, success %v, code %q", code, result.Success, result.ErrorCode)
+	}
+}
