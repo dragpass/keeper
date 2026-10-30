@@ -533,7 +533,7 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`group_session_open`|`encrypted_group_dek`, `org_id?` (0.0.58), `grant_context?` (0.0.58)|`{ group_handle, expires_at_ms }`|Unwrap with active privkey, store in memguard, return opaque handle. The only Group DEK open path; raw Group DEK never crosses IPC. `org_id` names the org whose grant this is; Keeper cannot check it against the DEK. `grant_context` records org, group, version and policy on the handle. A `legacy` context keeps the empty OAEP label; a labeled policy must match its OAEP label, or opening returns `GROUP_GRANT_POLICY_MISMATCH`. With both fields, `org_id` must equal `grant_context.org_id`. An unscoped handle does not establish current online authority.|
+|`group_session_open`|`encrypted_group_dek`, `org_id?` (0.0.58), `grant_context?` (0.0.58)|`{ group_handle, expires_at_ms }`|Unwrap with active privkey, store in memguard, return opaque handle. The only Group DEK open path; raw Group DEK never crosses IPC. `org_id` names the org whose grant this is; Keeper cannot check it against the DEK. `grant_context` records org, group, version and policy on the handle. Keeper also records a digest of the exact wrapped grant bytes, computed locally; neither the digest nor the caller-supplied context is current authority. A `legacy` context keeps the empty OAEP label; a labeled policy must match its OAEP label, or opening returns `GROUP_GRANT_POLICY_MISMATCH`. With both fields, `org_id` must equal `grant_context.org_id`. An unscoped handle does not establish current online authority.|
 |`group_session_close`|`group_handle`|_empty_|Discard. Idempotent.|
 
 ### Audit-only Group DEK versions (0.0.58)

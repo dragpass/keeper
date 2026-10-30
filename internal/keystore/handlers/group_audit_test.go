@@ -280,8 +280,10 @@ func TestAuditGrantLabelCannotBeDowngradedOrMoved(t *testing.T) {
 	} else {
 		handle := resp.Data.(proto.GroupSessionOpenResponseData).GroupHandle
 		label, err := deps.GroupSessions.LabelOf(handle)
+		digest := sha256.Sum256(legacyGrant)
 		if err != nil || label.OrgID != legacyClaim.OrgID || label.GroupID != legacyClaim.GroupID ||
-			label.DekVersion != legacyClaim.DekVersion || label.GrantPolicy != proto.GrantPolicyLegacy {
+			label.DekVersion != legacyClaim.DekVersion || label.GrantPolicy != proto.GrantPolicyLegacy ||
+			label.GrantDigest != base64.RawURLEncoding.EncodeToString(digest[:]) {
 			t.Fatal("legacy handle lost its declared scope")
 		}
 	}

@@ -43,13 +43,15 @@ type secretEntry struct {
 
 // Label is the non-secret context a group handle was opened with. OrgID is
 // the org the opener named; GrantPolicy, GroupID and DekVersion come from the
-// grant context the grant was opened under. A legacy handle has an empty
-// GrantPolicy.
+// grant context the grant was opened under. GrantDigest identifies the exact
+// randomized wrapped grant bytes opened by Keeper; the caller cannot set it.
+// A legacy handle without context has an empty GrantPolicy.
 type Label struct {
 	OrgID       string
 	GrantPolicy string
 	GroupID     string
 	DekVersion  int
+	GrantDigest string
 }
 
 // Store is the shared base for opaque-handle session stores. The two existing

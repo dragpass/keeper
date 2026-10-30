@@ -17,6 +17,7 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -107,6 +108,14 @@ func TestHandleGroupDEKGenerateAndOpen_RoundTrip(t *testing.T) {
 	encryptedRaw, err := base64.StdEncoding.DecodeString(data.EncryptedForMeB64)
 	if err != nil {
 		t.Fatalf("decode encrypted_for_me_b64: %v", err)
+	}
+	label, err := deps.GroupSessions.LabelOf(data.GroupHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encryptedRaw)
+	if label.GrantDigest != base64.RawURLEncoding.EncodeToString(digest[:]) {
+		t.Fatal("generated handle did not bind its wrapped grant")
 	}
 	priv, err := crypto.ParsePrivateKey(privPEM)
 	if err != nil {

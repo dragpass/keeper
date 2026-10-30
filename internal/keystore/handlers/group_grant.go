@@ -10,6 +10,8 @@ package handlers
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -39,15 +41,18 @@ func isDecryptOnlyLabel(label sessions.Label) bool {
 }
 
 // handleLabel is what a handle remembers about the grant it was opened from.
-func handleLabel(orgID string, gc *proto.GrantContext) sessions.Label {
+func handleLabel(orgID string, gc *proto.GrantContext, wrappedGrant []byte) sessions.Label {
+	digest := sha256.Sum256(wrappedGrant)
+	grantDigest := base64.RawURLEncoding.EncodeToString(digest[:])
 	if gc == nil {
-		return sessions.Label{OrgID: orgID}
+		return sessions.Label{OrgID: orgID, GrantDigest: grantDigest}
 	}
 	return sessions.Label{
 		OrgID:       gc.OrgID,
 		GrantPolicy: gc.Policy,
 		GroupID:     gc.GroupID,
 		DekVersion:  gc.DekVersion,
+		GrantDigest: grantDigest,
 	}
 }
 

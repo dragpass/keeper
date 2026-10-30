@@ -58,7 +58,7 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 		}
 	}
 
-	handle, expiresAt, openErr := d.GroupSessions.OpenLabeled(rawDEK, handleLabel("", req.GrantContext))
+	handle, expiresAt, openErr := d.GroupSessions.OpenLabeled(rawDEK, handleLabel("", req.GrantContext, encrypted))
 	if openErr != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group dek generate error: store.Open failed: %v", openErr)
