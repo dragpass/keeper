@@ -275,6 +275,16 @@ func TestAuditGrantLabelCannotBeDowngradedOrMoved(t *testing.T) {
 	if resp := open(legacyGrant, nil); !resp.Success {
 		t.Fatalf("legacy grant: %+v", resp)
 	}
+	if resp := open(legacyGrant, &legacyClaim); !resp.Success {
+		t.Fatalf("legacy grant with scoped empty label: %+v", resp)
+	} else {
+		handle := resp.Data.(proto.GroupSessionOpenResponseData).GroupHandle
+		label, err := deps.GroupSessions.LabelOf(handle)
+		if err != nil || label.OrgID != legacyClaim.OrgID || label.GroupID != legacyClaim.GroupID ||
+			label.DekVersion != legacyClaim.DekVersion || label.GrantPolicy != proto.GrantPolicyLegacy {
+			t.Fatal("legacy handle lost its declared scope")
+		}
+	}
 	if resp := open(auditGrant, audit); !resp.Success {
 		t.Fatalf("audit grant under its label: %+v", resp)
 	}
