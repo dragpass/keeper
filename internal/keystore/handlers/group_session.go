@@ -78,6 +78,7 @@ func HandleGroupSessionClose(d Deps, req proto.GroupSessionCloseRequest) proto.B
 	// key that would open those messages is gone, so the permission to open them
 	// goes with it rather than waiting out its 30-second deadline.
 	d.MessageChallenges.PurgeHandle(req.GroupHandle)
+	d.GroupDisplayChallenges.PurgeHandle(req.GroupHandle)
 	d.Logger.Println("group session close successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupSessionCloseResponseData{}}
 }

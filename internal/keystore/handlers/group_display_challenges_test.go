@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 func TestGroupDisplayChallengeConsumedOnceAndPurgedWithHandle(t *testing.T) {
@@ -28,6 +30,22 @@ func TestGroupDisplayChallengeConsumedOnceAndPurgedWithHandle(t *testing.T) {
 	store.PurgeHandle("first-handle")
 	if _, ok := store.Consume("second-challenge", now); ok {
 		t.Fatal("closed handle retained a display challenge")
+	}
+}
+
+func TestGroupSessionClosePurgesPendingDisplayChallenge(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	deps.GroupDisplayChallenges = NewGroupDisplayChallengeStore()
+	now := deps.Now()
+	handle := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	if err := deps.GroupDisplayChallenges.Put("pending", groupDisplayContext{groupHandle: handle}, now); err != nil {
+		t.Fatal(err)
+	}
+	if resp := HandleGroupSessionClose(deps, proto.GroupSessionCloseRequest{GroupHandle: handle}); !resp.Success {
+		t.Fatalf("close handle: %s", resp.Error)
+	}
+	if _, ok := deps.GroupDisplayChallenges.Consume("pending", now); ok {
+		t.Fatal("closed Group handle retained a display challenge")
 	}
 }
 

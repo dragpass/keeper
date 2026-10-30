@@ -71,19 +71,20 @@ func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse 
 
 func (a *App) HandlersDeps() handlers.Deps {
 	return handlers.Deps{
-		Logger:              a.Logger,
-		Store:               a.Store,
-		Clock:               a.Clock,
-		Rand:                a.Rand,
-		ServerKeyVerifier:   a.ServerKeyVerifier,
-		GroupSessions:       a.GroupSessions,
-		RecoverySessions:    a.RecoverySessions,
-		RecoveryKeySessions: a.RecoveryKeySessions,
-		Clipboard:           a.Clipboard,
-		MessageChallenges:   a.MessageChallenges,
-		AuditAuthorizations: a.AuditAuthorizations,
-		CredentialNonces:    a.CredentialNonces,
-		KeyTransparency:     a.KeyTransparency,
+		Logger:                 a.Logger,
+		Store:                  a.Store,
+		Clock:                  a.Clock,
+		Rand:                   a.Rand,
+		ServerKeyVerifier:      a.ServerKeyVerifier,
+		GroupSessions:          a.GroupSessions,
+		RecoverySessions:       a.RecoverySessions,
+		RecoveryKeySessions:    a.RecoveryKeySessions,
+		Clipboard:              a.Clipboard,
+		MessageChallenges:      a.MessageChallenges,
+		GroupDisplayChallenges: a.GroupDisplayChallenges,
+		AuditAuthorizations:    a.AuditAuthorizations,
+		CredentialNonces:       a.CredentialNonces,
+		KeyTransparency:        a.KeyTransparency,
 	}
 }
 
