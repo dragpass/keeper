@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -50,7 +51,9 @@ func HandleGroupSessionOpen(d Deps, req proto.GroupSessionOpenRequest) proto.Bas
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "unexpected group dek length (want 32)")
 	}
 
-	handle, expiresAt, err := d.GroupSessions.OpenLabeled(rawDEK, handleLabel(req.OrgID, req.GrantContext))
+	label := handleLabel(req.OrgID, req.GrantContext)
+	label.GrantDigest = sha256.Sum256(encrypted)
+	handle, expiresAt, err := d.GroupSessions.OpenLabeled(rawDEK, label)
 	if err != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group session open error: store.Open failed: %v", err)
