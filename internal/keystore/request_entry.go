@@ -77,6 +77,7 @@ func (a *App) HandlersDeps() handlers.Deps {
 		Rand:                a.Rand,
 		ServerKeyVerifier:   a.ServerKeyVerifier,
 		GroupSessions:       a.GroupSessions,
+		GroupOnline:         a.GroupOnline,
 		RecoverySessions:    a.RecoverySessions,
 		RecoveryKeySessions: a.RecoveryKeySessions,
 		Clipboard:           a.Clipboard,

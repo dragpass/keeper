@@ -30,7 +30,9 @@ func groupActions() map[string]action {
 		),
 
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
-		proto.ActionGroupDecryptToClipboard: wrap(handlers.HandleGroupDecryptToClipboard),
+		proto.ActionGroupDecryptToClipboard: direct(handlers.GroupOnlineRequired),
+		proto.ActionGroupOnlinePrepare:      wrap(handlers.HandleGroupOnlinePrepare),
+		proto.ActionGroupOnlineExecute:      wrap(handlers.HandleGroupOnlineExecute),
 
 		// raw Group DEK direct AES-GCM encrypt (mirror of group_decrypt_to_clipboard).
 		proto.ActionGroupEncrypt: wrap(handlers.HandleGroupEncrypt),

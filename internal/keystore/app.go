@@ -29,6 +29,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
+	"github.com/dragpass/keeper/internal/keystore/onlineauth"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -99,6 +100,7 @@ type App struct {
 	Logger              Logger
 	ServerKeyVerifier   ServerKeyVerifier
 	GroupSessions       *sessions.GroupSessionStore
+	GroupOnline         *onlineauth.GroupGate
 	RecoverySessions    *sessions.RecoverySessionStore
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	Clipboard           clipboard.Clipboard
@@ -162,6 +164,11 @@ func NewApp(deps Deps) *App {
 		// DefaultServerKeyVerifier holds the SecretStore explicitly. The
 		// app.Store fallback above runs first, so it's safe to delegate here.
 		app.ServerKeyVerifier = verifier.NewDefaultServerKeyVerifier(app.Store)
+	}
+	if gate, err := onlineauth.NewGroup(app.ServerKeyVerifier, app.Clock); err == nil {
+		app.GroupOnline = gate
+	} else {
+		app.Logger.Println("group online challenge initialization failed")
 	}
 	if app.GroupSessions == nil {
 		app.GroupSessions = sessions.NewGroupSessionStore(sessions.GroupSessionTTL)

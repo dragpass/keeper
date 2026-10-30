@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/logger"
+	"github.com/dragpass/keeper/internal/keystore/onlineauth"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -33,6 +34,7 @@ type Deps struct {
 	Rand                io.Reader
 	ServerKeyVerifier   verifier.ServerKeyVerifier
 	GroupSessions       *sessions.GroupSessionStore
+	GroupOnline         *onlineauth.GroupGate
 	RecoverySessions    *sessions.RecoverySessionStore
 	RecoveryKeySessions *sessions.RecoveryKeySessionStore
 	// Clipboard is the OS clipboard abstraction that the decrypt-to-clipboard
