@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -75,9 +76,10 @@ func HandleGroupDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRespon
 	copy(op.IV[:], iv)
 	operationDigest := proto.CurrentGroupDisplayOperationDigest(op)
 	frameDigest := sha256.Sum256(frameSPKI)
+	sessionStartNanos, _ := strconv.ParseInt(req.SessionIssuedAtNanos, 10, 64) // Validate checked the canonical int64.
 	context := groupDisplayContext{
 		groupHandle: req.GroupHandle, accountID: binding.AccountID, deviceID: deviceID,
-		tokenID: req.TokenID, sessionStartNanos: req.SessionIssuedAtNanos,
+		tokenID: req.TokenID, sessionStartNanos: sessionStartNanos,
 		bindingGeneration: binding.Generation, operationDigest: operationDigest,
 		frameKeyDigest: frameDigest,
 	}

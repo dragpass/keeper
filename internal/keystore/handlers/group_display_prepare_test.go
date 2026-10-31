@@ -34,7 +34,7 @@ func TestGroupDisplayPrepareBindsCiphertextHandleAndFrameWithoutPlaintext(t *tes
 		IVB64:                 base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64:         base64.StdEncoding.EncodeToString(ciphertext),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
-		TokenID:               "66666666-6666-4666-8666-666666666666", SessionIssuedAtNanos: 123456789,
+		TokenID:               "66666666-6666-4666-8666-666666666666", SessionIssuedAtNanos: "123456789",
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestGroupDisplayPrepareBindsCiphertextHandleAndFrameWithoutPlaintext(t *tes
 	}
 	stored, found := f.deps.GroupDisplayChallenges.Peek(data.Challenge, f.clock.now())
 	if !found || stored.groupHandle != handle || stored.accountID != f.v.AccountID ||
-		stored.tokenID != req.TokenID || stored.sessionStartNanos != req.SessionIssuedAtNanos {
+		stored.tokenID != req.TokenID || stored.sessionStartNanos != 123456789 {
 		t.Fatal("prepare did not bind the local operation and session")
 	}
 	handleBytes, err := base64.StdEncoding.DecodeString(handle)
@@ -99,7 +99,7 @@ func prepareGroupDisplayTestRequest(t *testing.T, handle string) proto.CurrentGr
 		IVB64:                 base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 12)),
 		CiphertextB64:         base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32)),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
-		TokenID:               "66666666-6666-4666-8666-666666666666", SessionIssuedAtNanos: 123456789,
+		TokenID:               "66666666-6666-4666-8666-666666666666", SessionIssuedAtNanos: "123456789",
 	}
 }
 
@@ -152,5 +152,33 @@ func TestGroupDisplayPrepareRefusesSignedOutBindingAndInvalidFrame(t *testing.T)
 	}
 	if f.deps.GroupDisplayChallenges.Len() != before {
 		t.Fatal("signed-out binding changed pending challenges")
+	}
+}
+
+func TestGroupDisplayPreparePreservesSessionNanosecondsFromDecimalText(t *testing.T) {
+	f, _, handle := groupDisplayDecisionFixture(t)
+	req := prepareGroupDisplayTestRequest(t, handle)
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const exactNanos = "1793410000123456789"
+	numericPayload := []byte(strings.Replace(string(payload),
+		`"session_issued_at_nanos":"123456789"`,
+		`"session_issued_at_nanos":1793410000123456789`, 1))
+	if resp := HandleGroupDisplayPrepare(f.deps, numericPayload); resp.Success {
+		t.Fatal("JSON number accepted for precision-sensitive nanoseconds")
+	}
+	payload = []byte(strings.Replace(string(payload),
+		`"session_issued_at_nanos":"123456789"`,
+		`"session_issued_at_nanos":"`+exactNanos+`"`, 1))
+	resp := HandleGroupDisplayPrepare(f.deps, payload)
+	if !resp.Success {
+		t.Fatalf("decimal session nanoseconds refused: %s", resp.Error)
+	}
+	data := resp.Data.(proto.CurrentGroupDisplayPrepareResponseData)
+	stored, found := f.deps.GroupDisplayChallenges.Peek(data.Challenge, f.clock.now())
+	if !found || stored.sessionStartNanos != 1793410000123456789 {
+		t.Fatal("session nanoseconds changed while crossing the JSON boundary")
 	}
 }

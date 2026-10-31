@@ -2159,7 +2159,8 @@ the Personal DEK actions below.
 `group_display_prepare` accepts `group_handle`, the selected ciphertext
 `token`, `iv_b64` (12 bytes), `ciphertext_b64` (16..8192 decoded bytes),
 `frame_public_key_spki_b64` (P-256), `token_id`, and
-`session_issued_at_nanos`. It is registered on Native Messaging, has no App
+`session_issued_at_nanos` (a canonical positive int64 decimal string, never
+a JSON number). It is registered on Native Messaging, has no App
 Local RPC route, and is absent from the MCP surface. The request is
 strictly decoded with a 16 KiB cap. Keeper requires a live, non-audit Group
 handle with a wrapped-grant digest, a current account binding and device ID.

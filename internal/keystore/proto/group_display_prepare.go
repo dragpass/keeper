@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -18,7 +19,8 @@ type CurrentGroupDisplayPrepareRequest struct {
 	CiphertextB64         string `json:"ciphertext_b64"`
 	FramePublicKeySPKIB64 string `json:"frame_public_key_spki_b64"`
 	TokenID               string `json:"token_id"`
-	SessionIssuedAtNanos  int64  `json:"session_issued_at_nanos"`
+	// The JWT nanosecond value exceeds JavaScript's exact integer range.
+	SessionIssuedAtNanos string `json:"session_issued_at_nanos"`
 }
 
 func (r CurrentGroupDisplayPrepareRequest) Validate() error {
@@ -56,8 +58,9 @@ func (r CurrentGroupDisplayPrepareRequest) Validate() error {
 	if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
 		return err
 	}
-	if r.SessionIssuedAtNanos <= 0 {
-		return newValidationError("session_issued_at_nanos", "must be positive")
+	nanos, err := strconv.ParseInt(r.SessionIssuedAtNanos, 10, 64)
+	if err != nil || nanos <= 0 || strconv.FormatInt(nanos, 10) != r.SessionIssuedAtNanos {
+		return newValidationError("session_issued_at_nanos", "must be a canonical positive int64 decimal string")
 	}
 	return nil
 }
