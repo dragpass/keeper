@@ -122,6 +122,7 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/login/sign-challenge",
 	"/v1/auth/org-emergency/seed",
 	"/v1/auth/password/rewrap",
+	"/v1/auth/personal-dek/bind",
 	"/v1/auth/recovery-key/reissue-prepare",
 	"/v1/auth/recovery/abort",
 	"/v1/auth/recovery/begin",

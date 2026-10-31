@@ -26,6 +26,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionAccountBindingSignout, "/v1/account/binding/signout", map[string]any{}},
 	{proto.ActionRotateUserKeypairPrepare, "/v1/account-key/rotate/prepare", map[string]any{}},
 	{proto.ActionRotateUserKeypairPromote, "/v1/account-key/rotate/promote", map[string]any{}},
+	{proto.ActionPersonalDEKBind, "/v1/auth/personal-dek/bind", map[string]any{}},
 	{proto.ActionDEKRotateToDeviceKey, "/v1/auth/login/restore-device-master", map[string]any{}},
 	{proto.ActionSaveSessionCode, "/v1/auth/signup/save-session-code", map[string]any{}},
 	{proto.ActionRecoverySessionClose, "/v1/auth/recovery/close", map[string]any{}},

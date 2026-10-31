@@ -2150,6 +2150,46 @@ extension options page is the only caller.
 |`dek_unwrap_and_encrypt`|`encrypted_dek_b64?`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|Personal scope encrypt. deviceKey from Keychain. (0.0.58) Empty `encrypted_dek_b64` opens the device master Keeper keeps in its `personal_device_wrapped_dek` slot (written by login and signup, removed by `device_signout`); no slot → `not_found`. The same holds for `dek_unwrap_and_encrypt_with_aad`, `dek_unwrap_and_decrypt_to_clipboard` and `dek_rotate_to_new_password`. A caller that sends its own copy is served as before, and none of them stores that copy: `personal_dek_adopt` is the only action that writes a caller-supplied wrap into the slot.|
 |`personal_dek_adopt`|`device_wrapped_dek_b64` (standard Base64 of iv(12) ‖ ciphertext ‖ tag, 60 bytes)|`{ adopted, reason? }`|(0.0.58) Moves the Extension's old copy of the device master (its `vault` storage) into `personal_device_wrapped_dek`. Under one hold of the keychain process lock, the lock `device_signout`, login, signup and `rotate_device_key` write under, it reads the account binding, the slot and the device key and writes the copy only when the binding is not `signed_out`, the slot is empty and the copy opens to a 32-byte DEK with the stored device key. Not adopted is a success with `adopted: false` and `reason`: `signed_out` (nothing else is checked) or `slot_occupied` (the slot keeps its value, whoever wrote it). A copy that does not open is `crypto_failure`, no device key is `not_found`, a malformed request is `validation_error`, an unreadable binding or stored device key is `storage_failure`; none writes. The copy is ciphertext under a key that never crosses IPC; the response carries no key material and logs carry neither the copy nor the key. The decrypted DEK is zeroized. Native Messaging only: no Local RPC route, not on the MCP surface (the App never kept a copy). An older Keeper answers `unsupported`.|
 
+### Personal DEK provenance binding
+
+The paired App route `POST /v1/auth/personal-dek/bind` dispatches the App-only
+`personal_dek_bind` action. Native Messaging and MCP cannot invoke it. Its
+8 KiB request contains `password`, `encrypted_dek_b64`, and `proof`; success
+returns only `{ bound: true }`. Ariadne issues the proof through the signed,
+authenticated App route `POST /api/v1/account/personal-dek-binding` with
+`{ login_generation }`. The password is sent only to paired Keeper, not Ariadne.
+
+The proof contains `account_id`, `device_id`, `token_id`,
+`session_issued_at_nanos` (a decimal JSON string), `login_generation`,
+`wrapped_dek_digest`, `issued_at`, `expires_at`, `server_key_version`, and
+`signature`. Its signed canonical string is:
+
+```text
+dragpass.personal.dek.binding|1|account_id|device_id|token_id|session_issued_at_nanos|login_generation|wrapped_dek_digest|issued_at|expires_at|server_key_version
+```
+
+Identifiers are canonical UUIDs; the login generation is canonical unpadded
+base64url of 16 bytes. The digest is lowercase SHA-256 hex over the exact
+76-byte password wrap (salt, IV and authenticated ciphertext). The proof has a
+30-second validity window. Keeper verifies the signature, expiry and digest,
+opens the password wrap, then compares the resulting DEK with the current
+device-wrapped slot under the keychain process lock. The current account,
+device and committed login generation must match. A different server session
+cannot replace provenance for the same local login generation.
+
+`personal_dek_provenance_v1` records the server session, local binding and login
+generations, and digests of the wrap and device key. It contains no plaintext
+DEK. Slot writes invalidate provenance first; reads compare the current slot,
+device key and identity. Sign-out or a new login invalidates the record by
+these comparisons. Missing, malformed or unavailable evidence is not trusted.
+Password login attempts binding after its local login intent is committed.
+Other entry paths and unavailable or older peers leave provenance unverified.
+
+This exchange establishes provenance, not permission to display plaintext.
+Personal isolated viewing remains disabled until its separate online use-time
+authorization is implemented. A signed provenance snapshot cannot establish
+that a server session has not subsequently been revoked.
+
 The retired Group Item DEK actions are not part of the current protocol. Group
 DragLink tokens use the direct Group DEK actions above. Personal entries use
 the Personal DEK actions below.

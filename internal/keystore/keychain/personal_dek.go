@@ -65,6 +65,10 @@ func DeletePersonalDeviceWrappedDEK(store SecretStore) error {
 }
 
 func savePersonalDeviceWrappedDEKLocked(store SecretStore, wrapped string) error {
+	// Invalidate first: a legacy write or journal rollback cannot inherit proof.
+	if err := store.Delete(config.Service, personalDEKProvenanceSlot); err != nil && !errors.Is(err, ErrSecretNotFound) {
+		return err
+	}
 	return store.Set(config.Service, config.PersonalDeviceWrappedDEK, wrapped)
 }
 

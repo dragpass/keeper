@@ -46,5 +46,9 @@ func (KeyringSecretStore) Set(service, account, value string) error {
 }
 
 func (KeyringSecretStore) Delete(service, account string) error {
-	return krDelete(service, account)
+	err := krDelete(service, account)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return ErrSecretNotFound
+	}
+	return err
 }
