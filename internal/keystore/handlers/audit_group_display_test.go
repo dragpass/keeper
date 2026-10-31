@@ -56,6 +56,11 @@ func TestAuditGroupDisplayRequiresTableBoundOnlineDecision(t *testing.T) {
 		IssuedAt: f.clock.now().Unix() - 1, ExpiresAt: f.clock.now().Unix() + 9, ServerKeyVersion: 1,
 	}, TableID: p.TableID, TableDigest: p.TableDigest}
 	decision.Signature = f.sign(t, proto.AuditGroupDisplayDecisionCanonical(decision))
+	wrongSignature := decision
+	wrongSignature.Signature = f.sign(t, "different decision")
+	if denied := HandleAuditGroupDisplayExecute(f.deps, payloadOf(t, proto.AuditGroupDisplayExecuteRequest{Prepare: req, Decision: wrongSignature})); denied.Success {
+		t.Fatal("invalid API signature produced an envelope")
+	}
 	changedPermit := req
 	changedPermit.Permit.Signature = f.sign(t, "different permit")
 	if denied := HandleAuditGroupDisplayExecute(f.deps, payloadOf(t, proto.AuditGroupDisplayExecuteRequest{Prepare: changedPermit, Decision: decision})); denied.Success {
