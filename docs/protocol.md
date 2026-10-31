@@ -2200,6 +2200,24 @@ derive the same key and open the envelope inside its isolated document. The
 Group plaintext is zeroized after sealing; explicit export is a separate
 user action. This action does not cover audit-only or personal ciphertext.
 
+`audit_group_display_prepare` and `audit_group_display_execute` use the same
+Native Messaging frame envelope and response shape, with a separate signed
+`dragpass.group.audit-display|1` decision. The strict request cap is 20 KiB.
+The preparation request additionally carries `org_id`, `group_id`,
+`dek_version`, `table_id`, `table_b64`, and the signed one-use audit decrypt
+`permit`. Keeper accepts only an audit-only handle for that exact context.
+Its response additionally names the table ID and SHA-256 table digest. The
+operation digest binds the exact table bytes, permit canonical fields and
+signature, token, ciphertext, handle, challenge, and frame key. Execute checks
+the API signature, exact pending operation, current local account/device
+binding and handle grant label before consuming the challenge; it then checks
+and consumes the existing audit permit before opening the token. Invalid,
+stale, replayed or mismatched evidence returns no frame envelope and writes
+no clipboard. The API online wait occurs before Keeper's request lock; Keeper
+holds that lock through the decision check and protected operation. This
+path accepts only versions for which the API can issue a current audit-table
+decision. It is not the default context-menu action yet.
+
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
 Keeper owns the plaintext sink: it decrypts in process memory and writes the plaintext directly to the OS clipboard via `Deps.Clipboard`. Responses carry no plaintext / `plaintext_b64` / preview / length metadata. `clipboard_ttl_ms` must be in `[5000, 60000]`.

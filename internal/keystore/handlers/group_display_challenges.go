@@ -16,6 +16,9 @@ var errGroupDisplayBusy = errors.New("group display challenge unavailable")
 // groupDisplayContext binds a server decision to the Keeper operation that
 // minted its challenge. The store holds no plaintext or key material.
 type groupDisplayContext struct {
+	audit             bool
+	auditTableID      string
+	auditTableDigest  [32]byte
 	groupHandle       string
 	accountID         string
 	deviceID          string

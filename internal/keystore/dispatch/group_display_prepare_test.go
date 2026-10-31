@@ -21,3 +21,12 @@ func TestGroupDisplayExecuteIsRegisteredWithoutMCPOrPlaintext(t *testing.T) {
 		t.Fatal("group display execute crossed its registered surface or plaintext boundary")
 	}
 }
+
+func TestAuditGroupDisplayIsRegisteredWithoutMCPOrPlaintext(t *testing.T) {
+	for _, name := range []string{"audit_group_display_prepare", "audit_group_display_execute"} {
+		entry, ok := actionRegistry[name]
+		if !ok || entry.appOnly || entry.mcp || entry.plaintext {
+			t.Fatalf("audit group display crossed its registered surface or plaintext boundary: %s", name)
+		}
+	}
+}

@@ -26,7 +26,7 @@ func verifyAndConsumeCurrentGroupDisplayDecision(d Deps, decision proto.CurrentG
 		return errCurrentGroupDisplayDenied
 	}
 	context, ok := d.GroupDisplayChallenges.Peek(decision.Challenge, now)
-	if !ok || context.groupHandle != handle ||
+	if !ok || context.audit || context.groupHandle != handle ||
 		context.accountID != decision.AccountID || context.deviceID != decision.DeviceID ||
 		context.tokenID != decision.TokenID || context.sessionStartNanos != decision.SessionIssuedAtNanos ||
 		context.operationDigest != decodedGroupDisplayDigest(decision.OperationDigest) ||
