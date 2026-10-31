@@ -64,6 +64,7 @@ const (
 	//           clipboard_ttl_ms
 	//   Output: {copied, clipboard_ttl_ms}
 	ActionGroupDecryptToClipboard = "group_decrypt_to_clipboard"
+	ActionGroupDisplayPrepare     = "group_display_prepare"
 
 	// GroupEncrypt: the encrypt-direction mirror of GroupDecryptToClipboard.
 	// AES-GCM-seals plaintext directly under the raw Group DEK behind the

@@ -2154,6 +2154,26 @@ The retired Group Item DEK actions are not part of the current protocol. Group
 DragLink tokens use the direct Group DEK actions above. Personal entries use
 the Personal DEK actions below.
 
+### Current Group display preparation
+
+`group_display_prepare` accepts `group_handle`, the selected ciphertext
+`token`, `iv_b64` (12 bytes), `ciphertext_b64` (16..8192 decoded bytes),
+`frame_public_key_spki_b64` (P-256), `token_id`, and
+`session_issued_at_nanos`. It is registered on Native Messaging, has no App
+Local RPC route, and is absent from the MCP surface. The request is
+strictly decoded with a 16 KiB cap. Keeper requires a live, non-audit Group
+handle with a wrapped-grant digest, a current account binding and device ID.
+
+The response contains only `challenge`, `group_id`, `dek_version`,
+`grant_digest`, `operation_digest`, and `frame_key_digest`. The challenge is
+random, process-local, single-use and expires after ten seconds. Keeper
+captures the binding generation, handle, Extension session metadata, and
+digests binding the exact token, IV, ciphertext and frame key to the handle
+and challenge for later comparison with an
+API-signed decision. Preparation neither decrypts nor authorizes a protected
+operation, and never writes a clipboard or returns plaintext. A later display
+execution action is required before this can serve as a viewer.
+
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
 Keeper owns the plaintext sink: it decrypts in process memory and writes the plaintext directly to the OS clipboard via `Deps.Clipboard`. Responses carry no plaintext / `plaintext_b64` / preview / length metadata. `clipboard_ttl_ms` must be in `[5000, 60000]`.
