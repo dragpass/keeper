@@ -106,6 +106,9 @@ func HandleGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRespon
 	}
 	var sealedIV, sealedCiphertext []byte
 	useErr := d.GroupSessions.UseLabeled(req.Prepare.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
+		if d.Now().Unix() >= req.Decision.ExpiresAt {
+			return errCurrentGroupDisplayDenied
+		}
 		if isAuditOnlyLabel(label) {
 			return errHandleAuditOnly
 		}
@@ -117,7 +120,9 @@ func HandleGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRespon
 		sealedIV, sealedCiphertext, err = crypto.SealAESGCM(d.Random(), key, plaintext, aad)
 		return err
 	})
-	if useErr != nil {
+	// Crypto work can outlive the authorization window while requestMu is held.
+	// Never release an envelope after the server may have committed revocation.
+	if useErr != nil || d.Now().Unix() >= req.Decision.ExpiresAt {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

@@ -114,13 +114,17 @@ func HandleAuditGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseR
 	if err != nil {
 		return deny()
 	}
+	if d.Now().Unix() >= req.Decision.ExpiresAt {
+		return deny()
+	}
 	plaintext, _, ok := openAuditToken(d, p.TokenContext(), p.Permit, p.IVB64, p.CiphertextB64)
 	if !ok {
 		return deny()
 	}
 	defer secure.Zeroize(plaintext)
 	sealedIV, sealedCiphertext, err := crypto.SealAESGCM(d.Random(), key, plaintext, aad)
-	if err != nil {
+	// Sealing may cross the server decision horizon even under requestMu.
+	if err != nil || d.Now().Unix() >= req.Decision.ExpiresAt {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

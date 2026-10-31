@@ -2187,6 +2187,9 @@ signature and live local account, device, grant and one-use challenge, then
 decrypts the non-audit Group ciphertext. A rejected or replayed decision
 returns no envelope and writes no clipboard. It never performs a network wait
 under that lock; the online API request must precede this action.
+Decision expiry is checked again before decryption and after envelope sealing.
+If cryptographic work crosses the expiry boundary, no envelope is returned.
+This does not retract an envelope already handed to the transport.
 
 The response contains `challenge`, `operation_digest`,
 `keeper_public_key_spki_b64`, `iv_b64`, and `ciphertext_b64`. The last field is
@@ -2216,7 +2219,11 @@ stale, replayed or mismatched evidence returns no frame envelope and writes
 no clipboard. The API online wait occurs before Keeper's request lock; Keeper
 holds that lock through the decision check and protected operation. This
 path accepts only versions for which the API can issue a current audit-table
-decision. It is not the default context-menu action yet.
+decision. The isolated Extension menu can request this action; personal and
+retained-token display are not covered by this contract.
+Decision expiry is rechecked before opening the audit token and after sealing
+the frame envelope. An expired decision returns no envelope, even if its
+initial signature and challenge checks passed.
 
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
