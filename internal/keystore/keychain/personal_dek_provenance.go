@@ -87,39 +87,59 @@ func BindPersonalDEKProvenance(store SecretStore, proof PersonalDEKProvenance, v
 func ReadPersonalDEKProvenance(store SecretStore) (PersonalDEKProvenance, error) {
 	var record PersonalDEKProvenance
 	err := withPersonalKeyBundleLock(store, func() error {
-		if err := recoverPersonalKeyBundleLocked(store); err != nil {
-			return err
-		}
-		raw, err := store.Get(config.Service, personalDEKProvenanceSlot)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal([]byte(raw), &record); err != nil {
-			return err
-		}
-		if record.Version != 1 || record.TokenID == "" || record.SessionIssuedAtNanos <= 0 || len(record.ServerWrapDigest) != 64 {
-			return ErrPersonalDEKProvenance
-		}
-		if err := checkPersonalProvenanceIdentity(store, record); err != nil {
-			return err
-		}
-		wrapped, err := getPersonalDeviceWrappedDEKLocked(store)
-		if err != nil {
-			return err
-		}
-		deviceKey, err := getDeviceKeyLocked(store)
-		if err != nil {
-			return err
-		}
-		if wrapped == "" || deviceKey == "" || record.DeviceWrapDigest != personalBindingDigest(wrapped) || record.DeviceKeyDigest != personalBindingDigest(deviceKey) {
-			return ErrPersonalDEKProvenance
-		}
-		return nil
+		var err error
+		record, _, _, err = readPersonalDEKProvenanceLocked(store)
+		return err
 	})
 	if err != nil {
 		return PersonalDEKProvenance{}, err
 	}
 	return record, nil
+}
+
+// UseVerifiedPersonalSlot keeps a local sign-out or slot replacement ordered
+// against the whole display operation. The callback must not perform network
+// I/O or slow password/key derivation and must not retain its arguments.
+func UseVerifiedPersonalSlot(store SecretStore, expected PersonalDEKProvenance, use func(wrapped, deviceKey string) error) error {
+	return withPersonalKeyBundleLock(store, func() error {
+		current, wrapped, deviceKey, err := readPersonalDEKProvenanceLocked(store)
+		if err != nil || current != expected || use == nil {
+			return ErrPersonalDEKProvenance
+		}
+		return use(wrapped, deviceKey)
+	})
+}
+
+func readPersonalDEKProvenanceLocked(store SecretStore) (PersonalDEKProvenance, string, string, error) {
+	var record PersonalDEKProvenance
+	if err := recoverPersonalKeyBundleLocked(store); err != nil {
+		return record, "", "", err
+	}
+	raw, err := store.Get(config.Service, personalDEKProvenanceSlot)
+	if err != nil {
+		return record, "", "", err
+	}
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return record, "", "", err
+	}
+	if record.Version != 1 || record.TokenID == "" || record.SessionIssuedAtNanos <= 0 || len(record.ServerWrapDigest) != 64 {
+		return record, "", "", ErrPersonalDEKProvenance
+	}
+	if err := checkPersonalProvenanceIdentity(store, record); err != nil {
+		return record, "", "", err
+	}
+	wrapped, err := getPersonalDeviceWrappedDEKLocked(store)
+	if err != nil {
+		return record, "", "", err
+	}
+	deviceKey, err := getDeviceKeyLocked(store)
+	if err != nil {
+		return record, "", "", err
+	}
+	if wrapped == "" || deviceKey == "" || record.DeviceWrapDigest != personalBindingDigest(wrapped) || record.DeviceKeyDigest != personalBindingDigest(deviceKey) {
+		return record, "", "", ErrPersonalDEKProvenance
+	}
+	return record, wrapped, deviceKey, nil
 }
 
 func checkPersonalProvenanceIdentity(store SecretStore, record PersonalDEKProvenance) error {

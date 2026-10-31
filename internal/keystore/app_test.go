@@ -23,6 +23,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -60,6 +61,21 @@ func TestNewApp_FillsProductionDefaults(t *testing.T) {
 	}
 	if app.RecoveryKeySessions == nil {
 		t.Fatalf("RecoveryKeySessions must have a default store")
+	}
+}
+
+func TestNewAppGroupDisplayChallengeStoreWiring(t *testing.T) {
+	injected := handlers.NewGroupDisplayChallengeStore()
+	app := NewApp(Deps{GroupDisplayChallenges: injected})
+	if app.GroupDisplayChallenges != injected || app.HandlersDeps().GroupDisplayChallenges != injected {
+		t.Fatal("injected Group display challenge store was not passed to handlers")
+	}
+	fresh := NewApp(Deps{})
+	if fresh.GroupDisplayChallenges == nil || fresh.HandlersDeps().GroupDisplayChallenges != fresh.GroupDisplayChallenges {
+		t.Fatal("default Group display challenge store was not passed to handlers")
+	}
+	if fresh.GroupDisplayChallenges == injected {
+		t.Fatal("different Keeper Apps shared challenge state")
 	}
 }
 

@@ -46,6 +46,9 @@ type Deps struct {
 	// so App owns its lifetime and parallel tests do not share entries. A nil
 	// store fails closed: no challenge can be minted and none can be consumed.
 	MessageChallenges *MessageChallengeStore
+	// GroupDisplayChallenges binds a one-use online Group display decision to
+	// the local handle and frame. Nil fails closed until the action is wired.
+	GroupDisplayChallenges *GroupDisplayChallengeStore
 	// CredentialNonces is the process-local single-use record behind the
 	// credential sinks (credential_execution_prepare → credential_http_request /
 	// credential_exec_request). A nil store fails closed.

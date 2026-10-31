@@ -81,6 +81,8 @@ type Deps struct {
 	// MessageChallenges holds the process-local secure-message display
 	// challenges. Lives and dies with the process; never persisted.
 	MessageChallenges *handlers.MessageChallengeStore
+	// GroupDisplayChallenges holds one-use Group display challenges in memory.
+	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
 	// AuditAuthorizations holds the receipts and permits the audit actions
 	// consumed. Lives and dies with the process; never persisted.
 	AuditAuthorizations *handlers.AuditAuthorizationStore
@@ -93,19 +95,20 @@ type Deps struct {
 // App is the single wiring container for the Keeper process. Handlers
 // access dependencies through App rather than global state.
 type App struct {
-	Store               SecretStore
-	Clock               Clock
-	Rand                io.Reader
-	Logger              Logger
-	ServerKeyVerifier   ServerKeyVerifier
-	GroupSessions       *sessions.GroupSessionStore
-	RecoverySessions    *sessions.RecoverySessionStore
-	RecoveryKeySessions *sessions.RecoveryKeySessionStore
-	Clipboard           clipboard.Clipboard
-	MessageChallenges   *handlers.MessageChallengeStore
-	AuditAuthorizations *handlers.AuditAuthorizationStore
-	CredentialNonces    *handlers.CredentialNonceStore
-	KeyTransparency     keytransparency.Gate
+	Store                  SecretStore
+	Clock                  Clock
+	Rand                   io.Reader
+	Logger                 Logger
+	ServerKeyVerifier      ServerKeyVerifier
+	GroupSessions          *sessions.GroupSessionStore
+	RecoverySessions       *sessions.RecoverySessionStore
+	RecoveryKeySessions    *sessions.RecoveryKeySessionStore
+	Clipboard              clipboard.Clipboard
+	MessageChallenges      *handlers.MessageChallengeStore
+	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
+	AuditAuthorizations    *handlers.AuditAuthorizationStore
+	CredentialNonces       *handlers.CredentialNonceStore
+	KeyTransparency        keytransparency.Gate
 
 	// requestMu runs every handler one at a time in this process (Native
 	// Messaging stdio, proxied hosts, App routes, composed App steps), so
@@ -132,19 +135,20 @@ type App struct {
 //	})
 func NewApp(deps Deps) *App {
 	app := &App{
-		Store:               deps.Store,
-		Clock:               deps.Clock,
-		Rand:                deps.Rand,
-		Logger:              deps.Logger,
-		ServerKeyVerifier:   deps.ServerKeyVerifier,
-		GroupSessions:       deps.GroupSessions,
-		RecoverySessions:    deps.RecoverySessions,
-		RecoveryKeySessions: deps.RecoveryKeySessions,
-		Clipboard:           deps.Clipboard,
-		MessageChallenges:   deps.MessageChallenges,
-		AuditAuthorizations: deps.AuditAuthorizations,
-		CredentialNonces:    deps.CredentialNonces,
-		KeyTransparency:     deps.KeyTransparency,
+		Store:                  deps.Store,
+		Clock:                  deps.Clock,
+		Rand:                   deps.Rand,
+		Logger:                 deps.Logger,
+		ServerKeyVerifier:      deps.ServerKeyVerifier,
+		GroupSessions:          deps.GroupSessions,
+		RecoverySessions:       deps.RecoverySessions,
+		RecoveryKeySessions:    deps.RecoveryKeySessions,
+		Clipboard:              deps.Clipboard,
+		MessageChallenges:      deps.MessageChallenges,
+		GroupDisplayChallenges: deps.GroupDisplayChallenges,
+		AuditAuthorizations:    deps.AuditAuthorizations,
+		CredentialNonces:       deps.CredentialNonces,
+		KeyTransparency:        deps.KeyTransparency,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}
@@ -174,6 +178,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.MessageChallenges == nil {
 		app.MessageChallenges = handlers.NewMessageChallengeStore()
+	}
+	if app.GroupDisplayChallenges == nil {
+		app.GroupDisplayChallenges = handlers.NewGroupDisplayChallengeStore()
 	}
 	if app.AuditAuthorizations == nil {
 		app.AuditAuthorizations = handlers.NewAuditAuthorizationStore()

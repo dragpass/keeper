@@ -78,6 +78,8 @@ func identityActions() map[string]action {
 		proto.ActionDEKUnwrapAndEncryptWithAAD: wrap(handlers.HandleDEKUnwrapAndEncryptWithAAD),
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
+		proto.ActionPersonalDisplayPrepare:         direct(handlers.HandlePersonalDisplayPrepare),
+		proto.ActionPersonalDisplayExecute:         direct(handlers.HandlePersonalDisplayExecute),
 		// the Extension's old device master copy into the empty slot (0.0.58)
 		proto.ActionPersonalDEKAdopt: wrap(handlers.HandlePersonalDEKAdopt),
 

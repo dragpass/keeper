@@ -50,6 +50,7 @@ type Label struct {
 	GrantPolicy string
 	GroupID     string
 	DekVersion  int
+	GrantDigest [32]byte
 }
 
 // Store is the shared base for opaque-handle session stores. The two existing

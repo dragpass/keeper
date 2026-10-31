@@ -2186,13 +2186,127 @@ Password login attempts binding after its local login intent is committed.
 Other entry paths and unavailable or older peers leave provenance unverified.
 
 This exchange establishes provenance, not permission to display plaintext.
-Personal isolated viewing remains disabled until its separate online use-time
-authorization is implemented. A signed provenance snapshot cannot establish
-that a server session has not subsequently been revoked.
+`personal_display_prepare` takes the selected token, IV, ciphertext, frame
+P-256 public key, and the Extension session token ID and issue nanoseconds.
+The non-audit drag token must carry `D=1:E=<expiry-or-0>:`. The request also
+carries canonical `token_aad_b64` for
+`dragpass.drag-display|1|scope|dek_version|org_id|group_id|expiry|entry_ref`.
+Keeper requires personal scope and expiry not past the execution time. The
+AES-GCM tag authenticates the AAD, so changing or removing the token expiry
+cannot produce a display envelope. `E=0` explicitly means no expiry.
+It is Native Messaging only, strictly decoded, and refuses an unproven local
+slot. The response contains a random ten-second, process-local challenge and
+the current server password-wrap, operation and frame-key digests, never key
+material or plaintext. The operation digest covers the exact selected token,
+IV, ciphertext, frame key and challenge.
+
+The Extension uses its independent bearer and verified device signature to
+obtain a server-signed `personal_display_decision` for those digests. The
+decision additionally names the authenticated account, device, token ID and
+session issue nanoseconds, issue and expiry seconds, and signing-key version.
+Its canonical string is:
+
+```text
+dragpass.personal.display|1|challenge|account_id|device_id|token_id|session_issued_at_nanos|wrap_digest|operation_digest|frame_key_digest|issued_at|expires_at|server_key_version
+```
+
+The API validates the current Extension session and exact stored password
+wrap under an account-row lock, records the ten-second account display horizon
+and releases the signed decision only after commit. Revocation writers that
+end that session wait out the horizon before committing. A decision saved for
+later use expires and cannot bypass a completed revocation. The Extension's
+online request runs outside Keeper's serialized request lock.
+
+`personal_display_execute` takes the same prepare request and the signed
+decision. Keeper recomputes the operation and frame digests, checks the server
+signature, current account/device provenance and exact local slot, and
+consumes the challenge once. The local slot remains locked against cross-
+process replacement while Keeper opens the DEK and seals plaintext to the
+prepared frame. The response has the Group envelope shape but uses
+`dragpass.personal.display.frame.v1` followed by a zero byte and the raw
+operation digest for HKDF info and AES-GCM AAD. Keeper checks expiry before
+opening and after sealing; a refusal returns no envelope or clipboard write.
+The frame validates the expected personal kind and decrypts inside its own
+document. Neither background nor content script receives plaintext. Already
+returned plaintext or an envelope delivered before revocation cannot be
+recalled.
 
 The retired Group Item DEK actions are not part of the current protocol. Group
 DragLink tokens use the direct Group DEK actions above. Personal entries use
 the Personal DEK actions below.
+
+### Current Group display preparation
+
+`group_display_prepare` accepts `group_handle`, the selected ciphertext
+`token`, canonical `token_aad_b64` for Group scope, `iv_b64` (12 bytes),
+`ciphertext_b64` (16..8192 decoded bytes),
+`frame_public_key_spki_b64` (P-256), `token_id`, and
+`session_issued_at_nanos` (a canonical positive int64 decimal string, never
+a JSON number). It is registered on Native Messaging, has no App
+Local RPC route, and is absent from the MCP surface. The request is
+strictly decoded with a 16 KiB cap. Keeper requires a live, non-audit Group
+handle with a wrapped-grant digest, a current account binding and device ID.
+
+The response contains only `challenge`, `group_id`, `dek_version`,
+`grant_digest`, `operation_digest`, and `frame_key_digest`. The challenge is
+random, process-local, single-use and expires after ten seconds. Keeper
+captures the binding generation, handle, Extension session metadata, and
+digests binding the exact token, IV, ciphertext and frame key to the handle
+and challenge for later comparison with an
+API-signed decision. Preparation neither decrypts nor authorizes a protected
+operation, and never writes a clipboard or returns plaintext. A later display
+execution action is required before this can serve as a viewer.
+The decision's `session_issued_at_nanos` field also crosses JSON as a decimal
+string. Keeper parses it exactly before comparing the prepared session and
+verifying the server signature; a JSON number is refused.
+
+`group_display_execute` accepts `prepare` (the exact preparation request) and
+`decision` (the API-signed current Group display decision). It is registered
+on Native Messaging, has no App Local RPC route, and is absent from MCP. Its
+strict request cap is 20 KiB. Under Keeper's serialized request lock it
+recomputes the selected-operation and frame-key digests, verifies the server
+signature and live local account, device, grant and one-use challenge, then
+decrypts the non-audit Group ciphertext with the authenticated display AAD.
+A rejected or replayed decision
+returns no envelope and writes no clipboard. It never performs a network wait
+under that lock; the online API request must precede this action.
+Decision expiry is checked again before decryption and after envelope sealing.
+If cryptographic work crosses the expiry boundary, no envelope is returned.
+This does not retract an envelope already handed to the transport.
+
+The response contains `challenge`, `operation_digest`,
+`keeper_public_key_spki_b64`, `iv_b64`, and `ciphertext_b64`. The last field is
+an AES-256-GCM envelope for the prepared frame, not the plaintext. Keeper
+generates a fresh P-256 ECDH key for each execution and derives the envelope
+key with HKDF-SHA-256 from the ECDH shared secret, the raw 32-byte challenge
+as salt and `dragpass.group.display.frame.v1` followed by a zero byte and the
+raw operation digest as info. The same info is AES-GCM AAD. The frame must
+validate the expected challenge and operation digest, import the Keeper SPKI,
+derive the same key and open the envelope inside its isolated document. The
+Group plaintext is zeroized after sealing; explicit export is a separate
+user action. This action does not cover audit-only or personal ciphertext.
+
+`audit_group_display_prepare` and `audit_group_display_execute` use the same
+Native Messaging frame envelope and response shape, with a separate signed
+`dragpass.group.audit-display|1` decision. The strict request cap is 20 KiB.
+The preparation request additionally carries `org_id`, `group_id`,
+`dek_version`, `table_id`, `table_b64`, and the signed one-use audit decrypt
+`permit`. Keeper accepts only an audit-only handle for that exact context.
+Its response additionally names the table ID and SHA-256 table digest. The
+operation digest binds the exact table bytes, permit canonical fields and
+signature, token, ciphertext, handle, challenge, and frame key. Execute checks
+the API signature, exact pending operation, current local account/device
+binding and handle grant label before consuming the challenge; it then checks
+and consumes the existing audit permit before opening the token. Invalid,
+stale, replayed or mismatched evidence returns no frame envelope and writes
+no clipboard. The API online wait occurs before Keeper's request lock; Keeper
+holds that lock through the decision check and protected operation. This
+path accepts only versions for which the API can issue a current audit-table
+decision. The isolated Extension menu can request this action; personal and
+retained-token display are not covered by this contract.
+Decision expiry is rechecked before opening the audit token and after sealing
+the frame envelope. An expired decision returns no envelope, even if its
+initial signature and challenge checks passed.
 
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 

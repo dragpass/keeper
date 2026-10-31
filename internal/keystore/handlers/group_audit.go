@@ -38,7 +38,6 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
-	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
 // auditClockSkewSeconds — how far into the future issued_at may sit.
@@ -182,13 +181,10 @@ func auditPreflight(d Deps, tc proto.AuditTokenContext) ([]byte, proto.BaseRespo
 	if err != nil {
 		return nil, sessionUseError(err, "group audit"), false
 	}
-	want := sessions.Label{
-		OrgID:       tc.OrgID,
-		GrantPolicy: proto.GrantPolicyAuditOnlyV1,
-		GroupID:     tc.GroupID,
-		DekVersion:  tc.DekVersion,
-	}
-	if label != want {
+	if label.OrgID != tc.OrgID ||
+		label.GrantPolicy != proto.GrantPolicyAuditOnlyV1 ||
+		label.GroupID != tc.GroupID ||
+		label.DekVersion != tc.DekVersion {
 		d.Logger.Println("group audit refused: the handle is not an audit-only handle for this org, group and version")
 		return nil, errs.CodeResponse(errs.ErrorCode(proto.GroupPolicyNotAuditOnly),
 			"the group handle was not opened from the audit-only grant of this org, group and version"), false

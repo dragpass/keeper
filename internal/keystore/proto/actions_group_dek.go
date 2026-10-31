@@ -63,7 +63,11 @@ const (
 	//   Inputs: group_handle, iv_b64(12B), ciphertext_b64,
 	//           clipboard_ttl_ms
 	//   Output: {copied, clipboard_ttl_ms}
-	ActionGroupDecryptToClipboard = "group_decrypt_to_clipboard"
+	ActionGroupDecryptToClipboard  = "group_decrypt_to_clipboard"
+	ActionGroupDisplayPrepare      = "group_display_prepare"
+	ActionGroupDisplayExecute      = "group_display_execute"
+	ActionAuditGroupDisplayPrepare = "audit_group_display_prepare"
+	ActionAuditGroupDisplayExecute = "audit_group_display_execute"
 
 	// GroupEncrypt: the encrypt-direction mirror of GroupDecryptToClipboard.
 	// AES-GCM-seals plaintext directly under the raw Group DEK behind the
