@@ -11,3 +11,13 @@ func TestGroupDisplayPrepareIsRegisteredWithoutMCPOrPlaintext(t *testing.T) {
 		t.Fatal("group display prepare crossed its registered surface or plaintext boundary")
 	}
 }
+
+func TestGroupDisplayExecuteIsRegisteredWithoutMCPOrPlaintext(t *testing.T) {
+	entry, ok := actionRegistry["group_display_execute"]
+	if !ok {
+		t.Fatal("group display execute is not registered")
+	}
+	if entry.appOnly || entry.mcp || entry.plaintext {
+		t.Fatal("group display execute crossed its registered surface or plaintext boundary")
+	}
+}

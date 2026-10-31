@@ -2178,6 +2178,28 @@ The decision's `session_issued_at_nanos` field also crosses JSON as a decimal
 string. Keeper parses it exactly before comparing the prepared session and
 verifying the server signature; a JSON number is refused.
 
+`group_display_execute` accepts `prepare` (the exact preparation request) and
+`decision` (the API-signed current Group display decision). It is registered
+on Native Messaging, has no App Local RPC route, and is absent from MCP. Its
+strict request cap is 20 KiB. Under Keeper's serialized request lock it
+recomputes the selected-operation and frame-key digests, verifies the server
+signature and live local account, device, grant and one-use challenge, then
+decrypts the non-audit Group ciphertext. A rejected or replayed decision
+returns no envelope and writes no clipboard. It never performs a network wait
+under that lock; the online API request must precede this action.
+
+The response contains `challenge`, `operation_digest`,
+`keeper_public_key_spki_b64`, `iv_b64`, and `ciphertext_b64`. The last field is
+an AES-256-GCM envelope for the prepared frame, not the plaintext. Keeper
+generates a fresh P-256 ECDH key for each execution and derives the envelope
+key with HKDF-SHA-256 from the ECDH shared secret, the raw 32-byte challenge
+as salt and `dragpass.group.display.frame.v1` followed by a zero byte and the
+raw operation digest as info. The same info is AES-GCM AAD. The frame must
+validate the expected challenge and operation digest, import the Keeper SPKI,
+derive the same key and open the envelope inside its isolated document. The
+Group plaintext is zeroized after sealing; explicit export is a separate
+user action. This action does not cover audit-only or personal ciphertext.
+
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
 Keeper owns the plaintext sink: it decrypts in process memory and writes the plaintext directly to the OS clipboard via `Deps.Clipboard`. Responses carry no plaintext / `plaintext_b64` / preview / length metadata. `clipboard_ttl_ms` must be in `[5000, 60000]`.
