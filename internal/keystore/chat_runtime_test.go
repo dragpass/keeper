@@ -176,7 +176,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"mls_mark_sent", "mls_process", "mls_rejoin_request_sign",
 		"mls_room_name_open", "mls_room_name_seal",
 		"org_emergency_seed_derive",
-		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number",
+		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number", "personal_dek_bind",
 		"recovery_session_close",
 		"rotate_user_keypair_prepare", "rotate_user_keypair_promote",
 		"savesessioncode",
