@@ -17,7 +17,7 @@ type CurrentGroupDisplayDecision struct {
 	AccountID            string `json:"account_id"`
 	DeviceID             string `json:"device_id"`
 	TokenID              string `json:"token_id"`
-	SessionIssuedAtNanos int64  `json:"session_issued_at_nanos"`
+	SessionIssuedAtNanos int64  `json:"session_issued_at_nanos,string"`
 	GroupID              string `json:"group_id"`
 	DekVersion           int    `json:"dek_version"`
 	GrantDigest          string `json:"grant_digest"`

@@ -1,9 +1,24 @@
 package proto
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestCurrentGroupDisplayDecisionReadsExactSessionNanos(t *testing.T) {
+	const nanos int64 = 1793410000123456789
+	var decision CurrentGroupDisplayDecision
+	if err := json.Unmarshal([]byte(`{"session_issued_at_nanos":"1793410000123456789"}`), &decision); err != nil {
+		t.Fatal(err)
+	}
+	if decision.SessionIssuedAtNanos != nanos {
+		t.Fatal("decision session nanoseconds changed across JSON")
+	}
+	if err := json.Unmarshal([]byte(`{"session_issued_at_nanos":1793410000123456789}`), &decision); err == nil {
+		t.Fatal("numeric session nanoseconds must be refused")
+	}
+}
 
 func TestCurrentGroupDisplayDecisionCanonicalMatchesAPI(t *testing.T) {
 	d := validGroupDisplayDecision()

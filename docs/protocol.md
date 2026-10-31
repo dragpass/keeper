@@ -2174,6 +2174,9 @@ and challenge for later comparison with an
 API-signed decision. Preparation neither decrypts nor authorizes a protected
 operation, and never writes a clipboard or returns plaintext. A later display
 execution action is required before this can serve as a viewer.
+The decision's `session_issued_at_nanos` field also crosses JSON as a decimal
+string. Keeper parses it exactly before comparing the prepared session and
+verifying the server signature; a JSON number is refused.
 
 ### Decrypt-to-clipboard (Keeper-owned plaintext sink)
 
