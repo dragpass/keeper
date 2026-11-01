@@ -35,6 +35,10 @@ func groupActions() map[string]action {
 		// raw Group DEK direct AES-GCM encrypt (mirror of group_decrypt_to_clipboard).
 		proto.ActionGroupEncrypt: wrap(handlers.HandleGroupEncrypt),
 
+		// Bound drag tokens: Keeper-built AAD with authenticated expiry.
+		proto.ActionGroupEncryptBound:            wrap(handlers.HandleGroupEncryptBound),
+		proto.ActionGroupDecryptBoundToClipboard: wrap(handlers.HandleGroupDecryptBoundToClipboard),
+
 		// AAD-binding variant of group_encrypt: binds a canonical context AAD
 		// into the GCM tag to prevent ciphertext swap across contexts.
 		proto.ActionGroupEncryptWithAAD: wrap(handlers.HandleGroupEncryptWithAAD),

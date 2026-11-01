@@ -13,6 +13,7 @@ import (
 
 func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
+	bindBoundTestAccount(t, deps.Store)
 	store := deps.Store
 	deviceKey := make([]byte, 32)
 	for i := range deviceKey {
@@ -24,7 +25,7 @@ func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 	}
 
 	const sentinel = "SLOT_DEK_SENTINEL"
-	enc := HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{
+	enc := HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte(sentinel)),
 	})
 	if !enc.Success {
@@ -32,7 +33,7 @@ func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 	}
 	encData := enc.Data.(proto.DEKUnwrapAndEncryptResponseData)
 
-	copied := HandleDEKUnwrapAndDecryptToClipboard(deps, proto.DEKUnwrapAndDecryptToClipboardRequest{
+	copied := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never", DekVersion: 1,
 		IVB64:          encData.IVB64,
 		CiphertextB64:  encData.CiphertextB64,
 		ClipboardTTLMs: 10_000,
@@ -64,15 +65,16 @@ func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 
 func TestPersonalDEKActions_EmptyEncryptedDEKWithoutSlotIsNotFound(t *testing.T) {
 	deps, _ := withMemoryClipboard(t)
+	bindBoundTestAccount(t, deps.Store)
 	setKeychainDeviceKey(t, deps.Store, make([]byte, 32))
 	pt := base64.StdEncoding.EncodeToString([]byte("x"))
 	iv := base64.StdEncoding.EncodeToString(make([]byte, 12))
 
 	cases := map[string]proto.BaseResponse{
-		"encrypt":     HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{PlaintextB64: pt}),
+		"encrypt":     HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never", PlaintextB64: pt}),
 		"encrypt_aad": HandleDEKUnwrapAndEncryptWithAAD(deps, proto.DEKUnwrapAndEncryptWithAADRequest{PlaintextB64: pt, AADB64: pt}),
-		"clipboard": HandleDEKUnwrapAndDecryptToClipboard(deps, proto.DEKUnwrapAndDecryptToClipboardRequest{
-			IVB64: iv, CiphertextB64: pt, ClipboardTTLMs: 10_000,
+		"clipboard": HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never", DekVersion: 1,
+			IVB64: iv, CiphertextB64: base64.StdEncoding.EncodeToString(make([]byte, 16)), ClipboardTTLMs: 10_000,
 		}),
 		"new_password": HandleDEKRotateToNewPassword(deps, proto.DEKRotateToNewPasswordRequest{NewPassword: "p"}),
 	}
@@ -90,13 +92,15 @@ func TestPersonalDEKActions_SlotGoneAfterSignout(t *testing.T) {
 	if resp := signupDEKForTest(deps, "pw"); !resp.Success {
 		t.Fatalf("signup setup: %s", resp.Error)
 	}
+	bindBoundTestAccount(t, store)
 	if resp := HandleDeviceSignout(deps, proto.DeviceSignoutRequest{}); !resp.Success {
 		t.Fatalf("signout: %s", resp.Error)
 	}
-	resp := HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{
+	// A personal bound token names the signed-in account, and sign-out ends it.
+	resp := HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
 	})
-	if resp.Success || resp.ErrorCode != string(errs.ErrCodeNotFound) {
-		t.Fatalf("want not_found after the slot is gone, got %+v", resp)
+	if resp.Success || resp.ErrorCode != proto.TokenAccountUnbound {
+		t.Fatalf("want %s after sign-out, got %+v", proto.TokenAccountUnbound, resp)
 	}
 }

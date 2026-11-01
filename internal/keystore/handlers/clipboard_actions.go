@@ -11,98 +11,27 @@ package handlers
 import (
 	"encoding/base64"
 	"errors"
-	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"time"
-
-	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/clipboard"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
-	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
 
-// HandleDEKUnwrapAndDecryptToClipboard writes the personal DEK plaintext
-// directly to the OS clipboard. The response contains no plaintext.
-func HandleDEKUnwrapAndDecryptToClipboard(d Deps, req proto.DEKUnwrapAndDecryptToClipboardRequest) proto.BaseResponse {
-	d.Logger.Println("dek unwrap and decrypt to clipboard request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
-	if !ok {
-		return resp
-	}
-
-	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
-	}
-	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
-	defer deviceKeyBuf.Destroy()
-
-	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
-	if !ok {
-		return resp
-	}
-	ciphertext, resp, ok := decodeBase64(req.CiphertextB64, "ciphertext_b64")
-	if !ok {
-		return resp
-	}
-
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
-	}
-	defer secure.Zeroize(dek)
-
-	plaintext, err := crypto.OpenAESGCM(dek, iv, ciphertext, nil)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "decrypt failed: "+err.Error())
-	}
-	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "dek unwrap and decrypt to clipboard")
+// HandleDEKUnwrapAndDecryptToClipboard is the AAD-free personal drag open. Its
+// tokens carry no authenticated expiry, so it is refused; use
+// dek_unwrap_and_decrypt_bound_to_clipboard (bound_token.go).
+func HandleDEKUnwrapAndDecryptToClipboard(d Deps, _ proto.DEKUnwrapAndDecryptToClipboardRequest) proto.BaseResponse {
+	return legacyTokenRefused(d, "dek unwrap and decrypt to clipboard")
 }
 
-// HandleGroupDecryptToClipboard writes the plaintext of a drag / audit token
-// (encrypted directly with the raw Group DEK) to the OS clipboard. There is
-// no key indirection, so crypto.OpenAESGCM is called directly inside GroupSessions.Use.
-//
-// Plaintext appears zero times in the response — only {copied, ttl}.
-func HandleGroupDecryptToClipboard(d Deps, req proto.GroupDecryptToClipboardRequest) proto.BaseResponse {
-	d.Logger.Println("group decrypt to clipboard request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	iv, resp, ok := decodeBase64Len(req.IVB64, 12, "iv_b64")
-	if !ok {
-		return resp
-	}
-	ciphertext, resp, ok := decodeBase64(req.CiphertextB64, "ciphertext_b64")
-	if !ok {
-		return resp
-	}
-
-	var plaintext []byte
-	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
-		if isAuditOnlyLabel(label) {
-			return errHandleAuditOnly
-		}
-		pt, err := crypto.OpenAESGCM(groupDEK, iv, ciphertext, nil)
-		if err != nil {
-			return errors.New("decrypt failed: " + err.Error())
-		}
-		plaintext = pt
-		return nil
-	})
-	if useErr != nil {
-		return handleSessionError(useErr, "group decrypt to clipboard")
-	}
-	return finalizeClipboardCopy(d, plaintext, req.ClipboardTTLMs, "group decrypt to clipboard")
+// HandleGroupDecryptToClipboard is the AAD-free Group drag open. Its tokens
+// carry no authenticated expiry, so it is refused; use
+// group_decrypt_bound_to_clipboard (bound_token.go).
+func HandleGroupDecryptToClipboard(d Deps, _ proto.GroupDecryptToClipboardRequest) proto.BaseResponse {
+	return legacyTokenRefused(d, "group decrypt to clipboard")
 }
 
 // writeClipboard consolidates d.Clipboard calls in one place. Defensive guard

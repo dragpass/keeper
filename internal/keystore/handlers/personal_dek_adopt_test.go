@@ -65,13 +65,14 @@ func slotOf(t *testing.T, store keychain.SecretStore) string {
 
 func TestPersonalDEKAdopt_EmptySlotIsAdoptedAndUsable(t *testing.T) {
 	deps, _, _, wrapped := adoptFixture(t)
+	bindBoundTestAccount(t, deps.Store)
 	if data := adoptData(t, adopt(deps, wrapped)); !data.Adopted || data.Reason != "" {
 		t.Fatalf("data = %+v", data)
 	}
 	if got := slotOf(t, deps.Store); got != wrapped {
 		t.Fatal("the slot does not hold the adopted wrap")
 	}
-	enc := HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{
+	enc := HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
 	})
 	if !enc.Success {

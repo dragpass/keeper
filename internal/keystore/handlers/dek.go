@@ -16,47 +16,11 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// HandleDEKUnwrapAndEncrypt unwraps the device-wrapped DEK and AES-GCM-encrypts the plaintext.
-func HandleDEKUnwrapAndEncrypt(d Deps, req proto.DEKUnwrapAndEncryptRequest) proto.BaseResponse {
-	d.Logger.Println("dek unwrap and encrypt request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-	encryptedDEK, _, resp, ok := deviceWrappedDEK(d, req.EncryptedDEKB64)
-	if !ok {
-		return resp
-	}
-
-	deviceKey, err := loadDeviceKeyFromKeychain(d.Store)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
-	}
-	deviceKeyBuf := memguard.NewBufferFromBytes(deviceKey)
-	defer deviceKeyBuf.Destroy()
-
-	plaintext, err := base64.StdEncoding.DecodeString(req.PlaintextB64)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode plaintext_b64: "+err.Error())
-	}
-	defer secure.Zeroize(plaintext)
-
-	dek, err := unwrapDeviceWrappedDEK(deviceKeyBuf.Bytes(), encryptedDEK)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, err.Error())
-	}
-	defer secure.Zeroize(dek)
-
-	iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, nil)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed: "+err.Error())
-	}
-
-	d.Logger.Println("dek unwrap and encrypt successful")
-	return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndEncryptResponseData{
-		IVB64:         base64.StdEncoding.EncodeToString(iv),
-		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
-	}}
+// HandleDEKUnwrapAndEncrypt is the AAD-free personal drag seal. A token it made
+// could not be opened (its expiry is unauthenticated), so it is refused; use
+// dek_unwrap_and_encrypt_bound (bound_token.go).
+func HandleDEKUnwrapAndEncrypt(d Deps, _ proto.DEKUnwrapAndEncryptRequest) proto.BaseResponse {
+	return legacyTokenRefused(d, "dek unwrap and encrypt")
 }
 
 // HandleDEKRotateToDeviceKey is the login flow's password→device rewrap.

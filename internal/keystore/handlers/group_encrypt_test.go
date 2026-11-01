@@ -1,8 +1,9 @@
-// group_encrypt_test.go — HandleGroupEncrypt guards.
+// group_encrypt_test.go — HandleGroupEncryptBound guards (the AAD-free
+// HandleGroupEncrypt is refused; see bound_token_test.go).
 //
 // Core guarantees:
 //   1. roundtrip: the sealed {iv, ciphertext} decrypts back to the plaintext
-//      under the same raw Group DEK (crypto.OpenAESGCM).
+//      under the same raw Group DEK and the bound token AAD.
 //   2. response envelope carries plaintext 0 times.
 //   3. logger Messages echo the plaintext sentinel 0 times (success path too).
 //   4. bad handle → not_found; expired session → expired_session.
@@ -22,15 +23,15 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func TestHandleGroupEncrypt_RoundTrip(t *testing.T) {
+func TestHandleGroupEncryptBound_RoundTrip(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 
 	const plaintextSentinel = "GROUP_ENCRYPT_PLAINTEXT_SENTINEL"
 	plaintextB64 := base64.StdEncoding.EncodeToString([]byte(plaintextSentinel))
 
-	resp := HandleGroupEncrypt(deps, proto.GroupEncryptRequest{
-		GroupHandle:  handle,
+	resp := HandleGroupEncryptBound(deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		PlaintextB64: plaintextB64,
 	})
 	if !resp.Success {
@@ -50,9 +51,10 @@ func TestHandleGroupEncrypt_RoundTrip(t *testing.T) {
 		t.Fatalf("decode ciphertext: %v", err)
 	}
 
-	// Decrypt back directly with the raw Group DEK — mirror of the client-side
-	// / group_decrypt_to_clipboard open path.
-	got, err := crypto.OpenAESGCM(groupRaw, iv, ct, nil)
+	// Decrypt back with the raw Group DEK under the bound token AAD — the
+	// group_decrypt_bound_to_clipboard open path.
+	aad := proto.BoundGroupTokenAAD(boundOrg, boundGroup, 7, "", proto.TokenExpiry{})
+	got, err := crypto.OpenAESGCM(groupRaw, iv, ct, []byte(aad))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -71,13 +73,13 @@ func TestHandleGroupEncrypt_RoundTrip(t *testing.T) {
 
 // TestHandleGroupEncrypt_NoSecretInLogger — the plaintext sentinel and the raw
 // Group DEK must not echo into the logger Messages on the success path.
-func TestHandleGroupEncrypt_NoSecretInLogger(t *testing.T) {
+func TestHandleGroupEncryptBound_NoSecretInLogger(t *testing.T) {
 	deps, log, _ := newTestDeps(t)
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 
 	const sentinel = "GROUP_ENCRYPT_LOGGER_LEAK_SENTINEL"
-	resp := HandleGroupEncrypt(deps, proto.GroupEncryptRequest{
-		GroupHandle:  handle,
+	resp := HandleGroupEncryptBound(deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte(sentinel)),
 	})
 	if !resp.Success {
@@ -95,11 +97,12 @@ func TestHandleGroupEncrypt_NoSecretInLogger(t *testing.T) {
 
 // TestHandleGroupEncrypt_BadHandle — an unregistered group_handle is rejected
 // with not_found.
-func TestHandleGroupEncrypt_BadHandle(t *testing.T) {
+func TestHandleGroupEncryptBound_BadHandle(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 
-	resp := HandleGroupEncrypt(deps, proto.GroupEncryptRequest{
-		GroupHandle:  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+	resp := HandleGroupEncryptBound(deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", OrgID: boundOrg, GroupID: boundGroup,
+		DekVersion: 7, TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
 	})
 	if resp.Success {
@@ -112,15 +115,15 @@ func TestHandleGroupEncrypt_BadHandle(t *testing.T) {
 
 // TestHandleGroupEncrypt_ExpiredSession — an expired handle is rejected with
 // expired_session.
-func TestHandleGroupEncrypt_ExpiredSession(t *testing.T) {
+func TestHandleGroupEncryptBound_ExpiredSession(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	handle, _ := openSessionForFreshKey(t, deps)
 
 	// Jump the clock past the TTL to force expiry.
 	deps.GroupSessions.SetClock(func() time.Time { return time.Now().Add(1 * time.Hour) })
 
-	resp := HandleGroupEncrypt(deps, proto.GroupEncryptRequest{
-		GroupHandle:  handle,
+	resp := HandleGroupEncryptBound(deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
 	})
 	if resp.Success {
@@ -133,17 +136,17 @@ func TestHandleGroupEncrypt_ExpiredSession(t *testing.T) {
 
 // The IV comes from Deps.Rand like every other random value a handler draws,
 // so a failing source fails the seal instead of falling back to crypto/rand.
-func TestHandleGroupEncrypt_DrawsTheIVFromDepsRand(t *testing.T) {
+func TestHandleGroupEncryptBound_DrawsTheIVFromDepsRand(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	handle, _ := openSessionForFreshKey(t, deps)
-	request := proto.GroupEncryptRequest{
-		GroupHandle:  handle,
+	request := proto.GroupEncryptBoundRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("x")),
 	}
 
 	fixedIV := []byte("twelve-bytes")
 	deps.Rand = bytes.NewReader(fixedIV)
-	resp := HandleGroupEncrypt(deps, request)
+	resp := HandleGroupEncryptBound(deps, request)
 	if !resp.Success {
 		t.Fatalf("seal: %s", resp.Error)
 	}
@@ -152,7 +155,7 @@ func TestHandleGroupEncrypt_DrawsTheIVFromDepsRand(t *testing.T) {
 	}
 
 	deps.Rand = failingReader{}
-	if resp := HandleGroupEncrypt(deps, request); resp.Success {
+	if resp := HandleGroupEncryptBound(deps, request); resp.Success {
 		t.Fatal("a failing Deps.Rand must fail the seal")
 	}
 }

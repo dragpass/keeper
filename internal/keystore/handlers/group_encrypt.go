@@ -1,63 +1,16 @@
-// group_encrypt.go — raw Group DEK direct AES-GCM encrypt handler.
+// group_encrypt.go — the AAD-free Group drag seal, now refused.
 //
-// HandleGroupEncrypt is the encrypt-direction mirror of
-// HandleGroupDecryptToClipboard (clipboard_actions.go): it seals plaintext
-// directly under the raw Group DEK behind the opaque handle. The plaintext is
-// decoded, sealed inside GroupSessions.Use, and zeroized; the response
-// carries only {iv_b64, ciphertext_b64}. Plaintext / raw Group DEK appear zero
-// times in the response and logs.
+// A token sealed with the raw Group DEK and no AAD carries an `E=` expiry
+// nobody can authenticate, and no action opens it any more. Sealing one would
+// only produce a token nobody can view, so group_encrypt answers
+// TOKEN_LEGACY_REFUSED. Drag tokens are sealed by group_encrypt_bound
+// (bound_token.go).
 
 package handlers
 
-import (
-	"encoding/base64"
-	"errors"
-	"github.com/dragpass/keeper/internal/keystore/crypto"
+import "github.com/dragpass/keeper/internal/keystore/proto"
 
-	"github.com/dragpass/keeper/internal/keystore/errs"
-	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/secure"
-	"github.com/dragpass/keeper/internal/keystore/sessions"
-)
-
-// HandleGroupEncrypt AES-GCM-seals the plaintext directly with the raw Group
-// DEK behind the opaque handle and returns IV / ciphertext separately.
-func HandleGroupEncrypt(d Deps, req proto.GroupEncryptRequest) proto.BaseResponse {
-	d.Logger.Println("group encrypt request processing...")
-
-	if err := req.Validate(); err != nil {
-		return errs.Response(err)
-	}
-
-	plaintext, err := base64.StdEncoding.DecodeString(req.PlaintextB64)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode plaintext_b64: "+err.Error())
-	}
-	defer secure.Zeroize(plaintext)
-
-	var iv, ciphertext []byte
-	useErr := d.GroupSessions.UseLabeled(req.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
-		if isAuditOnlyLabel(label) {
-			return errHandleAuditOnly
-		}
-		if isDecryptOnlyLabel(label) {
-			return errHandleDecryptOnly
-		}
-		i, c, err := crypto.SealAESGCM(d.Random(), groupDEK, plaintext, nil)
-		if err != nil {
-			return errors.New("encrypt failed: " + err.Error())
-		}
-		iv = i
-		ciphertext = c
-		return nil
-	})
-	if useErr != nil {
-		return handleSessionError(useErr, "group encrypt")
-	}
-
-	d.Logger.Println("group encrypt successful")
-	return proto.BaseResponse{Success: true, Data: proto.GroupEncryptResponseData{
-		IVB64:         base64.StdEncoding.EncodeToString(iv),
-		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
-	}}
+// HandleGroupEncrypt refuses the AAD-free Group drag seal.
+func HandleGroupEncrypt(d Deps, _ proto.GroupEncryptRequest) proto.BaseResponse {
+	return legacyTokenRefused(d, "group encrypt")
 }

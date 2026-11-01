@@ -205,7 +205,7 @@ func (f *auditFixture) encryptRequest(receipt proto.AuditTableReceipt) proto.Gro
 	return proto.GroupEncryptAuditRequest{
 		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
 		TableID: f.v.TableID, TableB64: base64.StdEncoding.EncodeToString(f.table),
-		Receipt: receipt, PlaintextB64: base64.StdEncoding.EncodeToString([]byte(f.v.Plaintext)),
+		TokenExpiry: "never", Receipt: receipt, PlaintextB64: base64.StdEncoding.EncodeToString([]byte(f.v.Plaintext)),
 	}
 }
 
@@ -213,7 +213,7 @@ func (f *auditFixture) decryptRequest(t *testing.T, permit proto.AuditDecryptPer
 	return proto.GroupDecryptAuditToClipboardRequest{
 		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
 		TableID: f.v.TableID, TableB64: base64.StdEncoding.EncodeToString(f.table),
-		Permit: permit, IVB64: base64.StdEncoding.EncodeToString(iv),
+		TokenExpiry: "never", Permit: permit, IVB64: base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64: base64.StdEncoding.EncodeToString(ct), ClipboardTTLMs: 10_000,
 	}
 }
@@ -364,9 +364,13 @@ func TestAuditOnlyHandleRefusesTheAADFreeDragActions(t *testing.T) {
 	f := newAuditFixture(t)
 	iv := base64.StdEncoding.EncodeToString(make([]byte, 12))
 	ct := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	wantCode(t, HandleGroupEncrypt(f.deps, proto.GroupEncryptRequest{GroupHandle: f.handle, PlaintextB64: "aGk="}), proto.GroupPolicyAuditOnly)
-	wantCode(t, HandleGroupDecryptToClipboard(f.deps, proto.GroupDecryptToClipboardRequest{
-		GroupHandle: f.handle, IVB64: iv, CiphertextB64: ct, ClipboardTTLMs: 10_000,
+	wantCode(t, HandleGroupEncryptBound(f.deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
+		TokenExpiry: "never", PlaintextB64: "aGk=",
+	}), proto.GroupPolicyAuditOnly)
+	wantCode(t, HandleGroupDecryptBoundToClipboard(f.deps, proto.GroupDecryptBoundToClipboardRequest{
+		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
+		TokenExpiry: "never", IVB64: iv, CiphertextB64: ct, ClipboardTTLMs: 10_000,
 	}), proto.GroupPolicyAuditOnly)
 
 	// The credential seal and the message seal still work on it.
@@ -439,7 +443,10 @@ func TestAuditTokenKeyDependsOnTheTable(t *testing.T) {
 	if _, err := crypto.OpenAESGCM(key, iv, ct, []byte(f.v.AuditAAD)); err != nil {
 		t.Fatal(err)
 	}
-	// Decrypt the golden token with a permit and the table it was made with.
+	// The golden token's AAD has no expiry, so the handler no longer opens it
+	// (bound_token_test.go); a bound token made with the same table does.
+	iv, ct = f.boundAuditToken(t, "never")
+	// Decrypt the bound token with a permit and the table it was made with.
 	if resp := HandleGroupDecryptAuditToClipboard(f.deps, payloadOf(t, f.decryptRequest(t, f.permit(t, nil), iv, ct))); !resp.Success {
 		t.Fatalf("golden token: %+v", resp)
 	}
@@ -465,7 +472,7 @@ func TestAuditTokenKeyDependsOnTheTable(t *testing.T) {
 
 func TestAuditAuthorizationRefusals(t *testing.T) {
 	f := newAuditFixture(t)
-	iv, ct := mustHex(t, f.v.IVHex), mustHex(t, f.v.CiphertextHex)
+	iv, ct := f.boundAuditToken(t, "never")
 	cases := map[string]func() json.RawMessage{
 		"forged receipt signature": func() json.RawMessage {
 			r := f.receipt(t, nil)
@@ -587,7 +594,7 @@ func TestAuditAuthorizationsAreSingleUse(t *testing.T) {
 	wantCode(t, HandleGroupEncryptAudit(f.deps, payloadOf(t, f.encryptRequest(receipt))), proto.AuditNotAuthorized)
 
 	// Concurrent replays of one permit leave exactly one winner.
-	iv, ct := mustHex(t, f.v.IVHex), mustHex(t, f.v.CiphertextHex)
+	iv, ct := f.boundAuditToken(t, "never")
 	payload := payloadOf(t, f.decryptRequest(t, f.permit(t, nil), iv, ct))
 	var wg sync.WaitGroup
 	var mu sync.Mutex

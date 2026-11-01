@@ -208,8 +208,19 @@ const (
 	//   directly from the Keychain.
 	//   Output: iv_b64, ciphertext_b64 (the Extension assembles the token
 	//   via buildTokenFromCiphertext).
-	// Moves dekManager.encryptData into the Keeper.
+	// Refused with TOKEN_LEGACY_REFUSED: a token it made has no authenticated
+	// expiry and could not be opened.
 	ActionDEKUnwrapAndEncrypt = "dek_unwrap_and_encrypt"
+
+	// DEKUnwrapAndEncryptBound / DEKUnwrapAndDecryptBoundToClipboard: the
+	// personal bound drag token (proto/bound_token.go). The Keeper builds the
+	// AAD `dragpass.drag.token|1|personal|<account>|-|1|-|<expiry>` from its own
+	// signed-in account binding and token_expiry, and refuses an expired one.
+	//   Inputs: encrypted_dek_b64?, token_expiry, plaintext_b64
+	//           (decrypt: iv_b64, ciphertext_b64, clipboard_ttl_ms)
+	//   Output: iv_b64, ciphertext_b64 / {copied, clipboard_ttl_ms}
+	ActionDEKUnwrapAndEncryptBound            = "dek_unwrap_and_encrypt_bound"
+	ActionDEKUnwrapAndDecryptBoundToClipboard = "dek_unwrap_and_decrypt_bound_to_clipboard"
 
 	// DEKUnwrapAndEncryptWithAAD: AAD-binding variant of
 	// DEKUnwrapAndEncrypt, the personal-scope sibling of
@@ -227,7 +238,8 @@ const (
 	// clipboard. The response does not contain the plaintext — only
 	// {copied, clipboard_ttl_ms}. Prevents the plaintext from living in the
 	// Extension JS heap / Native Messaging response / React state
-	// (security/keeper-plaintext-command-api-plan.md).
+	// (security/keeper-plaintext-command-api-plan.md). Refused with
+	// TOKEN_LEGACY_REFUSED: its tokens carry no authenticated expiry.
 	ActionDEKUnwrapAndDecryptToClipboard = "dek_unwrap_and_decrypt_to_clipboard"
 
 	// PersonalDEKAdopt (0.0.58): stores the Extension's old copy of the

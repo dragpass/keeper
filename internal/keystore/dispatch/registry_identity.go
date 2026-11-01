@@ -78,6 +78,9 @@ func identityActions() map[string]action {
 		proto.ActionDEKUnwrapAndEncryptWithAAD: wrap(handlers.HandleDEKUnwrapAndEncryptWithAAD),
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
+		// bound personal drag tokens: Keeper-built AAD with authenticated expiry
+		proto.ActionDEKUnwrapAndEncryptBound:            wrap(handlers.HandleDEKUnwrapAndEncryptBound),
+		proto.ActionDEKUnwrapAndDecryptBoundToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptBoundToClipboard),
 		// the Extension's old device master copy into the empty slot (0.0.58)
 		proto.ActionPersonalDEKAdopt: wrap(handlers.HandlePersonalDEKAdopt),
 

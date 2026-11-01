@@ -119,12 +119,25 @@ func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 	if err := keychain.SaveDeviceKey(app.Store, base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
 		t.Fatalf("saveDeviceKey: %v", err)
 	}
+	if _, _, err := keychain.SetAccountBinding(app.Store, "6f1c2a8e-3b4d-4c5e-9f60-718293a4b5c6", "alice", true); err != nil {
+		t.Fatalf("account binding: %v", err)
+	}
 
 	signupData := signupWraps(t, "p", make([]byte, 32))
 
 	plaintextB64 := base64.StdEncoding.EncodeToString([]byte("hello"))
+
+	// The AAD-free personal actions are refused through dispatch as well.
+	legacy := app.HandleRequest([]byte(fmt.Sprintf(
+		`{"action":"dek_unwrap_and_encrypt","request_id":"r-legacy","payload":{"encrypted_dek_b64":%q,"plaintext_b64":%q}}`,
+		signupData.DeviceWrappedDEKB64, plaintextB64,
+	)))
+	if legacy.Success || legacy.ErrorCode != "TOKEN_LEGACY_REFUSED" {
+		t.Fatalf("legacy encrypt: success=%t code=%q", legacy.Success, legacy.ErrorCode)
+	}
+
 	encMsg := fmt.Sprintf(
-		`{"action":"dek_unwrap_and_encrypt","request_id":"r-enc","payload":{"encrypted_dek_b64":%q,"plaintext_b64":%q}}`,
+		`{"action":"dek_unwrap_and_encrypt_bound","request_id":"r-enc","payload":{"encrypted_dek_b64":%q,"token_expiry":"never","plaintext_b64":%q}}`,
 		signupData.DeviceWrappedDEKB64, plaintextB64,
 	)
 	encResp := app.HandleRequest([]byte(encMsg))
@@ -139,7 +152,7 @@ func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 	json.Unmarshal(encRaw, &encData)
 
 	decMsg := fmt.Sprintf(
-		`{"action":"dek_unwrap_and_decrypt_to_clipboard","payload":{"encrypted_dek_b64":%q,"iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
+		`{"action":"dek_unwrap_and_decrypt_bound_to_clipboard","payload":{"encrypted_dek_b64":%q,"token_expiry":"never","dek_version":1,"iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
 		signupData.DeviceWrappedDEKB64, encData.IVB64, encData.CiphertextB64,
 	)
 	decResp := app.HandleRequest([]byte(decMsg))
@@ -151,6 +164,14 @@ func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 	json.Unmarshal(decRaw, &decData)
 	if !decData.Copied || decData.ClipboardTTLMs != 30000 {
 		t.Errorf("expected {copied:true, ttl:30000}, got %+v", decData)
+	}
+
+	legacyDec := app.HandleRequest([]byte(fmt.Sprintf(
+		`{"action":"dek_unwrap_and_decrypt_to_clipboard","payload":{"encrypted_dek_b64":%q,"iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
+		signupData.DeviceWrappedDEKB64, encData.IVB64, encData.CiphertextB64,
+	)))
+	if legacyDec.Success || legacyDec.ErrorCode != "TOKEN_LEGACY_REFUSED" {
+		t.Fatalf("legacy decrypt: success=%t code=%q", legacyDec.Success, legacyDec.ErrorCode)
 	}
 }
 

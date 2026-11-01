@@ -55,6 +55,7 @@ func assertNoLeak(t *testing.T, log *testdouble.MemoryLogger, resp proto.BaseRes
 
 func TestRotateDeviceKey_EmptyInputRotatesSlot(t *testing.T) {
 	deps, log, store := newTestDeps(t)
+	bindBoundTestAccount(t, store)
 	seedKeychainDeviceKeyForRotate(t, store, 0x21)
 	if resp := signupDEKForTest(deps, "pw"); !resp.Success {
 		t.Fatalf("signup setup: %s", resp.Error)
@@ -82,7 +83,7 @@ func TestRotateDeviceKey_EmptyInputRotatesSlot(t *testing.T) {
 	assertNoLeak(t, log, resp, oldSlot, newSlot, oldDK, storedDeviceKey(t, store))
 
 	// The personal dek_* actions keep working from the rotated slot.
-	enc := HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{
+	enc := HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never",
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("after rotation")),
 	})
 	if !enc.Success {
