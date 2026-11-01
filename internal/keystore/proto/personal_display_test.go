@@ -46,6 +46,7 @@ func TestPersonalDisplayPrepareRequiresOneFrameAndSession(t *testing.T) {
 	req := PersonalDisplayPrepareRequest{
 		Token:                 "selected token",
 		TokenExpiry:           "never",
+		DekVersion:            1,
 		IVB64:                 base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 12)),
 		CiphertextB64:         base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32)),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(spki),

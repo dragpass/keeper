@@ -2191,8 +2191,9 @@ Other entry paths and unavailable or older peers leave provenance unverified.
 
 This exchange establishes provenance, not permission to display plaintext.
 `personal_display_prepare` takes the selected token, IV, ciphertext, frame
-P-256 public key, the Extension session token ID and issue nanoseconds, and
-`token_expiry` (see "Isolated display token admission" below). It is Native Messaging only, strictly decoded, and refuses an unproven local
+P-256 public key, the Extension session token ID and issue nanoseconds,
+`token_expiry` and `dek_version` (the header's v<N>, which must be 1; see
+"Isolated display token admission" below). It is Native Messaging only, strictly decoded, and refuses an unproven local
 slot. The response contains a random ten-second, process-local challenge and
 the current server password-wrap, operation and frame-key digests, never key
 material or plaintext. The operation digest covers the exact selected token,

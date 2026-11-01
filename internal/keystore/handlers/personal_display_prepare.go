@@ -35,7 +35,7 @@ func HandlePersonalDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRes
 	}
 	// The verified provenance names the account whose personal DEK opens the
 	// token; a token sealed for another account fails the tag at execute.
-	aad := []byte(proto.BoundPersonalTokenAAD(provenance.AccountID, expiry))
+	aad := []byte(proto.BoundPersonalTokenAAD(provenance.AccountID, req.DekVersion, expiry))
 	iv, _, ok := decodeBase64(req.IVB64, "iv_b64")
 	if !ok {
 		return deny()

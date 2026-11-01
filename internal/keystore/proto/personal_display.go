@@ -25,7 +25,10 @@ type PersonalDisplayPrepareRequest struct {
 	Token string `json:"token"`
 	// TokenExpiry is the bound token's authenticated expiry. Keeper builds
 	// the AAD from it and the signed-in account; empty means a legacy token.
-	TokenExpiry           string `json:"token_expiry,omitempty"`
+	TokenExpiry string `json:"token_expiry,omitempty"`
+	// DekVersion is the token header's v<N>; Keeper binds it into the AAD
+	// and refuses anything but 1.
+	DekVersion            int    `json:"dek_version"`
 	IVB64                 string `json:"iv_b64"`
 	CiphertextB64         string `json:"ciphertext_b64"`
 	FramePublicKeySPKIB64 string `json:"frame_public_key_spki_b64"`
@@ -39,6 +42,9 @@ func (r PersonalDisplayPrepareRequest) Validate() error {
 	}
 	if r.TokenExpiry != "" {
 		if _, err := ParseTokenExpiry(r.TokenExpiry); err != nil {
+			return err
+		}
+		if err := RequireBoundPersonalDekVersion(r.DekVersion); err != nil {
 			return err
 		}
 	}

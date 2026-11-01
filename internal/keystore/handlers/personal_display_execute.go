@@ -43,7 +43,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 	}
 	// Built from the decision's account; the operation digest commits to the
 	// prepared AAD and the challenge context to the prepared account.
-	aad := []byte(proto.BoundPersonalTokenAAD(req.Decision.AccountID, expiry))
+	aad := []byte(proto.BoundPersonalTokenAAD(req.Decision.AccountID, req.Prepare.DekVersion, expiry))
 	ciphertext, _, ok := decodeBase64(req.Prepare.CiphertextB64, "ciphertext_b64")
 	if !ok {
 		return deny()

@@ -34,7 +34,7 @@ func personalDisplayPrepareFixture(t *testing.T) (Deps, proto.PersonalDisplayPre
 		t.Fatal(err)
 	}
 	return d, proto.PersonalDisplayPrepareRequest{
-		Token: "selected personal token", TokenExpiry: "never",
+		Token: "selected personal token", TokenExpiry: "never", DekVersion: 1,
 		IVB64: value.IVB64, CiphertextB64: value.CiphertextB64,
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
 		TokenID:               "44444444-4444-4444-8444-444444444444",

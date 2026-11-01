@@ -67,6 +67,22 @@ func TestDisplayPrepareAdmitsOnlyUnexpiredBoundTokens(t *testing.T) {
 	}
 }
 
+func TestPersonalDisplayPrepareRefusesAHeaderVersionOtherThanOne(t *testing.T) {
+	for _, version := range []int{0, 2, 7} {
+		d, req, binding, _, _ := personalDisplayPrepareFixture(t)
+		if !HandlePersonalDEKBind(d, binding).Success {
+			t.Fatal("provenance fixture bind failed")
+		}
+		req.DekVersion = version
+		if resp := HandlePersonalDisplayPrepare(d, payloadOf(t, req)); resp.Success {
+			t.Fatalf("personal display prepared for header version %d", version)
+		}
+		if d.GroupDisplayChallenges.Len() != 0 {
+			t.Fatal("refused version stored a challenge")
+		}
+	}
+}
+
 func TestGroupDisplayPrepareRefusesAnotherTokenScope(t *testing.T) {
 	f, _, handle := groupDisplayDecisionFixture(t)
 	gc := legacyContext(f.v)
