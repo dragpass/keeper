@@ -104,13 +104,27 @@ func ParseTokenExpiry(value string) (TokenExpiry, error) {
 	return TokenExpiry{ExpiresAt: n}, nil
 }
 
-// BoundPersonalTokenAAD is the AAD of a personal bound token.
-func BoundPersonalTokenAAD(accountID string, expiry TokenExpiry) string {
+// BoundPersonalTokenAAD is the AAD of a personal bound token. The DEK
+// version is the token header's v<N>; only v1 exists, and binding the header
+// value means a changed version can never open under the v1 canonical.
+func BoundPersonalTokenAAD(accountID string, dekVersion int, expiry TokenExpiry) string {
 	return strings.Join([]string{
 		BoundTokenAADDomain, boundTokenSchemaVersion, "personal",
-		accountID, boundTokenNone, strconv.Itoa(boundTokenPersonalDekVersion), boundTokenNone,
+		accountID, boundTokenNone, strconv.Itoa(dekVersion), boundTokenNone,
 		expiry.canonical(),
 	}, "|")
+}
+
+// BoundPersonalDekVersion is the only DEK version a personal token carries.
+const BoundPersonalDekVersion = boundTokenPersonalDekVersion
+
+// RequireBoundPersonalDekVersion refuses a personal token header version
+// other than v1 before any key is touched.
+func RequireBoundPersonalDekVersion(dekVersion int) error {
+	if dekVersion != boundTokenPersonalDekVersion {
+		return newValidationError("dek_version", "a personal bound token has DEK version 1")
+	}
+	return nil
 }
 
 // BoundGroupTokenAAD is the AAD of a Group bound token. auditTableID is empty
@@ -150,9 +164,11 @@ func (r DEKUnwrapAndEncryptBoundRequest) Validate() error {
 type DEKUnwrapAndDecryptBoundToClipboardRequest struct {
 	EncryptedDEKB64 string `json:"encrypted_dek_b64,omitempty"`
 	TokenExpiry     string `json:"token_expiry"`
-	IVB64           string `json:"iv_b64"`
-	CiphertextB64   string `json:"ciphertext_b64"`
-	ClipboardTTLMs  int64  `json:"clipboard_ttl_ms"`
+	// DekVersion is the token header's v<N>, bound into the AAD.
+	DekVersion     int    `json:"dek_version"`
+	IVB64          string `json:"iv_b64"`
+	CiphertextB64  string `json:"ciphertext_b64"`
+	ClipboardTTLMs int64  `json:"clipboard_ttl_ms"`
 }
 
 func (r DEKUnwrapAndDecryptBoundToClipboardRequest) Validate() error {
@@ -160,6 +176,9 @@ func (r DEKUnwrapAndDecryptBoundToClipboardRequest) Validate() error {
 		return err
 	}
 	if _, err := ParseTokenExpiry(r.TokenExpiry); err != nil {
+		return err
+	}
+	if err := RequireBoundPersonalDekVersion(r.DekVersion); err != nil {
 		return err
 	}
 	if err := validateAuditSealed(r.IVB64, r.CiphertextB64); err != nil {

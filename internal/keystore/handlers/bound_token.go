@@ -124,7 +124,7 @@ func HandleDEKUnwrapAndEncryptBound(d Deps, req proto.DEKUnwrapAndEncryptBoundRe
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode plaintext_b64")
 	}
 	defer secure.Zeroize(plaintext)
-	aad := []byte(proto.BoundPersonalTokenAAD(accountID, expiry))
+	aad := []byte(proto.BoundPersonalTokenAAD(accountID, proto.BoundPersonalDekVersion, expiry))
 	return withPersonalDEK(d, req.EncryptedDEKB64, func(dek []byte) proto.BaseResponse {
 		iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, aad)
 		if err != nil {
@@ -156,7 +156,7 @@ func HandleDEKUnwrapAndDecryptBoundToClipboard(d Deps, req proto.DEKUnwrapAndDec
 	}
 	iv, _ := base64.StdEncoding.DecodeString(req.IVB64)
 	ciphertext, _ := base64.StdEncoding.DecodeString(req.CiphertextB64)
-	aad := []byte(proto.BoundPersonalTokenAAD(accountID, expiry))
+	aad := []byte(proto.BoundPersonalTokenAAD(accountID, req.DekVersion, expiry))
 	return withPersonalDEK(d, req.EncryptedDEKB64, func(dek []byte) proto.BaseResponse {
 		plaintext, err := crypto.OpenAESGCM(dek, iv, ciphertext, aad)
 		if err != nil {

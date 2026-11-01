@@ -68,7 +68,7 @@ func TestHandleDEKUnwrapAndDecryptBoundToClipboard_RoundTrip(t *testing.T) {
 	}
 	encData := enc.Data.(proto.DEKUnwrapAndEncryptResponseData)
 
-	resp := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never",
+	resp := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never", DekVersion: 1,
 		EncryptedDEKB64: dual.DeviceWrappedDEKB64,
 		IVB64:           encData.IVB64,
 		CiphertextB64:   encData.CiphertextB64,
