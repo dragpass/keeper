@@ -326,19 +326,21 @@ func signupAndGetDeviceWrap(t *testing.T, deps Deps, store keychain.SecretStore,
 // The TestDEKUnwrapAndDecrypt_* series was removed along with
 // HandleDEKUnwrapAndDecrypt. The roundtrip / tampered / keychain-key-changed
 // / validation / bad-iv regression guards are covered by the unit tests for
-// the clipboard sink action (HandleDEKUnwrapAndDecryptToClipboard).
+// the bound clipboard sink action (HandleDEKUnwrapAndDecryptBoundToClipboard).
 
 func TestDEKUnwrap_EncryptValidation(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	deviceKey := make([]byte, 32)
 	setKeychainDeviceKey(t, store, deviceKey)
+	bindBoundTestAccount(t, store)
 
-	cases := []proto.DEKUnwrapAndEncryptRequest{
+	cases := []proto.DEKUnwrapAndEncryptBoundRequest{
+		{PlaintextB64: "AA==", TokenExpiry: "never"},
+		{EncryptedDEKB64: "AA==", TokenExpiry: "never"},
 		{PlaintextB64: "AA=="},
-		{EncryptedDEKB64: "AA=="},
 	}
 	for i, c := range cases {
-		if resp := HandleDEKUnwrapAndEncrypt(deps, c); resp.Success {
+		if resp := HandleDEKUnwrapAndEncryptBound(deps, c); resp.Success {
 			t.Errorf("case %d: expected validation failure", i)
 		}
 	}

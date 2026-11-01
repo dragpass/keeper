@@ -162,8 +162,10 @@ func GroupDEKGrantLabel(c *GrantContext) []byte {
 	}, "|"))
 }
 
-// AuditDragAADCanonical is the AAD of a drag token sealed under an audit-only
-// version. The Keeper builds it from validated fields; no caller supplies it.
+// AuditDragAADCanonical is the AAD of a legacy drag token sealed under an
+// audit-only version. It authenticates no expiry, so the Keeper no longer
+// seals or opens under it; the audit actions use BoundGroupTokenAAD with the
+// table id. It stays for the shared golden vector.
 //
 //	dragpass.drag.audit|1|<org>|<group>|<dek_version>|<table_id>
 func AuditDragAADCanonical(orgID, groupID string, dekVersion int, tableID string) string {
@@ -306,6 +308,10 @@ type AuditTokenContext struct {
 	DekVersion  int    `json:"dek_version"`
 	TableID     string `json:"table_id"`
 	TableB64    string `json:"table_b64"` // the 256-byte shuffle table, standard Base64
+	// TokenExpiry is the bound token's authenticated expiry (`never` or Unix
+	// seconds). Empty is a legacy request: the handler refuses it with
+	// TOKEN_LEGACY_REFUSED before any authorization is spent.
+	TokenExpiry string `json:"token_expiry,omitempty"`
 }
 
 func (c AuditTokenContext) validate() error {
@@ -324,6 +330,11 @@ func (c AuditTokenContext) validate() error {
 	if err := requireMessageUUID(c.TableID, "table_id"); err != nil {
 		return err
 	}
+	if c.TokenExpiry != "" {
+		if _, err := ParseTokenExpiry(c.TokenExpiry); err != nil {
+			return err
+		}
+	}
 	return requireMessageBase64Len(c.TableB64, "table_b64", AuditShuffleTableBytes, AuditShuffleTableBytes)
 }
 
@@ -337,12 +348,13 @@ type GroupEncryptAuditRequest struct {
 	DekVersion   int               `json:"dek_version"`
 	TableID      string            `json:"table_id"`
 	TableB64     string            `json:"table_b64"`
+	TokenExpiry  string            `json:"token_expiry,omitempty"`
 	Receipt      AuditTableReceipt `json:"receipt"`
 	PlaintextB64 string            `json:"plaintext_b64"` // secret in REQUEST only; never logged
 }
 
 func (r GroupEncryptAuditRequest) TokenContext() AuditTokenContext {
-	return AuditTokenContext{r.GroupHandle, r.OrgID, r.GroupID, r.DekVersion, r.TableID, r.TableB64}
+	return AuditTokenContext{r.GroupHandle, r.OrgID, r.GroupID, r.DekVersion, r.TableID, r.TableB64, r.TokenExpiry}
 }
 
 func (r GroupEncryptAuditRequest) Validate() error {
@@ -364,6 +376,7 @@ type GroupDecryptAuditToClipboardRequest struct {
 	DekVersion     int                `json:"dek_version"`
 	TableID        string             `json:"table_id"`
 	TableB64       string             `json:"table_b64"`
+	TokenExpiry    string             `json:"token_expiry,omitempty"`
 	Permit         AuditDecryptPermit `json:"permit"`
 	IVB64          string             `json:"iv_b64"`
 	CiphertextB64  string             `json:"ciphertext_b64"`
@@ -371,7 +384,7 @@ type GroupDecryptAuditToClipboardRequest struct {
 }
 
 func (r GroupDecryptAuditToClipboardRequest) TokenContext() AuditTokenContext {
-	return AuditTokenContext{r.GroupHandle, r.OrgID, r.GroupID, r.DekVersion, r.TableID, r.TableB64}
+	return AuditTokenContext{r.GroupHandle, r.OrgID, r.GroupID, r.DekVersion, r.TableID, r.TableB64, r.TokenExpiry}
 }
 
 func (r GroupDecryptAuditToClipboardRequest) Validate() error {
