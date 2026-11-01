@@ -39,8 +39,8 @@ func TestBoundTokenAADCanonical_GoldenVector(t *testing.T) {
 	never := TokenExpiry{}
 	at := TokenExpiry{ExpiresAt: v.ExpiresAt}
 	cases := map[string][2]string{
-		"personal never":    {BoundPersonalTokenAAD(v.AccountID, never), v.PersonalNever},
-		"personal expiring": {BoundPersonalTokenAAD(v.AccountID, at), v.PersonalExpiring},
+		"personal never":    {BoundPersonalTokenAAD(v.AccountID, 1, never), v.PersonalNever},
+		"personal expiring": {BoundPersonalTokenAAD(v.AccountID, 1, at), v.PersonalExpiring},
 		"group never":       {BoundGroupTokenAAD(v.OrgID, v.GroupID, v.DekVersion, "", never), v.GroupNever},
 		"group expiring":    {BoundGroupTokenAAD(v.OrgID, v.GroupID, v.DekVersion, "", at), v.GroupExpiring},
 		"group audit":       {BoundGroupTokenAAD(v.OrgID, v.GroupID, v.DekVersion, v.TableID, at), v.GroupAuditExpiring},
@@ -79,7 +79,7 @@ func TestTokenExpiryExpiredAt(t *testing.T) {
 }
 
 func TestBoundTokenDomainIsReserved(t *testing.T) {
-	if err := rejectReservedAAD(base64.StdEncoding.EncodeToString([]byte(BoundPersonalTokenAAD("6f1c2a8e-3b4d-4c5e-9f60-718293a4b5c6", TokenExpiry{}))), "aad_b64"); err == nil {
+	if err := rejectReservedAAD(base64.StdEncoding.EncodeToString([]byte(BoundPersonalTokenAAD("6f1c2a8e-3b4d-4c5e-9f60-718293a4b5c6", 1, TokenExpiry{}))), "aad_b64"); err == nil {
 		t.Fatal("a caller could seal under the bound token domain")
 	}
 }

@@ -152,7 +152,7 @@ func TestHandleRequest_DEKUnwrapEncrypt_FullFlow(t *testing.T) {
 	json.Unmarshal(encRaw, &encData)
 
 	decMsg := fmt.Sprintf(
-		`{"action":"dek_unwrap_and_decrypt_bound_to_clipboard","payload":{"encrypted_dek_b64":%q,"token_expiry":"never","iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
+		`{"action":"dek_unwrap_and_decrypt_bound_to_clipboard","payload":{"encrypted_dek_b64":%q,"token_expiry":"never","dek_version":1,"iv_b64":%q,"ciphertext_b64":%q,"clipboard_ttl_ms":30000}}`,
 		signupData.DeviceWrappedDEKB64, encData.IVB64, encData.CiphertextB64,
 	)
 	decResp := app.HandleRequest([]byte(decMsg))

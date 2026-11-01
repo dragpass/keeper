@@ -2335,7 +2335,7 @@ Keeper owns the plaintext sink: it decrypts in process memory and writes the pla
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`dek_unwrap_and_decrypt_to_clipboard`|`encrypted_dek_b64?`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|error|(0.0.60) Refused with `TOKEN_LEGACY_REFUSED`.|
-|`dek_unwrap_and_decrypt_bound_to_clipboard`|`encrypted_dek_b64?`, `token_expiry`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|(0.0.60) Personal bound token → Keeper clipboard. No plaintext echoed.|
+|`dek_unwrap_and_decrypt_bound_to_clipboard`|`encrypted_dek_b64?`, `token_expiry`, `dek_version` (the header's v<N>; must be 1), `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|(0.0.60) Personal bound token → Keeper clipboard. The header version is bound into the AAD and any version other than 1 is refused. No plaintext echoed.|
 |`group_decrypt_to_clipboard`|`group_handle`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|error|(0.0.60) Refused with `TOKEN_LEGACY_REFUSED`, on every handle.|
 |`group_decrypt_bound_to_clipboard`|`group_handle`, `org_id`, `group_id`, `dek_version`, `audit_table_id?`, `token_expiry`, `iv_b64` (12B), `ciphertext_b64`, `clipboard_ttl_ms`|`{ copied, clipboard_ttl_ms }`|(0.0.60) Group bound token → Keeper clipboard. A decrypt-only handle opens it; an audit-only handle refuses it. No plaintext echoed.|
 
@@ -2364,6 +2364,9 @@ dragpass.drag.token|1|group|<org_id>|<group_id>|<dek_version>|<audit_table_id or
 - Before any key use the Keeper refuses an expired token
   (`TOKEN_EXPIRED`, viewable strictly before the expiry, no grace).
 - The personal `<account_id>` is this device's signed-in `account_binding`.
+- The personal DEK version field is the token header's `v<N>`, sent as
+  `dek_version`; a personal token only has version 1, and any other value is
+  refused before the DEK is touched, so a changed header cannot open.
   It is a scope name, not authentication: a wrong account fails the tag.
 - A Group handle opened from a labeled grant must name the request's org,
   group and version (`TOKEN_SCOPE_MISMATCH`). An audit-only handle takes only

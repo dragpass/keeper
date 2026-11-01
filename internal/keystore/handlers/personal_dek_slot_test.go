@@ -33,7 +33,7 @@ func TestPersonalDEKActions_EmptyEncryptedDEKUsesSlot(t *testing.T) {
 	}
 	encData := enc.Data.(proto.DEKUnwrapAndEncryptResponseData)
 
-	copied := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never",
+	copied := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never", DekVersion: 1,
 		IVB64:          encData.IVB64,
 		CiphertextB64:  encData.CiphertextB64,
 		ClipboardTTLMs: 10_000,
@@ -73,7 +73,7 @@ func TestPersonalDEKActions_EmptyEncryptedDEKWithoutSlotIsNotFound(t *testing.T)
 	cases := map[string]proto.BaseResponse{
 		"encrypt":     HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never", PlaintextB64: pt}),
 		"encrypt_aad": HandleDEKUnwrapAndEncryptWithAAD(deps, proto.DEKUnwrapAndEncryptWithAADRequest{PlaintextB64: pt, AADB64: pt}),
-		"clipboard": HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never",
+		"clipboard": HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never", DekVersion: 1,
 			IVB64: iv, CiphertextB64: base64.StdEncoding.EncodeToString(make([]byte, 16)), ClipboardTTLMs: 10_000,
 		}),
 		"new_password": HandleDEKRotateToNewPassword(deps, proto.DEKRotateToNewPasswordRequest{NewPassword: "p"}),

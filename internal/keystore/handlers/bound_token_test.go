@@ -276,11 +276,11 @@ func TestBoundPersonalTokenRoundTripsAndBindsTheAccount(t *testing.T) {
 		ivRaw, _ := base64.StdEncoding.DecodeString(data.IVB64)
 		ctRaw, _ := base64.StdEncoding.DecodeString(data.CiphertextB64)
 		parsed, _ := proto.ParseTokenExpiry(expiry)
-		if _, err := crypto.OpenAESGCM(dek, ivRaw, ctRaw, []byte(proto.BoundPersonalTokenAAD(boundAccount, parsed))); err != nil {
+		if _, err := crypto.OpenAESGCM(dek, ivRaw, ctRaw, []byte(proto.BoundPersonalTokenAAD(boundAccount, 1, parsed))); err != nil {
 			t.Fatalf("not sealed under the personal canonical: %v", err)
 		}
 		req := proto.DEKUnwrapAndDecryptBoundToClipboardRequest{
-			EncryptedDEKB64: wrapped, TokenExpiry: expiry,
+			EncryptedDEKB64: wrapped, TokenExpiry: expiry, DekVersion: 1,
 			IVB64: data.IVB64, CiphertextB64: data.CiphertextB64, ClipboardTTLMs: 30_000,
 		}
 		if resp := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, req); !resp.Success {
@@ -309,13 +309,23 @@ func TestBoundPersonalTokenRefusals(t *testing.T) {
 	}
 	data := enc.Data.(proto.DEKUnwrapAndEncryptResponseData)
 	req := proto.DEKUnwrapAndDecryptBoundToClipboardRequest{
-		EncryptedDEKB64: wrapped, TokenExpiry: boundLater,
+		EncryptedDEKB64: wrapped, TokenExpiry: boundLater, DekVersion: 1,
 		IVB64: data.IVB64, CiphertextB64: data.CiphertextB64, ClipboardTTLMs: 30_000,
 	}
 
 	tampered := req
 	tampered.TokenExpiry = "never"
 	wantCode(t, HandleDEKUnwrapAndDecryptBoundToClipboard(deps, tampered), proto.TokenDecryptFailed)
+
+	// The header's DEK version is part of the token scope: a personal token
+	// only ever has v1, so another version is refused before any open.
+	for _, version := range []int{0, 2, 7} {
+		wrongVersion := req
+		wrongVersion.DekVersion = version
+		if resp := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, wrongVersion); resp.Success {
+			t.Fatalf("personal bound token opened with header version %d", version)
+		}
+	}
 
 	legacyIV, legacyCT, err := crypto.SealAESGCM(rand.Reader, dek, []byte(boundSecret), nil)
 	if err != nil {
