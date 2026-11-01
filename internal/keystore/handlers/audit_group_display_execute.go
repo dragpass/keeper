@@ -30,7 +30,8 @@ func HandleAuditGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseR
 	if strictDecodeJSON(payload, &req) != nil || req.Validate() != nil {
 		return deny()
 	}
-	if !admitAuditDisplayToken(d) {
+	expiry, _, ok := admitDisplayToken(d, req.Prepare.TokenExpiry, "audit group display execute")
+	if !ok {
 		return deny()
 	}
 	p := req.Prepare
@@ -126,8 +127,9 @@ func HandleAuditGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseR
 	}
 	defer secure.Zeroize(plaintext)
 	sealedIV, sealedCiphertext, err := crypto.SealAESGCM(d.Random(), key, plaintext, aad)
-	// Sealing may cross the server decision horizon even under requestMu.
-	if err != nil || d.Now().Unix() >= req.Decision.ExpiresAt {
+	// Sealing may cross the server decision horizon or the token expiry even
+	// under requestMu; openAuditToken checked the token expiry before opening.
+	if now := d.Now().Unix(); err != nil || now >= req.Decision.ExpiresAt || expiry.ExpiredAt(now) {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

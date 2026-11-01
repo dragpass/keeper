@@ -35,10 +35,13 @@ func HandleGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRespon
 	if err := req.Validate(); err != nil {
 		return deny()
 	}
-	aad, parsedAAD, err := admitDisplayTokenContext(d, "group", req.Prepare.TokenAADB64)
-	if err != nil || parsedAAD.DekVersion != req.Decision.DekVersion {
+	expiry, _, ok := admitDisplayToken(d, req.Prepare.TokenExpiry, "group display execute")
+	if !ok || req.Prepare.DekVersion != req.Decision.DekVersion || req.Prepare.GroupID != req.Decision.GroupID {
 		return deny()
 	}
+	// The prepared operation digest commits to these AAD bytes, and the handle
+	// label is checked against the same scope before opening.
+	aad := []byte(proto.BoundGroupTokenAAD(req.Prepare.OrgID, req.Prepare.GroupID, req.Prepare.DekVersion, "", expiry))
 	handle, _, ok := decodeBase64(req.Prepare.GroupHandle, "group_handle")
 	if !ok {
 		return deny()
@@ -112,7 +115,7 @@ func HandleGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRespon
 	var sealedIV, sealedCiphertext []byte
 	useErr := d.GroupSessions.UseLabeled(req.Prepare.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
 		if d.Now().Unix() >= req.Decision.ExpiresAt ||
-			tokenExpiredAt(parsedAAD, d.Now().Unix()) {
+			expiry.ExpiredAt(d.Now().Unix()) {
 			return errCurrentGroupDisplayDenied
 		}
 		if isAuditOnlyLabel(label) {
@@ -129,7 +132,7 @@ func HandleGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRespon
 	// Crypto work can outlive the authorization window while requestMu is held.
 	// Never release an envelope after the server may have committed revocation.
 	if useErr != nil || d.Now().Unix() >= req.Decision.ExpiresAt ||
-		tokenExpiredAt(parsedAAD, d.Now().Unix()) {
+		expiry.ExpiredAt(d.Now().Unix()) {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

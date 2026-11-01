@@ -55,6 +55,7 @@ type AuditGroupDisplayPrepareRequest struct {
 	TableID               string             `json:"table_id"`
 	TableB64              string             `json:"table_b64"`
 	Permit                AuditDecryptPermit `json:"permit"`
+	TokenExpiry           string             `json:"token_expiry,omitempty"`
 }
 
 func (r AuditGroupDisplayPrepareRequest) Validate() error {
@@ -62,6 +63,7 @@ func (r AuditGroupDisplayPrepareRequest) Validate() error {
 		GroupHandle: r.GroupHandle, Token: r.Token, IVB64: r.IVB64,
 		CiphertextB64: r.CiphertextB64, FramePublicKeySPKIB64: r.FramePublicKeySPKIB64,
 		TokenID: r.TokenID, SessionIssuedAtNanos: r.SessionIssuedAtNanos,
+		OrgID: r.OrgID, GroupID: r.GroupID, DekVersion: r.DekVersion, TokenExpiry: r.TokenExpiry,
 	}
 	if err := base.Validate(); err != nil {
 		return err
@@ -76,6 +78,7 @@ func (r AuditGroupDisplayPrepareRequest) TokenContext() AuditTokenContext {
 	return AuditTokenContext{
 		GroupHandle: r.GroupHandle, OrgID: r.OrgID, GroupID: r.GroupID,
 		DekVersion: r.DekVersion, TableID: r.TableID, TableB64: r.TableB64,
+		TokenExpiry: r.TokenExpiry,
 	}
 }
 

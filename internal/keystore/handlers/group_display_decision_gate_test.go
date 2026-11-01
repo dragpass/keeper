@@ -17,7 +17,6 @@ func groupDisplayDecisionFixture(t *testing.T) (*auditFixture, proto.CurrentGrou
 	t.Helper()
 	f := newAuditFixture(t)
 	f.deps.GroupDisplayChallenges = NewGroupDisplayChallengeStore()
-	f.deps.DisplayTokens = testDisplayTokens{}
 	deviceID := "55555555-5555-4555-8555-555555555555"
 	if err := f.store.Set(config.Service, config.DeviceID, deviceID); err != nil {
 		t.Fatal(err)

@@ -19,16 +19,16 @@ func TestPersonalDisplayExecuteRechecksTokenExpiryAtOpen(t *testing.T) {
 		t.Fatal("provenance fixture bind failed")
 	}
 	start := d.Now()
-	aad := "test.display-token|personal|1|||" + strconv.FormatInt(start.Unix()+2, 10)
-	encrypted := HandleDEKUnwrapAndEncryptWithAAD(d, proto.DEKUnwrapAndEncryptWithAADRequest{
+	expiry := strconv.FormatInt(start.Unix()+2, 10)
+	encrypted := HandleDEKUnwrapAndEncryptBound(d, proto.DEKUnwrapAndEncryptBoundRequest{
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("frame-only-test-text")),
-		AADB64:       base64.StdEncoding.EncodeToString([]byte(aad)),
+		TokenExpiry:  expiry,
 	})
 	if !encrypted.Success {
 		t.Fatal("expiring ciphertext fixture failed")
 	}
 	sealed := encrypted.Data.(proto.DEKUnwrapAndEncryptResponseData)
-	req.TokenAADB64 = base64.StdEncoding.EncodeToString([]byte(aad))
+	req.TokenExpiry = expiry
 	req.IVB64, req.CiphertextB64 = sealed.IVB64, sealed.CiphertextB64
 	payload, _ := json.Marshal(req)
 	prepared := HandlePersonalDisplayPrepare(d, payload)

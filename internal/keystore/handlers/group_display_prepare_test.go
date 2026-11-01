@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -20,7 +19,7 @@ import (
 
 func groupDisplayTestAAD(f *auditFixture) []byte {
 	gc := legacyContext(f.v)
-	return []byte("test.display-token|group|" + strconv.Itoa(gc.DekVersion) + "|" + gc.OrgID + "||0")
+	return []byte(proto.BoundGroupTokenAAD(gc.OrgID, gc.GroupID, gc.DekVersion, "", proto.TokenExpiry{}))
 }
 
 func TestGroupDisplayPrepareBindsCiphertextHandleAndFrameWithoutPlaintext(t *testing.T) {
@@ -37,7 +36,7 @@ func TestGroupDisplayPrepareBindsCiphertextHandleAndFrameWithoutPlaintext(t *tes
 	ciphertext := bytes.Repeat([]byte{4}, 32)
 	req := proto.CurrentGroupDisplayPrepareRequest{
 		GroupHandle: handle, Token: "⠁⠃⠉",
-		TokenAADB64:           base64.StdEncoding.EncodeToString(groupDisplayTestAAD(f)),
+		OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion, TokenExpiry: "never",
 		IVB64:                 base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64:         base64.StdEncoding.EncodeToString(ciphertext),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
@@ -104,7 +103,7 @@ func prepareGroupDisplayTestRequest(t *testing.T, f *auditFixture, handle string
 	}
 	return proto.CurrentGroupDisplayPrepareRequest{
 		GroupHandle: handle, Token: "⠁⠃⠉",
-		TokenAADB64:           base64.StdEncoding.EncodeToString(groupDisplayTestAAD(f)),
+		OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion, TokenExpiry: "never",
 		IVB64:                 base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 12)),
 		CiphertextB64:         base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32)),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),

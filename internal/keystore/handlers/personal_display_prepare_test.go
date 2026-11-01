@@ -17,11 +17,9 @@ func personalDisplayPrepareFixture(t *testing.T) (Deps, proto.PersonalDisplayPre
 	t.Helper()
 	d, _, binding, serverKey := personalBindingFixture(t)
 	d.GroupDisplayChallenges = NewGroupDisplayChallengeStore()
-	d.DisplayTokens = testDisplayTokens{}
-	aad := "test.display-token|personal|1|||0"
-	encrypted := HandleDEKUnwrapAndEncryptWithAAD(d, proto.DEKUnwrapAndEncryptWithAADRequest{
+	encrypted := HandleDEKUnwrapAndEncryptBound(d, proto.DEKUnwrapAndEncryptBoundRequest{
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("frame-only-test-text")),
-		AADB64:       base64.StdEncoding.EncodeToString([]byte(aad)),
+		TokenExpiry:  "never",
 	})
 	if !encrypted.Success {
 		t.Fatal("personal ciphertext fixture failed")
@@ -36,7 +34,7 @@ func personalDisplayPrepareFixture(t *testing.T) (Deps, proto.PersonalDisplayPre
 		t.Fatal(err)
 	}
 	return d, proto.PersonalDisplayPrepareRequest{
-		Token: "selected personal token", TokenAADB64: base64.StdEncoding.EncodeToString([]byte(aad)),
+		Token: "selected personal token", TokenExpiry: "never",
 		IVB64: value.IVB64, CiphertextB64: value.CiphertextB64,
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
 		TokenID:               "44444444-4444-4444-8444-444444444444",

@@ -13,9 +13,15 @@ const CurrentGroupDisplayPrepareMaxRequestBytes = 16 * 1024
 // CurrentGroupDisplayPrepareRequest names ciphertext and the receiving frame.
 // The active account and device are read from Keeper, not supplied by a page.
 type CurrentGroupDisplayPrepareRequest struct {
-	GroupHandle           string `json:"group_handle"`
-	Token                 string `json:"token"`
-	TokenAADB64           string `json:"token_aad_b64,omitempty"`
+	GroupHandle string `json:"group_handle"`
+	Token       string `json:"token"`
+	// The bound token's scope and authenticated expiry. Keeper builds the
+	// token AAD from these and the handle label; an empty TokenExpiry is a
+	// legacy token and is refused.
+	OrgID                 string `json:"org_id"`
+	GroupID               string `json:"group_id"`
+	DekVersion            int    `json:"dek_version"`
+	TokenExpiry           string `json:"token_expiry,omitempty"`
 	IVB64                 string `json:"iv_b64"`
 	CiphertextB64         string `json:"ciphertext_b64"`
 	FramePublicKeySPKIB64 string `json:"frame_public_key_spki_b64"`
@@ -59,6 +65,9 @@ func (r CurrentGroupDisplayPrepareRequest) Validate() error {
 	if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
 		return err
 	}
+	if err := validateDisplayTokenScope(r.OrgID, r.GroupID, r.DekVersion, r.TokenExpiry); err != nil {
+		return err
+	}
 	nanos, err := strconv.ParseInt(r.SessionIssuedAtNanos, 10, 64)
 	if err != nil || nanos <= 0 || strconv.FormatInt(nanos, 10) != r.SessionIssuedAtNanos {
 		return newValidationError("session_issued_at_nanos", "must be a canonical positive int64 decimal string")
@@ -73,4 +82,25 @@ type CurrentGroupDisplayPrepareResponseData struct {
 	GrantDigest     string `json:"grant_digest"`
 	OperationDigest string `json:"operation_digest"`
 	FrameKeyDigest  string `json:"frame_key_digest"`
+}
+
+// validateDisplayTokenScope checks the shape of a Group display token scope.
+// An empty token expiry passes here so the handler can answer
+// TOKEN_LEGACY_REFUSED rather than a generic validation error.
+func validateDisplayTokenScope(orgID, groupID string, dekVersion int, tokenExpiry string) error {
+	if err := requireMessageUUID(orgID, "org_id"); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(groupID, "group_id"); err != nil {
+		return err
+	}
+	if dekVersion <= 0 {
+		return newValidationError("dek_version", "must be positive")
+	}
+	if tokenExpiry != "" {
+		if _, err := ParseTokenExpiry(tokenExpiry); err != nil {
+			return err
+		}
+	}
+	return nil
 }

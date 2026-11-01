@@ -22,8 +22,10 @@ const (
 )
 
 type PersonalDisplayPrepareRequest struct {
-	Token                 string `json:"token"`
-	TokenAADB64           string `json:"token_aad_b64"`
+	Token string `json:"token"`
+	// TokenExpiry is the bound token's authenticated expiry. Keeper builds
+	// the AAD from it and the signed-in account; empty means a legacy token.
+	TokenExpiry           string `json:"token_expiry,omitempty"`
 	IVB64                 string `json:"iv_b64"`
 	CiphertextB64         string `json:"ciphertext_b64"`
 	FramePublicKeySPKIB64 string `json:"frame_public_key_spki_b64"`
@@ -35,8 +37,10 @@ func (r PersonalDisplayPrepareRequest) Validate() error {
 	if len(r.Token) == 0 || len(r.Token) > 8192 || !utf8.ValidString(r.Token) {
 		return newValidationError("token", "must be valid UTF-8 within 1..8192 bytes")
 	}
-	if _, err := requireBase64(r.TokenAADB64, "token_aad_b64"); err != nil {
-		return err
+	if r.TokenExpiry != "" {
+		if _, err := ParseTokenExpiry(r.TokenExpiry); err != nil {
+			return err
+		}
 	}
 	if _, err := requireBase64Len(r.IVB64, "iv_b64", 12); err != nil {
 		return err

@@ -29,10 +29,13 @@ func HandlePersonalDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRes
 	if err != nil {
 		return deny()
 	}
-	aad, _, err := admitDisplayTokenContext(d, "personal", req.TokenAADB64)
-	if err != nil {
-		return displayTokenRefused()
+	expiry, resp, ok := admitDisplayToken(d, req.TokenExpiry, "personal display prepare")
+	if !ok {
+		return resp
 	}
+	// The verified provenance names the account whose personal DEK opens the
+	// token; a token sealed for another account fails the tag at execute.
+	aad := []byte(proto.BoundPersonalTokenAAD(provenance.AccountID, expiry))
 	iv, _, ok := decodeBase64(req.IVB64, "iv_b64")
 	if !ok {
 		return deny()

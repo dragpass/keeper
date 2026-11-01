@@ -56,11 +56,7 @@ type Deps struct {
 	// AuditAuthorizations is the process-local single-use record of the audit
 	// actions' receipts and permits. A nil store fails closed.
 	AuditAuthorizations *AuditAuthorizationStore
-	// DisplayTokens admits drag tokens for isolated display. Nil refuses every
-	// display: no current drag token format authenticates its expiry, so the
-	// production wiring leaves this unset until such a format exists.
-	DisplayTokens   DisplayTokenAdmission
-	KeyTransparency keytransparency.Gate
+	KeyTransparency     keytransparency.Gate
 }
 
 func (d Deps) Now() time.Time {

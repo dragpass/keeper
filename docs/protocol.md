@@ -2192,8 +2192,7 @@ Other entry paths and unavailable or older peers leave provenance unverified.
 This exchange establishes provenance, not permission to display plaintext.
 `personal_display_prepare` takes the selected token, IV, ciphertext, frame
 P-256 public key, the Extension session token ID and issue nanoseconds, and
-`token_aad_b64`, the authenticated metadata of the token format (see
-"Isolated display token admission" below). It is Native Messaging only, strictly decoded, and refuses an unproven local
+`token_expiry` (see "Isolated display token admission" below). It is Native Messaging only, strictly decoded, and refuses an unproven local
 slot. The response contains a random ten-second, process-local challenge and
 the current server password-wrap, operation and frame-key digests, never key
 material or plaintext. The operation digest covers the exact selected token,
@@ -2237,30 +2236,29 @@ the Personal DEK actions below.
 
 ### Isolated display token admission
 
-Every isolated display action first admits the selected drag token. A token
-is admitted only when its format authenticates its expiry, or an explicit
-no-expiry state, as AES-GCM AAD bound to the ciphertext and its scope. The
-personal and current Group actions pass `token_aad_b64` to the admitting
-format, require a matching scope and DEK version, and refuse a token whose
-authenticated expiry is not after the current time; the execute actions
-recheck that expiry immediately before opening and before releasing the
-envelope. The decrypt uses those exact AAD bytes.
-
-No current drag token format authenticates its expiry. Personal, current
-Group, retained Group and audit tokens carry no authenticated expiry, and a
-missing `E=` never means "no expiry". Keeper therefore admits no token for
-isolated display: `personal_display_prepare`, `group_display_prepare` and
-`audit_group_display_prepare` refuse with error code `TOKEN_LEGACY_REFUSED`
-before minting a challenge, consuming an audit permit or touching key
-material, and the execute actions refuse without an envelope. Existing tokens
-are not converted; the author recovers by encrypting again from plaintext they
-kept. A future authenticated-expiry token format enables these actions by
-supplying the admission; until then the display path stays closed.
+Every isolated display action admits only a bound drag token (see "Bound
+drag tokens"). The request carries `token_expiry` (`never` or canonical Unix
+seconds) and Keeper builds the token AAD itself:
+`personal_display_prepare` from the verified personal provenance account,
+`group_display_prepare` from the handle label after checking the request's
+`org_id`, `group_id` and `dek_version` against it, and
+`audit_group_display_prepare` from the audit context and table id. A request
+without `token_expiry` is a legacy token and is refused with
+`TOKEN_LEGACY_REFUSED`; a token whose authenticated expiry has passed is
+refused with `TOKEN_EXPIRED`. Both refusals happen before a challenge is
+minted, a permit is checked or key material is touched. The operation digest
+commits to the Keeper-built AAD bytes, so a changed `token_expiry` or scope
+does not match the signed decision, and a stripped or transplanted header
+fails the AES-GCM tag. The execute actions recheck the decision and token
+expiry immediately before opening and again before releasing the envelope.
+Existing tokens are not converted; the author encrypts again from plaintext
+they kept.
 
 ### Current Group display preparation
 
 `group_display_prepare` accepts `group_handle`, the selected ciphertext
-`token`, `token_aad_b64` (see "Isolated display token admission"), `iv_b64` (12 bytes),
+`token`, `org_id`, `group_id`, `dek_version`, `token_expiry` (see
+"Isolated display token admission"), `iv_b64` (12 bytes),
 `ciphertext_b64` (16..8192 decoded bytes),
 `frame_public_key_spki_b64` (P-256), `token_id`, and
 `session_issued_at_nanos` (a canonical positive int64 decimal string, never
@@ -2324,8 +2322,8 @@ stale, replayed or mismatched evidence returns no frame envelope and writes
 no clipboard. The API online wait occurs before Keeper's request lock; Keeper
 holds that lock through the decision check and protected operation. This
 path accepts only versions for which the API can issue a current audit-table
-decision. Audit-only tokens carry no authenticated expiry, so both audit
-display actions currently refuse (`TOKEN_LEGACY_REFUSED` from prepare).
+decision. The preparation request also carries `token_expiry`; the audit
+token is opened with the bound audit AAD and key derivation.
 Decision expiry is rechecked before opening the audit token and after sealing
 the frame envelope. An expired decision returns no envelope, even if its
 initial signature and challenge checks passed.

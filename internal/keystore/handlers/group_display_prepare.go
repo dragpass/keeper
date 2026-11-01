@@ -25,17 +25,16 @@ func HandleGroupDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRespon
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	aad, parsedAAD, err := admitDisplayTokenContext(d, "group", req.TokenAADB64)
-	if err != nil {
-		return displayTokenRefused()
+	expiry, resp, ok := admitDisplayToken(d, req.TokenExpiry, "group display prepare")
+	if !ok {
+		return resp
 	}
 	if d.Store == nil || d.GroupSessions == nil || d.GroupDisplayChallenges == nil {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "group display unavailable")
 	}
 	label, err := d.GroupSessions.LabelOf(req.GroupHandle)
 	if err != nil || label.OrgID == "" || label.GroupID == "" || label.DekVersion <= 0 ||
-		parsedAAD.OrgID != label.OrgID || parsedAAD.DekVersion != label.DekVersion ||
-		(parsedAAD.GroupID != "" && parsedAAD.GroupID != label.GroupID) ||
+		req.OrgID != label.OrgID || req.GroupID != label.GroupID || req.DekVersion != label.DekVersion ||
 		label.GrantDigest == [sha256.Size]byte{} ||
 		(label.GrantPolicy != proto.GrantPolicyLegacy && label.GrantPolicy != proto.GrantPolicyDecryptOnlyV1) {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "group display unavailable")
@@ -76,6 +75,7 @@ func HandleGroupDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRespon
 		return errs.CodeResponse(errs.ErrCodeInternal, "group display preparation unavailable")
 	}
 	challengeText := base64.RawURLEncoding.EncodeToString(challenge[:])
+	aad := []byte(proto.BoundGroupTokenAAD(label.OrgID, label.GroupID, label.DekVersion, "", expiry))
 	op := proto.CurrentGroupDisplayOperation{Token: []byte(req.Token), TokenAAD: aad, Ciphertext: ciphertext, FramePublicKeySPKI: frameSPKI}
 	op.Challenge = challenge
 	copy(op.GroupHandle[:], handle)

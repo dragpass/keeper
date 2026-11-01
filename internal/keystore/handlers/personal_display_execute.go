@@ -37,10 +37,13 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 	if !ok {
 		return deny()
 	}
-	aad, tokenContext, err := admitDisplayTokenContext(d, "personal", req.Prepare.TokenAADB64)
-	if err != nil {
+	expiry, _, ok := admitDisplayToken(d, req.Prepare.TokenExpiry, "personal display execute")
+	if !ok {
 		return deny()
 	}
+	// Built from the decision's account; the operation digest commits to the
+	// prepared AAD and the challenge context to the prepared account.
+	aad := []byte(proto.BoundPersonalTokenAAD(req.Decision.AccountID, expiry))
 	ciphertext, _, ok := decodeBase64(req.Prepare.CiphertextB64, "ciphertext_b64")
 	if !ok {
 		return deny()
@@ -134,7 +137,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 			return err
 		}
 		defer secure.Zeroize(dek)
-		if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || tokenExpiredAt(tokenContext, now) {
+		if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || expiry.ExpiredAt(now) {
 			return keychain.ErrPersonalDEKProvenance
 		}
 		plaintext, err := crypto.OpenAESGCM(dek, iv, ciphertext, aad)
@@ -148,7 +151,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 	if err != nil {
 		return deny()
 	}
-	if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || tokenExpiredAt(tokenContext, now) {
+	if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || expiry.ExpiredAt(now) {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

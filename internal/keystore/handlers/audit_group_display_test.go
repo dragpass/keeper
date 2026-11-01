@@ -22,7 +22,6 @@ import (
 func TestAuditGroupDisplayRequiresTableBoundOnlineDecision(t *testing.T) {
 	f := newAuditFixture(t)
 	f.deps.GroupDisplayChallenges = NewGroupDisplayChallengeStore()
-	f.deps.DisplayTokens = testDisplayTokens{}
 	deviceID := "55555555-5555-4555-8555-555555555555"
 	if err := f.store.Set(config.Service, config.DeviceID, deviceID); err != nil {
 		t.Fatal(err)
@@ -36,9 +35,10 @@ func TestAuditGroupDisplayRequiresTableBoundOnlineDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	permit := f.permit(t, nil)
+	boundIV, boundCT := f.boundAuditToken(t, "never")
 	req := proto.AuditGroupDisplayPrepareRequest{
-		GroupHandle: f.handle, Token: "audit-token", IVB64: base64.StdEncoding.EncodeToString(mustHex(t, f.v.IVHex)),
-		CiphertextB64:         base64.StdEncoding.EncodeToString(mustHex(t, f.v.CiphertextHex)),
+		GroupHandle: f.handle, Token: "audit-token", IVB64: base64.StdEncoding.EncodeToString(boundIV),
+		CiphertextB64: base64.StdEncoding.EncodeToString(boundCT), TokenExpiry: "never",
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
 		TokenID:               "66666666-6666-4666-8666-666666666666", SessionIssuedAtNanos: "123456789",
 		OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,

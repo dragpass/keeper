@@ -37,8 +37,8 @@ func TestGroupDisplayExecuteSealsOnlyToPreparedFrame(t *testing.T) {
 	}
 	req := proto.CurrentGroupDisplayPrepareRequest{
 		GroupHandle: handle, Token: "selected-ciphertext-token",
-		TokenAADB64: base64.StdEncoding.EncodeToString(tokenAAD),
-		IVB64:       base64.StdEncoding.EncodeToString(iv), CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
+		OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion, TokenExpiry: "never",
+		IVB64: base64.StdEncoding.EncodeToString(iv), CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
 		FramePublicKeySPKIB64: base64.StdEncoding.EncodeToString(frameSPKI),
 		TokenID:               decision.TokenID, SessionIssuedAtNanos: "123456789",
 	}

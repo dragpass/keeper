@@ -28,10 +28,10 @@ func HandleAuditGroupDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseR
 	if d.Store == nil || d.GroupSessions == nil || d.GroupDisplayChallenges == nil {
 		return deny()
 	}
-	// Audit-only tokens carry no authenticated expiry; refuse before the
-	// table preflight so an unverifiable token spends nothing.
-	if !admitAuditDisplayToken(d) {
-		return displayTokenRefused()
+	// Refuse a legacy or expired token before the table preflight, so an
+	// unverifiable token spends nothing.
+	if _, resp, ok := admitDisplayToken(d, req.TokenExpiry, "audit group display prepare"); !ok {
+		return resp
 	}
 	table, _, ok := auditPreflight(d, req.TokenContext())
 	if !ok {
