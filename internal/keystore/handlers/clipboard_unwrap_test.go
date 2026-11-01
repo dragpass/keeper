@@ -40,8 +40,9 @@ func TestFinalizeClipboardCopy_UnavailableClipboardFails(t *testing.T) {
 	}
 }
 
-func TestHandleDEKUnwrapAndDecryptToClipboard_RoundTrip(t *testing.T) {
+func TestHandleDEKUnwrapAndDecryptBoundToClipboard_RoundTrip(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
+	bindBoundTestAccount(t, deps.Store)
 
 	deviceKey := make([]byte, 32)
 	if _, err := rand.Read(deviceKey); err != nil {
@@ -58,7 +59,7 @@ func TestHandleDEKUnwrapAndDecryptToClipboard_RoundTrip(t *testing.T) {
 	dual := signup.Data.(proto.DEKGenerateAndWrapDualResponseData)
 
 	const plaintextSentinel = "DEK_PLAINTEXT_SENTINEL"
-	enc := HandleDEKUnwrapAndEncrypt(deps, proto.DEKUnwrapAndEncryptRequest{
+	enc := HandleDEKUnwrapAndEncryptBound(deps, proto.DEKUnwrapAndEncryptBoundRequest{TokenExpiry: "never",
 		EncryptedDEKB64: dual.DeviceWrappedDEKB64,
 		PlaintextB64:    base64.StdEncoding.EncodeToString([]byte(plaintextSentinel)),
 	})
@@ -67,7 +68,7 @@ func TestHandleDEKUnwrapAndDecryptToClipboard_RoundTrip(t *testing.T) {
 	}
 	encData := enc.Data.(proto.DEKUnwrapAndEncryptResponseData)
 
-	resp := HandleDEKUnwrapAndDecryptToClipboard(deps, proto.DEKUnwrapAndDecryptToClipboardRequest{
+	resp := HandleDEKUnwrapAndDecryptBoundToClipboard(deps, proto.DEKUnwrapAndDecryptBoundToClipboardRequest{TokenExpiry: "never",
 		EncryptedDEKB64: dual.DeviceWrappedDEKB64,
 		IVB64:           encData.IVB64,
 		CiphertextB64:   encData.CiphertextB64,

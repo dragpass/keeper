@@ -14,8 +14,13 @@
 //	  → the server signature verifies under the named key version
 //	  → it is consumed, once, in this process
 //	  → the token key is derived: HKDF-SHA256(ikm = Group DEK,
-//	    salt = SHA-256(table), info = the audit AAD), and the token is sealed or
+//	    salt = SHA-256(table), info = the AAD), and the token is sealed or
 //	    opened under it with the same AAD.
+//
+// Before all of that, the request must name token_expiry: a request without
+// it is a legacy token whose expiry nobody can authenticate and is refused
+// (TOKEN_LEGACY_REFUSED), and an expired one is refused (TOKEN_EXPIRED). The
+// AAD is the bound token canonical with the table id (proto/bound_token.go).
 //
 // The AAD and the derived key are built here from validated fields; the
 // caller never supplies either. A token sealed with the raw Group DEK (the
@@ -61,6 +66,10 @@ func HandleGroupEncryptAudit(d Deps, payload json.RawMessage) proto.BaseResponse
 		return resp
 	}
 	tc := req.TokenContext()
+	expiry, resp, ok := auditTokenExpiry(d, tc, "group encrypt audit")
+	if !ok {
+		return resp
+	}
 	table, resp, ok := auditPreflight(d, tc)
 	if !ok {
 		return resp
@@ -86,7 +95,7 @@ func HandleGroupEncryptAudit(d Deps, payload json.RawMessage) proto.BaseResponse
 	}
 	defer secure.Zeroize(plaintext)
 
-	aad := proto.AuditDragAADCanonical(tc.OrgID, tc.GroupID, tc.DekVersion, tc.TableID)
+	aad := proto.BoundGroupTokenAAD(tc.OrgID, tc.GroupID, tc.DekVersion, tc.TableID, expiry)
 	var iv, ciphertext []byte
 	useErr := d.GroupSessions.Use(tc.GroupHandle, func(groupDEK []byte) error {
 		key, err := deriveAuditTokenKey(groupDEK, table, aad)
@@ -126,6 +135,10 @@ func HandleGroupDecryptAuditToClipboard(d Deps, payload json.RawMessage) proto.B
 func openAuditToken(
 	d Deps, tc proto.AuditTokenContext, p proto.AuditDecryptPermit, ivB64, ciphertextB64 string,
 ) ([]byte, proto.BaseResponse, bool) {
+	expiry, resp, ok := auditTokenExpiry(d, tc, "group decrypt audit")
+	if !ok {
+		return nil, resp, false
+	}
 	table, resp, ok := auditPreflight(d, tc)
 	if !ok {
 		return nil, resp, false
@@ -152,7 +165,7 @@ func openAuditToken(
 		return nil, auditInvalidInput("ciphertext_b64 must be standard Base64"), false
 	}
 
-	aad := proto.AuditDragAADCanonical(tc.OrgID, tc.GroupID, tc.DekVersion, tc.TableID)
+	aad := proto.BoundGroupTokenAAD(tc.OrgID, tc.GroupID, tc.DekVersion, tc.TableID, expiry)
 	var plaintext []byte
 	var openErr error
 	useErr := d.GroupSessions.Use(tc.GroupHandle, func(groupDEK []byte) error {
@@ -172,6 +185,15 @@ func openAuditToken(
 		return nil, errs.CodeResponse(errs.ErrorCode(proto.AuditDecryptFailed), "audit token decrypt failed"), false
 	}
 	return plaintext, proto.BaseResponse{}, true
+}
+
+// auditTokenExpiry refuses a legacy request (no token_expiry) and an expired
+// token before anything is spent.
+func auditTokenExpiry(d Deps, tc proto.AuditTokenContext, action string) (proto.TokenExpiry, proto.BaseResponse, bool) {
+	if tc.TokenExpiry == "" {
+		return proto.TokenExpiry{}, legacyTokenRefused(d, action), false
+	}
+	return boundExpiry(d, tc.TokenExpiry, action)
 }
 
 // auditPreflight checks the handle's policy and context against the request

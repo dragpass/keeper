@@ -80,6 +80,9 @@ func identityActions() map[string]action {
 		proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
 		proto.ActionPersonalDisplayPrepare:         direct(handlers.HandlePersonalDisplayPrepare),
 		proto.ActionPersonalDisplayExecute:         direct(handlers.HandlePersonalDisplayExecute),
+		// bound personal drag tokens: Keeper-built AAD with authenticated expiry
+		proto.ActionDEKUnwrapAndEncryptBound:            wrap(handlers.HandleDEKUnwrapAndEncryptBound),
+		proto.ActionDEKUnwrapAndDecryptBoundToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptBoundToClipboard),
 		// the Extension's old device master copy into the empty slot (0.0.58)
 		proto.ActionPersonalDEKAdopt: wrap(handlers.HandlePersonalDEKAdopt),
 

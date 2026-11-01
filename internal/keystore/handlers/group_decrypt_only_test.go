@@ -46,7 +46,10 @@ func TestDecryptOnlyHandleRefusesEverySealAndKeepsDecrypting(t *testing.T) {
 	gc := decryptOnlyContext(f.v)
 	handle := f.openWith(t, f.wrapToMe(t, f.pubPEM, gc), gc)
 
-	wantCode(t, HandleGroupEncrypt(f.deps, proto.GroupEncryptRequest{GroupHandle: handle, PlaintextB64: "aGk="}), proto.GroupPolicyDecryptOnly)
+	wantCode(t, HandleGroupEncryptBound(f.deps, proto.GroupEncryptBoundRequest{
+		GroupHandle: handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
+		TokenExpiry: "never", PlaintextB64: "aGk=",
+	}), proto.GroupPolicyDecryptOnly)
 	wantCode(t, HandleGroupEncryptWithAAD(f.deps, proto.GroupEncryptWithAADRequest{
 		GroupHandle: handle, PlaintextB64: "aGk=",
 		AADB64: base64.StdEncoding.EncodeToString([]byte(f.v.OrgID + "|entry|kind|1|3")),
@@ -59,17 +62,24 @@ func TestDecryptOnlyHandleRefusesEverySealAndKeepsDecrypting(t *testing.T) {
 	req.GroupHandle = handle
 	wantCode(t, HandleGroupEncryptAudit(f.deps, payloadOf(t, req)), proto.GroupPolicyNotAuditOnly)
 
-	// A token sealed before the switch (AAD-free, raw DEK) still opens.
-	iv, ct, err := crypto.SealAESGCM(f.deps.Random(), mustHex(t, f.v.GroupDEKHex), []byte("pre-switch"), nil)
+	// A bound token sealed before the switch still opens. An AAD-free one is
+	// refused like everywhere else: its expiry is unauthenticated.
+	aad := proto.BoundGroupTokenAAD(f.v.OrgID, f.v.GroupID, f.v.DekVersion, "", proto.TokenExpiry{})
+	iv, ct, err := crypto.SealAESGCM(f.deps.Random(), mustHex(t, f.v.GroupDEKHex), []byte("pre-switch"), []byte(aad))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp := HandleGroupDecryptToClipboard(f.deps, proto.GroupDecryptToClipboardRequest{
-		GroupHandle: handle, IVB64: base64.StdEncoding.EncodeToString(iv),
+	if resp := HandleGroupDecryptBoundToClipboard(f.deps, proto.GroupDecryptBoundToClipboardRequest{
+		GroupHandle: handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion, TokenExpiry: "never",
+		IVB64:         base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64: base64.StdEncoding.EncodeToString(ct), ClipboardTTLMs: 10_000,
 	}); !resp.Success {
 		t.Fatalf("decrypt on a decrypt-only handle: %+v", resp)
 	}
+	wantCode(t, HandleGroupDecryptToClipboard(f.deps, proto.GroupDecryptToClipboardRequest{
+		GroupHandle: handle, IVB64: base64.StdEncoding.EncodeToString(iv),
+		CiphertextB64: base64.StdEncoding.EncodeToString(ct), ClipboardTTLMs: 10_000,
+	}), proto.TokenLegacyRefused)
 }
 
 func TestDecryptOnlyGrantOpensOnlyUnderItsLabel(t *testing.T) {

@@ -57,29 +57,33 @@ const (
 	ActionDEKRewrapForMember        = "dek_rewrap_for_member"
 	ActionDEKUnwrapAndRewrapForMany = "dek_unwrap_and_rewrap_for_many"
 
-	// GroupDecryptToClipboard: action where the Keeper unwraps a drag /
-	// audit token (raw Group DEK direct encryption) and writes the
-	// plaintext directly to the OS clipboard.
-	//   Inputs: group_handle, iv_b64(12B), ciphertext_b64,
-	//           clipboard_ttl_ms
-	//   Output: {copied, clipboard_ttl_ms}
+	// GroupDecryptToClipboard: the AAD-free Group drag open. Refused with
+	// TOKEN_LEGACY_REFUSED: its tokens carry no authenticated expiry. Kept
+	// registered so an old caller gets that code, not "unknown action".
 	ActionGroupDecryptToClipboard  = "group_decrypt_to_clipboard"
 	ActionGroupDisplayPrepare      = "group_display_prepare"
 	ActionGroupDisplayExecute      = "group_display_execute"
 	ActionAuditGroupDisplayPrepare = "audit_group_display_prepare"
 	ActionAuditGroupDisplayExecute = "audit_group_display_execute"
 
-	// GroupEncrypt: the encrypt-direction mirror of GroupDecryptToClipboard.
-	// AES-GCM-seals plaintext directly under the raw Group DEK behind the
-	// opaque handle (no Item DEK indirection) and returns {iv_b64,
-	// ciphertext_b64}. First step of moving drag encryption off client-side
-	// AES-GCM onto Keeper handles.
-	//   Inputs: group_handle, plaintext_b64
-	//   Output: {iv_b64(12B), ciphertext_b64}
-	// The plaintext lives only in the request and briefly in Keeper memory
-	// (zeroized after sealing); it never appears in the response or logs. The
-	// raw Group DEK never crosses IPC.
+	// GroupEncrypt: the AAD-free Group drag seal. Refused with
+	// TOKEN_LEGACY_REFUSED; a token it made could not be opened.
 	ActionGroupEncrypt = "group_encrypt"
+
+	// Bound drag tokens (proto/bound_token.go). The Keeper builds the AAD
+	// `dragpass.drag.token|1|group|<org>|<group>|<dek_version>|<table or ->|<expiry>`
+	// from the structured fields, refuses an expired token_expiry, and holds a
+	// labeled handle to the named scope. No caller supplies an AAD.
+	//
+	// GroupEncryptBound
+	//   Inputs: group_handle, org_id, group_id, dek_version, audit_table_id?,
+	//           token_expiry (`never` or Unix seconds), plaintext_b64
+	//   Output: {iv_b64(12B), ciphertext_b64}
+	ActionGroupEncryptBound = "group_encrypt_bound"
+	// GroupDecryptBoundToClipboard
+	//   Inputs: the same scope fields, iv_b64, ciphertext_b64, clipboard_ttl_ms
+	//   Output: {copied, clipboard_ttl_ms}
+	ActionGroupDecryptBoundToClipboard = "group_decrypt_bound_to_clipboard"
 
 	// GroupEncryptWithAAD: AAD-binding variant of GroupEncrypt. AES-GCM-seals
 	// plaintext under the raw Group DEK behind the opaque handle with a caller-

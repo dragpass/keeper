@@ -1,4 +1,5 @@
-// Tests for HandleGroupDecryptToClipboard.
+// Tests for HandleGroupDecryptBoundToClipboard (the AAD-free
+// HandleGroupDecryptToClipboard is refused; see bound_token_test.go).
 //
 // Core guarantees:
 //   1. response envelope plaintext-free
@@ -22,21 +23,21 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-func TestHandleGroupDecryptToClipboard_RoundTrip(t *testing.T) {
+func TestHandleGroupDecryptBoundToClipboard_RoundTrip(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 
 	const plaintextSentinel = "GROUP_PLAINTEXT_SENTINEL"
 
-	// Prelude: like the Extension, AES-GCM seal directly with raw Group DEK.
-	// Split IV / ciphertext with AESGCMSealSplit.
-	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(plaintextSentinel), nil)
+	// Prelude: seal under the raw Group DEK with the bound token AAD, as
+	// group_encrypt_bound does.
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(plaintextSentinel), boundTestAAD())
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
-	resp := HandleGroupDecryptToClipboard(deps, proto.GroupDecryptToClipboardRequest{
-		GroupHandle:    handle,
+	resp := HandleGroupDecryptBoundToClipboard(deps, proto.GroupDecryptBoundToClipboardRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		IVB64:          base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64:  base64.StdEncoding.EncodeToString(ct),
 		ClipboardTTLMs: 30_000,
@@ -74,16 +75,16 @@ func TestHandleGroupDecryptToClipboard_RoundTrip(t *testing.T) {
 
 // TestHandleGroupDecryptToClipboard_RejectsInvalidTTL — clipboard_ttl_ms
 // range validation.
-func TestHandleGroupDecryptToClipboard_RejectsInvalidTTL(t *testing.T) {
+func TestHandleGroupDecryptBoundToClipboard_RejectsInvalidTTL(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
 	handle, _ := openSessionForFreshKey(t, deps)
 
 	cases := []int64{0, 4_999, 60_001}
 	for _, ttl := range cases {
-		resp := HandleGroupDecryptToClipboard(deps, proto.GroupDecryptToClipboardRequest{
-			GroupHandle:    handle,
+		resp := HandleGroupDecryptBoundToClipboard(deps, proto.GroupDecryptBoundToClipboardRequest{
+			GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 			IVB64:          base64.StdEncoding.EncodeToString(make([]byte, 12)),
-			CiphertextB64:  "AAAA",
+			CiphertextB64:  base64.StdEncoding.EncodeToString(make([]byte, 16)),
 			ClipboardTTLMs: ttl,
 		})
 		if resp.Success {
@@ -100,13 +101,14 @@ func TestHandleGroupDecryptToClipboard_RejectsInvalidTTL(t *testing.T) {
 
 // TestHandleGroupDecryptToClipboard_BadHandle — an unregistered group_handle
 // is rejected and clipboard.Write is not called.
-func TestHandleGroupDecryptToClipboard_BadHandle(t *testing.T) {
+func TestHandleGroupDecryptBoundToClipboard_BadHandle(t *testing.T) {
 	deps, mc := withMemoryClipboard(t)
 
-	resp := HandleGroupDecryptToClipboard(deps, proto.GroupDecryptToClipboardRequest{
+	resp := HandleGroupDecryptBoundToClipboard(deps, proto.GroupDecryptBoundToClipboardRequest{
+		OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		GroupHandle:    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		IVB64:          base64.StdEncoding.EncodeToString(make([]byte, 12)),
-		CiphertextB64:  "AAAA",
+		CiphertextB64:  base64.StdEncoding.EncodeToString(make([]byte, 16)),
 		ClipboardTTLMs: 30_000,
 	})
 	if resp.Success {
@@ -119,19 +121,19 @@ func TestHandleGroupDecryptToClipboard_BadHandle(t *testing.T) {
 
 // TestHandleGroupDecryptToClipboard_NoPlaintextInLogger — the plaintext
 // sentinel must not echo into the logger Messages.
-func TestHandleGroupDecryptToClipboard_NoPlaintextInLogger(t *testing.T) {
+func TestHandleGroupDecryptBoundToClipboard_NoPlaintextInLogger(t *testing.T) {
 	deps, log, _ := newTestDeps(t)
 	deps.Clipboard = clipboard.NewMemoryClipboard()
 	handle, groupRaw := openSessionForFreshKey(t, deps)
 
 	const sentinel = "GROUP_LOGGER_LEAK_SENTINEL"
-	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(sentinel), nil)
+	iv, ct, err := crypto.SealAESGCM(rand.Reader, groupRaw, []byte(sentinel), boundTestAAD())
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
-	HandleGroupDecryptToClipboard(deps, proto.GroupDecryptToClipboardRequest{
-		GroupHandle:    handle,
+	HandleGroupDecryptBoundToClipboard(deps, proto.GroupDecryptBoundToClipboardRequest{
+		GroupHandle: handle, OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, TokenExpiry: "never",
 		IVB64:          base64.StdEncoding.EncodeToString(iv),
 		CiphertextB64:  base64.StdEncoding.EncodeToString(ct),
 		ClipboardTTLMs: 30_000,
@@ -140,4 +142,8 @@ func TestHandleGroupDecryptToClipboard_NoPlaintextInLogger(t *testing.T) {
 	if log.Contains(sentinel) {
 		t.Fatalf("logger leaked plaintext sentinel: %v", log.Messages())
 	}
+}
+
+func boundTestAAD() []byte {
+	return []byte(proto.BoundGroupTokenAAD(boundOrg, boundGroup, 7, "", proto.TokenExpiry{}))
 }
