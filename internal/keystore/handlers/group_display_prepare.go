@@ -25,14 +25,9 @@ func HandleGroupDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRespon
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	aad, err := base64.StdEncoding.DecodeString(req.TokenAADB64)
+	aad, parsedAAD, err := admitDisplayTokenContext(d, "group", req.TokenAADB64)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeValidation, "group display context unavailable")
-	}
-	parsedAAD, err := proto.ParseDragDisplayAAD(aad)
-	if err != nil || parsedAAD.Scope != "group" ||
-		(parsedAAD.ExpiresAt != 0 && d.Now().Unix() >= parsedAAD.ExpiresAt) {
-		return errs.CodeResponse(errs.ErrCodeValidation, "group display context unavailable")
+		return displayTokenRefused()
 	}
 	if d.Store == nil || d.GroupSessions == nil || d.GroupDisplayChallenges == nil {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "group display unavailable")

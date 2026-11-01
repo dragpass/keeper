@@ -35,13 +35,8 @@ func (r PersonalDisplayPrepareRequest) Validate() error {
 	if len(r.Token) == 0 || len(r.Token) > 8192 || !utf8.ValidString(r.Token) {
 		return newValidationError("token", "must be valid UTF-8 within 1..8192 bytes")
 	}
-	aad, err := requireBase64(r.TokenAADB64, "token_aad_b64")
-	if err != nil {
+	if _, err := requireBase64(r.TokenAADB64, "token_aad_b64"); err != nil {
 		return err
-	}
-	parsedAAD, err := ParseDragDisplayAAD(aad)
-	if err != nil || parsedAAD.Scope != "personal" {
-		return newValidationError("token_aad_b64", "must be a canonical personal display context")
 	}
 	if _, err := requireBase64Len(r.IVB64, "iv_b64", 12); err != nil {
 		return err

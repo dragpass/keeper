@@ -30,6 +30,9 @@ func HandleAuditGroupDisplayExecute(d Deps, payload json.RawMessage) proto.BaseR
 	if strictDecodeJSON(payload, &req) != nil || req.Validate() != nil {
 		return deny()
 	}
+	if !admitAuditDisplayToken(d) {
+		return deny()
+	}
 	p := req.Prepare
 	handle, _, ok := decodeBase64(p.GroupHandle, "group_handle")
 	if !ok {

@@ -20,7 +20,7 @@ import (
 
 func groupDisplayTestAAD(f *auditFixture) []byte {
 	gc := legacyContext(f.v)
-	return []byte("dragpass.drag-display|1|group|" + strconv.Itoa(gc.DekVersion) + "|" + gc.OrgID + "||0|")
+	return []byte("test.display-token|group|" + strconv.Itoa(gc.DekVersion) + "|" + gc.OrgID + "||0")
 }
 
 func TestGroupDisplayPrepareBindsCiphertextHandleAndFrameWithoutPlaintext(t *testing.T) {

@@ -37,13 +37,8 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 	if !ok {
 		return deny()
 	}
-	aad, err := base64.StdEncoding.DecodeString(req.Prepare.TokenAADB64)
+	aad, tokenContext, err := admitDisplayTokenContext(d, "personal", req.Prepare.TokenAADB64)
 	if err != nil {
-		return deny()
-	}
-	parsedAAD, err := proto.ParseDragDisplayAAD(aad)
-	if err != nil || parsedAAD.Scope != "personal" ||
-		(parsedAAD.ExpiresAt != 0 && d.Now().Unix() >= parsedAAD.ExpiresAt) {
 		return deny()
 	}
 	ciphertext, _, ok := decodeBase64(req.Prepare.CiphertextB64, "ciphertext_b64")
@@ -139,7 +134,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 			return err
 		}
 		defer secure.Zeroize(dek)
-		if d.Now().Unix() >= req.Decision.ExpiresAt {
+		if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || tokenExpiredAt(tokenContext, now) {
 			return keychain.ErrPersonalDEKProvenance
 		}
 		plaintext, err := crypto.OpenAESGCM(dek, iv, ciphertext, aad)
@@ -153,7 +148,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 	if err != nil {
 		return deny()
 	}
-	if d.Now().Unix() >= req.Decision.ExpiresAt {
+	if now := d.Now().Unix(); now >= req.Decision.ExpiresAt || tokenExpiredAt(tokenContext, now) {
 		return deny()
 	}
 	return proto.BaseResponse{Success: true, Data: proto.CurrentGroupDisplayExecuteResponseData{

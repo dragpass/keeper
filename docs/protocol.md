@@ -2187,14 +2187,9 @@ Other entry paths and unavailable or older peers leave provenance unverified.
 
 This exchange establishes provenance, not permission to display plaintext.
 `personal_display_prepare` takes the selected token, IV, ciphertext, frame
-P-256 public key, and the Extension session token ID and issue nanoseconds.
-The non-audit drag token must carry `D=1:E=<expiry-or-0>:`. The request also
-carries canonical `token_aad_b64` for
-`dragpass.drag-display|1|scope|dek_version|org_id|group_id|expiry|entry_ref`.
-Keeper requires personal scope and expiry not past the execution time. The
-AES-GCM tag authenticates the AAD, so changing or removing the token expiry
-cannot produce a display envelope. `E=0` explicitly means no expiry.
-It is Native Messaging only, strictly decoded, and refuses an unproven local
+P-256 public key, the Extension session token ID and issue nanoseconds, and
+`token_aad_b64`, the authenticated metadata of the token format (see
+"Isolated display token admission" below). It is Native Messaging only, strictly decoded, and refuses an unproven local
 slot. The response contains a random ten-second, process-local challenge and
 the current server password-wrap, operation and frame-key digests, never key
 material or plaintext. The operation digest covers the exact selected token,
@@ -2224,8 +2219,9 @@ consumes the challenge once. The local slot remains locked against cross-
 process replacement while Keeper opens the DEK and seals plaintext to the
 prepared frame. The response has the Group envelope shape but uses
 `dragpass.personal.display.frame.v1` followed by a zero byte and the raw
-operation digest for HKDF info and AES-GCM AAD. Keeper checks expiry before
-opening and after sealing; a refusal returns no envelope or clipboard write.
+operation digest for HKDF info and AES-GCM AAD. Keeper checks the decision
+expiry and the admitted token expiry before opening and after sealing; a
+refusal returns no envelope or clipboard write.
 The frame validates the expected personal kind and decrypts inside its own
 document. Neither background nor content script receives plaintext. Already
 returned plaintext or an envelope delivered before revocation cannot be
@@ -2235,10 +2231,32 @@ The retired Group Item DEK actions are not part of the current protocol. Group
 DragLink tokens use the direct Group DEK actions above. Personal entries use
 the Personal DEK actions below.
 
+### Isolated display token admission
+
+Every isolated display action first admits the selected drag token. A token
+is admitted only when its format authenticates its expiry, or an explicit
+no-expiry state, as AES-GCM AAD bound to the ciphertext and its scope. The
+personal and current Group actions pass `token_aad_b64` to the admitting
+format, require a matching scope and DEK version, and refuse a token whose
+authenticated expiry is not after the current time; the execute actions
+recheck that expiry immediately before opening and before releasing the
+envelope. The decrypt uses those exact AAD bytes.
+
+No current drag token format authenticates its expiry. Personal, current
+Group, retained Group and audit tokens carry no authenticated expiry, and a
+missing `E=` never means "no expiry". Keeper therefore admits no token for
+isolated display: `personal_display_prepare`, `group_display_prepare` and
+`audit_group_display_prepare` refuse with error code `TOKEN_LEGACY_REFUSED`
+before minting a challenge, consuming an audit permit or touching key
+material, and the execute actions refuse without an envelope. Existing tokens
+are not converted; the author recovers by encrypting again from plaintext they
+kept. A future authenticated-expiry token format enables these actions by
+supplying the admission; until then the display path stays closed.
+
 ### Current Group display preparation
 
 `group_display_prepare` accepts `group_handle`, the selected ciphertext
-`token`, canonical `token_aad_b64` for Group scope, `iv_b64` (12 bytes),
+`token`, `token_aad_b64` (see "Isolated display token admission"), `iv_b64` (12 bytes),
 `ciphertext_b64` (16..8192 decoded bytes),
 `frame_public_key_spki_b64` (P-256), `token_id`, and
 `session_issued_at_nanos` (a canonical positive int64 decimal string, never
@@ -2266,7 +2284,7 @@ on Native Messaging, has no App Local RPC route, and is absent from MCP. Its
 strict request cap is 20 KiB. Under Keeper's serialized request lock it
 recomputes the selected-operation and frame-key digests, verifies the server
 signature and live local account, device, grant and one-use challenge, then
-decrypts the non-audit Group ciphertext with the authenticated display AAD.
+decrypts the non-audit Group ciphertext with the admitted token AAD.
 A rejected or replayed decision
 returns no envelope and writes no clipboard. It never performs a network wait
 under that lock; the online API request must precede this action.
@@ -2302,8 +2320,8 @@ stale, replayed or mismatched evidence returns no frame envelope and writes
 no clipboard. The API online wait occurs before Keeper's request lock; Keeper
 holds that lock through the decision check and protected operation. This
 path accepts only versions for which the API can issue a current audit-table
-decision. The isolated Extension menu can request this action; personal and
-retained-token display are not covered by this contract.
+decision. Audit-only tokens carry no authenticated expiry, so both audit
+display actions currently refuse (`TOKEN_LEGACY_REFUSED` from prepare).
 Decision expiry is rechecked before opening the audit token and after sealing
 the frame envelope. An expired decision returns no envelope, even if its
 initial signature and challenge checks passed.

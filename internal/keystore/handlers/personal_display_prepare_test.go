@@ -17,7 +17,8 @@ func personalDisplayPrepareFixture(t *testing.T) (Deps, proto.PersonalDisplayPre
 	t.Helper()
 	d, _, binding, serverKey := personalBindingFixture(t)
 	d.GroupDisplayChallenges = NewGroupDisplayChallengeStore()
-	aad := "dragpass.drag-display|1|personal|1|||0|"
+	d.DisplayTokens = testDisplayTokens{}
+	aad := "test.display-token|personal|1|||0"
 	encrypted := HandleDEKUnwrapAndEncryptWithAAD(d, proto.DEKUnwrapAndEncryptWithAADRequest{
 		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("frame-only-test-text")),
 		AADB64:       base64.StdEncoding.EncodeToString([]byte(aad)),

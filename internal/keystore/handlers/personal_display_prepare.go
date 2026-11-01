@@ -29,14 +29,9 @@ func HandlePersonalDisplayPrepare(d Deps, payload json.RawMessage) proto.BaseRes
 	if err != nil {
 		return deny()
 	}
-	aad, err := base64.StdEncoding.DecodeString(req.TokenAADB64)
+	aad, _, err := admitDisplayTokenContext(d, "personal", req.TokenAADB64)
 	if err != nil {
-		return deny()
-	}
-	parsedAAD, err := proto.ParseDragDisplayAAD(aad)
-	if err != nil || parsedAAD.Scope != "personal" ||
-		(parsedAAD.ExpiresAt != 0 && d.Now().Unix() >= parsedAAD.ExpiresAt) {
-		return deny()
+		return displayTokenRefused()
 	}
 	iv, _, ok := decodeBase64(req.IVB64, "iv_b64")
 	if !ok {
