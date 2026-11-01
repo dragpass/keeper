@@ -37,9 +37,7 @@ func (r DEKUnwrapAndEncryptWithAADRequest) Validate() error {
 	}
 	// AAD is required: this action exists to bind an AAD. An empty AAD is what
 	// the plain DEKUnwrapAndEncrypt action already covers. requireBase64
-	// rejects empty.
-	if _, err := requireBase64(r.AADB64, "aad_b64"); err != nil {
-		return err
-	}
-	return nil
+	// rejects empty. A domain the Keeper builds itself (bound and audit drag
+	// tokens, Secure Message) is refused, as for the Group sibling.
+	return rejectReservedAAD(r.AADB64, "aad_b64")
 }

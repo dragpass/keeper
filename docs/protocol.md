@@ -2242,7 +2242,8 @@ dragpass.drag.token|1|group|<org_id>|<group_id>|<dek_version>|<audit_table_id or
   with the table id, both as AAD and as the HKDF `info` of the token key. A
   request without it is refused before the receipt or permit is spent.
 - The domain starts with `dragpass.drag.`, which `ReservedAADDomains` refuses
-  for any caller-chosen AAD.
+  for any caller-chosen AAD: `group_encrypt_with_aad`,
+  `dek_unwrap_and_encrypt_with_aad` and the credential sinks.
 - The golden vector is `internal/keystore/testdata/bound-token-aad-v1.json`
   (the same file is in `dragpass/packages/token-format/lib/testdata/`).
 
