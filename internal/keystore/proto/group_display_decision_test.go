@@ -78,3 +78,11 @@ func TestCurrentGroupDisplayDecisionRejectsInvalidFields(t *testing.T) {
 		})
 	}
 }
+
+// The skew allowance is a cross-repository contract with ariadne's
+// models.KeeperDisplayClockSkewSeconds.
+func TestDisplayDecisionClockSkewMatchesTheAPIHorizonAllowance(t *testing.T) {
+	if DisplayDecisionClockSkewSeconds != 5 {
+		t.Fatalf("skew allowance = %d, the API waits for expiry plus 5 s", DisplayDecisionClockSkewSeconds)
+	}
+}

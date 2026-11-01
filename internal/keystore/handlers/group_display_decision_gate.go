@@ -22,7 +22,7 @@ func verifyAndConsumeCurrentGroupDisplayDecision(d Deps, decision proto.CurrentG
 		return errCurrentGroupDisplayDenied
 	}
 	now := d.Now()
-	if decision.IssuedAt > now.Unix()+5 || now.Unix() >= decision.ExpiresAt {
+	if decision.IssuedAt > now.Unix()+proto.DisplayDecisionClockSkewSeconds || now.Unix() >= decision.ExpiresAt {
 		return errCurrentGroupDisplayDenied
 	}
 	context, ok := d.GroupDisplayChallenges.Peek(decision.Challenge, now)

@@ -72,7 +72,7 @@ func HandlePersonalDisplayExecute(d Deps, payload json.RawMessage) proto.BaseRes
 		return deny()
 	}
 	now := d.Now()
-	if req.Decision.IssuedAt > now.Unix()+5 || now.Unix() >= req.Decision.ExpiresAt {
+	if req.Decision.IssuedAt > now.Unix()+proto.DisplayDecisionClockSkewSeconds || now.Unix() >= req.Decision.ExpiresAt {
 		return deny()
 	}
 	context, found := d.GroupDisplayChallenges.Peek(req.Decision.Challenge, now)

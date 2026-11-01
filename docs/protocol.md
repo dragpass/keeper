@@ -2255,6 +2255,19 @@ expiry immediately before opening and again before releasing the envelope.
 Existing tokens are not converted; the author encrypts again from plaintext
 they kept.
 
+### Display decision clock allowance
+
+A display decision is refused when its `issued_at` is more than
+`DisplayDecisionClockSkewSeconds` (5) seconds ahead of Keeper's clock, and
+its expiry is judged with Keeper's own clock. A Keeper running up to 5
+seconds behind the API database can therefore accept a decision up to 5
+seconds after the database considers it expired. The API covers that: every
+revocation writer ordered against display decisions waits until the recorded
+decision expiry plus the same 5 seconds (ariadne
+`models.KeeperDisplayClockSkewSeconds`) before it commits. A Keeper more than
+5 seconds behind refuses the decision as issued in its future. The two
+constants must stay equal.
+
 ### Current Group display preparation
 
 `group_display_prepare` accepts `group_handle`, the selected ciphertext
