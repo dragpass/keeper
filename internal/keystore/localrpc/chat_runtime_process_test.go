@@ -1,7 +1,6 @@
 package localrpc
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -20,7 +19,7 @@ type nativeHost struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
-	stderr *bytes.Buffer
+	stderr *processOutput
 }
 
 func startNativeHost(t *testing.T, dir, address string) *nativeHost {
@@ -43,7 +42,7 @@ func startNativeHost(t *testing.T, dir, address string) *nativeHost {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := &nativeHost{cmd: cmd, stdin: stdin, stdout: stdout, stderr: &bytes.Buffer{}}
+	host := &nativeHost{cmd: cmd, stdin: stdin, stdout: stdout, stderr: &processOutput{}}
 	cmd.Stderr = host.stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

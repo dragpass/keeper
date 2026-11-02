@@ -234,6 +234,8 @@ func TestHandleDEKRewrapForMember_RoundTrip(t *testing.T) {
 	resp := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
 		OtherPublicKey:  otherKP.PublicKey,
+		OwnerAccountID:  pinOwnerA,
+		OtherAccountID:  pinPeer,
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKRewrapForMember failed: %s", resp.Error)
@@ -289,6 +291,8 @@ func TestHandleDEKRewrapForMember_NoRawInResponse(t *testing.T) {
 	resp := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
 		OtherPublicKey:  otherKP.PublicKey,
+		OwnerAccountID:  pinOwnerA,
+		OtherAccountID:  pinPeer,
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKRewrapForMember failed: %s", resp.Error)

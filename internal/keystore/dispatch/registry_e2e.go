@@ -15,3 +15,8 @@ func e2eActions() map[string]action {
 		proto.ActionClipboardGetLastHash: wrap(handlers.HandleClipboardGetLastHash),
 	}
 }
+
+// nativeFixturesAllowed lets the Extension's E2E organization fixtures run the
+// Group DEK wrap actions over Native Messaging. Only a keeper_e2e binary has
+// it; no environment variable or config value turns it on in a release.
+const nativeFixturesAllowed = true

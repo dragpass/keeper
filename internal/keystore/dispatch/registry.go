@@ -46,6 +46,10 @@ type action struct {
 	// session) may run; a Native Messaging frame is refused before its
 	// handler. Chat runs only in the App, so every gated chat action is one.
 	appOnly bool
+	// e2eNativeFixture lets a keeper_e2e build serve this App-only action to
+	// a Native Messaging frame, for the Extension's E2E organization
+	// fixtures. A release build ignores it (nativeFixturesAllowed).
+	e2eNativeFixture bool
 }
 
 type chatRuntimeClass uint8
@@ -81,6 +85,10 @@ func (a action) revoking(reason string) action {
 // appOnlyAction marks an ungated action App-only, such as a chat action that
 // returns plaintext.
 func (a action) appOnlyAction() action { a.appOnly = true; return a }
+
+// e2eNativeFixture marks an App-only action the Extension's E2E fixtures may
+// still run over Native Messaging in a keeper_e2e build.
+func (a action) e2eFixtureOnNative() action { a.e2eNativeFixture = true; return a }
 
 func (a action) onMCP() action            { a.mcp = true; return a }
 func (a action) returnsPlaintext() action { a.plaintext = true; return a }
@@ -178,12 +186,26 @@ func ChatRuntimeClass(name string) (gated bool, revocation string) {
 
 // AppOnly reports whether only the authenticated App caller may run action.
 func AppOnly(name string) bool {
-	return actionRegistry[name].appOnly
+	return refusedToNative(actionRegistry[name])
 }
 
 // AppOnlyActions returns the App-only action names, sorted.
 func AppOnlyActions() []string {
-	return actionNames(func(a action) bool { return a.appOnly })
+	return actionNames(refusedToNative)
+}
+
+// NativeE2EFixtureActions returns the App-only actions a keeper_e2e build
+// serves to Native Messaging frames for the Extension's E2E fixtures, sorted.
+// NativeFixturesAllowed reports whether this build does.
+func NativeE2EFixtureActions() []string {
+	return actionNames(func(a action) bool { return a.appOnly && a.e2eNativeFixture })
+}
+
+// NativeFixturesAllowed is true only in a keeper_e2e build.
+func NativeFixturesAllowed() bool { return nativeFixturesAllowed }
+
+func refusedToNative(a action) bool {
+	return a.appOnly && !(a.e2eNativeFixture && nativeFixturesAllowed)
 }
 
 // ChatRuntimeGatedActions returns the gated action names, sorted.

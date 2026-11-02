@@ -14,7 +14,6 @@
 package localrpc
 
 import (
-	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -188,7 +187,7 @@ func (d *rvDeviceDir) startOwner(t *testing.T) *keeperProcess {
 	t.Helper()
 	cmd := exec.Command(builtMLSKeeper(t), "--app-service")
 	cmd.Env = d.env()
-	stderr := &bytes.Buffer{}
+	stderr := &processOutput{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -232,7 +231,7 @@ func (d *rvDeviceDir) startNative(t *testing.T, env []string) *nativeHost {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := &nativeHost{cmd: cmd, stdin: stdin, stdout: stdout, stderr: &bytes.Buffer{}}
+	host := &nativeHost{cmd: cmd, stdin: stdin, stdout: stdout, stderr: &processOutput{}}
 	cmd.Stderr = host.stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

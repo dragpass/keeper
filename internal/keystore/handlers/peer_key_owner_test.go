@@ -81,16 +81,15 @@ func TestPeerKeyOwner_RecordedByPinActionsToo(t *testing.T) {
 
 // A legacy wrap carries no owner id, so there is no namespace to bind and
 // nothing is recorded.
-func TestPeerKeyOwner_LegacyWrapRecordsNothing(t *testing.T) {
+func TestPeerKeyOwner_SelfWrapRecordsNothing(t *testing.T) {
 	fixture := newWrapFixture(t)
-	peer := newTrustKey(t)
 
 	resp := HandleDEKRewrapForMember(fixture.deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: fixture.wrapped,
-		OtherPublicKey:  peer.pair.PublicKey,
+		OtherPublicKey:  fixture.ownPublicKey,
 	})
 	if !resp.Success {
-		t.Fatalf("legacy wrap failed: %s", resp.Error)
+		t.Fatalf("self wrap failed: %s", resp.Error)
 	}
 	if _, found := recordedOwner(t, fixture.deps); found {
 		t.Fatal("a wrap with no owner id bound the device")

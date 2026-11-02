@@ -20,15 +20,15 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
-// TestHandleRequest_GroupDEKGenerateAndOpen_JSONDispatch verifies that
+// TestHandleAppRequest_GroupDEKGenerateAndOpen_JSONDispatch verifies that
 // the composite action is invoked via the dispatcher and the response
 // includes group_handle + encrypted_for_me_b64.
-func TestHandleRequest_GroupDEKGenerateAndOpen_JSONDispatch(t *testing.T) {
+func TestHandleAppRequest_GroupDEKGenerateAndOpen_JSONDispatch(t *testing.T) {
 	app := newFacadeTestApp()
 	pubPEM, _ := setupAppKeyPair(t, app)
 	pubJSON, _ := json.Marshal(pubPEM)
 	msg := fmt.Sprintf(`{"action":"group_dek_generate_and_open","request_id":"r-gen","payload":{"my_public_key":%s}}`, pubJSON)
-	resp := app.HandleRequest([]byte(msg))
+	resp := app.HandleAppRequest("facade-session", "", []byte(msg))
 	if !resp.Success {
 		t.Fatalf("dispatch failed: %s", resp.Error)
 	}
@@ -49,10 +49,10 @@ func TestHandleRequest_GroupDEKGenerateAndOpen_JSONDispatch(t *testing.T) {
 	})
 }
 
-// TestHandleRequest_DEKRewrapForMember_JSONDispatch verifies that the
+// TestHandleAppRequest_DEKRewrapForMember_JSONDispatch verifies that the
 // composite action is invoked via the dispatcher and the response
 // includes encrypted_for_other_b64.
-func TestHandleRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
+func TestHandleAppRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 	app := newFacadeTestApp()
 	myPubPEM, _ := setupAppKeyPair(t, app)
 	otherKP, _ := GenerateRSAKeyPair()
@@ -69,10 +69,11 @@ func TestHandleRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 	wrappedJSON, _ := json.Marshal(wrappedB64)
 	pubJSON, _ := json.Marshal(otherKP.PublicKey)
 	msg := fmt.Sprintf(
-		`{"action":"dek_rewrap_for_member","request_id":"r-rewrap","payload":{"wrapped_for_me_b64":%s,"other_public_key":%s}}`,
+		`{"action":"dek_rewrap_for_member","request_id":"r-rewrap","payload":{"wrapped_for_me_b64":%s,"other_public_key":%s,`+
+			`"owner_account_id":"11111111-1111-4111-8111-111111111111","other_account_id":"33333333-3333-4333-8333-333333333333"}}`,
 		wrappedJSON, pubJSON,
 	)
-	resp := app.HandleRequest([]byte(msg))
+	resp := app.HandleAppRequest("facade-session", "", []byte(msg))
 	if !resp.Success {
 		t.Fatalf("dispatch failed: %s", resp.Error)
 	}
@@ -213,5 +214,28 @@ func TestHandleRequest_DEKRotateToDeviceKey_FullFlow(t *testing.T) {
 	json.Unmarshal(rotateRaw, &rotateData)
 	if rotateData.DeviceWrappedDEKB64 == "" {
 		t.Error("device_wrapped_dek_b64 should be populated")
+	}
+}
+
+// Even the App cannot point an account-less rewrap at a key that is not this
+// Keeper's own (protocol.md "Group DEK rewrap targets"); the handler checks it
+// behind the App-only gate as defense in depth.
+func TestHandleAppRequest_DEKRewrapForMember_NoAccountForeignKeyRefused(t *testing.T) {
+	app := newFacadeTestApp()
+	myPubPEM, _ := setupAppKeyPair(t, app)
+	otherKP, _ := GenerateRSAKeyPair()
+
+	dek := make([]byte, 32)
+	myPub, _ := ParsePublicKey(myPubPEM)
+	wrappedForMe, _ := EncryptData(myPub, dek)
+	wrappedJSON, _ := json.Marshal(base64.StdEncoding.EncodeToString(wrappedForMe))
+	pubJSON, _ := json.Marshal(otherKP.PublicKey)
+	msg := fmt.Sprintf(
+		`{"action":"dek_rewrap_for_member","request_id":"r-foreign","payload":{"wrapped_for_me_b64":%s,"other_public_key":%s}}`,
+		wrappedJSON, pubJSON,
+	)
+	resp := app.HandleAppRequest("facade-session", "", []byte(msg))
+	if resp.Success || resp.Data != nil {
+		t.Fatalf("an account-less rewrap to a foreign key was not refused: %+v", resp)
 	}
 }

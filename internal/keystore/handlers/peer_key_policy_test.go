@@ -317,22 +317,21 @@ func TestHandleDEKRewrapForMember_ChangedIsRefusedUnderBothPolicies(t *testing.T
 
 // Strict mode is a rule about pins, and a call that names no account has no
 // pin to judge. The pre-0.0.31 shape keeps working exactly as it did.
-func TestHandleDEKRewrapForMember_StrictLeavesLegacyCallsAlone(t *testing.T) {
+func TestHandleDEKRewrapForMember_StrictLeavesSelfWrapAlone(t *testing.T) {
 	fixture := newWrapFixture(t)
-	peer := newTrustKey(t)
 
 	setStrictMode(t, fixture.deps, true)
 
 	resp := HandleDEKRewrapForMember(fixture.deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: fixture.wrapped,
-		OtherPublicKey:  peer.pair.PublicKey,
+		OtherPublicKey:  fixture.ownPublicKey,
 	})
 	if !resp.Success {
-		t.Fatalf("strict mode refused a legacy call: %s (%s)", resp.Error, resp.ErrorCode)
+		t.Fatalf("strict mode refused a self wrap: %s (%s)", resp.Error, resp.ErrorCode)
 	}
 	data := resp.Data.(proto.DEKRewrapForMemberResponseData)
 	if data.PinEnforced || data.PinState != "" {
-		t.Fatalf("legacy call reported enforcement: %+v", data)
+		t.Fatalf("self wrap reported enforcement: %+v", data)
 	}
 	if data.EncryptedForOtherB64 == "" {
 		t.Fatal("no wrap produced")

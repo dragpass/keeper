@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,13 @@ func TestUnpairedLocalProcessIsRefusedByARealOwner(t *testing.T) {
 // to a proven owner, and a standalone host next to an owner it cannot prove.
 // The caller is known from the transport, so nothing in the frame changes it.
 func TestNativeMessagingFramesAreRefusedEveryAppOnlyActionInEveryRole(t *testing.T) {
-	appOnly := dispatch.AppOnlyActions()
+	// The child is a keeper_e2e binary, which serves the Group DEK wrap
+	// fixtures to Native Messaging; a release build refuses them too
+	// (TestGroupDEKWrapActionsAreAppOnlyInRelease, and the in-process
+	// TestHandleRequest_GroupDEKWrapActionsRefusedToNativeMessaging).
+	appOnly := slices.DeleteFunc(dispatch.AppOnlyActions(), func(name string) bool {
+		return slices.Contains(dispatch.NativeE2EFixtureActions(), name)
+	})
 	if len(appOnly) == 0 {
 		t.Fatal("no App-only actions")
 	}

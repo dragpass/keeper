@@ -307,6 +307,7 @@ func TestAuditGrantRewrapsKeepTheLabel(t *testing.T) {
 
 	member := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: mineB64, OtherPublicKey: peer.PublicKey, GrantContext: audit,
+		OwnerAccountID: pinOwnerA, OtherAccountID: pinPeer,
 	})
 	if !member.Success {
 		t.Fatalf("rewrap for member: %+v", member)
@@ -314,7 +315,7 @@ func TestAuditGrantRewrapsKeepTheLabel(t *testing.T) {
 	checkLabeled("dek_rewrap_for_member", member.Data.(proto.DEKRewrapForMemberResponseData).EncryptedForOtherB64)
 
 	many := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64: mineB64, Recipients: exemptRecipients(peer.PublicKey), GrantContext: audit,
+		WrappedForMeB64: mineB64, Recipients: archiveRecipient(peer.PublicKey), GrantContext: audit,
 	})
 	if !many.Success {
 		t.Fatalf("rewrap for many: %+v", many)
@@ -324,6 +325,7 @@ func TestAuditGrantRewrapsKeepTheLabel(t *testing.T) {
 	// Without the context the audit grant does not even open for a rewrap.
 	refused := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: mineB64, OtherPublicKey: peer.PublicKey,
+		OwnerAccountID: pinOwnerA, OtherAccountID: pinPeer,
 	})
 	if refused.Success {
 		t.Fatal("audit grant rewrapped without its context")
@@ -744,7 +746,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	member, _ := crypto.GenerateRSAKeyPair()
 	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrapped),
-		Recipients: exemptRecipients(member.PublicKey), GrantContext: audit,
+		Recipients: archiveRecipient(member.PublicKey), GrantContext: audit,
 	})
 	if !resp.Success {
 		t.Fatalf("combine: %+v", resp)
