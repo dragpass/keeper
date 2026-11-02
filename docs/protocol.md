@@ -2404,6 +2404,57 @@ dragpass.drag.token|1|group|<org_id>|<group_id>|<dek_version>|<audit_table_id or
 This is a viewing control for clients that run these checks. It does not
 recall plaintext or keys a reader has already obtained.
 
+### Entry value-change tracking (lv83)
+
+Keeper tells whether a tracked DragLink entry's value changed without the
+value, or anything derived from it in the clear, leaving Keeper. For each
+value version it seals a comparison record (`internal/keystore/changetrack`):
+
+```text
+record plaintext = 0x01 || K (32 random bytes) || tag (32 bytes)
+tag              = HMAC-SHA256(K, "dragpass.drag.change.tag|1|" || L(kind) || L(scope_id) || L(group_id) || L(entry_id) || value)
+record AAD       = dragpass.drag.change|1|<group|personal>|<scope_id>|<group_id or ->|<entry_id>|<dek_version>|<seq>
+```
+
+`L(x)` is a 4-byte big-endian length. `scope_id` is the org id for a Group
+entry and the signed-in `account_binding` for a personal one. The record is
+AES-256-GCM sealed under the DEK of `dek_version`. `K` is fresh for every
+record: a new value is compared under the **previous** record's `K`, then the
+next record draws a new one, so equal values in two entries, or in two
+versions of one entry, have unrelated tags. The domain starts with
+`dragpass.drag.`, which `ReservedAADDomains` refuses for any caller-chosen AAD.
+
+A record travels as `{ iv_b64, ciphertext_b64, dek_version, seq }` (`seq` is
+1..2^53-2). Verdicts: `baseline` (no previous record), `same`, `changed`, and
+`unknown` (a previous record that does not verify: another scope, entry, DEK
+version or sequence, damaged bytes, an unsupported format, or a DEK this call
+cannot open). `unknown` is never reported as `changed`, and a comparison
+failure never blocks or alters the token.
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`group_encrypt_bound_tracked`|`group_encrypt_bound` fields without `audit_table_id`, plus `entry_id`, `previous_record?`, `previous_group_handle?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record }`|Seals the bound token and the next record from the same plaintext under the handle's DEK. A previous record under another DEK version is opened through `previous_group_handle` (a labeled handle must name the same org, group and that version; an audit-only, closed or mismatched handle gives `unknown`). Refused like `group_encrypt_bound` on an expired expiry, a decrypt-only or audit-only handle and a scope mismatch. `plaintext_b64` is `secret`.|
+|`dek_unwrap_and_encrypt_bound_tracked`|`dek_unwrap_and_encrypt_bound` fields plus `entry_id`, `previous_record?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record }`|Personal sibling. The scope is the signed-in account binding; a record of another account is `unknown`.|
+|`group_change_baseline_prepare`|`group_handle`, `token`, `org_id`, `group_id`, `dek_version`, `token_expiry`, `iv_b64`, `ciphertext_b64`, `entry_id`, `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, group_id, dek_version, grant_digest, operation_digest, token_fingerprint }`|Native Messaging only, strict decode, 16 KiB. Admits only an unexpired bound token (`TOKEN_LEGACY_REFUSED`, `TOKEN_EXPIRED` before anything else), a live labeled legacy or decrypt-only handle for exactly that scope with a grant digest, a signed-in binding and a device id. Mints a ten-second one-use challenge in its own store and commits to the exact token, Keeper-built token AAD, IV, ciphertext, handle and entry. Opens nothing.|
+|`group_change_baseline_execute`|`prepare` (the exact request), `decision`|`{ change_verdict: "baseline", change_record }`|Native Messaging only, strict decode, 20 KiB. Recomputes the operation digest and token fingerprint, requires the decision to name the same entry, scope, token id and session, verifies the server signature over the canonical below, rechecks the live binding generation, device and handle label, consumes the challenge, rechecks decision and token expiry before and after opening, and seals record `seq` 1. A refusal returns no record.|
+
+The baseline decision is issued by the API (ariadne `POST /draglinks/:id/rotation/baseline-decision`)
+under the same authority transaction and display horizons as the current Group
+display decision, plus the entry checks. Its canonical string is:
+
+```text
+dragpass.drag.change-baseline|1|challenge|account_id|device_id|token_id|session_issued_at_nanos|org_id|group_id|dek_version|grant_digest|entry_id|token_fingerprint|operation_digest|issued_at|expires_at|server_key_version
+```
+
+`token_fingerprint` is the lowercase SHA-256 hex of the token string, which the
+API requires to equal the entry's current fingerprint. Keeper does not parse
+tokens: like the display actions it trusts the Extension to pass the IV and
+ciphertext that belong to `token`. There is no personal baseline action; a
+personal entry gets its baseline from its first tracked save.
+
+Nothing here confirms that an external service changed: the server records
+the verdict a client reported and a person's confirmation separately.
+
 ## Error codes
 
 The `error_code` field on failure responses carries a coarse category token
