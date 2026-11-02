@@ -307,6 +307,7 @@ func TestAuditGrantRewrapsKeepTheLabel(t *testing.T) {
 
 	member := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: mineB64, OtherPublicKey: peer.PublicKey, GrantContext: audit,
+		OwnerAccountID: pinOwnerA, OtherAccountID: pinPeer,
 	})
 	if !member.Success {
 		t.Fatalf("rewrap for member: %+v", member)
@@ -324,6 +325,7 @@ func TestAuditGrantRewrapsKeepTheLabel(t *testing.T) {
 	// Without the context the audit grant does not even open for a rewrap.
 	refused := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: mineB64, OtherPublicKey: peer.PublicKey,
+		OwnerAccountID: pinOwnerA, OtherAccountID: pinPeer,
 	})
 	if refused.Success {
 		t.Fatal("audit grant rewrapped without its context")

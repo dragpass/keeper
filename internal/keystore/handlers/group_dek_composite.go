@@ -94,6 +94,11 @@ func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto
 		d.Logger.Printf("dek rewrap for member error: failed to parse other public key: %v", err)
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse other public key: "+err.Error())
 	}
+	if req.OtherAccountID == "" {
+		if resp, ok := requireOwnTargetWithoutAccount(d, otherPubKey, "other_public_key"); !ok {
+			return resp
+		}
+	}
 
 	encrypted, err := base64.StdEncoding.DecodeString(req.WrappedForMeB64)
 	if err != nil {

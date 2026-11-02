@@ -179,6 +179,7 @@ func TestDecryptOnlyGrantRewrapsStayDecryptOnly(t *testing.T) {
 	}
 	member := HandleDEKRewrapForMember(deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: mineB64, OtherPublicKey: peer.PublicKey, GrantContext: gc,
+		OwnerAccountID: pinOwnerA, OtherAccountID: pinPeer,
 	})
 	if !member.Success {
 		t.Fatalf("member: %+v", member)
