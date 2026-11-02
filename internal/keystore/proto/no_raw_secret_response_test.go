@@ -79,19 +79,20 @@ var rawSecretResponseCarveOuts = map[string]string{
 // must never appear here — the removed wrapgroupdek's group_dek_b64 and the
 // removed group_session_open_with_raw were exactly such inputs.
 var rawSecretRequestCarveOuts = map[string]string{
-	"GroupEncryptRequest.plaintext_b64":               "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
-	"GroupEncryptBoundTrackedRequest.plaintext_b64":   "encrypt direction: the drag text sealed as a bound token and, from the same bytes, compared with and summarized into the entry's sealed change record (lv83); zeroized after sealing, never returned or logged. The response carries only the token, the sealed record and a verdict.",
-	"GroupEncryptBoundRequest.plaintext_b64":          "encrypt direction: the drag text to seal under the Group DEK with the Keeper-built bound token AAD is the action's input; zeroized after sealing, never returned or logged.",
-	"GroupEncryptWithAADRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
-	"GroupEncryptAuditRequest.plaintext_b64":          "encrypt direction: the drag text to seal under an audit-only version's per-token key is the action's input; zeroized after sealing, never returned or logged.",
-	"MessageSealRequest.plaintext_b64":                "encrypt direction: the Secure Message to seal under the message AAD is the action's input; zeroized after sealing, never returned or logged.",
-	"DEKUnwrapAndEncryptRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
-	"DEKUnwrapAndEncryptBoundRequest.plaintext_b64":   "encrypt direction: the drag text to seal under the personal DEK with the Keeper-built bound token AAD is the action's input; zeroized after sealing, never returned or logged.",
-	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64": "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
-	"MLSEncryptRequest.plaintext_b64":                 "encrypt direction: the chat v2 message to encrypt as an MLS application message is the action's input; zeroized after sealing, never returned or logged, not even by length.",
-	"MLSRoomNameSealRequest.plaintext_b64":            "encrypt direction: the v2 room name to seal under the confirmed epoch's MLS exporter is the action's input; zeroized after sealing, never returned or logged.",
-	"MLSGroupCreateRequest.room_name_plaintext_b64":   "encrypt direction: the v2 room name to reseal for the epoch the pending create makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
-	"MLSCommitBuildRequest.room_name_plaintext_b64":   "encrypt direction: the v2 room name to reseal for the epoch the pending Commit makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
+	"GroupEncryptRequest.plaintext_b64":                    "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptBoundTrackedRequest.plaintext_b64": "encrypt direction: the personal drag text sealed as a bound token and, from the same bytes, compared with and summarized into the entry's sealed change record (lv83); zeroized after sealing, never returned or logged.",
+	"GroupEncryptBoundTrackedRequest.plaintext_b64":        "encrypt direction: the drag text sealed as a bound token and, from the same bytes, compared with and summarized into the entry's sealed change record (lv83); zeroized after sealing, never returned or logged. The response carries only the token, the sealed record and a verdict.",
+	"GroupEncryptBoundRequest.plaintext_b64":               "encrypt direction: the drag text to seal under the Group DEK with the Keeper-built bound token AAD is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptWithAADRequest.plaintext_b64":             "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptAuditRequest.plaintext_b64":               "encrypt direction: the drag text to seal under an audit-only version's per-token key is the action's input; zeroized after sealing, never returned or logged.",
+	"MessageSealRequest.plaintext_b64":                     "encrypt direction: the Secure Message to seal under the message AAD is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptRequest.plaintext_b64":             "encrypt direction: plaintext to seal under the personal DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptBoundRequest.plaintext_b64":        "encrypt direction: the drag text to seal under the personal DEK with the Keeper-built bound token AAD is the action's input; zeroized after sealing, never returned or logged.",
+	"DEKUnwrapAndEncryptWithAADRequest.plaintext_b64":      "encrypt direction: plaintext to seal under the personal DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
+	"MLSEncryptRequest.plaintext_b64":                      "encrypt direction: the chat v2 message to encrypt as an MLS application message is the action's input; zeroized after sealing, never returned or logged, not even by length.",
+	"MLSRoomNameSealRequest.plaintext_b64":                 "encrypt direction: the v2 room name to seal under the confirmed epoch's MLS exporter is the action's input; zeroized after sealing, never returned or logged.",
+	"MLSGroupCreateRequest.room_name_plaintext_b64":        "encrypt direction: the v2 room name to reseal for the epoch the pending create makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
+	"MLSCommitBuildRequest.room_name_plaintext_b64":        "encrypt direction: the v2 room name to reseal for the epoch the pending Commit makes, from its MLS exporter; zeroized after sealing, never returned or logged.",
 }
 
 var rawTokenRe = regexp.MustCompile(`(^|_)raw($|_)`)

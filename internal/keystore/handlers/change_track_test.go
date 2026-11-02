@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/changetrack"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
@@ -201,5 +202,60 @@ func TestGroupEncryptBoundTracked_LogsNoValueKeyOrRecord(t *testing.T) {
 		if log.Contains(secret) {
 			t.Fatal("logger recorded a value, key, record or identifier")
 		}
+	}
+}
+
+// ─── Personal ────────────────────────────────────────────────────────────
+
+func personalTrackedReq(wrapped, value string, prev *proto.ChangeRecord) proto.DEKUnwrapAndEncryptBoundTrackedRequest {
+	return proto.DEKUnwrapAndEncryptBoundTrackedRequest{
+		EncryptedDEKB64: wrapped, TokenExpiry: boundLater, EntryID: trackEntry,
+		PlaintextB64:   base64.StdEncoding.EncodeToString([]byte(value)),
+		PreviousRecord: prev,
+	}
+}
+
+func personalTrackedData(t *testing.T, resp proto.BaseResponse) proto.DEKUnwrapAndEncryptBoundTrackedResponseData {
+	t.Helper()
+	if !resp.Success {
+		t.Fatalf("personal tracked encrypt failed: %s", resp.ErrorCode)
+	}
+	return resp.Data.(proto.DEKUnwrapAndEncryptBoundTrackedResponseData)
+}
+
+// The personal scope is the signed-in account binding, never a caller value.
+func TestDEKUnwrapAndEncryptBoundTracked_BaselineThenSameUnderTheAccountScope(t *testing.T) {
+	deps, _, _, wrapped, dek := newBoundPersonalFixture(t)
+	first := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", nil)))
+	if first.ChangeVerdict != string(changetrack.VerdictBaseline) || first.ChangeRecord.Seq != 1 || first.ChangeRecord.DekVersion != 1 {
+		t.Fatalf("verdict %q seq %d version %d, want baseline 1 1", first.ChangeVerdict, first.ChangeRecord.Seq, first.ChangeRecord.DekVersion)
+	}
+	scope := changetrack.Scope{Kind: changetrack.ScopePersonal, ScopeID: boundAccount, EntryID: trackEntry}
+	if changetrack.Compare(dek, scope, sealedOf(t, first.ChangeRecord), []byte("value-one")) != changetrack.VerdictSame {
+		t.Fatal("personal record is not bound to the signed-in account")
+	}
+	prev := first.ChangeRecord
+	second := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", &prev)))
+	if second.ChangeVerdict != string(changetrack.VerdictSame) || second.ChangeRecord.Seq != 2 {
+		t.Fatalf("verdict %q seq %d, want same 2", second.ChangeVerdict, second.ChangeRecord.Seq)
+	}
+}
+
+func TestDEKUnwrapAndEncryptBoundTracked_ChangedAndAnotherAccountsRecordIsUnknown(t *testing.T) {
+	deps, _, _, wrapped, _ := newBoundPersonalFixture(t)
+	first := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", nil)))
+	prev := first.ChangeRecord
+	changed := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-two", &prev)))
+	if changed.ChangeVerdict != string(changetrack.VerdictChanged) {
+		t.Fatalf("verdict %q, want changed", changed.ChangeVerdict)
+	}
+	// After another account signs in on this device the old record is out of scope.
+	if _, _, err := keychain.SetAccountBinding(deps.Store, boundOther, "bob", true); err != nil {
+		t.Fatal(err)
+	}
+	prev = changed.ChangeRecord
+	other := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-two", &prev)))
+	if other.ChangeVerdict != string(changetrack.VerdictUnknown) {
+		t.Fatalf("verdict %q, want unknown", other.ChangeVerdict)
 	}
 }

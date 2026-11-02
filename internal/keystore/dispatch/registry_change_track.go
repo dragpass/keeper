@@ -10,6 +10,7 @@ import (
 
 func changeTrackActions() map[string]action {
 	return map[string]action{
-		proto.ActionGroupEncryptBoundTracked: wrap(handlers.HandleGroupEncryptBoundTracked),
+		proto.ActionGroupEncryptBoundTracked:        wrap(handlers.HandleGroupEncryptBoundTracked),
+		proto.ActionDEKUnwrapAndEncryptBoundTracked: wrap(handlers.HandleDEKUnwrapAndEncryptBoundTracked),
 	}
 }

@@ -141,3 +141,51 @@ func classifyUnderPreviousHandle(d Deps, req proto.GroupEncryptBoundTrackedReque
 	})
 	return verdict, seq, err
 }
+
+// HandleDEKUnwrapAndEncryptBoundTracked seals a personal bound token and its
+// change record under the device-wrapped personal DEK. The scope is this
+// device's signed-in account binding.
+func HandleDEKUnwrapAndEncryptBoundTracked(d Deps, req proto.DEKUnwrapAndEncryptBoundTrackedRequest) proto.BaseResponse {
+	const action = "dek unwrap and encrypt bound tracked"
+	d.Logger.Println(action + " request processing...")
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	expiry, resp, ok := boundExpiry(d, req.TokenExpiry, action)
+	if !ok {
+		return resp
+	}
+	accountID, resp, ok := boundAccountID(d, action)
+	if !ok {
+		return resp
+	}
+	plaintext, err := base64.StdEncoding.DecodeString(req.PlaintextB64)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode plaintext_b64")
+	}
+	defer secure.Zeroize(plaintext)
+	scope := changetrack.Scope{Kind: changetrack.ScopePersonal, ScopeID: accountID, EntryID: req.EntryID}
+	aad := []byte(proto.BoundPersonalTokenAAD(accountID, proto.BoundPersonalDekVersion, expiry))
+	return withPersonalDEK(d, req.EncryptedDEKB64, func(dek []byte) proto.BaseResponse {
+		var prev *changetrack.Previous
+		if p, ok := previousSealed(req.PreviousRecord); ok {
+			prev = &changetrack.Previous{Record: p, DEK: dek}
+		}
+		verdict, record, err := changetrack.Observe(d.Random(), scope,
+			changetrack.Current{DEK: dek, DekVersion: proto.BoundPersonalDekVersion}, prev, plaintext)
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "change record failed")
+		}
+		iv, ciphertext, err := crypto.SealAESGCM(d.Random(), dek, plaintext, aad)
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed")
+		}
+		d.Logger.Println(action + " successful")
+		return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndEncryptBoundTrackedResponseData{
+			IVB64:         base64.StdEncoding.EncodeToString(iv),
+			CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
+			ChangeVerdict: string(verdict),
+			ChangeRecord:  changeRecordData(record),
+		}}
+	})
+}

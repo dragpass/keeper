@@ -94,3 +94,36 @@ type GroupEncryptBoundTrackedResponseData struct {
 	ChangeVerdict string       `json:"change_verdict"`
 	ChangeRecord  ChangeRecord `json:"change_record"`
 }
+
+// DEKUnwrapAndEncryptBoundTrackedRequest is DEKUnwrapAndEncryptBoundRequest
+// plus the entry and its current record. The personal DEK has one version, so
+// no second key is ever needed.
+type DEKUnwrapAndEncryptBoundTrackedRequest struct {
+	EncryptedDEKB64 string        `json:"encrypted_dek_b64,omitempty"` // empty: the Keeper's own slot
+	TokenExpiry     string        `json:"token_expiry"`
+	PlaintextB64    string        `json:"plaintext_b64"` // secret in REQUEST only; never logged
+	EntryID         string        `json:"entry_id"`
+	PreviousRecord  *ChangeRecord `json:"previous_record,omitempty"`
+}
+
+func (r DEKUnwrapAndEncryptBoundTrackedRequest) Validate() error {
+	if err := (DEKUnwrapAndEncryptBoundRequest{EncryptedDEKB64: r.EncryptedDEKB64, TokenExpiry: r.TokenExpiry, PlaintextB64: r.PlaintextB64}).Validate(); err != nil {
+		return err
+	}
+	if err := requireMessageUUID(r.EntryID, "entry_id"); err != nil {
+		return err
+	}
+	if r.PreviousRecord != nil {
+		return r.PreviousRecord.validate()
+	}
+	return nil
+}
+
+// DEKUnwrapAndEncryptBoundTrackedResponseData — the personal bound token plus
+// the change verdict and the record that replaces the previous one.
+type DEKUnwrapAndEncryptBoundTrackedResponseData struct {
+	IVB64         string       `json:"iv_b64"`
+	CiphertextB64 string       `json:"ciphertext_b64"`
+	ChangeVerdict string       `json:"change_verdict"`
+	ChangeRecord  ChangeRecord `json:"change_record"`
+}
