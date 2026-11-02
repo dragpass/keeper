@@ -2257,16 +2257,23 @@ they kept.
 
 ### Display decision clock allowance
 
-A display decision is refused when its `issued_at` is more than
-`DisplayDecisionClockSkewSeconds` (5) seconds ahead of Keeper's clock, and
-its expiry is judged with Keeper's own clock. A Keeper running up to 5
-seconds behind the API database can therefore accept a decision up to 5
-seconds after the database considers it expired. The API covers that: every
-revocation writer ordered against display decisions waits until the recorded
-decision expiry plus the same 5 seconds (ariadne
-`models.KeeperDisplayClockSkewSeconds`) before it commits. A Keeper more than
-5 seconds behind refuses the decision as issued in its future. The two
-constants must stay equal.
+What bounds execution is the one-use display challenge, not Keeper's wall
+clock. `*_display_prepare` stores the challenge in
+`GroupDisplayChallengeStore` with a 10 second TTL measured on Go's monotonic
+clock, and the execute gate consumes it, so a decision executes less than 10
+seconds after its challenge was prepared. A decision names that challenge, so
+the API issued it after the preparation; its `expires_at` is `issued_at` (API
+database clock) plus 10 seconds. Every revocation writer ordered against display decisions waits until
+the database clock passes the recorded expiry plus 5 seconds (ariadne
+`models.KeeperDisplayClockSkewSeconds`) before it commits. The extra 5 seconds
+is margin for whole-second rounding of `issued_at` and request latency; it does
+not depend on Keeper's wall-clock offset.
+
+At execute time Keeper also refuses a decision whose `issued_at` is more than
+`DisplayDecisionClockSkewSeconds` (5) seconds ahead of its own wall clock, or
+whose `expires_at` has passed on that clock. These wall-clock checks narrow
+acceptance further; they are not the ordering guarantee. The two 5 second
+constants are kept equal.
 
 ### Current Group display preparation
 

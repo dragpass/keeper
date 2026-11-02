@@ -99,10 +99,9 @@ func (d CurrentGroupDisplayDecision) Validate() error {
 	return nil
 }
 
-// DisplayDecisionClockSkewSeconds is how far this Keeper's clock may differ
-// from the API database clock for a display decision: a decision issued more
-// than this far in Keeper's future is refused, and expiry is judged with
-// Keeper's own clock. The API waits for a decision's expiry plus this
-// allowance before committing a revocation, so it must equal ariadne's
-// models.KeeperDisplayClockSkewSeconds (docs/protocol.md).
+// DisplayDecisionClockSkewSeconds is how far a decision's issued_at may be
+// ahead of this Keeper's wall clock at execute time. The ordering against API
+// revocations comes from the 10 s monotonic challenge TTL, not from this check
+// (docs/protocol.md "Display decision clock allowance"). It is kept equal to
+// ariadne's models.KeeperDisplayClockSkewSeconds.
 const DisplayDecisionClockSkewSeconds = 5
