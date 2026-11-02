@@ -522,9 +522,9 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`dek_rewrap_with_old_key_to_self`|`challenge_token`, `signature`, `recovery_handle`, `encrypted_group_dek`, `server_key_version?`, `grant_context?` (0.0.58)|`{ new_encrypted_group_dek }`|App only (a Native Messaging frame is refused). The recovery rewrap without a caller-chosen target. Unwraps with the recovered OLD key behind `recovery_handle` and wraps to this Keeper's **active** account key. Refused while a recovery is still staged (the server has not been seen to accept the new key) and when the active key is still the recovered one, so the OLD key cannot place a grant anywhere but the account's own new key. The App path uses only this form. (0.0.58) `grant_context` opens and rewraps under the grant's label (see "Audit-only Group DEK versions").|
-|`group_dek_generate_and_open`|`my_public_key`, `grant_context?` (0.0.58)|`{ group_handle, expires_at_ms, encrypted_for_me_b64 }`|Generate new 32B Group DEK + register as session + RSA-wrap with caller pubkey. raw never leaves. (0.0.58) With an `audit_only_v1` `grant_context` (the version the DEK will become) the wrap carries the grant label, the handle is audit-only, and Keeper opens its own wrap with its active private key before answering: a `my_public_key` that is not this Keeper's key is `validation_error`, so a grant nobody can open is never handed out.|
-|`dek_rewrap_for_member`|`wrapped_for_me_b64`, `other_public_key`, `owner_account_id?`, `other_account_id?`, `rotation_statements?`, `enrollment_evidence?` (0.0.57)|`{ encrypted_for_other_b64, pin_enforced, pin_state? }`|Synthetic unwrap+wrap. raw stays in Keeper memory only. When `other_account_id` is present the peer key pin is checked before anything is unwrapped (0.0.31): an unexplained key change closes the action with `peer_key_changed` and no wrap output. When KT is configured, a missing pin additionally requires inclusion evidence for a valid, signed account-key enrollment whose account id and fingerprint match the exact recipient key; missing or mismatched evidence refuses before pin persistence or wrapping. The two account ids travel together or not at all; sending one without the other is `validation_error`. Request capped at 512 KiB before decode. (0.0.58) `grant_context?` is the context of `wrapped_for_me_b64`; the new wrap carries the same label.|
-|`dek_unwrap_and_rewrap_for_many`|`wrapped_for_me_b64`, `recipients[]` (`{ account_id?, public_key, rotation_statements?, enrollment_evidence? }`); `owner_account_id?`; `grant_context?` (0.0.58, every new wrap carries its label); `narrow_to_decrypt_only?` (0.0.58, bool: wrap every recipient under the `decrypt_only_v1` label of the same org / group / version instead; requires a `legacy` `grant_context`)|`{ encrypted_for_recipients_b64[], pin_enforced, pin_states[]? }`|Multi-recipient variant of `dek_rewrap_for_member`. Unwrap my wrapped Group DEK once, RSA-OAEP re-wrap to each recipient key; response lists are parallel to the request recipients. raw unwrapped once, stays in Keeper memory only. Used by `adminRotateDek` to wrap the OLD Group DEK to every member + the archive key without the raw entering the JS heap. `recipients[]` is the pin-enforced shape (0.0.31); the pre-0.0.31 flat `recipient_public_keys[]` was removed in 0.0.58, and a request carrying only it has no recipients and is `validation_error`. With KT configured, first pins require a matching witnessed enrollment proof. **Every recipient is judged before the first wrap**, so one refusal produces no partial output — a rotation that wrapped some members and refused others would split the org. A recipient with no `account_id` reports `exempt` (the org archive key is a resource, not an account); several exempt recipients in one call are fine, but a non-empty `account_id` may not repeat, since the parallel lists would report two states for one peer and the second check would judge the first one's freshly written pin. Max 64 recipients, 32 statements each, 512 KiB per request.|
+|`group_dek_generate_and_open`|`my_public_key`, `grant_context?` (0.0.58)|`{ group_handle, expires_at_ms, encrypted_for_me_b64 }`|Generate new 32B Group DEK + register as session + RSA-wrap with this Keeper's own key. raw never leaves. `my_public_key` must be this Keeper's own account key (see "Group DEK rewrap targets"); any other key is `validation_error` and no handle is opened. (0.0.58) With an `audit_only_v1` `grant_context` (the version the DEK will become) the wrap carries the grant label, the handle is audit-only, and Keeper opens its own wrap with its active private key before answering, so a grant nobody can open is never handed out.|
+|`dek_rewrap_for_member`|`wrapped_for_me_b64`, `other_public_key`, `owner_account_id?`, `other_account_id?`, `rotation_statements?`, `enrollment_evidence?` (0.0.57)|`{ encrypted_for_other_b64, pin_enforced, pin_state? }`|Synthetic unwrap+wrap. raw stays in Keeper memory only. When `other_account_id` is present the peer key pin is checked before anything is unwrapped (0.0.31): an unexplained key change closes the action with `peer_key_changed` and no wrap output. When KT is configured, a missing pin additionally requires inclusion evidence for a valid, signed account-key enrollment whose account id and fingerprint match the exact recipient key; missing or mismatched evidence refuses before pin persistence or wrapping. The two account ids travel together or not at all; sending one without the other is `validation_error`. Without account ids, `other_public_key` must be this Keeper's own account key (see "Group DEK rewrap targets"); any other key is `validation_error` before the grant is unwrapped. Request capped at 512 KiB before decode. (0.0.58) `grant_context?` is the context of `wrapped_for_me_b64`; the new wrap carries the same label.|
+|`dek_unwrap_and_rewrap_for_many`|`wrapped_for_me_b64`, `recipients[]` (`{ account_id?, public_key, rotation_statements?, enrollment_evidence? }`); `owner_account_id?`; `grant_context?` (0.0.58, every new wrap carries its label); `narrow_to_decrypt_only?` (0.0.58, bool: wrap every recipient under the `decrypt_only_v1` label of the same org / group / version instead; requires a `legacy` `grant_context`)|`{ encrypted_for_recipients_b64[], pin_enforced, pin_states[]? }`|Multi-recipient variant of `dek_rewrap_for_member`. Unwrap my wrapped Group DEK once, RSA-OAEP re-wrap to each recipient key; response lists are parallel to the request recipients. raw unwrapped once, stays in Keeper memory only. Used by `adminRotateDek` to wrap the OLD Group DEK to every member + the archive key without the raw entering the JS heap. `recipients[]` is the pin-enforced shape (0.0.31); the pre-0.0.31 flat `recipient_public_keys[]` was removed in 0.0.58, and a request carrying only it has no recipients and is `validation_error`. With KT configured, first pins require a matching witnessed enrollment proof. **Every recipient is judged before the first wrap**, so one refusal produces no partial output — a rotation that wrapped some members and refused others would split the org. A recipient with no `account_id` reports `exempt`: this Keeper's own key, or the org archive key, which is a resource, not an account, and is not checked (see "Group DEK rewrap targets"); several exempt recipients in one call are fine, but a non-empty `account_id` may not repeat, since the parallel lists would report two states for one peer and the second check would judge the first one's freshly written pin. Max 64 recipients, 32 statements each, 512 KiB per request.|
 |`group_encrypt`|`group_handle`, `plaintext_b64`|error|(0.0.60) Refused with `TOKEN_LEGACY_REFUSED`: a token sealed without AAD has no authenticated expiry and no action opens it. Use `group_encrypt_bound` ("Bound drag tokens").|
 |`group_encrypt_bound`|`group_handle`, `org_id`, `group_id`, `dek_version`, `audit_table_id?`, `token_expiry`, `plaintext_b64`|`{ iv_b64, ciphertext_b64 }`|(0.0.60) Seal a bound drag token under the raw Group DEK with the Keeper-built bound AAD ("Bound drag tokens"). Refused on an audit-only handle (`GROUP_POLICY_AUDIT_ONLY`) and a decrypt-only one (`GROUP_POLICY_DECRYPT_ONLY`). `plaintext_b64` is `secret`.|
 |`group_encrypt_with_aad`|`group_handle`, `plaintext_b64`, `aad_b64`|`{ iv_b64, ciphertext_b64 }`|AAD-binding variant of `group_encrypt`. Binds the caller-supplied `aad_b64` (canonical context `scope_id\|entry_id\|payload_kind\|schema_version\|dek_version`; `scope_id` is `org_id` for org scope and `account_id` for personal scope, and the org serialisation is byte-identical to the older `org_id` form) into the GCM tag, so a ciphertext cannot be opened under a different context — a swap guard for sealed credential payloads. `aad_b64` is **required** (empty is what `group_encrypt` covers) and is public context material, not secret. Open with the byte-identical AAD to decrypt. `plaintext_b64` is `secret`; response is public material. plaintext / raw Group DEK echoed 0 times. (0.0.58) An AAD starting with a domain Keeper builds itself (`dragpass.drag.`, `dragpass.message`) is `validation_error`, in every Base64 alphabet; the credential sinks refuse the same. Allowed on an audit-only handle (the credential AAD is its own domain).|
@@ -536,6 +536,36 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 |---|---|---|---|
 |`group_session_open`|`encrypted_group_dek`, `org_id?` (0.0.58), `grant_context?` (0.0.58)|`{ group_handle, expires_at_ms }`|Unwrap with active privkey, store in memguard, return opaque handle. The only Group DEK open path — raw Group DEK never crosses IPC. `org_id` (lowercase UUID) names the org whose grant this is; Keeper cannot check it against the DEK; without `grant_context` nothing reads it. (0.0.58) `grant_context` opens the grant under its label and the handle keeps the policy for its life; an `audit_only_v1` grant that does not open under its label is `GROUP_GRANT_POLICY_MISMATCH`. With both, `org_id` must equal `grant_context.org_id`.|
 |`group_session_close`|`group_handle`|_empty_|Discard. Idempotent.|
+
+### Group DEK rewrap targets
+
+A Group DEK wrapped to a key the caller holds lets the caller open every
+bound token of that version offline, outside the expiry and display checks
+Keeper makes. So a wrap target is either named or Keeper's own:
+
+- **Named account.** `dek_rewrap_for_member`, `dek_unwrap_and_rewrap_for_many`
+  and the App-only archive re-grants judge a target that carries an account id
+  by that account's peer key pin (see "Peer account key pins").
+- **Keeper's own key.** A target with no account id must be this Keeper's
+  active account key or the key staged by an account key rotation, compared
+  as parsed keys against the keychain. This covers the self slot of a rotation
+  and the App route `/v1/account-key/rotate/rewrap-group-dek`.
+  `group_dek_generate_and_open` takes only this case for `my_public_key`.
+  Anything else is `validation_error` with no output, and the grant is not
+  unwrapped.
+
+Not yet bound:
+
+- In `dek_unwrap_and_rewrap_for_many`, a recipient with no account id that is
+  not this Keeper's key is accepted as the org archive key, unchecked (the
+  "Accepted gap" under "Peer account key pins").
+- A first observation of a named account is `tofu`. Without a Key Transparency
+  trust file nothing ties the named account id to the key, and Keeper cannot
+  tell whether the account is a member of the group.
+
+A Native Messaging caller can therefore still obtain a Group DEK under its own
+key through those two paths. The App routes serve only the paired App and have
+the same two gaps.
 
 ### Audit-only Group DEK versions (0.0.58)
 
@@ -2051,10 +2081,12 @@ until `peer_key_pin_verify` settles the difference. Both are hashes of public
 keys, so the payload adds nothing the refusal did not already imply, and it
 saves the SPA from re-fetching the very key the refusal is about.
 
-**Accepted gap.** A recipient with no account id — the org archive key, which
-is an org resource rather than an account — is exempt. A server that swaps the
-archive public key can still receive an OLD Group DEK. Archive key pinning is
-out of scope for this slice.
+**Accepted gap.** A recipient with no account id that is not this Keeper's
+own key — the org archive key, which is an org resource rather than an
+account — is exempt. A server that swaps the archive public key, or a Native
+Messaging caller that names its own key as the archive key, can still receive
+an OLD Group DEK. A wrap with no account id to any other target is refused
+(see "Group DEK rewrap targets").
 
 **Evaluating without wrapping (0.0.33).** The pin only advanced to `rotated`
 inside a wrap, and the SPA blocks all four wrap entry points — invite, DEK
