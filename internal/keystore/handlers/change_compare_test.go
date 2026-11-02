@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/changetrack"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 )
@@ -247,4 +249,50 @@ func TestDEKUnwrapAndEncryptBoundTracked_PersonalComparisonIsOff(t *testing.T) {
 			t.Fatalf("personal: verdict %q seq %d, want unknown 2 with a token", got.ChangeVerdict, got.ChangeRecord.Seq)
 		}
 	}
+}
+
+// F5: a decision naming another grant digest, a binding replaced after the
+// prepare, and a decision already expired at the first check give no verdict.
+func TestGroupEncryptBoundTracked_RefusesGrantBindingAndEarlyExpiry(t *testing.T) {
+	t.Run("other grant digest", func(t *testing.T) {
+		f := newCompareFixture(t)
+		prev := f.save(t, "value-one", nil, nil).ChangeRecord
+		d := f.decide(t, f.prepare(t, prev), func(d *proto.ChangeCompareDecision) {
+			d.GrantDigest = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+		})
+		if got := f.save(t, "value-one", &prev, d); got.ChangeVerdict != string(changetrack.VerdictUnknown) {
+			t.Fatalf("verdict %q, want unknown", got.ChangeVerdict)
+		}
+	})
+	t.Run("binding replaced after prepare", func(t *testing.T) {
+		f := newCompareFixture(t)
+		prev := f.save(t, "value-one", nil, nil).ChangeRecord
+		d := f.decide(t, f.prepare(t, prev), nil)
+		// The same account signs in again: a new binding generation.
+		if _, _, err := keychain.SetAccountBinding(f.store, f.v.AccountID, "alice", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.save(t, "value-one", &prev, d); got.ChangeVerdict != string(changetrack.VerdictUnknown) {
+			t.Fatalf("verdict %q, want unknown", got.ChangeVerdict)
+		}
+	})
+	t.Run("expired at the first check", func(t *testing.T) {
+		f := newCompareFixture(t)
+		prev := f.save(t, "value-one", nil, nil).ChangeRecord
+		d := f.decide(t, f.prepare(t, prev), nil)
+		// Only the first decision-time read sees the expiry (the second clock
+		// read in the save): the first check alone must refuse.
+		base := f.clock.now()
+		calls := 0
+		f.deps.Clock = func() time.Time {
+			calls++
+			if calls == 2 {
+				return time.Unix(d.ExpiresAt, 0)
+			}
+			return base
+		}
+		if got := f.save(t, "value-one", &prev, d); got.ChangeVerdict != string(changetrack.VerdictUnknown) {
+			t.Fatalf("verdict %q, want unknown", got.ChangeVerdict)
+		}
+	})
 }
