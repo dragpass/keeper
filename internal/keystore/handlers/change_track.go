@@ -62,7 +62,11 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 	aad := []byte(proto.BoundGroupTokenAAD(tc.OrgID, tc.GroupID, tc.DekVersion, "", expiry))
 
 	prev, hasPrev := previousSealed(req.PreviousRecord)
-	crossVersion := hasPrev && prev.DekVersion != tc.DekVersion
+	// lv83 H1: compare only under a valid server decision. Without one the
+	// verdict is unknown and nothing about the value is revealed; the token
+	// and the next record are still sealed.
+	authorized := hasPrev && verifyAndConsumeCompareDecision(d, req, prev) == nil
+	crossVersion := authorized && prev.DekVersion != tc.DekVersion
 	// A previous record under another DEK version is classified first, under
 	// its own handle; the session store does not allow two handles at once.
 	var verdict changetrack.Verdict
@@ -89,7 +93,11 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 			if hasPrev {
 				p = &prev
 			}
-			v, n, err := changetrack.Next(scope, p, groupDEK, plaintext)
+			compareKey := groupDEK
+			if hasPrev && !authorized {
+				compareKey = nil // no decision: unknown, the record is not opened
+			}
+			v, n, err := changetrack.Next(scope, p, compareKey, plaintext)
 			if err != nil {
 				return errors.New("change record failed")
 			}
@@ -167,9 +175,12 @@ func HandleDEKUnwrapAndEncryptBoundTracked(d Deps, req proto.DEKUnwrapAndEncrypt
 	scope := changetrack.Scope{Kind: changetrack.ScopePersonal, ScopeID: accountID, EntryID: req.EntryID}
 	aad := []byte(proto.BoundPersonalTokenAAD(accountID, proto.BoundPersonalDekVersion, expiry))
 	return withPersonalDEK(d, req.EncryptedDEKB64, func(dek []byte) proto.BaseResponse {
+		// Personal comparison is off (lv83 H1): there is no online decision
+		// for a personal entry, so a previous record is never opened and the
+		// verdict is unknown; only the sequence advances.
 		var prev *changetrack.Previous
 		if p, ok := previousSealed(req.PreviousRecord); ok {
-			prev = &changetrack.Previous{Record: p, DEK: dek}
+			prev = &changetrack.Previous{Record: p}
 		}
 		verdict, record, err := changetrack.Observe(d.Random(), scope,
 			changetrack.Current{DEK: dek, DekVersion: proto.BoundPersonalDekVersion}, prev, plaintext)

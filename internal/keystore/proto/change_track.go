@@ -55,6 +55,11 @@ type GroupEncryptBoundTrackedRequest struct {
 	EntryID             string        `json:"entry_id"`
 	PreviousRecord      *ChangeRecord `json:"previous_record,omitempty"`
 	PreviousGroupHandle string        `json:"previous_group_handle,omitempty"`
+	// CompareDecision authorizes comparing against PreviousRecord (lv83 H1).
+	// Without a valid one the verdict is "unknown"; the token and the next
+	// record are still sealed. It is checked by the handler, not here, so a
+	// malformed decision never blocks the encryption.
+	CompareDecision *ChangeCompareDecision `json:"compare_decision,omitempty"`
 }
 
 // TokenContext — tracked tokens carry no audit table.

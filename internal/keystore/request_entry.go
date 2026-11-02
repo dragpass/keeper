@@ -83,6 +83,7 @@ func (a *App) HandlersDeps() handlers.Deps {
 		MessageChallenges:        a.MessageChallenges,
 		GroupDisplayChallenges:   a.GroupDisplayChallenges,
 		ChangeBaselineChallenges: a.ChangeBaselineChallenges,
+		ChangeCompareChallenges:  a.ChangeCompareChallenges,
 		AuditAuthorizations:      a.AuditAuthorizations,
 		CredentialNonces:         a.CredentialNonces,
 		KeyTransparency:          a.KeyTransparency,

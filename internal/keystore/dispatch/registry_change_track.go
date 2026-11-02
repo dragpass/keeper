@@ -15,5 +15,7 @@ func changeTrackActions() map[string]action {
 		proto.ActionGroupChangeBaselinePrepare:      direct(handlers.HandleGroupChangeBaselinePrepare),
 		proto.ActionGroupChangeBaselineExecute:      direct(handlers.HandleGroupChangeBaselineExecute),
 		proto.ActionDEKUnwrapAndEncryptBoundTracked: wrap(handlers.HandleDEKUnwrapAndEncryptBoundTracked),
+		// Comparison decision (lv83 H1): no verdict without it.
+		proto.ActionGroupChangeComparePrepare: direct(handlers.HandleGroupChangeComparePrepare),
 	}
 }

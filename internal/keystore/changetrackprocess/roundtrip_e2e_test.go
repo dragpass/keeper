@@ -222,7 +222,7 @@ type tracked struct {
 	ChangeRecord  proto.ChangeRecord `json:"change_record"`
 }
 
-func (k *keeper) save(handle string, dekVersion int, value string, prev *proto.ChangeRecord, prevHandle string) tracked {
+func (k *keeper) save(handle string, dekVersion int, value string, prev *proto.ChangeRecord, prevHandle string, dec *proto.ChangeCompareDecision) tracked {
 	k.t.Helper()
 	req := map[string]any{
 		"group_handle": handle, "org_id": orgID, "group_id": groupID, "dek_version": dekVersion,
@@ -235,35 +235,75 @@ func (k *keeper) save(handle string, dekVersion int, value string, prev *proto.C
 	if prevHandle != "" {
 		req["previous_group_handle"] = prevHandle
 	}
+	if dec != nil {
+		req["compare_decision"] = dec
+	}
 	var out tracked
 	k.must(proto.ActionGroupEncryptBoundTracked, req, &out)
 	return out
 }
 
+// decide prepares a comparison in Keeper and signs the decision the API
+// would issue for it.
+func (k *keeper) decide(handle string, dekVersion int, prev proto.ChangeRecord) *proto.ChangeCompareDecision {
+	k.t.Helper()
+	var prepared proto.GroupChangeComparePrepareResponseData
+	k.must(proto.ActionGroupChangeComparePrepare, proto.GroupChangeComparePrepareRequest{
+		GroupHandle: handle, OrgID: orgID, GroupID: groupID, DekVersion: dekVersion, EntryID: entryID,
+		PreviousRecord: prev, TokenID: tokenID, SessionIssuedAtNanos: "1793410000123456789",
+	}, &prepared)
+	now := time.Now().Unix()
+	d := proto.ChangeCompareDecision{
+		Challenge: prepared.Challenge, AccountID: accountID, DeviceID: deviceID, TokenID: tokenID,
+		SessionIssuedAtNanos: 1793410000123456789, OrgID: orgID, GroupID: groupID, DekVersion: dekVersion,
+		GrantDigest: prepared.GrantDigest, EntryID: entryID, RecordDigest: prepared.RecordDigest,
+		OperationDigest: prepared.OperationDigest, IssuedAt: now - 1, ExpiresAt: now + 9, ServerKeyVersion: 1,
+	}
+	sig, err := crypto.SignData(serverKey, proto.ChangeCompareDecisionCanonical(d))
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	d.Signature = base64.StdEncoding.EncodeToString(sig)
+	return &d
+}
+
+func legacy(v int) *proto.GrantContext {
+	return &proto.GrantContext{Policy: proto.GrantPolicyLegacy, OrgID: orgID, GroupID: groupID, DekVersion: v}
+}
+
 func TestRealKeeper_TrackedEncryptRoundTrip(t *testing.T) {
 	k := start(t)
-	v7 := k.openGroup()
-	first := k.save(v7, 7, "rt-value-one", nil, "")
+	v7 := k.openGroupWith(legacy(7))
+	first := k.save(v7, 7, "rt-value-one", nil, "", nil)
 	if first.ChangeVerdict != "baseline" || first.ChangeRecord.Seq != 1 {
 		t.Fatalf("first save: %q seq %d, want baseline 1", first.ChangeVerdict, first.ChangeRecord.Seq)
 	}
-	same := k.save(v7, 7, "rt-value-one", &first.ChangeRecord, "")
+	// No decision: no verdict, the value is still sealed.
+	if got := k.save(v7, 7, "rt-value-one", &first.ChangeRecord, "", nil); got.ChangeVerdict != "unknown" || got.CiphertextB64 == "" {
+		t.Fatalf("without a decision: %q, want unknown", got.ChangeVerdict)
+	}
+	same := k.save(v7, 7, "rt-value-one", &first.ChangeRecord, "", k.decide(v7, 7, first.ChangeRecord))
 	if same.ChangeVerdict != "same" {
-		t.Fatalf("re-saving the value: %q, want same", same.ChangeVerdict)
+		t.Fatalf("re-saving the value under a decision: %q, want same", same.ChangeVerdict)
 	}
 	// A new DEK version: the record under version 7 is opened through its own
 	// handle and the value is still the same.
-	v8 := k.openGroup()
-	rotated := k.save(v8, 8, "rt-value-one", &same.ChangeRecord, v7)
+	v8 := k.openGroupWith(legacy(8))
+	rotated := k.save(v8, 8, "rt-value-one", &same.ChangeRecord, v7, k.decide(v8, 8, same.ChangeRecord))
 	if rotated.ChangeVerdict != "same" || rotated.ChangeRecord.DekVersion != 8 {
 		t.Fatalf("after rotation: %q version %d, want same 8", rotated.ChangeVerdict, rotated.ChangeRecord.DekVersion)
 	}
-	changed := k.save(v8, 8, "rt-value-two", &rotated.ChangeRecord, "")
+	dec := k.decide(v8, 8, rotated.ChangeRecord)
+	changed := k.save(v8, 8, "rt-value-two", &rotated.ChangeRecord, "", dec)
 	if changed.ChangeVerdict != "changed" {
 		t.Fatalf("new value: %q, want changed", changed.ChangeVerdict)
 	}
+	// The same decision answers no second guess.
+	if again := k.save(v8, 8, "rt-value-one", &rotated.ChangeRecord, "", dec); again.ChangeVerdict != "unknown" {
+		t.Fatalf("replayed decision: %q, want unknown", again.ChangeVerdict)
+	}
 	// Without the old version's handle the comparison is unknown, never changed.
-	unknown := k.save(v8, 8, "rt-value-two", &same.ChangeRecord, "")
+	unknown := k.save(v8, 8, "rt-value-two", &same.ChangeRecord, "", k.decide(v8, 8, same.ChangeRecord))
 	if unknown.ChangeVerdict != "unknown" {
 		t.Fatalf("unverifiable record: %q, want unknown", unknown.ChangeVerdict)
 	}
@@ -343,7 +383,7 @@ func TestRealKeeper_ChangeBaselineFromAToken(t *testing.T) {
 	if r := k.call(proto.ActionGroupChangeBaselineExecute, map[string]any{"prepare": prepare, "decision": signed}); r.Success {
 		t.Fatal("a decision was used twice")
 	}
-	if got := k.save(handle, 7, "rt-base-value", &baseline.ChangeRecord, ""); got.ChangeVerdict != "same" {
+	if got := k.save(handle, 7, "rt-base-value", &baseline.ChangeRecord, "", k.decide(handle, 7, baseline.ChangeRecord)); got.ChangeVerdict != "same" {
 		t.Fatalf("saving the token's value against the baseline: %q, want same", got.ChangeVerdict)
 	}
 	legacy := prepare

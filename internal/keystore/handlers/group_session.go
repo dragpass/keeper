@@ -83,6 +83,7 @@ func HandleGroupSessionClose(d Deps, req proto.GroupSessionCloseRequest) proto.B
 	d.MessageChallenges.PurgeHandle(req.GroupHandle)
 	d.GroupDisplayChallenges.PurgeHandle(req.GroupHandle)
 	d.ChangeBaselineChallenges.PurgeHandle(req.GroupHandle)
+	d.ChangeCompareChallenges.PurgeHandle(req.GroupHandle)
 	d.Logger.Println("group session close successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupSessionCloseResponseData{}}
 }

@@ -138,12 +138,16 @@ func TestGroupChangeBaselineExecute_SealsTheFirstRecordFromTheToken(t *testing.T
 	if data.ChangeVerdict != "baseline" || data.ChangeRecord.Seq != 1 || data.ChangeRecord.DekVersion != f.v.DekVersion {
 		t.Fatalf("verdict %q seq %d, want baseline 1", data.ChangeVerdict, data.ChangeRecord.Seq)
 	}
-	// The baseline describes the token's value: saving that value again is same.
+	// The baseline describes the token's value: saving that value again under
+	// a comparison decision is same.
 	prev := data.ChangeRecord
+	f.deps.ChangeCompareChallenges = NewGroupDisplayChallengeStore()
+	cf := &compareFixture{f}
 	next := HandleGroupEncryptBoundTracked(f.deps, proto.GroupEncryptBoundTrackedRequest{
 		GroupHandle: f.handle, OrgID: f.v.OrgID, GroupID: f.v.GroupID, DekVersion: f.v.DekVersion,
 		TokenExpiry: f.expiry, EntryID: trackEntry, PreviousRecord: &prev,
-		PlaintextB64: base64.StdEncoding.EncodeToString([]byte("value-one")),
+		CompareDecision: cf.decide(t, cf.prepare(t, prev), nil),
+		PlaintextB64:    base64.StdEncoding.EncodeToString([]byte("value-one")),
 	})
 	if !next.Success || next.Data.(proto.GroupEncryptBoundTrackedResponseData).ChangeVerdict != "same" {
 		t.Fatal("baseline does not describe the token's value")

@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/changetrack"
-	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
@@ -64,49 +63,6 @@ func TestGroupEncryptBoundTracked_FirstSaveIsBaselineAndSealsTheToken(t *testing
 	want := sha256.Sum256([]byte("value-one"))
 	if got, ok := f.mc.LastHash(); !resp.Success || !ok || got != want {
 		t.Fatal("tracked token does not open as a bound token with the saved value")
-	}
-}
-
-func TestGroupEncryptBoundTracked_SameValueAgainstPreviousRecordIsSame(t *testing.T) {
-	f := newBoundGroupFixture(t)
-	first := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, f.trackedReq("value-one", nil)))
-	prev := first.ChangeRecord
-	second := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, f.trackedReq("value-one", &prev)))
-	if second.ChangeVerdict != string(changetrack.VerdictSame) || second.ChangeRecord.Seq != 2 {
-		t.Fatalf("verdict %q seq %d, want same 2", second.ChangeVerdict, second.ChangeRecord.Seq)
-	}
-}
-
-// A DEK rotation between two saves of one value: the previous record is opened
-// through the retained version's handle and the new one is sealed under the
-// current DEK. The verdict stays same.
-func TestGroupEncryptBoundTracked_SameValueAcrossDEKVersionsUsesThePreviousHandle(t *testing.T) {
-	for _, labeled := range []bool{false, true} {
-		f := newBoundGroupFixture(t)
-		oldRaw := make([]byte, 32)
-		if _, err := rand.Read(oldRaw); err != nil {
-			t.Fatal(err)
-		}
-		// An unlabeled (legacy) handle, and a labeled one whose label names the
-		// same org, group and the record's version.
-		oldHandle := openLabeledForTest(t, f, oldRaw, sessions.Label{})
-		if labeled {
-			oldHandle = openLabeledForTest(t, f, oldRaw, sessions.Label{OrgID: boundOrg, GroupID: boundGroup, DekVersion: 6})
-		}
-		old, err := changetrack.Seal(rand.Reader, oldRaw, trackGroupScope(), 6, 4, []byte("value-one"))
-		if err != nil {
-			t.Fatal("seal failed")
-		}
-		prev := changeRecordData(old)
-		req := f.trackedReq("value-one", &prev)
-		req.PreviousGroupHandle = oldHandle
-		data := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, req))
-		if data.ChangeVerdict != string(changetrack.VerdictSame) || data.ChangeRecord.Seq != 5 || data.ChangeRecord.DekVersion != 7 {
-			t.Fatalf("labeled=%v: verdict %q seq %d version %d, want same 5 7", labeled, data.ChangeVerdict, data.ChangeRecord.Seq, data.ChangeRecord.DekVersion)
-		}
-		if changetrack.Compare(f.raw, trackGroupScope(), sealedOf(t, data.ChangeRecord), []byte("value-one")) != changetrack.VerdictSame {
-			t.Fatalf("labeled=%v: new record is not sealed under the current DEK", labeled)
-		}
 	}
 }
 
@@ -179,16 +135,6 @@ func TestGroupEncryptBoundTracked_UnverifiablePreviousRecordIsUnknownAndStillSea
 	}
 }
 
-func TestGroupEncryptBoundTracked_DifferentValueIsChanged(t *testing.T) {
-	f := newBoundGroupFixture(t)
-	first := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, f.trackedReq("value-one", nil)))
-	prev := first.ChangeRecord
-	second := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, f.trackedReq("value-two", &prev)))
-	if second.ChangeVerdict != string(changetrack.VerdictChanged) {
-		t.Fatalf("verdict %q, want changed", second.ChangeVerdict)
-	}
-}
-
 func TestGroupEncryptBoundTracked_RefusesDecryptOnlyAndExpired(t *testing.T) {
 	f := newBoundGroupFixture(t)
 	dOnly := openLabeledForTest(t, f, f.raw, sessions.Label{OrgID: boundOrg, GroupID: boundGroup, DekVersion: 7, GrantPolicy: proto.GrantPolicyDecryptOnlyV1})
@@ -235,7 +181,7 @@ func personalTrackedData(t *testing.T, resp proto.BaseResponse) proto.DEKUnwrapA
 }
 
 // The personal scope is the signed-in account binding, never a caller value.
-func TestDEKUnwrapAndEncryptBoundTracked_BaselineThenSameUnderTheAccountScope(t *testing.T) {
+func TestDEKUnwrapAndEncryptBoundTracked_BaselineUnderTheAccountScope(t *testing.T) {
 	deps, _, _, wrapped, dek := newBoundPersonalFixture(t)
 	first := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", nil)))
 	if first.ChangeVerdict != string(changetrack.VerdictBaseline) || first.ChangeRecord.Seq != 1 || first.ChangeRecord.DekVersion != 1 {
@@ -244,29 +190,5 @@ func TestDEKUnwrapAndEncryptBoundTracked_BaselineThenSameUnderTheAccountScope(t 
 	scope := changetrack.Scope{Kind: changetrack.ScopePersonal, ScopeID: boundAccount, EntryID: trackEntry}
 	if changetrack.Compare(dek, scope, sealedOf(t, first.ChangeRecord), []byte("value-one")) != changetrack.VerdictSame {
 		t.Fatal("personal record is not bound to the signed-in account")
-	}
-	prev := first.ChangeRecord
-	second := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", &prev)))
-	if second.ChangeVerdict != string(changetrack.VerdictSame) || second.ChangeRecord.Seq != 2 {
-		t.Fatalf("verdict %q seq %d, want same 2", second.ChangeVerdict, second.ChangeRecord.Seq)
-	}
-}
-
-func TestDEKUnwrapAndEncryptBoundTracked_ChangedAndAnotherAccountsRecordIsUnknown(t *testing.T) {
-	deps, _, _, wrapped, _ := newBoundPersonalFixture(t)
-	first := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-one", nil)))
-	prev := first.ChangeRecord
-	changed := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-two", &prev)))
-	if changed.ChangeVerdict != string(changetrack.VerdictChanged) {
-		t.Fatalf("verdict %q, want changed", changed.ChangeVerdict)
-	}
-	// After another account signs in on this device the old record is out of scope.
-	if _, _, err := keychain.SetAccountBinding(deps.Store, boundOther, "bob", true); err != nil {
-		t.Fatal(err)
-	}
-	prev = changed.ChangeRecord
-	other := personalTrackedData(t, HandleDEKUnwrapAndEncryptBoundTracked(deps, personalTrackedReq(wrapped, "value-two", &prev)))
-	if other.ChangeVerdict != string(changetrack.VerdictUnknown) {
-		t.Fatalf("verdict %q, want unknown", other.ChangeVerdict)
 	}
 }

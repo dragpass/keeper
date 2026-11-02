@@ -53,6 +53,9 @@ type Deps struct {
 	// to the exact token and entry Keeper prepared. A separate store, so a
 	// baseline challenge can never satisfy a display decision or the reverse.
 	ChangeBaselineChallenges *GroupDisplayChallengeStore
+	// ChangeCompareChallenges binds a one-use comparison decision (lv83 H1)
+	// to the handle, entry and record Keeper prepared.
+	ChangeCompareChallenges *GroupDisplayChallengeStore
 	// CredentialNonces is the process-local single-use record behind the
 	// credential sinks (credential_execution_prepare → credential_http_request /
 	// credential_exec_request). A nil store fails closed.
