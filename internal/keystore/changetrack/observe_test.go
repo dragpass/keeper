@@ -91,3 +91,27 @@ func TestObserve_RefusesSequenceOverflow(t *testing.T) {
 		t.Fatal("observe accepted a sequence that cannot advance")
 	}
 }
+
+// The new value is compared under the previous record's key before a fresh
+// key is drawn for the next record, so one value saved repeatedly stays same.
+func TestObserve_ComparesUnderThePreviousKeyThenRekeys(t *testing.T) {
+	dek := testDEK(t)
+	s := groupScope(testEntryA)
+	cur := Current{DEK: dek, DekVersion: 5}
+	_, rec, err := Observe(rand.Reader, s, cur, nil, []byte("value-one"))
+	if err != nil {
+		t.Fatal("baseline failed")
+	}
+	prevKey := openKeyForTest(t, dek, s, rec)
+	for i := 0; i < 3; i++ {
+		got, next, err := Observe(rand.Reader, s, cur, &Previous{Record: rec, DEK: dek}, []byte("value-one"))
+		if err != nil || got != VerdictSame {
+			t.Fatalf("save %d: verdict %q, want same", i, got)
+		}
+		nextKey := openKeyForTest(t, dek, s, next)
+		if string(nextKey) == string(prevKey) {
+			t.Fatalf("save %d: next record reuses the previous comparison key", i)
+		}
+		rec, prevKey = next, nextKey
+	}
+}

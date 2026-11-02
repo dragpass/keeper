@@ -24,3 +24,17 @@ func openTagForTest(t *testing.T, dek []byte, s Scope, rec Sealed) []byte {
 	}
 	return plain[1+recordKeyBytes:]
 }
+
+// openKeyForTest returns a record's comparison key for in-memory comparison only.
+func openKeyForTest(t *testing.T, dek []byte, s Scope, rec Sealed) []byte {
+	t.Helper()
+	aad, err := recordAAD(s, rec.DekVersion, rec.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := crypto.OpenAESGCM(dek, rec.IV, rec.Ciphertext, aad)
+	if err != nil {
+		t.Fatal("open failed")
+	}
+	return plain[1 : 1+recordKeyBytes]
+}
