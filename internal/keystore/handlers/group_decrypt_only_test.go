@@ -122,7 +122,7 @@ func TestNarrowToDecryptOnly(t *testing.T) {
 	peerPriv, _ := crypto.ParsePrivateKey(peer.PrivateKey)
 
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64: legacyB64, Recipients: exemptRecipients(peer.PublicKey),
+		WrappedForMeB64: legacyB64, Recipients: archiveRecipient(peer.PublicKey),
 		GrantContext: legacyContext(v), NarrowToDecryptOnly: true,
 	})
 	if !resp.Success {
@@ -150,7 +150,7 @@ func TestNarrowToDecryptOnly(t *testing.T) {
 		"audit-only":   {WrappedForMeB64: base64.StdEncoding.EncodeToString(auditGrant), GrantContext: audit, NarrowToDecryptOnly: true},
 		"decrypt-only": {WrappedForMeB64: base64.StdEncoding.EncodeToString(doGrant), GrantContext: decryptOnlyContext(v), NarrowToDecryptOnly: true},
 	} {
-		req.Recipients = exemptRecipients(peer.PublicKey)
+		req.Recipients = archiveRecipient(peer.PublicKey)
 		if r := HandleDEKUnwrapAndRewrapForMany(deps, req); r.Success || r.ErrorCode != string(errs.ErrCodeValidation) {
 			t.Fatalf("%s: narrowing accepted: %+v", name, r)
 		}
@@ -186,7 +186,7 @@ func TestDecryptOnlyGrantRewrapsStayDecryptOnly(t *testing.T) {
 	}
 	check("dek_rewrap_for_member", member.Data.(proto.DEKRewrapForMemberResponseData).EncryptedForOtherB64)
 	many := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
-		WrappedForMeB64: mineB64, Recipients: exemptRecipients(peer.PublicKey), GrantContext: gc,
+		WrappedForMeB64: mineB64, Recipients: archiveRecipient(peer.PublicKey), GrantContext: gc,
 	})
 	if !many.Success {
 		t.Fatalf("many: %+v", many)

@@ -102,3 +102,42 @@ func TestGroupDEKGenerateAndOpen_RefusesForeignKey(t *testing.T) {
 		t.Fatal("a refused generate opened a handle")
 	}
 }
+
+// dek_unwrap_and_rewrap_for_many: a recipient without an account id is this
+// Keeper's own key, or the one recipient marked as the org archive key.
+// Anything else is refused before the Group DEK is unwrapped.
+func TestDEKUnwrapAndRewrapForMany_AccountlessRecipientMustBeOwnKeyOrArchive(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	myPubPEM, _ := setupHandlerKeyPair(t, store)
+	foreign, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := wrapForStoredKey(t, myPubPEM)
+	call := func(recipients ...proto.DEKRewrapRecipient) proto.BaseResponse {
+		return HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
+			WrappedForMeB64: wrapped, Recipients: recipients,
+		})
+	}
+
+	if resp := call(proto.DEKRewrapRecipient{PublicKey: foreign.PublicKey}); resp.Success ||
+		resp.ErrorCode != string(errs.ErrCodeValidation) || resp.Data != nil {
+		t.Fatalf("an unmarked foreign key without an account was wrapped: %+v", resp)
+	}
+	if resp := call(
+		proto.DEKRewrapRecipient{PublicKey: archive.PublicKey, OrgArchive: true},
+		proto.DEKRewrapRecipient{PublicKey: foreign.PublicKey, OrgArchive: true},
+	); resp.Success {
+		t.Fatal("two org archive recipients were accepted")
+	}
+	if resp := call(
+		proto.DEKRewrapRecipient{PublicKey: myPubPEM},
+		proto.DEKRewrapRecipient{PublicKey: archive.PublicKey, OrgArchive: true},
+	); !resp.Success {
+		t.Fatalf("own key and one org archive recipient were refused: %+v", resp)
+	}
+}

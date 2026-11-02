@@ -181,8 +181,8 @@ type DEKRewrapForMemberResponseData struct {
 // payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
 	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
-	// A recipient with no account_id is pin-exempt — the org archive key is
-	// a resource, not an account.
+	// A recipient with no account_id is pin-exempt: this Keeper's own key, or
+	// the one recipient marked org_archive (a resource, not an account).
 	Recipients []DEKRewrapRecipient `json:"recipients"`
 	// OwnerAccountID scopes the pins. Required as soon as any recipient
 	// names an account.
@@ -215,6 +215,10 @@ type DEKRewrapRecipient struct {
 	PublicKey          string                   `json:"public_key"`
 	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
 	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	// OrgArchive marks the one recipient without an account that is the org
+	// archive key (server-supplied, not checked by Keeper). Every other
+	// recipient without an account must be this Keeper's own key.
+	OrgArchive bool `json:"org_archive,omitempty"`
 }
 
 // DEKRewrapMaxRecipients caps one call. The org member ceiling is 30, plus the
@@ -258,7 +262,16 @@ func validateRewrapRecipients(recipients []DEKRewrapRecipient, ownerAccountID st
 	// list wrong or something upstream is trying to get two different keys
 	// accepted for one account in a single pass.
 	seenAccounts := make(map[string]struct{}, len(recipients))
+	archives := 0
 	for _, recipient := range recipients {
+		if recipient.OrgArchive {
+			archives++
+			if recipient.AccountID != "" || archives > 1 ||
+				len(recipient.RotationStatements) > 0 || recipient.EnrollmentEvidence != nil {
+				return newValidationError("recipients.org_archive",
+					"at most one recipient, with no account, chain or enrollment evidence")
+			}
+		}
 		if recipient.AccountID == "" {
 			continue
 		}

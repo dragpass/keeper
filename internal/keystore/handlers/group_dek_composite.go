@@ -196,6 +196,11 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 			return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse recipient public key: "+err.Error())
 		}
 		recipientKeys[i] = pub
+		if recipient.AccountID == "" && !recipient.OrgArchive {
+			if resp, ok := requireOwnTargetWithoutAccount(d, pub, "recipients.public_key"); !ok {
+				return resp
+			}
+		}
 		checks[i] = peerKeyPinCheck{
 			accountID:          recipient.AccountID,
 			observed:           crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),

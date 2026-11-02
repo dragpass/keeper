@@ -18,6 +18,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestHandleDEKUnwrapAndRewrapForMany_MissingPrivateKey(t *testing.T) {
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
 		WrappedForMeB64: base64.StdEncoding.EncodeToString([]byte("doesnt-matter")),
-		Recipients:      exemptRecipients(recipientKP.PublicKey),
+		Recipients:      archiveRecipient(recipientKP.PublicKey),
 	})
 	if resp.Success {
 		t.Fatal("expected failure when identity private key slot is absent")
@@ -97,7 +98,8 @@ func TestHandleDEKUnwrapAndRewrapForMany_RoundTrip(t *testing.T) {
 
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
 		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
-		Recipients:      exemptRecipients(pems...),
+		OwnerAccountID:  pinOwnerA,
+		Recipients:      namedRecipients(pems...),
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKUnwrapAndRewrapForMany failed: %s", resp.Error)
@@ -152,7 +154,7 @@ func TestHandleDEKUnwrapAndRewrapForMany_NoRawInResponse(t *testing.T) {
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
 	resp := HandleDEKUnwrapAndRewrapForMany(deps, proto.DEKUnwrapAndRewrapForManyRequest{
 		WrappedForMeB64: base64.StdEncoding.EncodeToString(wrappedForMe),
-		Recipients:      exemptRecipients(recipientKP.PublicKey),
+		Recipients:      archiveRecipient(recipientKP.PublicKey),
 	})
 	if !resp.Success {
 		t.Fatalf("HandleDEKUnwrapAndRewrapForMany failed: %s", resp.Error)
@@ -169,6 +171,24 @@ func TestHandleDEKUnwrapAndRewrapForMany_NoRawInResponse(t *testing.T) {
 
 // exemptRecipients builds a recipient list that names no account, so every
 // entry is wrapped and reported exempt rather than pinned.
+// archiveRecipient is the one recipient without an account that is not this
+// Keeper's own key: the org archive key, marked as such.
+func archiveRecipient(pem string) []proto.DEKRewrapRecipient {
+	return []proto.DEKRewrapRecipient{{PublicKey: pem, OrgArchive: true}}
+}
+
+// namedRecipients names a distinct account for each key, so every key is a
+// peer judged by its pin (first observation here).
+func namedRecipients(pems ...string) []proto.DEKRewrapRecipient {
+	out := make([]proto.DEKRewrapRecipient, len(pems))
+	for i, pem := range pems {
+		out[i] = proto.DEKRewrapRecipient{
+			AccountID: fmt.Sprintf("%08d-0000-4000-8000-000000000000", i+1), PublicKey: pem,
+		}
+	}
+	return out
+}
+
 func exemptRecipients(pems ...string) []proto.DEKRewrapRecipient {
 	out := make([]proto.DEKRewrapRecipient, len(pems))
 	for i, pem := range pems {

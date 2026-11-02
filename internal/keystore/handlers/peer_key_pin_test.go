@@ -302,7 +302,7 @@ func TestHandleDEKUnwrapAndRewrapForMany_ExemptRecipient(t *testing.T) {
 		OwnerAccountID:  pinOwnerA,
 		Recipients: []proto.DEKRewrapRecipient{
 			{AccountID: pinPeer, PublicKey: member.pair.PublicKey},
-			{PublicKey: archive.pair.PublicKey},
+			{PublicKey: archive.pair.PublicKey, OrgArchive: true},
 		},
 	})
 	if !resp.Success {
