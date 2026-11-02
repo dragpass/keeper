@@ -171,7 +171,9 @@ func TestGroupChangeBaselineExecute_RefusesWithoutCurrentAuthority(t *testing.T)
 			return f.execute(t, f.decision(t, p, func(d *proto.ChangeBaselineDecision) { d.EntryID = boundOther }))
 		},
 		"another token": func(t *testing.T, f *baselineFixture, p proto.GroupChangeBaselinePrepareResponseData) proto.BaseResponse {
-			return f.execute(t, f.decision(t, p, func(d *proto.ChangeBaselineDecision) { d.TokenFingerprint = hex.EncodeToString(make([]byte, 31)) + "01" }))
+			return f.execute(t, f.decision(t, p, func(d *proto.ChangeBaselineDecision) {
+				d.TokenFingerprint = hex.EncodeToString(make([]byte, 31)) + "01"
+			}))
 		},
 		"another account": func(t *testing.T, f *baselineFixture, p proto.GroupChangeBaselinePrepareResponseData) proto.BaseResponse {
 			return f.execute(t, f.decision(t, p, func(d *proto.ChangeBaselineDecision) { d.AccountID = boundOther }))

@@ -81,21 +81,32 @@ func TestGroupEncryptBoundTracked_SameValueAgainstPreviousRecordIsSame(t *testin
 // through the retained version's handle and the new one is sealed under the
 // current DEK. The verdict stays same.
 func TestGroupEncryptBoundTracked_SameValueAcrossDEKVersionsUsesThePreviousHandle(t *testing.T) {
-	f := newBoundGroupFixture(t)
-	oldHandle, oldRaw := openSessionForFreshKey(t, f.deps)
-	old, err := changetrack.Seal(rand.Reader, oldRaw, trackGroupScope(), 6, 4, []byte("value-one"))
-	if err != nil {
-		t.Fatal("seal failed")
-	}
-	prev := changeRecordData(old)
-	req := f.trackedReq("value-one", &prev)
-	req.PreviousGroupHandle = oldHandle
-	data := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, req))
-	if data.ChangeVerdict != string(changetrack.VerdictSame) || data.ChangeRecord.Seq != 5 || data.ChangeRecord.DekVersion != 7 {
-		t.Fatalf("verdict %q seq %d version %d, want same 5 7", data.ChangeVerdict, data.ChangeRecord.Seq, data.ChangeRecord.DekVersion)
-	}
-	if changetrack.Compare(f.raw, trackGroupScope(), sealedOf(t, data.ChangeRecord), []byte("value-one")) != changetrack.VerdictSame {
-		t.Fatal("new record is not sealed under the current DEK")
+	for _, labeled := range []bool{false, true} {
+		f := newBoundGroupFixture(t)
+		oldRaw := make([]byte, 32)
+		if _, err := rand.Read(oldRaw); err != nil {
+			t.Fatal(err)
+		}
+		// An unlabeled (legacy) handle, and a labeled one whose label names the
+		// same org, group and the record's version.
+		oldHandle := openLabeledForTest(t, f, oldRaw, sessions.Label{})
+		if labeled {
+			oldHandle = openLabeledForTest(t, f, oldRaw, sessions.Label{OrgID: boundOrg, GroupID: boundGroup, DekVersion: 6})
+		}
+		old, err := changetrack.Seal(rand.Reader, oldRaw, trackGroupScope(), 6, 4, []byte("value-one"))
+		if err != nil {
+			t.Fatal("seal failed")
+		}
+		prev := changeRecordData(old)
+		req := f.trackedReq("value-one", &prev)
+		req.PreviousGroupHandle = oldHandle
+		data := trackedData(t, HandleGroupEncryptBoundTracked(f.deps, req))
+		if data.ChangeVerdict != string(changetrack.VerdictSame) || data.ChangeRecord.Seq != 5 || data.ChangeRecord.DekVersion != 7 {
+			t.Fatalf("labeled=%v: verdict %q seq %d version %d, want same 5 7", labeled, data.ChangeVerdict, data.ChangeRecord.Seq, data.ChangeRecord.DekVersion)
+		}
+		if changetrack.Compare(f.raw, trackGroupScope(), sealedOf(t, data.ChangeRecord), []byte("value-one")) != changetrack.VerdictSame {
+			t.Fatalf("labeled=%v: new record is not sealed under the current DEK", labeled)
+		}
 	}
 }
 
