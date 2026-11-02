@@ -78,6 +78,8 @@ func identityActions() map[string]action {
 		proto.ActionDEKUnwrapAndEncryptWithAAD: wrap(handlers.HandleDEKUnwrapAndEncryptWithAAD),
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionDEKUnwrapAndDecryptToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptToClipboard),
+		proto.ActionPersonalDisplayPrepare:         direct(handlers.HandlePersonalDisplayPrepare),
+		proto.ActionPersonalDisplayExecute:         direct(handlers.HandlePersonalDisplayExecute),
 		// bound personal drag tokens: Keeper-built AAD with authenticated expiry
 		proto.ActionDEKUnwrapAndEncryptBound:            wrap(handlers.HandleDEKUnwrapAndEncryptBound),
 		proto.ActionDEKUnwrapAndDecryptBoundToClipboard: wrap(handlers.HandleDEKUnwrapAndDecryptBoundToClipboard),

@@ -60,7 +60,11 @@ const (
 	// GroupDecryptToClipboard: the AAD-free Group drag open. Refused with
 	// TOKEN_LEGACY_REFUSED: its tokens carry no authenticated expiry. Kept
 	// registered so an old caller gets that code, not "unknown action".
-	ActionGroupDecryptToClipboard = "group_decrypt_to_clipboard"
+	ActionGroupDecryptToClipboard  = "group_decrypt_to_clipboard"
+	ActionGroupDisplayPrepare      = "group_display_prepare"
+	ActionGroupDisplayExecute      = "group_display_execute"
+	ActionAuditGroupDisplayPrepare = "audit_group_display_prepare"
+	ActionAuditGroupDisplayExecute = "audit_group_display_execute"
 
 	// GroupEncrypt: the AAD-free Group drag seal. Refused with
 	// TOKEN_LEGACY_REFUSED; a token it made could not be opened.
