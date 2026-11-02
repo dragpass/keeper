@@ -24,8 +24,9 @@ import (
 
 // HandleGroupDEKGenerateAndOpen generates a raw 32B Group DEK inside the
 // Keeper, registers it with the GroupSessionStore, and simultaneously
-// RSA-OAEP-wraps it with the caller's public key for return. The raw bytes
-// are not included in the response and do not reside in the Extension JS heap.
+// RSA-OAEP-wraps it with this Keeper's own public key for return. A
+// my_public_key that is not this Keeper's key is refused. The raw bytes are
+// not included in the response and do not reside in the Extension JS heap.
 func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequest) proto.BaseResponse {
 	d.Logger.Println("group dek generate and open request processing...")
 
@@ -37,6 +38,9 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 	if err != nil {
 		d.Logger.Printf("group dek generate error: failed to parse my public key: %v", err)
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to parse my public key: "+err.Error())
+	}
+	if resp, ok := requireOwnTargetWithoutAccount(d, myPubKey, "my_public_key"); !ok {
+		return resp
 	}
 
 	rawDEK := make([]byte, 32)
@@ -81,7 +85,8 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 // and a key that changed without a valid rotation chain closes the action with
 // peer_key_changed before anything is unwrapped. The server chose the public
 // key in this request; the pin is the only thing on this device that remembers
-// which key it chose last time.
+// which key it chose last time. A request that names no account may only
+// target this Keeper's own active or staged key (group_dek_rewrap_target.go).
 func HandleDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto.BaseResponse {
 	d.Logger.Println("dek rewrap for member request processing...")
 
@@ -271,8 +276,7 @@ func HandleDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRewrapForMany
 // selfOpenAuditGrant opens the audit-only wrap this Keeper just made for itself
 // and checks it yields the same DEK. A rotation built on a grant the label
 // does not open would leave the org on a key nobody can use; this is where it
-// is caught, before the wrap leaves the Keeper. It also pins my_public_key to
-// this Keeper's own key for the audit-only case.
+// is caught, before the wrap leaves the Keeper.
 func selfOpenAuditGrant(d Deps, encrypted, rawDEK []byte, gc *proto.GrantContext) (proto.BaseResponse, bool) {
 	privKeyBuf, err := getPrivateKeySecure(d.Store)
 	if err != nil {

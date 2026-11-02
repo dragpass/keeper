@@ -78,3 +78,27 @@ func TestDEKRewrapForMember_NoAccountAcceptsStagedRotationKey(t *testing.T) {
 		t.Fatalf("a wrap to the staged rotation key was refused: %s (%s)", resp.Error, resp.ErrorCode)
 	}
 }
+
+// A new Group DEK is wrapped only to this Keeper's own key; the App route
+// already binds it, and Native Messaging must not be able to pick another.
+func TestGroupDEKGenerateAndOpen_RefusesForeignKey(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	setupHandlerKeyPair(t, store)
+	foreign, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRSAKeyPair: %v", err)
+	}
+
+	resp := HandleGroupDEKGenerateAndOpen(deps, proto.GroupDEKGenerateAndOpenRequest{
+		MyPublicKey: foreign.PublicKey,
+	})
+	if resp.Success {
+		t.Fatal("a new Group DEK was wrapped to a foreign key")
+	}
+	if resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("error code = %q, want %q", resp.ErrorCode, errs.ErrCodeValidation)
+	}
+	if deps.GroupSessions.CloseAll() != 0 {
+		t.Fatal("a refused generate opened a handle")
+	}
+}
