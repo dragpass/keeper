@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -46,6 +47,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	binaryPath = filepath.Join(dir, "dragpass-keeper-e2e")
+	if runtime.GOOS == "windows" {
+		binaryPath += ".exe"
+	}
 	build := exec.Command("go", "build", "-tags", "keeper_e2e", "-o", binaryPath, ".")
 	build.Dir = filepath.Join("..", "..", "..")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -123,6 +127,17 @@ func start(t *testing.T) *keeper {
 		"KEEPER_E2E_KEYRING_FILE=" + filepath.Join(dir, "keyring.json"),
 		"HOME=" + filepath.Join(dir, "home"),
 		"PATH=" + os.Getenv("PATH"),
+	}
+	if runtime.GOOS == "windows" {
+		// What a Windows process needs beyond that: the system root (DLL
+		// loading, the CSPRNG) and profile directories inside the test dir,
+		// as the kill harness gives its Keepers.
+		cmd.Env = append(cmd.Env,
+			"SystemRoot="+os.Getenv("SystemRoot"), "SYSTEMROOT="+os.Getenv("SystemRoot"),
+			"TEMP="+os.TempDir(), "TMP="+os.TempDir(),
+			"USERPROFILE="+filepath.Join(dir, "home"),
+			"APPDATA="+filepath.Join(dir, "home", "AppData", "Roaming"),
+			"LOCALAPPDATA="+filepath.Join(dir, "home", "AppData", "Local"))
 	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
