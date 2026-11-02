@@ -2508,8 +2508,11 @@ its own handle, entry and previous record and the live binding generation and
 device, consumes the challenge, and only then compares. One decision answers
 one comparison. A missing, forged, expired, replayed or mismatched decision
 gives `unknown` and still seals the token and the next record. A caller who
-gets a verdict holds decrypt authority for the item and could read the value
-anyway; the signature trusts the server's authority decision.
+gets a verdict holds decrypt authority for the item and could decrypt any token
+of the item it can see; a member who cannot see the token can only verify
+guesses, one per decision, and the API caps issuance (10 per item and 60 per
+account an hour, fail-closed) and records each issued decision. The signature
+trusts the server's authority decision.
 
 The baseline decision is issued by the API (ariadne `POST /draglinks/:id/rotation/baseline-decision`)
 under the same authority transaction and display horizons as the current Group
