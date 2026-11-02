@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -21,10 +22,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const (
@@ -67,6 +71,14 @@ type response struct {
 	Data      json.RawMessage `json:"data"`
 }
 
+const (
+	accountID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	deviceID  = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	tokenID   = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+)
+
+var serverKey *rsa.PrivateKey
+
 func start(t *testing.T) *keeper {
 	t.Helper()
 	dir := t.TempDir()
@@ -74,10 +86,31 @@ func start(t *testing.T) *keeper {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed, _ := json.Marshal(map[string]string{
-		config.Service + "|" + config.DragPassKeeperPrivateKey: pair.PrivateKey,
-		config.Service + "|" + config.DragPassKeeperPublicKey:  pair.PublicKey,
-	})
+	if serverKey == nil {
+		if serverKey, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverPEM, err := crypto.PublicKeyToPEM(&serverKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := testdouble.NewMemorySecretStore()
+	for k, v := range map[string]string{
+		config.DragPassKeeperPrivateKey:                     pair.PrivateKey,
+		config.DragPassKeeperPublicKey:                      pair.PublicKey,
+		config.DragPassServerPublicKeyVersionedPrefix + "1": serverPEM,
+		config.DragPassServerPublicKeyActiveVersion:         "1",
+		config.DeviceID: deviceID,
+	} {
+		if err := store.Set(config.Service, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := keychain.SetAccountBinding(store, accountID, "alice", true); err != nil {
+		t.Fatal(err)
+	}
+	seed, _ := json.Marshal(store.Snapshot())
 	if err := os.WriteFile(filepath.Join(dir, "keyring.json"), seed, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +185,11 @@ func (k *keeper) must(action string, payload, into any) {
 
 // openGroup wraps a fresh Group DEK to this Keeper's key and opens a handle.
 func (k *keeper) openGroup() string {
+	return k.openGroupWith(nil)
+}
+
+// openGroupWith opens a handle, labeled when grantContext is set.
+func (k *keeper) openGroupWith(grantContext *proto.GrantContext) string {
 	k.t.Helper()
 	pub, err := crypto.ParsePublicKey(k.pub)
 	if err != nil {
@@ -168,7 +206,12 @@ func (k *keeper) openGroup() string {
 	var out struct {
 		GroupHandle string `json:"group_handle"`
 	}
-	k.must(proto.ActionGroupSessionOpen, map[string]any{"encrypted_group_dek": base64.StdEncoding.EncodeToString(wrapped)}, &out)
+	req := map[string]any{"encrypted_group_dek": base64.StdEncoding.EncodeToString(wrapped)}
+	if grantContext != nil {
+		req["grant_context"] = grantContext
+		req["org_id"] = grantContext.OrgID
+	}
+	k.must(proto.ActionGroupSessionOpen, req, &out)
 	return out.GroupHandle
 }
 
@@ -240,6 +283,75 @@ func TestRealKeeper_TrackedEncryptRoundTrip(t *testing.T) {
 		t.Fatal("the first token no longer opens to its original value")
 	}
 	if bytes.Contains(k.err.Bytes(), []byte("rt-value")) {
+		t.Fatal("the Keeper logged a test value")
+	}
+}
+
+// The baseline action on a real Keeper: an unexpired bound token, a signed
+// decision for this account, device and session, one use; the baseline then
+// describes the token's value. A decision the server did not sign gets no
+// record.
+func TestRealKeeper_ChangeBaselineFromAToken(t *testing.T) {
+	k := start(t)
+	gc := &proto.GrantContext{Policy: proto.GrantPolicyLegacy, OrgID: orgID, GroupID: groupID, DekVersion: 7}
+	handle := k.openGroupWith(gc)
+	var sealed struct {
+		IVB64         string `json:"iv_b64"`
+		CiphertextB64 string `json:"ciphertext_b64"`
+	}
+	k.must(proto.ActionGroupEncryptBound, map[string]any{
+		"group_handle": handle, "org_id": orgID, "group_id": groupID, "dek_version": 7,
+		"token_expiry": "never", "plaintext_b64": base64.StdEncoding.EncodeToString([]byte("rt-base-value")),
+	}, &sealed)
+	prepare := proto.GroupChangeBaselinePrepareRequest{
+		GroupHandle: handle, Token: "RT-TOKEN", OrgID: orgID, GroupID: groupID, DekVersion: 7,
+		TokenExpiry: "never", IVB64: sealed.IVB64, CiphertextB64: sealed.CiphertextB64,
+		EntryID: entryID, TokenID: tokenID, SessionIssuedAtNanos: "1793410000123456789",
+	}
+	decide := func(sign bool) proto.ChangeBaselineDecision {
+		var prepared proto.GroupChangeBaselinePrepareResponseData
+		k.must(proto.ActionGroupChangeBaselinePrepare, prepare, &prepared)
+		now := time.Now().Unix()
+		d := proto.ChangeBaselineDecision{
+			Challenge: prepared.Challenge, AccountID: accountID, DeviceID: deviceID, TokenID: tokenID,
+			SessionIssuedAtNanos: 1793410000123456789, OrgID: orgID, GroupID: groupID, DekVersion: 7,
+			GrantDigest: prepared.GrantDigest, EntryID: entryID, TokenFingerprint: prepared.TokenFingerprint,
+			OperationDigest: prepared.OperationDigest, IssuedAt: now - 1, ExpiresAt: now + 9, ServerKeyVersion: 1,
+		}
+		d.Signature = base64.StdEncoding.EncodeToString([]byte("unsigned"))
+		if sign {
+			sig, err := crypto.SignData(serverKey, proto.ChangeBaselineDecisionCanonical(d))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Signature = base64.StdEncoding.EncodeToString(sig)
+		}
+		return d
+	}
+	if r := k.call(proto.ActionGroupChangeBaselineExecute, map[string]any{"prepare": prepare, "decision": decide(false)}); r.Success {
+		t.Fatal("an unsigned decision produced a baseline")
+	}
+	signed := decide(true)
+	var baseline struct {
+		ChangeVerdict string             `json:"change_verdict"`
+		ChangeRecord  proto.ChangeRecord `json:"change_record"`
+	}
+	k.must(proto.ActionGroupChangeBaselineExecute, map[string]any{"prepare": prepare, "decision": signed}, &baseline)
+	if baseline.ChangeVerdict != "baseline" || baseline.ChangeRecord.Seq != 1 {
+		t.Fatalf("baseline %q seq %d", baseline.ChangeVerdict, baseline.ChangeRecord.Seq)
+	}
+	if r := k.call(proto.ActionGroupChangeBaselineExecute, map[string]any{"prepare": prepare, "decision": signed}); r.Success {
+		t.Fatal("a decision was used twice")
+	}
+	if got := k.save(handle, 7, "rt-base-value", &baseline.ChangeRecord, ""); got.ChangeVerdict != "same" {
+		t.Fatalf("saving the token's value against the baseline: %q, want same", got.ChangeVerdict)
+	}
+	legacy := prepare
+	legacy.TokenExpiry = ""
+	if r := k.call(proto.ActionGroupChangeBaselinePrepare, legacy); r.Success || r.ErrorCode != proto.TokenLegacyRefused {
+		t.Fatalf("a legacy token was admitted: %s", r.ErrorCode)
+	}
+	if bytes.Contains(k.err.Bytes(), []byte("rt-base")) {
 		t.Fatal("the Keeper logged a test value")
 	}
 }
