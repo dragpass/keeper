@@ -568,7 +568,9 @@ App-only action to Native Messaging.
 Accepted gaps, all on the paired App:
 
 - `dek_unwrap_and_rewrap_for_many` accepts one id-less recipient marked
-  `org_archive` whose key the server supplies, unchecked (the
+  `org_archive`. The marker is the App's unchecked self-declaration and the
+  key is App-supplied (the App takes it from the server); Keeper checks
+  neither (the
   "Accepted gap" under "Peer account key pins"). The archive handoff target of
   `archive_unwrap_and_rewrap` and the `archive_key_split` recipients are also
   App-supplied keys.
