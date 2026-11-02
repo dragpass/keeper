@@ -49,6 +49,10 @@ type Deps struct {
 	// GroupDisplayChallenges binds a one-use online Group display decision to
 	// the local handle and frame. Nil fails closed until the action is wired.
 	GroupDisplayChallenges *GroupDisplayChallengeStore
+	// ChangeBaselineChallenges binds a one-use change-baseline decision (lv83)
+	// to the exact token and entry Keeper prepared. A separate store, so a
+	// baseline challenge can never satisfy a display decision or the reverse.
+	ChangeBaselineChallenges *GroupDisplayChallengeStore
 	// CredentialNonces is the process-local single-use record behind the
 	// credential sinks (credential_execution_prepare → credential_http_request /
 	// credential_exec_request). A nil store fails closed.

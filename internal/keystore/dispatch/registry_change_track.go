@@ -10,7 +10,10 @@ import (
 
 func changeTrackActions() map[string]action {
 	return map[string]action{
-		proto.ActionGroupEncryptBoundTracked:        wrap(handlers.HandleGroupEncryptBoundTracked),
+		proto.ActionGroupEncryptBoundTracked: wrap(handlers.HandleGroupEncryptBoundTracked),
+		// Baseline from an existing token: strict decoders, lv79 online decision.
+		proto.ActionGroupChangeBaselinePrepare:      direct(handlers.HandleGroupChangeBaselinePrepare),
+		proto.ActionGroupChangeBaselineExecute:      direct(handlers.HandleGroupChangeBaselineExecute),
 		proto.ActionDEKUnwrapAndEncryptBoundTracked: wrap(handlers.HandleDEKUnwrapAndEncryptBoundTracked),
 	}
 }

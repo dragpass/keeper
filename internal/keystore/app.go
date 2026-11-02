@@ -109,6 +109,8 @@ type App struct {
 	AuditAuthorizations    *handlers.AuditAuthorizationStore
 	CredentialNonces       *handlers.CredentialNonceStore
 	KeyTransparency        keytransparency.Gate
+	// ChangeBaselineChallenges holds one-use change-baseline challenges (lv83).
+	ChangeBaselineChallenges *handlers.GroupDisplayChallengeStore
 
 	// requestMu runs every handler one at a time in this process (Native
 	// Messaging stdio, proxied hosts, App routes, composed App steps), so
@@ -181,6 +183,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.GroupDisplayChallenges == nil {
 		app.GroupDisplayChallenges = handlers.NewGroupDisplayChallengeStore()
+	}
+	if app.ChangeBaselineChallenges == nil {
+		app.ChangeBaselineChallenges = handlers.NewGroupDisplayChallengeStore()
 	}
 	if app.AuditAuthorizations == nil {
 		app.AuditAuthorizations = handlers.NewAuditAuthorizationStore()
