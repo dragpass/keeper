@@ -2468,7 +2468,12 @@ entry and the signed-in `account_binding` for a personal one. The record is
 AES-256-GCM sealed under the DEK of `dek_version`. `K` is fresh for every
 record: a new value is compared under the **previous** record's `K`, then the
 next record draws a new one, so equal values in two entries, or in two
-versions of one entry, have unrelated tags. The domain starts with
+versions of one entry, have unrelated tags: the stored records alone do not
+link them. **Limitation (open, lv83 H1):** the two tracked encrypt actions
+answer `same` or `changed` for a value and a previous record the caller
+chooses, with no online decision, rate limit or audit, so a caller holding a
+sealing handle (or the personal DEK) can test guesses of a value and compare
+two entries. The domain starts with
 `dragpass.drag.`, which `ReservedAADDomains` refuses for any caller-chosen AAD.
 
 A record travels as `{ iv_b64, ciphertext_b64, dek_version, seq }` (`seq` is
