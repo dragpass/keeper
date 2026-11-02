@@ -1,7 +1,6 @@
 package localrpc
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -80,7 +79,7 @@ func freeLoopbackAddress(t *testing.T) string {
 
 type keeperProcess struct {
 	cmd     *exec.Cmd
-	stderr  *bytes.Buffer
+	stderr  *processOutput
 	exited  chan struct{}
 	waitErr error
 }
@@ -100,7 +99,7 @@ func startAppService(t *testing.T, dir, address string) *keeperProcess {
 		"USERPROFILE=" + filepath.Join(dir, "home"),
 		"APPDATA=" + filepath.Join(dir, "config"),
 	}
-	stderr := &bytes.Buffer{}
+	stderr := &processOutput{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
