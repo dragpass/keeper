@@ -30,6 +30,9 @@ const (
 type wrapFixture struct {
 	deps    Deps
 	wrapped string
+	// ownPublicKey is the Keeper's active key, the one target a wrap that
+	// names no account may use.
+	ownPublicKey string
 }
 
 func newWrapFixture(t *testing.T) wrapFixture {
@@ -48,7 +51,7 @@ func newWrapFixture(t *testing.T) wrapFixture {
 	if err != nil {
 		t.Fatalf("EncryptData: %v", err)
 	}
-	return wrapFixture{deps: deps, wrapped: base64.StdEncoding.EncodeToString(sealed)}
+	return wrapFixture{deps: deps, wrapped: base64.StdEncoding.EncodeToString(sealed), ownPublicKey: myPubPEM}
 }
 
 func mustGetPin(t *testing.T, deps Deps, owner, peer string) keychain.PeerKeyPin {
@@ -189,23 +192,22 @@ func TestHandleDEKRewrapForMember_ValidChainRotatesPin(t *testing.T) {
 }
 
 // Calling without account ids behaves exactly as it did before 0.0.31.
-func TestHandleDEKRewrapForMember_LegacyCallStaysOpen(t *testing.T) {
+func TestHandleDEKRewrapForMember_SelfWrapWithoutAccountIsNotEnforced(t *testing.T) {
 	fixture := newWrapFixture(t)
-	peer := newTrustKey(t)
 
 	resp := HandleDEKRewrapForMember(fixture.deps, proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64: fixture.wrapped,
-		OtherPublicKey:  peer.pair.PublicKey,
+		OtherPublicKey:  fixture.ownPublicKey,
 	})
 	if !resp.Success {
-		t.Fatalf("legacy call failed: %s", resp.Error)
+		t.Fatalf("self wrap failed: %s", resp.Error)
 	}
 	data := resp.Data.(proto.DEKRewrapForMemberResponseData)
 	if data.PinEnforced || data.PinState != "" {
-		t.Fatalf("legacy call reported enforcement: %+v", data)
+		t.Fatalf("self wrap reported enforcement: %+v", data)
 	}
 	if _, err := keychain.GetPeerKeyPin(fixture.deps.Store, pinOwnerA, pinPeer); err == nil {
-		t.Fatal("legacy call wrote a pin")
+		t.Fatal("self wrap wrote a pin")
 	}
 }
 
@@ -300,7 +302,7 @@ func TestHandleDEKUnwrapAndRewrapForMany_ExemptRecipient(t *testing.T) {
 		OwnerAccountID:  pinOwnerA,
 		Recipients: []proto.DEKRewrapRecipient{
 			{AccountID: pinPeer, PublicKey: member.pair.PublicKey},
-			{PublicKey: archive.pair.PublicKey},
+			{PublicKey: archive.pair.PublicKey, OrgArchive: true},
 		},
 	})
 	if !resp.Success {

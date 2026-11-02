@@ -211,6 +211,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 			PublicKey:          recipient.PublicKey,
 			RotationStatements: recipient.RotationStatements,
 			EnrollmentEvidence: recipient.EnrollmentEvidence,
+			OrgArchive:         recipient.OrgArchive,
 		})
 	}
 	return proto.DEKUnwrapAndRewrapForManyRequest{

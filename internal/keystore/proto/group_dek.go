@@ -57,9 +57,10 @@ type DEKRewrapWithOldKeyResponseData struct {
 type GroupDEKGenerateAndOpenRequest struct {
 	MyPublicKey string `json:"my_public_key"`
 	// GrantContext (0.0.58, optional) is the version the new DEK will become.
-	// With the audit-only policy the wrap carries its label, my_public_key must
-	// be this Keeper's own key, and the Keeper opens its own wrap once before
-	// answering, so a grant nobody can open is never handed out.
+	// With the audit-only policy the wrap carries its label and the Keeper
+	// opens its own wrap once before answering, so a grant nobody can open is
+	// never handed out. my_public_key must be this Keeper's own key for every
+	// policy.
 	GrantContext *GrantContext `json:"grant_context,omitempty"`
 }
 
@@ -94,14 +95,12 @@ type GroupDEKGenerateAndOpenResponseData struct {
 // action, producing an equivalent raw-free flow (one extra unwrap+wrap
 // round-trip, but no raw exposure).
 //
-// The three account key trust fields are optional, and optional is a
-// compatibility device rather than a hole. What the pin defends against is a
-// malicious server, not a malicious Extension: an Extension already under an
-// attacker's control has easier routes than omitting an id. This version of
-// the Extension sends the ids from all four of its wrap call sites, and the
-// SPA never assembles a Keeper request at all, so a `pin_enforced:false`
-// response is a regression signal worth a console warning rather than a
-// supported mode.
+// The account key trust fields are optional only for a self wrap: a request
+// that names no account must target this Keeper's own active or staged
+// account key, which the Keeper checks against its keychain. Any other target
+// needs both account ids, so the peer key pin is consulted. Without that
+// check a Native Messaging caller could receive the Group DEK under a key it
+// holds and open bound tokens offline.
 type DEKRewrapForMemberRequest struct {
 	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
 	OtherPublicKey  string `json:"other_public_key"`
@@ -182,8 +181,8 @@ type DEKRewrapForMemberResponseData struct {
 // payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
 	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
-	// A recipient with no account_id is pin-exempt — the org archive key is
-	// a resource, not an account.
+	// A recipient with no account_id is pin-exempt: this Keeper's own key, or
+	// the one recipient marked org_archive (a resource, not an account).
 	Recipients []DEKRewrapRecipient `json:"recipients"`
 	// OwnerAccountID scopes the pins. Required as soon as any recipient
 	// names an account.
@@ -216,6 +215,10 @@ type DEKRewrapRecipient struct {
 	PublicKey          string                   `json:"public_key"`
 	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
 	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	// OrgArchive marks the one recipient without an account that is the org
+	// archive key (server-supplied, not checked by Keeper). Every other
+	// recipient without an account must be this Keeper's own key.
+	OrgArchive bool `json:"org_archive,omitempty"`
 }
 
 // DEKRewrapMaxRecipients caps one call. The org member ceiling is 30, plus the
@@ -259,7 +262,16 @@ func validateRewrapRecipients(recipients []DEKRewrapRecipient, ownerAccountID st
 	// list wrong or something upstream is trying to get two different keys
 	// accepted for one account in a single pass.
 	seenAccounts := make(map[string]struct{}, len(recipients))
+	archives := 0
 	for _, recipient := range recipients {
+		if recipient.OrgArchive {
+			archives++
+			if recipient.AccountID != "" || archives > 1 ||
+				len(recipient.RotationStatements) > 0 || recipient.EnrollmentEvidence != nil {
+				return newValidationError("recipients.org_archive",
+					"at most one recipient, with no account, chain or enrollment evidence")
+			}
+		}
 		if recipient.AccountID == "" {
 			continue
 		}
