@@ -80,6 +80,7 @@ var rawSecretResponseCarveOuts = map[string]string{
 // removed group_session_open_with_raw were exactly such inputs.
 var rawSecretRequestCarveOuts = map[string]string{
 	"GroupEncryptRequest.plaintext_b64":               "encrypt direction: plaintext to seal under the Group DEK is the action's input; zeroized after sealing, never returned or logged.",
+	"GroupEncryptBoundTrackedRequest.plaintext_b64":   "encrypt direction: the drag text sealed as a bound token and, from the same bytes, compared with and summarized into the entry's sealed change record (lv83); zeroized after sealing, never returned or logged. The response carries only the token, the sealed record and a verdict.",
 	"GroupEncryptBoundRequest.plaintext_b64":          "encrypt direction: the drag text to seal under the Group DEK with the Keeper-built bound token AAD is the action's input; zeroized after sealing, never returned or logged.",
 	"GroupEncryptWithAADRequest.plaintext_b64":        "encrypt direction: plaintext to seal under the Group DEK (AAD-bound) is the action's input; zeroized after sealing, never returned or logged.",
 	"GroupEncryptAuditRequest.plaintext_b64":          "encrypt direction: the drag text to seal under an audit-only version's per-token key is the action's input; zeroized after sealing, never returned or logged.",
