@@ -18,16 +18,19 @@ func groupActions() map[string]action {
 		proto.ActionGroupSessionClose: wrap(handlers.HandleGroupSessionClose).onMCP(),
 
 		// Admin-path raw-free composite actions (Group DEK never crosses into JS).
-		proto.ActionGroupDEKGenerateAndOpen: wrap(handlers.HandleGroupDEKGenerateAndOpen),
+		// App-only: a Group DEK wrapped to a key the caller holds opens bound
+		// tokens offline, and organization administration runs in the App.
+		proto.ActionGroupDEKGenerateAndOpen: wrap(handlers.HandleGroupDEKGenerateAndOpen).
+			appOnlyAction().e2eFixtureOnNative(),
 		// Capped rather than plain wrap: both take account key trust fields
 		// whose size the caller controls, and the ceiling has to apply before
 		// the Group DEK is unwrapped.
 		proto.ActionDEKRewrapForMember: wrapCapped(
 			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKRewrapForMember,
-		),
+		).appOnlyAction().e2eFixtureOnNative(),
 		proto.ActionDEKUnwrapAndRewrapForMany: wrapCapped(
 			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKUnwrapAndRewrapForMany,
-		),
+		).appOnlyAction().e2eFixtureOnNative(),
 
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionGroupDecryptToClipboard:  wrap(handlers.HandleGroupDecryptToClipboard),
