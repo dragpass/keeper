@@ -9,10 +9,10 @@ package proto
 
 const (
 	// CredentialPolicyVersion is the only signed policy format Keeper accepts.
-	// Version 2 binds the execution nonce, the exact query and the body digest.
-	// A policy without it is refused before its signature is checked; there is
-	// no fallback to the format that bound neither.
-	CredentialPolicyVersion = 2
+	// Version 3 binds the execution nonce, the exact query, the body digest and
+	// the digest of the exact sealed payload (lv84). Any other version is
+	// refused before its signature is checked; there is no fallback.
+	CredentialPolicyVersion = 3
 
 	// CredentialExecutionNonceChars — 32 CSPRNG bytes as unpadded Base64URL.
 	CredentialExecutionNonceBytes = 32

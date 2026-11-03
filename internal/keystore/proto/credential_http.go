@@ -58,8 +58,8 @@ type CredentialPolicy struct {
 	ExecCwd        string            `json:"exec_cwd,omitempty"`
 	EnvTemplate    map[string]string `json:"env_template,omitempty"`
 
-	// PolicyVersion / ExecutionNonce / TargetQuery / BodySHA256 — the version 2
-	// binding. Keeper accepts only PolicyVersion 2 (CredentialPolicyVersion).
+	// PolicyVersion / ExecutionNonce / TargetQuery / BodySHA256 bind the
+	// execution request. Keeper accepts only CredentialPolicyVersion (3).
 	// ExecutionNonce is one this Keeper process minted with
 	// credential_execution_prepare and is consumed by the first request that
 	// presents it. TargetQuery is the exact raw query of target_url and
@@ -69,6 +69,11 @@ type CredentialPolicy struct {
 	ExecutionNonce string `json:"execution_nonce"`
 	TargetQuery    string `json:"target_query"`
 	BodySHA256     string `json:"body_sha256"`
+	// PayloadSHA256 is the lowercase hex SHA-256 of IV || ciphertext of the
+	// sealed payload the server released with this policy (version 3, lv84).
+	// The payload in the request must be exactly that one, so an older
+	// ciphertext presented with a newer policy is never opened.
+	PayloadSHA256 string `json:"payload_sha256"`
 
 	ApprovalMode     string `json:"approval_mode"`
 	Expiry           string `json:"expiry"`

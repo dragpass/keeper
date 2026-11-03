@@ -16,16 +16,16 @@ import (
 
 const credentialPolicySignatureAlg = "rsa-pss-sha256"
 
-// credentialPolicyCanonicalPrefix opens every version 2 canonical. A version 1
-// canonical starts with an entry UUID, so no signature over one can verify as
-// the other.
-const credentialPolicyCanonicalPrefix = "dragpass.credential-policy|2|"
+// credentialPolicyCanonicalPrefix opens every version 3 canonical. The version
+// is in the prefix (and a version 1 canonical started with an entry UUID), so
+// no signature over one format can verify as another.
+const credentialPolicyCanonicalPrefix = "dragpass.credential-policy|3|"
 
-// canonicalCredentialPolicy is the version 2 signing input:
+// canonicalCredentialPolicy is the version 3 signing input:
 //
-//	dragpass.credential-policy|2|<len>:<execution_nonce>|<len>:<target_query>|<len>:<body_sha256>|<body>
+//	dragpass.credential-policy|3|<len>:<execution_nonce>|<len>:<target_query>|<len>:<body_sha256>|<len>:<payload_sha256>|<body>
 //
-// The three binding fields sit at fixed positions and are length-prefixed, so
+// The four binding fields sit at fixed positions and are length-prefixed, so
 // a query or nonce containing "|" cannot move a boundary. <body> is the field
 // list every earlier format signed (canonicalCredentialPolicyBody). ariadne's
 // canonicalPolicyString builds the same bytes; both repositories assert the
@@ -35,6 +35,7 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		canonicalCredentialLengthPrefixed(p.ExecutionNonce) + "|" +
 		canonicalCredentialLengthPrefixed(p.TargetQuery) + "|" +
 		canonicalCredentialLengthPrefixed(p.BodySHA256) + "|" +
+		canonicalCredentialLengthPrefixed(p.PayloadSHA256) + "|" +
 		canonicalCredentialPolicyBody(p)
 }
 
@@ -172,6 +173,10 @@ func verifyCredentialPolicy(d Deps, aad []byte, p proto.CredentialPolicy) (bool,
 	if !isCredentialBodyDigest(p.BodySHA256) {
 		return false, errs.CodeResponse(errs.ErrCodeValidation,
 			"policy.body_sha256 must be empty or 64 lowercase hex characters")
+	}
+	if p.PayloadSHA256 == "" || !isCredentialBodyDigest(p.PayloadSHA256) {
+		return false, errs.CodeResponse(errs.ErrCodeValidation,
+			"policy.payload_sha256 must be 64 lowercase hex characters")
 	}
 	if p.SignatureAlg != credentialPolicySignatureAlg {
 		return false, errs.CodeResponse(errs.ErrCodeValidation, "unsupported credential policy signature algorithm")

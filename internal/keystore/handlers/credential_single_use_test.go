@@ -100,6 +100,7 @@ func singleUseRequest(t *testing.T, deps Deps, s *singleUseServer, query string,
 	policy.ExecutionNonce = nonce
 	policy.TargetQuery = query
 	policy.BodySHA256 = bodyDigestHex(body)
+	policy.PayloadSHA256 = payloadDigestForTest(t, ivB64, ctB64)
 	target := s.url + "/x"
 	if query != "" {
 		target += "?" + query
@@ -228,11 +229,11 @@ func TestCredentialHTTP_PolicyWithoutNonceRefused(t *testing.T) {
 	}
 }
 
-// The format that bound neither nonce, query nor body is refused outright,
-// before the signature is checked. The test verifier accepts every signature,
-// so only the version check can refuse these.
+// Every format but the current one (version 3, which also binds the payload)
+// is refused outright, before the signature is checked. The test verifier
+// accepts every signature, so only the version check can refuse these.
 func TestCredentialHTTP_LegacyPolicyVersionRefused(t *testing.T) {
-	for _, version := range []int{0, 1, 3} {
+	for _, version := range []int{0, 1, 2, 4} {
 		s := newSingleUseServer(t, nil)
 		deps, _, _ := newTestDeps(t)
 		req := singleUseRequest(t, deps, s, "", nil, mintCredentialNonce(t, deps))
@@ -458,7 +459,19 @@ func TestCredentialNonceStore_FullRefusesInsteadOfEvicting(t *testing.T) {
 	}
 }
 
-// armCredentialPolicy makes p a version 2 policy that signs exactly what the
+// payloadDigestOrEmpty is the policy's payload digest for a request's sealed
+// bytes, or "" when they do not decode (a row testing the decode refusal).
+func payloadDigestOrEmpty(ivB64, ctB64 string) string {
+	iv, err1 := base64.StdEncoding.DecodeString(ivB64)
+	ct, err2 := base64.StdEncoding.DecodeString(ctB64)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	sum := sha256.Sum256(append(append([]byte(nil), iv...), ct...))
+	return hex.EncodeToString(sum[:])
+}
+
+// armCredentialPolicy makes p a version 3 policy that signs exactly what the
 // request carries, with a nonce minted by deps: what a correct server returns
 // for that request. Tests that are not about the binding go through it so they
 // keep exercising what they were written for.
@@ -485,11 +498,17 @@ func handleArmedHTTP(t *testing.T, deps Deps, req proto.CredentialHTTPRequest) p
 	t.Helper()
 	body, _ := base64.StdEncoding.DecodeString(req.BodyB64)
 	req.Policy = armCredentialPolicy(t, deps, req.Policy, req.TargetURL, body)
+	if req.Policy.PayloadSHA256 == "" {
+		req.Policy.PayloadSHA256 = payloadDigestOrEmpty(req.IVB64, req.CiphertextB64)
+	}
 	return HandleCredentialHTTPRequest(deps, req)
 }
 
 func handleArmedExec(t *testing.T, deps Deps, req proto.CredentialExecRequest) proto.BaseResponse {
 	t.Helper()
 	req.Policy = armCredentialPolicy(t, deps, req.Policy, "", nil)
+	if req.Policy.PayloadSHA256 == "" {
+		req.Policy.PayloadSHA256 = payloadDigestOrEmpty(req.IVB64, req.CiphertextB64)
+	}
 	return HandleCredentialExecRequest(deps, req)
 }

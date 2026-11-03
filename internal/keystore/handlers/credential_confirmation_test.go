@@ -83,6 +83,7 @@ func newPersonalCredentialRig(t *testing.T) personalCredentialRig {
 	policy := credTestPolicy([]string{hostOf(t, ts.URL)}, []string{"GET"})
 	policy.HeaderTemplate = header
 	policy = armCredentialPolicy(t, deps, policy, ts.URL+"/x", nil)
+	policy.PayloadSHA256 = payloadDigestOrEmpty(base64.StdEncoding.EncodeToString(iv), base64.StdEncoding.EncodeToString(ct))
 	return personalCredentialRig{
 		deps:  deps,
 		hits:  hits,
