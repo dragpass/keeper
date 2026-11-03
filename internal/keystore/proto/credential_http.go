@@ -58,8 +58,8 @@ type CredentialPolicy struct {
 	ExecCwd        string            `json:"exec_cwd,omitempty"`
 	EnvTemplate    map[string]string `json:"env_template,omitempty"`
 
-	// PolicyVersion / ExecutionNonce / TargetQuery / BodySHA256 — the version 2
-	// binding. Keeper accepts only PolicyVersion 2 (CredentialPolicyVersion).
+	// PolicyVersion / ExecutionNonce / TargetQuery / BodySHA256 bind the
+	// execution request. Keeper accepts only CredentialPolicyVersion (3).
 	// ExecutionNonce is one this Keeper process minted with
 	// credential_execution_prepare and is consumed by the first request that
 	// presents it. TargetQuery is the exact raw query of target_url and
