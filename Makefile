@@ -269,10 +269,15 @@ $(MAC_PKG_AMD64) $(MAC_PKG_ARM64):
             $@
 	@echo "Successfully built $@"
 
+# Pinned to the digest of the last release-check run that built the
+# installer (2026-10-20). The tag alone would let a new image change the
+# installer build silently.
+INNOSETUP_IMAGE ?= amake/innosetup@sha256:e003376ba818547275fe10c95e2a29be0f2d12d45e9eb8f205b6672dc5685bb1
+
 pkg-windows: $(WIN_PKG)
 $(WIN_PKG): $(WIN_BIN) setup.iss
 	@echo "Building Windows installer via Docker: $(WIN_PKG)..."
-	@docker run --rm -v "$$PWD:/work" amake/innosetup "/DMyAppVersion=$(VERSION)" setup.iss
+	@docker run --rm -v "$$PWD:/work" $(INNOSETUP_IMAGE) "/DMyAppVersion=$(VERSION)" setup.iss
 	@echo "Successfully built Windows installer."
 
 pkg-linux: pkg-linux-amd64 pkg-linux-arm64
