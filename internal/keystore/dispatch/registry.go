@@ -135,6 +135,7 @@ var actionFragments = []actionFragment{
 	identityActions,
 	serverKeyActions,
 	groupActions,
+	changeTrackActions,
 	peerKeyActions,
 	credentialActions,
 	messageActions,

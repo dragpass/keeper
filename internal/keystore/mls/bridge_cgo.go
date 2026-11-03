@@ -154,6 +154,8 @@ type Session struct {
 func Available() bool { return true }
 
 func Version() (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var buf C.DpBuf
 	if rc := C.dpmls_version(&buf); rc != 0 {
 		return "", statusError(rc)
@@ -164,6 +166,8 @@ func Version() (string, error) {
 // generateSignatureKey is for tests that need a throwaway member. A real
 // session signs with the device's declared key, which NewDeviceSession loads.
 func generateSignatureKey() (secret, public []byte, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var sk, pk C.DpBuf
 	if rc := C.dpmls_signature_key_generate(&sk, &pk); rc != 0 {
 		return nil, nil, statusError(rc)
@@ -180,6 +184,8 @@ func generateSignatureKey() (secret, public []byte, err error) {
 // Unexported so that no caller can hand a group a signer of its own: a key no
 // declaration vouches for would make the leaf unacceptable to every peer.
 func openSession(identity, secretKey, publicKey, declaration []byte) (*Session, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var handle *C.DpSession
 	rc := C.dpmls_session_new(
 		bytePtr(identity), C.size_t(len(identity)),
@@ -222,6 +228,8 @@ func (s *Session) live() (*C.DpSession, error) {
 // payload, in its context. Roles are required: a group without them takes no
 // Commit (chatstate/roles.go), so making one would only make a dead room.
 func (s *Session) CreateGroup(groupID, roles []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if len(roles) == 0 {
 		return failed("a group is created with its roles")
 	}
@@ -245,6 +253,8 @@ func (s *Session) CreateGroup(groupID, roles []byte) error {
 // reference, and its private entry. Nothing of the private keys stays in the
 // session; private is the caller's to persist and wipe.
 func (s *Session) keyPackage(notAfterCap uint64) (message, reference, private []byte, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -261,6 +271,8 @@ func (s *Session) keyPackage(notAfterCap uint64) (message, reference, private []
 // installKeyPackage hands the session one private entry for the next join.
 // The join drops it again, whether it succeeds or not.
 func (s *Session) installKeyPackage(private []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -275,6 +287,8 @@ func (s *Session) installKeyPackage(private []byte) error {
 // welcomeKeyPackageRefs lists the KeyPackage references a Welcome is
 // addressed to.
 func welcomeKeyPackageRefs(welcome []byte) ([][]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var buf C.DpBuf
 	rc := C.dpmls_welcome_key_package_refs(bytePtr(welcome), C.size_t(len(welcome)), &buf)
 	runtime.KeepAlive(welcome)
@@ -294,6 +308,8 @@ func welcomeKeyPackageRefs(welcome []byte) ([][]byte, error) {
 // the whole Commit otherwise. CommitAddMembersVerified is the path that does
 // both.
 func (s *Session) CommitAddMembers(keyPackages [][]byte) (commit, welcome []byte, expectedEpoch uint64, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -318,6 +334,8 @@ func (s *Session) CommitAddMembers(keyPackages [][]byte) (commit, welcome []byte
 // CommitUpdate builds a Commit with no proposals, which rotates this device's
 // own key material. Pending in the same way CommitAddMember is.
 func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -338,6 +356,8 @@ func (s *Session) CommitUpdate() (commit []byte, expectedEpoch uint64, err error
 // same way CommitAddMember is: the leaves stay in Roster until
 // ApplyPendingCommit.
 func (s *Session) CommitRemoveMembers(leafIndices []uint32) (commit []byte, expectedEpoch uint64, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -389,6 +409,8 @@ func (s *Session) CommitReplaceMembers(
 
 // Roster is every leaf of the confirmed tree. A pending Commit is not in it.
 func (s *Session) Roster() ([]Leaf, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -406,6 +428,8 @@ func (s *Session) Roster() ([]Leaf, error) {
 // does: this is the only call that moves the group to the epoch a Commit this
 // device built would create.
 func (s *Session) ApplyPendingCommit() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -419,6 +443,8 @@ func (s *Session) ApplyPendingCommit() error {
 // carries. Processing somebody else's Commit does the same thing on its own;
 // this is for settling an outcome without the winning message in hand.
 func (s *Session) ClearPendingCommit() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -429,6 +455,8 @@ func (s *Session) ClearPendingCommit() error {
 }
 
 func (s *Session) HasPendingCommit() (bool, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -445,6 +473,8 @@ func (s *Session) HasPendingCommit() (bool, error) {
 // GroupID is the MLS group id. Groups this Keeper creates use the
 // conversation id, which is what a join is checked against.
 func (s *Session) GroupID() ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -462,6 +492,8 @@ func (s *Session) GroupID() ([]byte, error) {
 // what lets the rollback anchor follow this value without mistaking a lost CAS
 // for a rewind (design §7.3.3).
 func (s *Session) Epoch() (uint64, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -476,6 +508,8 @@ func (s *Session) Epoch() (uint64, error) {
 }
 
 func (s *Session) EpochComparisonDigest(conversationID []byte) (uint64, []byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -493,6 +527,8 @@ func (s *Session) EpochComparisonDigest(conversationID []byte) (uint64, []byte, 
 }
 
 func (s *Session) Join(welcome []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -509,6 +545,8 @@ func (s *Session) Join(welcome []byte) error {
 // sender's signature and the AEAD tag, which is what makes a declaration
 // carried in it the sender's word rather than the server's.
 func (s *Session) Encrypt(plaintext, authenticatedData []byte) ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -531,6 +569,8 @@ func (s *Session) Encrypt(plaintext, authenticatedData []byte) ([]byte, error) {
 }
 
 func (s *Session) Process(message []byte) (Processed, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -579,6 +619,8 @@ func (s *Session) Process(message []byte) (Processed, error) {
 // application message: SenderIdentity is the sending leaf's credential in
 // that epoch's tree.
 func (s *Session) ProcessArchived(message []byte) (Processed, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -620,6 +662,8 @@ func (s *Session) ProcessArchived(message []byte) (Processed, error) {
 // approve hands the Rust gate the leaves Go verified for the next group
 // operation on this session. That operation consumes the list either way.
 func (s *Session) approve(leaves []Leaf) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -636,6 +680,8 @@ func (s *Session) approve(leaves []Leaf) error {
 // the next group operation on this session. That operation consumes the list
 // either way.
 func (s *Session) approveRemovals(leaves []Leaf) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -651,6 +697,8 @@ func (s *Session) approveRemovals(leaves []Leaf) error {
 // setNextRoles hands the Rust side the roles payload the next create or
 // Commit build writes into the group context. Empty clears it.
 func (s *Session) setNextRoles(payload []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -665,6 +713,8 @@ func (s *Session) setNextRoles(payload []byte) error {
 // setNextCommitAAD hands the Rust side the authenticated data the next Commit
 // build carries. Empty carries none.
 func (s *Session) setNextCommitAAD(aad []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -679,6 +729,8 @@ func (s *Session) setNextCommitAAD(aad []byte) error {
 // groupAuthority reads the group context's roles payload (nil when it has
 // none).
 func (s *Session) groupAuthority() ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -695,6 +747,8 @@ func (s *Session) groupAuthority() ([]byte, error) {
 // processCollect reports the leaves message would bring in and what the
 // Commit does, and leaves the group exactly as it was.
 func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -712,6 +766,8 @@ func (s *Session) processCollect(message []byte) ([]Leaf, CommitShape, error) {
 
 // joinCollect reports every leaf of a Welcome's tree and keeps no group.
 func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -730,6 +786,8 @@ func (s *Session) joinCollect(welcome []byte) ([]Leaf, error) {
 // keyPackageLeaf reads the leaf a KeyPackage would add, without a session and
 // without applying anything.
 func keyPackageLeaf(keyPackage []byte) (Leaf, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var buf C.DpBuf
 	rc := C.dpmls_key_package_leaf(bytePtr(keyPackage), C.size_t(len(keyPackage)), &buf)
 	runtime.KeepAlive(keyPackage)
@@ -748,6 +806,8 @@ func keyPackageLeaf(keyPackage []byte) (Leaf, error) {
 
 // keyPackageNotAfter is the end of a KeyPackage's lifetime in Unix seconds.
 func keyPackageNotAfter(keyPackage []byte) (uint64, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var out C.uint64_t
 	rc := C.dpmls_key_package_not_after(bytePtr(keyPackage), C.size_t(len(keyPackage)), &out)
 	runtime.KeepAlive(keyPackage)
@@ -758,6 +818,8 @@ func keyPackageNotAfter(keyPackage []byte) (uint64, error) {
 }
 
 func WireFormOf(message []byte) (WireForm, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var form C.uint8_t
 	rc := C.dpmls_wire_form(bytePtr(message), C.size_t(len(message)), &form)
 	runtime.KeepAlive(message)
@@ -770,6 +832,8 @@ func WireFormOf(message []byte) (WireForm, error) {
 // ExportSecret is MLS-Exporter(label, context, n) of the confirmed epoch. The
 // result is a key: the caller wipes it.
 func (s *Session) ExportSecret(label, context []byte, n int) ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -791,6 +855,8 @@ func (s *Session) ExportSecret(label, context []byte, n int) ([]byte, error) {
 // create, and names that epoch. The Commit stays pending and the confirmed
 // epoch does not move.
 func (s *Session) ExportPendingSecret(label, context []byte, n int) ([]byte, uint64, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -818,6 +884,8 @@ func (s *Session) ExportPendingSecret(label, context []byte, n int) ([]byte, uin
 // rather than a claim — whatever holds the conversation lock has to span from
 // here to the encryption that takes the number.
 func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -840,6 +908,8 @@ func (s *Session) SendPosition() (epoch uint64, leafIndex, generation uint32, er
 // this boundary. The advance is only in memory until the caller persists the
 // state.
 func (s *Session) BurnGeneration() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -856,6 +926,8 @@ func (s *Session) BurnGeneration() error {
 // write is the only way to hold it. Nothing is durable until the caller stores
 // what this returns.
 func (s *Session) Flush() ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -870,6 +942,8 @@ func (s *Session) Flush() ([]byte, error) {
 }
 
 func (s *Session) Load(blob []byte) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.live()
@@ -901,6 +975,11 @@ func takeBuf(buf *C.DpBuf) []byte {
 	return C.GoBytes(unsafe.Pointer(buf.ptr), C.int(buf.len))
 }
 
+// statusError reads the library's last error, which the library keeps in a
+// thread-local slot, with a second cgo call. Every function that calls it
+// locks its goroutine to the OS thread first (runtime.LockOSThread), so the
+// failing call and this read run on one thread; otherwise a goroutine moved
+// between them reads another call's message.
 func statusError(rc C.int32_t) error {
 	if rc == 0 {
 		return nil
