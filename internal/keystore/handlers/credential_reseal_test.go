@@ -80,6 +80,10 @@ func TestGroupEncryptBoundTracked_NonUTF8ValueIsNotResealed(t *testing.T) {
 	if data.CredentialPayload != nil || data.CiphertextB64 == "" || data.ChangeRecord.Seq != 1 {
 		t.Fatal("want token and record without a payload")
 	}
+	// The caller learns why, so the server can name a recovery that works.
+	if data.CredentialPayloadSkipped != "unsupported_value" {
+		t.Fatalf("skipped reason %q, want unsupported_value", data.CredentialPayloadSkipped)
+	}
 }
 
 func TestDEKUnwrapAndEncryptBoundTracked_ResealsUnderTheAccountScope(t *testing.T) {

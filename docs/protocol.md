@@ -2557,7 +2557,7 @@ AAD; the caller supplies neither:
 `credential_payload` is `{ iv_b64, ciphertext_b64, dek_version, aad_hash_b64 }`
 (`aad_hash_b64` is the standard Base64 SHA-256 of the AAD string). It is absent
 when not asked for, and when the value is not valid UTF-8, since JSON would
-change it. A reseal never blocks or alters the token or the record, and the
+change it; then `credential_payload_skipped: "unsupported_value"` says so. A reseal never blocks or alters the token or the record, and the
 value is never returned.
 
 ## Error codes

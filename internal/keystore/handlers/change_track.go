@@ -123,11 +123,12 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 	}
 	d.Logger.Println(action + " successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupEncryptBoundTrackedResponseData{
-		IVB64:             base64.StdEncoding.EncodeToString(iv),
-		CiphertextB64:     base64.StdEncoding.EncodeToString(ciphertext),
-		ChangeVerdict:     string(verdict),
-		ChangeRecord:      changeRecordData(record),
-		CredentialPayload: payload,
+		IVB64:                    base64.StdEncoding.EncodeToString(iv),
+		CiphertextB64:            base64.StdEncoding.EncodeToString(ciphertext),
+		ChangeVerdict:            string(verdict),
+		ChangeRecord:             changeRecordData(record),
+		CredentialPayload:        payload,
+		CredentialPayloadSkipped: credentialPayloadSkipped(req.SealCredentialPayload, payload, plaintext),
 	}}
 }
 
@@ -202,11 +203,12 @@ func HandleDEKUnwrapAndEncryptBoundTracked(d Deps, req proto.DEKUnwrapAndEncrypt
 		}
 		d.Logger.Println(action + " successful")
 		return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndEncryptBoundTrackedResponseData{
-			IVB64:             base64.StdEncoding.EncodeToString(iv),
-			CiphertextB64:     base64.StdEncoding.EncodeToString(ciphertext),
-			ChangeVerdict:     string(verdict),
-			ChangeRecord:      changeRecordData(record),
-			CredentialPayload: payload,
+			IVB64:                    base64.StdEncoding.EncodeToString(iv),
+			CiphertextB64:            base64.StdEncoding.EncodeToString(ciphertext),
+			ChangeVerdict:            string(verdict),
+			ChangeRecord:             changeRecordData(record),
+			CredentialPayload:        payload,
+			CredentialPayloadSkipped: credentialPayloadSkipped(req.SealCredentialPayload, payload, plaintext),
 		}}
 	})
 }

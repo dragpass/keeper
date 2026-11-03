@@ -106,6 +106,9 @@ type GroupEncryptBoundTrackedResponseData struct {
 	// CredentialPayload is present only when asked for and the value fits
 	// the payload.
 	CredentialPayload *CredentialPayloadSealed `json:"credential_payload,omitempty"`
+	// CredentialPayloadSkipped says why an asked-for payload is absent:
+	// "unsupported_value" (not valid UTF-8). Empty otherwise.
+	CredentialPayloadSkipped string `json:"credential_payload_skipped,omitempty"`
 }
 
 // DEKUnwrapAndEncryptBoundTrackedRequest is DEKUnwrapAndEncryptBoundRequest
@@ -143,6 +146,8 @@ type DEKUnwrapAndEncryptBoundTrackedResponseData struct {
 	ChangeRecord  ChangeRecord `json:"change_record"`
 	// CredentialPayload — see GroupEncryptBoundTrackedResponseData.
 	CredentialPayload *CredentialPayloadSealed `json:"credential_payload,omitempty"`
+	// CredentialPayloadSkipped — see GroupEncryptBoundTrackedResponseData.
+	CredentialPayloadSkipped string `json:"credential_payload_skipped,omitempty"`
 }
 
 // CredentialPayloadSealed is a credential payload resealed from the value of

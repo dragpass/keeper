@@ -55,6 +55,18 @@ func credentialPayloadJSON(value []byte) []byte {
 // resealCredentialPayload seals value as a credential payload under dek and
 // the canonical AAD. A value that cannot be carried, or a sealing failure,
 // yields nil: the reseal is a by-product and never blocks the token.
+// CredentialPayloadSkippedUnsupported — the value cannot be carried in the
+// payload without changing it (not valid UTF-8).
+const credentialPayloadSkippedUnsupported = "unsupported_value"
+
+// credentialPayloadSkipped is the reason an asked-for payload is absent.
+func credentialPayloadSkipped(asked bool, payload *proto.CredentialPayloadSealed, value []byte) string {
+	if !asked || payload != nil || utf8.Valid(value) {
+		return ""
+	}
+	return credentialPayloadSkippedUnsupported
+}
+
 func resealCredentialPayload(random io.Reader, dek []byte, scopeID, entryID string, dekVersion int, value []byte) *proto.CredentialPayloadSealed {
 	payload := credentialPayloadJSON(value)
 	if payload == nil {
