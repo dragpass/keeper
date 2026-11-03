@@ -182,7 +182,10 @@ jobs:
 
   windows:
     name: Windows (mingw cross-build)
-    runs-on: ubuntu-latest
+    # Wine in the Inno Setup image fails with "wineserver: socket: Function
+    # not implemented" on ubuntu-26.04 runners with the same image digest
+    # that succeeds on ubuntu-24.04, so the runner is pinned with the image.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
