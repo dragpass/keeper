@@ -62,3 +62,31 @@ func TestCredentialExec_LegacyPolicyVersionStartsNoProcess(t *testing.T) {
 		t.Fatal("a legacy-format policy started a process")
 	}
 }
+
+// lv84 L2 (review item 7): the exec sink, like the HTTP one, opens only the
+// payload the policy names; another sealed payload of the item starts no
+// process and leaves the nonce in place.
+func TestCredentialExec_OpensOnlyThePayloadThePolicyNames(t *testing.T) {
+	sh := credExecFixtureShell(t)
+	dir := t.TempDir()
+	marker := dir + "/runs"
+	deps, _, _ := newTestDeps(t)
+	handle, groupRaw := openSessionForFreshKey(t, deps)
+	nonce := mintCredentialNonce(t, deps)
+	other := credExecRequest(t, groupRaw, handle, sh, []string{"-c", "echo run >> " + marker}, dir, nil)
+	req := credExecRequest(t, groupRaw, handle, sh, []string{"-c", "echo run >> " + marker}, dir,
+		func(r *proto.CredentialExecRequest) {
+			r.Policy.PolicyVersion = proto.CredentialPolicyVersion
+			r.Policy.ExecutionNonce = nonce
+			r.Policy.PayloadSHA256 = payloadDigestOrEmpty(r.IVB64, r.CiphertextB64)
+		})
+	stale := req
+	stale.IVB64, stale.CiphertextB64 = other.IVB64, other.CiphertextB64
+	requireRefused(t, HandleCredentialExecRequest(deps, stale), errs.ErrCodeCryptoFailure)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a payload the policy does not name started a process")
+	}
+	if resp := HandleCredentialExecRequest(deps, req); !resp.Success {
+		t.Fatalf("the refused request spent the nonce: %s (%s)", resp.Error, resp.ErrorCode)
+	}
+}
