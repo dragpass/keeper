@@ -81,6 +81,7 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 
 	var iv, ciphertext []byte
 	var record changetrack.Sealed
+	var payload *proto.CredentialPayloadSealed
 	useErr := d.GroupSessions.UseLabeled(tc.GroupHandle, func(groupDEK []byte, label sessions.Label) error {
 		if err := checkBoundLabel(label, tc); err != nil {
 			return err
@@ -111,6 +112,9 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 		if err != nil {
 			return errors.New("encrypt failed")
 		}
+		if req.SealCredentialPayload {
+			payload = resealCredentialPayload(d.Random(), groupDEK, req.OrgID, req.EntryID, tc.DekVersion, plaintext)
+		}
 		iv, ciphertext, record = i, c, rec
 		return nil
 	})
@@ -119,10 +123,11 @@ func HandleGroupEncryptBoundTracked(d Deps, req proto.GroupEncryptBoundTrackedRe
 	}
 	d.Logger.Println(action + " successful")
 	return proto.BaseResponse{Success: true, Data: proto.GroupEncryptBoundTrackedResponseData{
-		IVB64:         base64.StdEncoding.EncodeToString(iv),
-		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
-		ChangeVerdict: string(verdict),
-		ChangeRecord:  changeRecordData(record),
+		IVB64:             base64.StdEncoding.EncodeToString(iv),
+		CiphertextB64:     base64.StdEncoding.EncodeToString(ciphertext),
+		ChangeVerdict:     string(verdict),
+		ChangeRecord:      changeRecordData(record),
+		CredentialPayload: payload,
 	}}
 }
 
@@ -191,12 +196,17 @@ func HandleDEKUnwrapAndEncryptBoundTracked(d Deps, req proto.DEKUnwrapAndEncrypt
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "encrypt failed")
 		}
+		var payload *proto.CredentialPayloadSealed
+		if req.SealCredentialPayload {
+			payload = resealCredentialPayload(d.Random(), dek, accountID, req.EntryID, proto.BoundPersonalDekVersion, plaintext)
+		}
 		d.Logger.Println(action + " successful")
 		return proto.BaseResponse{Success: true, Data: proto.DEKUnwrapAndEncryptBoundTrackedResponseData{
-			IVB64:         base64.StdEncoding.EncodeToString(iv),
-			CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
-			ChangeVerdict: string(verdict),
-			ChangeRecord:  changeRecordData(record),
+			IVB64:             base64.StdEncoding.EncodeToString(iv),
+			CiphertextB64:     base64.StdEncoding.EncodeToString(ciphertext),
+			ChangeVerdict:     string(verdict),
+			ChangeRecord:      changeRecordData(record),
+			CredentialPayload: payload,
 		}}
 	})
 }

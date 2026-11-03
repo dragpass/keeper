@@ -7,6 +7,8 @@
 
 package proto
 
+import "strconv"
+
 // Actions.
 const (
 	ActionGroupEncryptBoundTracked        = "group_encrypt_bound_tracked"
@@ -60,6 +62,9 @@ type GroupEncryptBoundTrackedRequest struct {
 	// record are still sealed. It is checked by the handler, not here, so a
 	// malformed decision never blocks the encryption.
 	CompareDecision *ChangeCompareDecision `json:"compare_decision,omitempty"`
+	// SealCredentialPayload also seals the entry's credential payload from
+	// the same plaintext (lv84).
+	SealCredentialPayload bool `json:"seal_credential_payload,omitempty"`
 }
 
 // TokenContext — tracked tokens carry no audit table.
@@ -98,6 +103,9 @@ type GroupEncryptBoundTrackedResponseData struct {
 	CiphertextB64 string       `json:"ciphertext_b64"`
 	ChangeVerdict string       `json:"change_verdict"`
 	ChangeRecord  ChangeRecord `json:"change_record"`
+	// CredentialPayload is present only when asked for and the value fits
+	// the payload.
+	CredentialPayload *CredentialPayloadSealed `json:"credential_payload,omitempty"`
 }
 
 // DEKUnwrapAndEncryptBoundTrackedRequest is DEKUnwrapAndEncryptBoundRequest
@@ -109,6 +117,8 @@ type DEKUnwrapAndEncryptBoundTrackedRequest struct {
 	PlaintextB64    string        `json:"plaintext_b64"` // secret in REQUEST only; never logged
 	EntryID         string        `json:"entry_id"`
 	PreviousRecord  *ChangeRecord `json:"previous_record,omitempty"`
+	// SealCredentialPayload — see GroupEncryptBoundTrackedRequest.
+	SealCredentialPayload bool `json:"seal_credential_payload,omitempty"`
 }
 
 func (r DEKUnwrapAndEncryptBoundTrackedRequest) Validate() error {
@@ -131,4 +141,24 @@ type DEKUnwrapAndEncryptBoundTrackedResponseData struct {
 	CiphertextB64 string       `json:"ciphertext_b64"`
 	ChangeVerdict string       `json:"change_verdict"`
 	ChangeRecord  ChangeRecord `json:"change_record"`
+	// CredentialPayload — see GroupEncryptBoundTrackedResponseData.
+	CredentialPayload *CredentialPayloadSealed `json:"credential_payload,omitempty"`
+}
+
+// CredentialPayloadSealed is a credential payload resealed from the value of
+// a tracked encrypt (lv84): opaque bytes, the DEK version that sealed them
+// and the SHA-256 of the canonical AAD Keeper bound them to. Never the value.
+type CredentialPayloadSealed struct {
+	IVB64         string `json:"iv_b64"`
+	CiphertextB64 string `json:"ciphertext_b64"`
+	DekVersion    int    `json:"dek_version"`
+	AADHashB64    string `json:"aad_hash_b64"`
+}
+
+// CredentialPayloadAAD is the canonical credential AAD
+// "scope|entry_id|credential|1|dek_version" (schema version 1). The scope is
+// the organization id for a group payload and the account id for a personal
+// one. It must match the Extension's canonicalCredentialAad byte for byte.
+func CredentialPayloadAAD(scopeID, entryID string, dekVersion int) string {
+	return scopeID + "|" + entryID + "|credential|1|" + strconv.Itoa(dekVersion)
 }

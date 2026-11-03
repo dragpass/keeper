@@ -2486,8 +2486,8 @@ failure never blocks or alters the token.
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`group_encrypt_bound_tracked`|`group_encrypt_bound` fields without `audit_table_id`, plus `entry_id`, `previous_record?`, `previous_group_handle?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record }`|Seals the bound token and the next record from the same plaintext under the handle's DEK. A previous record under another DEK version is opened through `previous_group_handle` (a labeled handle must name the same org, group and that version; an audit-only, closed or mismatched handle gives `unknown`). Refused like `group_encrypt_bound` on an expired expiry, a decrypt-only or audit-only handle and a scope mismatch. `plaintext_b64` is `secret`.|
-|`dek_unwrap_and_encrypt_bound_tracked`|`dek_unwrap_and_encrypt_bound` fields plus `entry_id`, `previous_record?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record }`|Personal sibling. The scope is the signed-in account binding; a record of another account is `unknown`.|
+|`group_encrypt_bound_tracked`|`group_encrypt_bound` fields without `audit_table_id`, plus `entry_id`, `previous_record?`, `previous_group_handle?`, `seal_credential_payload?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record, credential_payload? }`|Seals the bound token and the next record from the same plaintext under the handle's DEK. A previous record under another DEK version is opened through `previous_group_handle` (a labeled handle must name the same org, group and that version; an audit-only, closed or mismatched handle gives `unknown`). Refused like `group_encrypt_bound` on an expired expiry, a decrypt-only or audit-only handle and a scope mismatch. `plaintext_b64` is `secret`.|
+|`dek_unwrap_and_encrypt_bound_tracked`|`dek_unwrap_and_encrypt_bound` fields plus `entry_id`, `previous_record?`, `seal_credential_payload?`|`{ iv_b64, ciphertext_b64, change_verdict, change_record, credential_payload? }`|Personal sibling. The scope is the signed-in account binding; a record of another account is `unknown`.|
 |`group_change_compare_prepare`|`group_handle`, `org_id`, `group_id`, `dek_version`, `entry_id`, `previous_record`, `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, group_id, dek_version, grant_digest, record_digest, operation_digest }`|Native Messaging only, strict decode, 16 KiB. Requires a live labeled legacy or decrypt-only handle for exactly that scope with a grant digest, the signed-in binding and a device id. Mints a ten-second one-use challenge bound to the handle, the entry and `record_digest` (SHA-256 over `dragpass.drag.change.record\|1`, the length-prefixed IV and ciphertext, the big-endian DEK version and sequence). Opens nothing. The tracked encrypt that carries the signed decision in `compare_decision` must use the same handle, entry and previous record.|
 |`group_change_baseline_prepare`|`group_handle`, `token`, `org_id`, `group_id`, `dek_version`, `token_expiry`, `iv_b64`, `ciphertext_b64`, `entry_id`, `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, group_id, dek_version, grant_digest, operation_digest, token_fingerprint }`|Native Messaging only, strict decode, 16 KiB. Admits only an unexpired bound token (`TOKEN_LEGACY_REFUSED`, `TOKEN_EXPIRED` before anything else), a live labeled legacy or decrypt-only handle for exactly that scope with a grant digest, a signed-in binding and a device id. Mints a ten-second one-use challenge in its own store and commits to the exact token, Keeper-built token AAD, IV, ciphertext, handle and entry. Opens nothing.|
 |`group_change_baseline_execute`|`prepare` (the exact request), `decision`|`{ change_verdict: "baseline", change_record }`|Native Messaging only, strict decode, 20 KiB. Recomputes the operation digest and token fingerprint, requires the decision to name the same entry, scope, token id and session, verifies the server signature over the canonical below, rechecks the live binding generation, device and handle label, consumes the challenge, rechecks decision and token expiry before and after opening, and seals record `seq` 1. A refusal returns no record.|
@@ -2530,6 +2530,25 @@ personal entry gets its baseline from its first tracked save.
 
 Nothing here confirms that an external service changed: the server records
 the verdict a client reported and a person's confirmation separately.
+
+#### Credential payload reseal (lv84)
+
+With `seal_credential_payload: true` a tracked encrypt also seals the entry's
+credential payload from the same plaintext, so the token and the payload MCP
+injects cannot hold different values. Keeper builds both the payload and its
+AAD; the caller supplies neither:
+
+- payload: `{"type":"api_key","secret":{"authorization_scheme":"Bearer","token":<value>}}`,
+  the shape auto-prepare writes;
+- AAD: `scope|entry_id|credential|1|dek_version`, where the scope is `org_id`
+  and the token's `dek_version` for a group token, and the signed-in account
+  binding and version 1 for a personal token.
+
+`credential_payload` is `{ iv_b64, ciphertext_b64, dek_version, aad_hash_b64 }`
+(`aad_hash_b64` is the standard Base64 SHA-256 of the AAD string). It is absent
+when not asked for, and when the value is not valid UTF-8, since JSON would
+change it. A reseal never blocks or alters the token or the record, and the
+value is never returned.
 
 ## Error codes
 
