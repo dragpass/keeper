@@ -262,20 +262,23 @@ func TestCredentialPolicyValidateRequiresSignatureEnvelope(t *testing.T) {
 	}
 }
 
-// TestCanonicalCredentialPolicy_SharedFixtureVersion2 — the version 2 canonical
-// of the shared fixture with a nonce, a query with a duplicate parameter and a
-// body digest. ariadne's TestCanonicalPolicyString_SharedFixtureVersion2 asserts
-// the same literal; the two must never differ by one byte.
-func TestCanonicalCredentialPolicy_SharedFixtureVersion2(t *testing.T) {
+// TestCanonicalCredentialPolicy_SharedFixtureVersion3 — the version 3 canonical
+// of the shared fixture with a nonce, a query with a duplicate parameter, a
+// body digest and a payload digest. ariadne's
+// TestCanonicalPolicyString_SharedFixtureVersion3 asserts the same literal; the
+// two must never differ by one byte.
+func TestCanonicalCredentialPolicy_SharedFixtureVersion3(t *testing.T) {
 	p := credSharedFixturePolicy()
-	p.PolicyVersion = 2
+	p.PolicyVersion = 3
 	p.ExecutionNonce = "Zm9vYmFyLWNyZWRlbnRpYWwtbm9uY2UtZml4dHVyZTA"
 	p.TargetQuery = "a=1&b=2&b=3"
 	p.BodySHA256 = "4d4bbe59c6aad22442cde199a6a8a5f034405fcd78fb5a81c24ef249de1c45f1"
+	p.PayloadSHA256 = "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
 	got := canonicalCredentialPolicy(p)
-	want := "dragpass.credential-policy|2|" +
+	want := "dragpass.credential-policy|3|" +
 		"43:Zm9vYmFyLWNyZWRlbnRpYWwtbm9uY2UtZml4dHVyZTA|11:a=1&b=2&b=3|" +
 		"64:4d4bbe59c6aad22442cde199a6a8a5f034405fcd78fb5a81c24ef249de1c45f1|" +
+		"64:8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4|" +
 		"11111111-1111-1111-1111-111111111111|3|api.example.com|GET,POST|/v1/*|" +
 		"9:X-API-Key16:{{secret.token}}|false|false|api.example.com|/v1/users|GET|" +
 		"2026-07-18T12:00:00Z"

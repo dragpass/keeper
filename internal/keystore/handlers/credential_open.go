@@ -12,6 +12,9 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -86,6 +89,13 @@ func openCredentialForSink(d Deps, common credentialRequestCommon,
 	// The signed policy is trusted only after verification above.
 	if matched, failure := matchPolicy(); !matched {
 		return nil, cleanup, failure, false
+	}
+	// The payload must be exactly the one the server released with this
+	// policy (lv84): an older ciphertext of the same item, which the AAD alone
+	// would still open, is refused here, before the nonce is spent.
+	if !payloadMatchesPolicy(iv, ciphertext, common.policy.PayloadSHA256) {
+		return nil, cleanup, errs.CodeResponse(errs.ErrCodeCryptoFailure,
+			"sealed payload is not the one the signed policy names"), false
 	}
 	// A personal DEK needs no further server grant, so the server's fresh
 	// confirmation is required here instead. Checked before the nonce is
@@ -208,4 +218,17 @@ func withCredentialDEK(d Deps, src credentialKeySource, fn func(dek []byte) erro
 	defer secure.Zeroize(dek)
 
 	return fn(dek)
+}
+
+// payloadMatchesPolicy compares SHA-256(iv || ciphertext) with the policy's
+// payload digest in constant time.
+func payloadMatchesPolicy(iv, ciphertext []byte, wantHex string) bool {
+	want, err := hex.DecodeString(wantHex)
+	if err != nil || len(want) != sha256.Size {
+		return false
+	}
+	h := sha256.New()
+	h.Write(iv)
+	h.Write(ciphertext)
+	return subtle.ConstantTimeCompare(h.Sum(nil), want) == 1
 }

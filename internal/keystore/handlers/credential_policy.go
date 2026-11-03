@@ -19,7 +19,7 @@ const credentialPolicySignatureAlg = "rsa-pss-sha256"
 // credentialPolicyCanonicalPrefix opens every version 2 canonical. A version 1
 // canonical starts with an entry UUID, so no signature over one can verify as
 // the other.
-const credentialPolicyCanonicalPrefix = "dragpass.credential-policy|2|"
+const credentialPolicyCanonicalPrefix = "dragpass.credential-policy|3|"
 
 // canonicalCredentialPolicy is the version 2 signing input:
 //
@@ -35,6 +35,7 @@ func canonicalCredentialPolicy(p proto.CredentialPolicy) string {
 		canonicalCredentialLengthPrefixed(p.ExecutionNonce) + "|" +
 		canonicalCredentialLengthPrefixed(p.TargetQuery) + "|" +
 		canonicalCredentialLengthPrefixed(p.BodySHA256) + "|" +
+		canonicalCredentialLengthPrefixed(p.PayloadSHA256) + "|" +
 		canonicalCredentialPolicyBody(p)
 }
 
@@ -172,6 +173,10 @@ func verifyCredentialPolicy(d Deps, aad []byte, p proto.CredentialPolicy) (bool,
 	if !isCredentialBodyDigest(p.BodySHA256) {
 		return false, errs.CodeResponse(errs.ErrCodeValidation,
 			"policy.body_sha256 must be empty or 64 lowercase hex characters")
+	}
+	if p.PayloadSHA256 == "" || !isCredentialBodyDigest(p.PayloadSHA256) {
+		return false, errs.CodeResponse(errs.ErrCodeValidation,
+			"policy.payload_sha256 must be 64 lowercase hex characters")
 	}
 	if p.SignatureAlg != credentialPolicySignatureAlg {
 		return false, errs.CodeResponse(errs.ErrCodeValidation, "unsupported credential policy signature algorithm")

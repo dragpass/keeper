@@ -24,6 +24,7 @@ func TestCredentialExec_SameSignedPolicyTwice_SecondStartsNoProcess(t *testing.T
 		func(r *proto.CredentialExecRequest) {
 			r.Policy.PolicyVersion = proto.CredentialPolicyVersion
 			r.Policy.ExecutionNonce = nonce
+			r.Policy.PayloadSHA256 = payloadDigestOrEmpty(r.IVB64, r.CiphertextB64)
 		})
 
 	if first := HandleCredentialExecRequest(deps, req); !first.Success {
