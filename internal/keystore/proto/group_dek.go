@@ -183,7 +183,10 @@ type DEKRewrapForMemberResponseData struct {
 // flat, unenforced `recipient_public_keys` list was removed in 0.0.58; a
 // payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
-	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
+	WrappedForMeB64 string               `json:"wrapped_for_me_b64"`
+	Operation       string               `json:"operation,omitempty"`
+	SourceKind      string               `json:"source_kind,omitempty"`
+	Decision        *GroupRewrapDecision `json:"decision,omitempty"`
 	// A recipient with no account_id is pin-exempt: this Keeper's own key, or
 	// the one recipient marked org_archive (a resource, not an account).
 	Recipients []DEKRewrapRecipient `json:"recipients"`

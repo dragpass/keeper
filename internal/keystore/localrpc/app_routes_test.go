@@ -316,8 +316,8 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		{"account_id": routePeer, "public_key": peer.PublicKey},
 		{"public_key": archive.PublicKey, "org_archive": true},
 	}, nil)
-	if code != http.StatusOK || !result.Success {
-		t.Fatalf("many: %d %s", code, body)
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_recipients") {
+		t.Fatalf("unsigned many rewrap: %d %s", code, body)
 	}
 	refusals := map[string][]map[string]any{
 		"an exempt stranger":         {{"public_key": stranger.PublicKey}},
@@ -360,8 +360,8 @@ func TestAppGroupDEKRoutesTakeTheirOwnSizeCap(t *testing.T) {
 	if len(raw) <= maxRequestBytes {
 		t.Fatalf("payload %d is not past the default cap", len(raw))
 	}
-	if code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-many", payload); code != http.StatusOK || !result.Success {
-		t.Fatalf("large rewrap: %d %s", code, body)
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-many", payload); code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
+		t.Fatalf("large unsigned rewrap was not decoded then refused: %d %s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/auth/recovery/begin", map[string]string{
 		"alias": strings.Repeat("a", maxRequestBytes), "recovery_key": "x",

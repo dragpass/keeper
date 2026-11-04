@@ -3,14 +3,32 @@ package proto
 // GroupRewrapPrepareRequest asks Keeper to bind one stored member grant and
 // named recipient before the App requests an online server decision.
 type GroupRewrapPrepareRequest struct {
-	Operation            string                    `json:"operation"`
-	SourceKind           string                    `json:"source_kind"`
-	TokenID              string                    `json:"token_id"`
-	SessionIssuedAtNanos int64                     `json:"session_issued_at_nanos,string"`
-	Member               DEKRewrapForMemberRequest `json:"member"`
+	Operation            string                            `json:"operation"`
+	SourceKind           string                            `json:"source_kind"`
+	TokenID              string                            `json:"token_id"`
+	SessionIssuedAtNanos int64                             `json:"session_issued_at_nanos,string"`
+	Member               DEKRewrapForMemberRequest         `json:"member"`
+	Many                 *DEKUnwrapAndRewrapForManyRequest `json:"many,omitempty"`
 }
 
 func (r GroupRewrapPrepareRequest) Validate() error {
+	if r.Many != nil {
+		if (r.Operation != "rotation_old_grants" || r.SourceKind != "stored_member") &&
+			(r.Operation != "audit_relabel" || r.SourceKind != "retained_member") {
+			return newValidationError("operation", "unsupported batch rewrap context")
+		}
+		if r.Member.WrappedForMeB64 != "" || r.Many.Decision != nil ||
+			r.Many.OwnerAccountID == "" || r.Many.GrantContext == nil {
+			return newValidationError("many", "named source, grant context and no prior decision required")
+		}
+		if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
+			return err
+		}
+		if r.SessionIssuedAtNanos <= 0 {
+			return newValidationError("session_issued_at_nanos", "must be positive")
+		}
+		return r.Many.Validate()
+	}
 	if r.Operation != "member_invite" && r.Operation != "member_add" {
 		return newValidationError("operation", "unsupported rewrap operation")
 	}

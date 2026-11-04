@@ -33,7 +33,7 @@ func groupActions() map[string]action {
 			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKRewrapToPendingKey,
 		).appOnlyAction(),
 		proto.ActionDEKUnwrapAndRewrapForMany: wrapCapped(
-			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKUnwrapAndRewrapForMany,
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleAuthorizedDEKUnwrapAndRewrapForMany,
 		).appOnlyAction().e2eFixtureOnNative(),
 		proto.ActionGroupRewrapPrepare: wrapCapped(
 			proto.DEKRewrapMaxRequestBytes, handlers.HandleGroupRewrapPrepare,
