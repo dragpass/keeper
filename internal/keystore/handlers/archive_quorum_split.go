@@ -18,8 +18,13 @@ package handlers
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -27,12 +32,16 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
-// HandleArchiveKeySplit Shamir-splits the org archive private key into shares,
-// hybrid-wraps each to a recipient (admin account archive) public key, then
-// deletes the private key. Not idempotent: with no archive private key present
-// it returns not_found. The public key slot is preserved, and the ACCOUNT
-// archive slot (the admin receiving key) is never touched — only the ORG slot
-// is wiped.
+type archiveSplitJournal struct {
+	OperationID    string                            `json:"operation_id"`
+	RequestDigest  string                            `json:"request_digest"`
+	KeyFingerprint string                            `json:"key_fingerprint"`
+	Result         proto.ArchiveKeySplitResponseData `json:"result"`
+}
+
+// HandleArchiveKeySplit prepares wrapped shares while keeping the source key.
+// A separate authenticated finalization must confirm server persistence before
+// removing the source private key. Missing source key returns not_found.
 func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
 	d.Logger.Println("archive key split processing...")
 
@@ -54,12 +63,35 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	// The slot holding the org's public key owns its key. Once a split has
 	// wiped that slot's private half, the device-wide key is another key and
 	// must not be split in its place.
-	slot, _, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+	slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
 	}
 	if !found {
 		slot = keychain.OrgArchiveActiveSlot("")
+	}
+	requestBytes, err := json.Marshal(req)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeValidation, "invalid split request")
+	}
+	requestDigest := sha256.Sum256(requestBytes)
+	journalAccount := "archive_quorum_split_pending:" + slot.PrivateAccount
+	pending, err := d.Store.Get(config.Service, journalAccount)
+	if err == nil {
+		var journal archiveSplitJournal
+		if json.Unmarshal([]byte(pending), &journal) != nil ||
+			journal.OperationID != req.OperationID ||
+			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||
+			journal.KeyFingerprint == "" ||
+			journal.KeyFingerprint != journal.Result.KeyFingerprint ||
+			!found || fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
+			len(journal.Result.Shares) != len(req.RecipientPublicKeys) {
+			return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation unavailable")
+		}
+		return proto.BaseResponse{Success: true, Data: journal.Result}
+	}
+	if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split preparation failed")
 	}
 	privKeyBuf, err := getArchiveSlotPrivateKeySecure(d.Store, slot)
 	if err != nil {
@@ -79,6 +111,9 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to derive archive public key: "+err.Error())
 	}
 	keyFingerprint := fingerprintBase64Public(splitPubPEM)
+	if found && fingerprintBase64Public(activePublic) != keyFingerprint {
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key changed")
+	}
 
 	shares, err := crypto.SplitSecret(privKeyBuf.Bytes(), req.ThresholdN, len(pubs))
 	if err != nil {
@@ -103,19 +138,17 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		}
 	}
 
-	// Success — delete the whole archive private key. It now exists only as the
-	// shares just returned.
-	if err := slot.DeletePrivate(d.Store); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure,
-			"delete archive private key after split failed: "+err.Error())
+	result := proto.ArchiveKeySplitResponseData{KeyFingerprint: keyFingerprint, Shares: out}
+	journalBytes, err := json.Marshal(archiveSplitJournal{
+		OperationID: req.OperationID, RequestDigest: hex.EncodeToString(requestDigest[:]),
+		KeyFingerprint: keyFingerprint, Result: result,
+	})
+	if err != nil || d.Store.Set(config.Service, journalAccount, string(journalBytes)) != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive split preparation failed")
 	}
-
-	d.Logger.Printf("archive key split: %d shares (threshold %d), private key wiped",
+	d.Logger.Printf("archive key split prepared: %d shares (threshold %d), private key retained",
 		len(out), req.ThresholdN)
-	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeySplitResponseData{
-		KeyFingerprint: keyFingerprint,
-		Shares:         out,
-	}}
+	return proto.BaseResponse{Success: true, Data: result}
 }
 
 // HandleArchiveShareRewrap re-wraps an admin's own hybrid-wrapped share from
