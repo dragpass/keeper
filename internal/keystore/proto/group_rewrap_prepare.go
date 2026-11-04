@@ -1,7 +1,7 @@
 package proto
 
-// GroupRewrapPrepareRequest asks Keeper to bind one stored member grant and
-// named recipient before the App requests an online server decision.
+// GroupRewrapPrepareRequest binds one member or ordered batch rewrap before
+// the App requests an online server decision.
 type GroupRewrapPrepareRequest struct {
 	Operation            string                            `json:"operation"`
 	SourceKind           string                            `json:"source_kind"`
