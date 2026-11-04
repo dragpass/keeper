@@ -68,7 +68,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
 	}
 	if !found {
-		slot = keychain.OrgArchiveActiveSlot("")
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key unavailable")
 	}
 	requestBytes, err := json.Marshal(req)
 	if err != nil {

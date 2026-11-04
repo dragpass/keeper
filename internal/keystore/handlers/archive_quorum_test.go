@@ -247,6 +247,26 @@ func TestArchiveQuorum_SplitPreparationStoreFailurePreservesKeyAndReturnsNoShare
 	}
 }
 
+func TestArchiveQuorum_SplitPreparationRequiresRecoverablePublicSlot(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	archive, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = keychain.SaveArchivePrivateKey(store, archive.PrivateKey)
+	_, recipients := genAdminKeys(t, 2)
+	response := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
+		OperationID: "66666666-6666-4666-8666-666666666666",
+		ThresholdN:  2, RecipientPublicKeys: recipients,
+	})
+	if response.Success || response.Data != nil {
+		t.Fatal("missing source public slot must not produce unrecoverable shares")
+	}
+	if stored, err := keychain.GetArchivePrivateKey(store); err != nil || stored != archive.PrivateKey {
+		t.Fatal("missing public slot must preserve the private key")
+	}
+}
+
 func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 
