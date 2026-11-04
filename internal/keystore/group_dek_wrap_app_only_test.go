@@ -93,6 +93,12 @@ func TestHandleAppRequest_GroupDEKWrapActionsRunForTheApp(t *testing.T) {
 	app, _, _ := newLeaseApp(t)
 	for action, frame := range groupDEKWrapFrames(t, app) {
 		response := app.HandleAppRequest(sessionA, "", frame)
+		if action == proto.ActionDEKRewrapForMember {
+			if response.Success || response.ErrorCode != "not_found" || response.Data != nil {
+				t.Fatalf("%s without an online decision: %+v", action, response)
+			}
+			continue
+		}
 		if !response.Success {
 			t.Fatalf("%s from the App: %+v", action, response)
 		}

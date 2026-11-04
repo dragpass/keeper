@@ -125,6 +125,9 @@ type appGenerate struct {
 type appMemberRewrap struct {
 	WrappedForMeB64    string                       `json:"wrapped_for_me_b64"`
 	OtherPublicKey     string                       `json:"other_public_key"`
+	Operation          string                       `json:"operation,omitempty"`
+	SourceKind         string                       `json:"source_kind,omitempty"`
+	Decision           *proto.GroupRewrapDecision   `json:"decision,omitempty"`
 	OwnerAccountID     string                       `json:"owner_account_id"`
 	OtherAccountID     string                       `json:"other_account_id"`
 	RotationStatements []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -172,6 +175,9 @@ func bindMemberRewrap(_ *Server, input any) (any, error) {
 	return proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64:    in.WrappedForMeB64,
 		OtherPublicKey:     in.OtherPublicKey,
+		Operation:          in.Operation,
+		SourceKind:         in.SourceKind,
+		Decision:           in.Decision,
 		OwnerAccountID:     in.OwnerAccountID,
 		OtherAccountID:     in.OtherAccountID,
 		RotationStatements: in.RotationStatements,

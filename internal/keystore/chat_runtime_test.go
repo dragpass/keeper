@@ -162,7 +162,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"auth_recovery_abort", "auth_recovery_begin", "auth_recovery_prepare",
 		"auth_recovery_reissue_prepare", "auth_signup_abort", "auth_signup_prepare",
 		"chat_state_read_outbox",
-		"dek_rewrap_for_member", "dek_rewrap_with_old_key_to_self", "dek_rotate_to_device_key",
+		"dek_rewrap_for_member", "dek_rewrap_to_pending_key", "dek_rewrap_with_old_key_to_self", "dek_rotate_to_device_key",
 		"dek_rotate_to_new_password", "dek_unwrap_and_rewrap_for_many",
 		"group_decrypt_with_aad_for_app_display", "group_dek_generate_and_open", "group_rewrap_prepare",
 		"message_display_prepare", "message_seal",

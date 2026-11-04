@@ -102,8 +102,11 @@ type GroupDEKGenerateAndOpenResponseData struct {
 // check a Native Messaging caller could receive the Group DEK under a key it
 // holds and open bound tokens offline.
 type DEKRewrapForMemberRequest struct {
-	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
-	OtherPublicKey  string `json:"other_public_key"`
+	WrappedForMeB64 string               `json:"wrapped_for_me_b64"`
+	OtherPublicKey  string               `json:"other_public_key"`
+	Operation       string               `json:"operation,omitempty"`
+	SourceKind      string               `json:"source_kind,omitempty"`
+	Decision        *GroupRewrapDecision `json:"decision,omitempty"`
 	// OwnerAccountID scopes the pin. Pins belong to the account doing the
 	// wrapping, so two accounts sharing a device keep separate trust records.
 	OwnerAccountID string `json:"owner_account_id,omitempty"`

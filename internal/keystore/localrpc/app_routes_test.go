@@ -276,15 +276,8 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		"owner_account_id": routeOwner, "other_account_id": routePeer,
 	}
 	code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-member", member)
-	if code != http.StatusOK || !result.Success || !strings.Contains(string(result.Data), `"pin_enforced":true`) {
-		t.Fatalf("member rewrap: %d %s", code, body)
-	}
-	var memberData struct {
-		EncryptedForOtherB64 string `json:"encrypted_for_other_b64"`
-	}
-	_ = json.Unmarshal(result.Data, &memberData)
-	if !bytes.Equal(openWith(t, peer.PrivateKey, memberData.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("member rewrap did not reach the peer")
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
+		t.Fatalf("unsigned member rewrap: %d %s", code, body)
 	}
 	for _, missing := range []string{"owner_account_id", "other_account_id"} {
 		without := map[string]any{}
@@ -298,14 +291,14 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		}
 	}
 
-	// The peer's key changes with no chain: the pin refuses and nothing is wrapped.
+	// A changed key cannot bypass the missing online decision.
 	changed := map[string]any{}
 	for key, value := range member {
 		changed[key] = value
 	}
 	changed["other_public_key"] = stranger.PublicKey
 	code, result, body = callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-member", changed)
-	if code != http.StatusOK || result.Success || result.ErrorCode != "peer_key_changed" || strings.Contains(body, "encrypted_for_other") {
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
 		t.Fatalf("changed key: %d %s", code, body)
 	}
 
@@ -427,7 +420,7 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 		"other_public_key":   peer.PublicKey, "owner_account_id": routeOwner, "other_account_id": routePeer,
 		"enrollment_evidence": evidence,
 	})
-	if code != http.StatusOK || !result.Success {
-		t.Fatalf("member rewrap with enrollment evidence: %d %s", code, body)
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
+		t.Fatalf("unsigned member rewrap with enrollment evidence: %d %s", code, body)
 	}
 }
