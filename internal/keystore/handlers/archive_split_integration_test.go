@@ -20,7 +20,7 @@ func TestArchiveSplitIntegrationPreservesOriginalBeforeConfirmation(t *testing.T
 		t.Fatal(err)
 	}
 	_, recipients := genAdminKeys(t, 2)
-	response := HandleArchiveKeySplit(d, proto.ArchiveKeySplitRequest{ThresholdN: 2, RecipientPublicKeys: recipients})
+	response := HandleArchiveKeySplit(d, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: recipients})
 	if !response.Success {
 		t.Fatal("split preparation refused")
 	}

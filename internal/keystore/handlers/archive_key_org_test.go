@@ -10,6 +10,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"reflect"
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -235,9 +236,9 @@ func TestArchiveOrgID_Validation(t *testing.T) {
 	}
 }
 
-// A split names its org: it splits and wipes that org's own key, and the
-// device-wide key other orgs use stays whole.
-func TestArchiveSplit_OrgScopedWipesOnlyTheOrgKey(t *testing.T) {
+// A split preparation names its org and preserves both its source key and the
+// device-wide key other orgs may still use.
+func TestArchiveSplit_OrgScopedPreparationPreservesKeys(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	shared := seedActiveArchiveKey(t, deps)
 	staged := beginOrg(t, deps, testOrgA)
@@ -245,24 +246,24 @@ func TestArchiveSplit_OrgScopedWipesOnlyTheOrgKey(t *testing.T) {
 		t.Fatalf("commit A: %s", r.Error)
 	}
 	_, adminPems := genAdminKeys(t, 3)
-	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
+	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !split.Success {
 		t.Fatalf("split A: %s", split.Error)
 	}
 	if got := split.Data.(proto.ArchiveKeySplitResponseData).KeyFingerprint; got != staged.Fingerprint {
 		t.Fatalf("split fingerprint = %s, want A's key %s", got, staged.Fingerprint)
 	}
-	if _, err := keychain.OrgArchiveActiveSlot(testOrgA).GetPrivate(store); err == nil {
-		t.Fatal("A's private key must be wiped after split")
+	if priv, err := keychain.OrgArchiveActiveSlot(testOrgA).GetPrivate(store); err != nil || priv == "" {
+		t.Fatal("A's private key must survive split preparation")
 	}
 	if priv, _ := keychain.GetArchivePrivateKey(store); priv == "" {
 		t.Fatal("the device-wide private key must survive an org-scoped split")
 	}
-	// A second split of A finds A's slot without its private half and must
-	// not fall through to the device-wide key.
-	again := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
-	if again.Success || again.ErrorCode != string(errs.ErrCodeNotFound) {
-		t.Fatalf("second split of A: %+v", again)
+	// A retry of the same operation returns the stored result without changing
+	// A's key or falling through to the device-wide key.
+	again := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
+	if !again.Success || !reflect.DeepEqual(split.Data, again.Data) {
+		t.Fatalf("split retry of A changed its result: %+v", again)
 	}
 	if pub, _ := keychain.GetArchivePublicKey(store); pub != shared.PublicKey {
 		t.Fatal("device-wide key changed")

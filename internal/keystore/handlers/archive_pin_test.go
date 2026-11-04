@@ -69,7 +69,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)
 	adminKPs, adminPems := genAdminKeys(t, 3)
-	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{ThresholdN: 2, RecipientPublicKeys: adminPems})
+	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !split.Success {
 		t.Fatalf("split: %s", split.Error)
 	}

@@ -260,8 +260,8 @@ A second, independent archive keypair in its own slots
 half is what the account publishes to the server account directory
 (`account_archive_keys`) so the account can RECEIVE material wrapped to it:
 ownership-handoff re-wrapped grants and archive quorum Shamir shares. It is
-deliberately not the org archive keypair — `archive_key_split` deletes the org
-private key when quorum is enabled, and the account receiving key must survive
+deliberately not the org archive keypair — `archive_key_split` prepares shares while retaining the org
+private key until authenticated finalization, and the account receiving key must survive
 that wipe. Kept as separate actions (rather than a slot parameter on
 `archive_key_*`) because the two keys have different lifecycles.
 
@@ -272,8 +272,10 @@ that wipe. Kept as separate actions (rather than a slot parameter on
 #### Archive-key admin quorum (Shamir N-of-M break-glass)
 
 An alternative custody where the archive private key is Shamir-split across M
-admin devices instead of held whole on the owner's device. After split the
-whole private key exists nowhere at rest, only as shares. Break-glass then
+admin devices instead of held whole on the owner's device. After authenticated quorum finalization, the whole private key exists
+nowhere at rest, only as shares. Split preparation retains the original in
+Keeper protected storage. The current candidate does not yet provide signed
+finalization, so its preparation result is not a completed quorum transition. Break-glass then
 requires N of M admins to approve within a coordinator-run recovery session.
 
 A Shamir share of the archive private-key PEM (~1.7 KB) exceeds the RSA-OAEP
@@ -286,7 +288,7 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`archive_key_split`|`org_id?` (0.0.58), `threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|App only (a Native Messaging frame is refused). Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the org archive private key (kept: the org public key; the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. Not idempotent — a missing private key → `not_found`. (0.0.58) With `org_id` the key split is the one in the slot holding the org's public key (its own, else the device-wide one) and only that slot's private half is deleted; once split, the org's own slot never falls through to the device-wide key.|
+|`archive_key_split`|`operation_id`, `org_id?` (0.0.58), `threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|App only (a Native Messaging frame is refused). Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then durably record the preparation and **retain** the org archive private key (the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. A retry of the same operation ID and exact request returns the stored shares; a different operation ID is refused while preparation is pending. A missing private key returns `not_found`. (0.0.58) With `org_id` the key split is the one in the slot holding the org's public key (its own, else the device-wide one) and only that slot is prepared; it is not deleted before authenticated finalization.|
 |`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
 |`archive_share_rewrap`|`account_id`, `org_id`, `recovery_session_id`, `wrapped_key`, `ciphertext`, `session_public_key`, `decision`|`{ wrapped_key, ciphertext }`|Paired App only. Requires the prepared exact request and a server-signed archive-share decision before reading the account archive private key. Missing, expired, replayed or mismatched authority returns no output. The account receiving slot is used, never the org archive slot. Expiry is checked again after cryptography before output.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|App only (a Native Messaging frame is refused). Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|

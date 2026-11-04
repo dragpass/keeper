@@ -703,8 +703,14 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 		}
 	}
 	admins := []string{routeKeypair(t).PublicKey, routeKeypair(t).PublicKey, routeKeypair(t).PublicKey}
-	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
 		"threshold_n": 2, "recipient_public_keys": admins,
+	}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
+		t.Fatalf("split without operation id: status=%d error=%s", code, result.ErrorCode)
+	}
+	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
+		"operation_id": "44444444-4444-4444-8444-444444444444",
+		"threshold_n":  2, "recipient_public_keys": admins,
 	})
 	if code != http.StatusOK || !result.Success {
 		t.Fatalf("split: %d %s", code, body)
