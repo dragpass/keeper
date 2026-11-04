@@ -164,7 +164,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"chat_state_read_outbox",
 		"dek_rewrap_for_member", "dek_rewrap_with_old_key_to_self", "dek_rotate_to_device_key",
 		"dek_rotate_to_new_password", "dek_unwrap_and_rewrap_for_many",
-		"group_decrypt_with_aad_for_app_display", "group_dek_generate_and_open",
+		"group_decrypt_with_aad_for_app_display", "group_dek_generate_and_open", "group_rewrap_prepare",
 		"message_display_prepare", "message_seal",
 		"mls_commit_build", "mls_commit_confirm",
 		"mls_conversation_forget_removed", "mls_conversation_status",
