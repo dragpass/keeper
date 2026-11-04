@@ -49,6 +49,9 @@ type Deps struct {
 	// GroupDisplayChallenges binds a one-use online Group display decision to
 	// the local handle and frame. Nil fails closed until the action is wired.
 	GroupDisplayChallenges *GroupDisplayChallengeStore
+	// GroupRewrapChallenges binds signed rewrap decisions to one exact local
+	// request. A nil store refuses preparation and execution.
+	GroupRewrapChallenges *GroupRewrapChallengeStore
 	// ChangeBaselineChallenges binds a one-use change-baseline decision (lv83)
 	// to the exact token and entry Keeper prepared. A separate store, so a
 	// baseline challenge can never satisfy a display decision or the reverse.
