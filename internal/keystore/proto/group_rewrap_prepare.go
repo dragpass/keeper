@@ -51,17 +51,18 @@ func (r GroupRewrapPrepareRequest) Validate() error {
 }
 
 type GroupRewrapPrepareResponseData struct {
-	Challenge               string `json:"challenge"`
-	Operation               string `json:"operation"`
-	OrgID                   string `json:"org_id"`
-	GroupID                 string `json:"group_id"`
-	DEKVersion              int    `json:"dek_version"`
-	SourceKind              string `json:"source_kind"`
-	SourceGrantDigest       string `json:"source_grant_digest"`
-	SourcePolicy            string `json:"source_policy"`
-	OutputPolicy            string `json:"output_policy"`
-	RequestDigest           string `json:"request_digest"`
-	RecipientsDigest        string `json:"recipients_digest"`
-	RecipientAccountID      string `json:"recipient_account_id"`
-	RecipientKeyFingerprint string `json:"recipient_key_fingerprint"`
+	Challenge               string                      `json:"challenge"`
+	Operation               string                      `json:"operation"`
+	OrgID                   string                      `json:"org_id"`
+	GroupID                 string                      `json:"group_id"`
+	DEKVersion              int                         `json:"dek_version"`
+	SourceKind              string                      `json:"source_kind"`
+	SourceGrantDigest       string                      `json:"source_grant_digest"`
+	SourcePolicy            string                      `json:"source_policy"`
+	OutputPolicy            string                      `json:"output_policy"`
+	RequestDigest           string                      `json:"request_digest"`
+	RecipientsDigest        string                      `json:"recipients_digest"`
+	Recipients              []RewrapRecipientCommitment `json:"recipients,omitempty"`
+	RecipientAccountID      string                      `json:"recipient_account_id"`
+	RecipientKeyFingerprint string                      `json:"recipient_key_fingerprint"`
 }

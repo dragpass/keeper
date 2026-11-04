@@ -13,19 +13,19 @@ import (
 
 var errInvalidBatchRewrap = errors.New("invalid batch rewrap commitment")
 
-func batchRewrapCommitments(req proto.DEKUnwrapAndRewrapForManyRequest) (groupRewrapContext, string, error) {
+func batchRewrapCommitments(req proto.DEKUnwrapAndRewrapForManyRequest) (groupRewrapContext, string, []proto.RewrapRecipientCommitment, error) {
 	if req.Validate() != nil || req.GrantContext == nil || req.OwnerAccountID == "" {
-		return groupRewrapContext{}, "", errInvalidBatchRewrap
+		return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 	}
 	source, err := base64.StdEncoding.DecodeString(req.WrappedForMeB64)
 	if err != nil {
-		return groupRewrapContext{}, "", errInvalidBatchRewrap
+		return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 	}
 	recipients := make([]proto.RewrapRecipientCommitment, 0, len(req.Recipients))
 	for _, recipient := range req.Recipients {
 		fingerprint, err := crypto.RewrapKeyFingerprint(recipient.PublicKey)
 		if err != nil {
-			return groupRewrapContext{}, "", errInvalidBatchRewrap
+			return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 		}
 		kind := "self"
 		if recipient.OrgArchive {
@@ -39,15 +39,15 @@ func batchRewrapCommitments(req proto.DEKUnwrapAndRewrapForManyRequest) (groupRe
 	}
 	recipientsText, err := proto.RewrapRecipientsDigest(recipients)
 	if err != nil {
-		return groupRewrapContext{}, "", errInvalidBatchRewrap
+		return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 	}
 	recipientsBytes, err := hex.DecodeString(recipientsText)
 	if err != nil {
-		return groupRewrapContext{}, "", errInvalidBatchRewrap
+		return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 	}
 	requestDigest, err := proto.GroupRewrapManyRequestDigest(req)
 	if err != nil {
-		return groupRewrapContext{}, "", errInvalidBatchRewrap
+		return groupRewrapContext{}, "", nil, errInvalidBatchRewrap
 	}
 	context := groupRewrapContext{
 		orgID: req.GrantContext.OrgID, groupID: req.GrantContext.GroupID,
@@ -56,7 +56,7 @@ func batchRewrapCommitments(req proto.DEKUnwrapAndRewrapForManyRequest) (groupRe
 		requestDigest: requestDigest,
 	}
 	copy(context.recipientsDigest[:], recipientsBytes)
-	return context, recipientsText, nil
+	return context, recipientsText, recipients, nil
 }
 
 // HandleAuthorizedDEKRewrapForMember is the external execution boundary. The
@@ -121,7 +121,7 @@ func HandleAuthorizedDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRew
 			(req.Operation != "audit_relabel" || req.SourceKind != "retained_member")) {
 		return deny()
 	}
-	execution, _, err := batchRewrapCommitments(req)
+	execution, _, _, err := batchRewrapCommitments(req)
 	if err != nil {
 		return deny()
 	}

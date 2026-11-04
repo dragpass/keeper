@@ -82,6 +82,11 @@ func TestGroupRewrapPrepareBindsEntireBatchWithoutWrapping(t *testing.T) {
 	if data.Challenge == "" || data.RequestDigest == "" || data.RecipientsDigest == "" {
 		t.Fatal("batch preparation omitted its commitments")
 	}
+	if len(data.Recipients) != 2 || data.Recipients[0].Kind != "account" ||
+		data.Recipients[0].AccountID != request.Many.Recipients[0].AccountID ||
+		data.Recipients[1].AccountID != request.Many.Recipients[1].AccountID {
+		t.Fatal("batch preparation omitted its ordered recipient identities")
+	}
 	if !reflect.DeepEqual(before, f.store.(*testdouble.MemorySecretStore).Snapshot()) {
 		t.Fatal("batch preparation changed keychain state")
 	}

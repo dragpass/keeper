@@ -39,7 +39,7 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 		return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
 	}
 	if req.Many != nil {
-		context, recipientsDigestText, err := batchRewrapCommitments(*req.Many)
+		context, recipientsDigestText, recipients, err := batchRewrapCommitments(*req.Many)
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeValidation, "invalid batch rewrap request")
 		}
@@ -64,7 +64,7 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 			SourceGrantDigest: hex.EncodeToString(context.sourceDigest[:]),
 			SourcePolicy:      context.sourcePolicy, OutputPolicy: context.outputPolicy,
 			RequestDigest:    hex.EncodeToString(context.requestDigest[:]),
-			RecipientsDigest: recipientsDigestText,
+			RecipientsDigest: recipientsDigestText, Recipients: recipients,
 		}}
 	}
 	source, err := base64.StdEncoding.DecodeString(req.Member.WrappedForMeB64)
