@@ -102,6 +102,11 @@ var authAndGroupRoutes = map[string]appRoute{
 		bind:       bindMemberRewrap,
 		plainLimit: proto.DEKRewrapMaxRequestBytes,
 	},
+	"/v1/group-dek/rewrap-prepare": {
+		action:     proto.ActionGroupRewrapPrepare,
+		input:      func() any { return &proto.GroupRewrapPrepareRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
 	"/v1/group-dek/rewrap-for-many": {
 		action:     proto.ActionDEKUnwrapAndRewrapForMany,
 		input:      func() any { return &appManyRewrap{} },

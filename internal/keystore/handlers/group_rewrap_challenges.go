@@ -114,6 +114,15 @@ func (s *GroupRewrapChallengeStore) PurgeHandle(handle string) {
 	}
 }
 
+func (s *GroupRewrapChallengeStore) Len() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
 func (s *GroupRewrapChallengeStore) sweepLocked(now time.Time) {
 	for challenge, entry := range s.entries {
 		if !now.Before(entry.expiresAt) {

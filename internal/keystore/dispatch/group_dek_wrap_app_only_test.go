@@ -14,6 +14,7 @@ import (
 // frame.
 func TestGroupDEKWrapActionsAreAppOnlyInRelease(t *testing.T) {
 	for _, name := range []string{
+		proto.ActionGroupRewrapPrepare,
 		proto.ActionGroupDEKGenerateAndOpen,
 		proto.ActionDEKRewrapForMember,
 		proto.ActionDEKUnwrapAndRewrapForMany,

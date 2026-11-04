@@ -31,6 +31,9 @@ func groupActions() map[string]action {
 		proto.ActionDEKUnwrapAndRewrapForMany: wrapCapped(
 			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKUnwrapAndRewrapForMany,
 		).appOnlyAction().e2eFixtureOnNative(),
+		proto.ActionGroupRewrapPrepare: wrapCapped(
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleGroupRewrapPrepare,
+		).appOnlyAction(),
 
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionGroupDecryptToClipboard:  wrap(handlers.HandleGroupDecryptToClipboard),
