@@ -12,12 +12,14 @@ package handlers
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
@@ -62,7 +64,15 @@ func HandleGroupDEKGenerateAndOpen(d Deps, req proto.GroupDEKGenerateAndOpenRequ
 		}
 	}
 
-	handle, expiresAt, openErr := d.GroupSessions.OpenLabeled(rawDEK, handleLabel("", req.GrantContext))
+	label := handleLabel("", req.GrantContext)
+	if req.GrantContext != nil {
+		if binding, found, bindErr := keychain.GetAccountBinding(d.Store); bindErr == nil && found && !binding.SignedOut && binding.Generation != 0 {
+			label.GeneratedSourceDigest = sha256.Sum256(encrypted)
+			label.GeneratedAccountID = binding.AccountID
+			label.GeneratedBindingGeneration = binding.Generation
+		}
+	}
+	handle, expiresAt, openErr := d.GroupSessions.OpenLabeled(rawDEK, label)
 	if openErr != nil {
 		secure.Zeroize(rawDEK)
 		d.Logger.Printf("group dek generate error: store.Open failed: %v", openErr)

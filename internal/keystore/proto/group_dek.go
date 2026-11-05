@@ -184,6 +184,7 @@ type DEKRewrapForMemberResponseData struct {
 // payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
 	WrappedForMeB64 string               `json:"wrapped_for_me_b64"`
+	SourceHandle    string               `json:"source_handle,omitempty"`
 	Operation       string               `json:"operation,omitempty"`
 	SourceKind      string               `json:"source_kind,omitempty"`
 	Decision        *GroupRewrapDecision `json:"decision,omitempty"`
@@ -239,6 +240,11 @@ const DEKRewrapMaxRequestBytes = 512 * 1024
 func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
 		return err
+	}
+	if r.SourceHandle != "" {
+		if err := requireHandle(r.SourceHandle, "source_handle"); err != nil {
+			return err
+		}
 	}
 	if len(r.Recipients) == 0 {
 		return newValidationError("recipients", "must not be empty")

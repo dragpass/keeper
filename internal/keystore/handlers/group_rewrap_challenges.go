@@ -4,10 +4,12 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 const (
-	groupRewrapChallengeTTL = time.Minute
+	groupRewrapChallengeTTL = proto.GroupRewrapDecisionTTLSeconds * time.Second
 	groupRewrapMaxPending   = 128
 )
 
@@ -68,20 +70,25 @@ func (s *GroupRewrapChallengeStore) Put(challenge string, context groupRewrapCon
 }
 
 func (s *GroupRewrapChallengeStore) Peek(challenge string, now time.Time) (groupRewrapContext, bool) {
+	entry, ok := s.peekEntry(challenge, now)
+	return entry.context, ok
+}
+
+func (s *GroupRewrapChallengeStore) peekEntry(challenge string, now time.Time) (groupRewrapEntry, bool) {
 	if s == nil {
-		return groupRewrapContext{}, false
+		return groupRewrapEntry{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[challenge]
 	if !ok {
-		return groupRewrapContext{}, false
+		return groupRewrapEntry{}, false
 	}
 	if !now.Before(entry.expiresAt) {
 		delete(s.entries, challenge)
-		return groupRewrapContext{}, false
+		return groupRewrapEntry{}, false
 	}
-	return entry.context, true
+	return entry, true
 }
 
 func (s *GroupRewrapChallengeStore) Consume(challenge string, now time.Time) (groupRewrapContext, bool) {

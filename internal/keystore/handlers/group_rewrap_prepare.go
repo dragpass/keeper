@@ -43,6 +43,9 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeValidation, "invalid batch rewrap request")
 		}
+		if req.SourceKind == "keeper_generated" && !generatedRewrapSourceMatches(d, *req.Many, context.sourceDigest) {
+			return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
+		}
 		context.accountID = binding.AccountID
 		context.deviceID = deviceID
 		context.tokenID = req.TokenID

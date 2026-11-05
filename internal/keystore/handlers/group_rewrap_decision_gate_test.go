@@ -56,13 +56,13 @@ func TestGroupRewrapDecisionGateRequiresExactLiveRequestAndConsumesOnce(t *testi
 	f, decision, context := groupRewrapDecisionFixture(t)
 	changed := context
 	changed.recipientsDigest[0]++
-	if err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, changed); err == nil {
+	if _, err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, changed); err == nil {
 		t.Fatal("different recipient request accepted")
 	}
-	if err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err != nil {
+	if _, err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err != nil {
 		t.Fatalf("valid signed request refused: %v", err)
 	}
-	if err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
+	if _, err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
 		t.Fatal("replayed decision accepted")
 	}
 }
@@ -72,7 +72,7 @@ func TestGroupRewrapDecisionGateRefusesChangedBindingAndKeepsChallenge(t *testin
 	if _, _, err := keychain.SetAccountBinding(f.store, context.accountID, "alice", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
+	if _, err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
 		t.Fatal("old login generation accepted")
 	}
 	if _, pending := f.deps.GroupRewrapChallenges.Peek(decision.Challenge, f.clock.now()); !pending {
@@ -96,7 +96,7 @@ func TestGroupRewrapDecisionGateRefusesSignedStatementForAnotherRequest(t *testi
 			f, decision, context := groupRewrapDecisionFixture(t)
 			change(&decision)
 			decision.Signature = f.sign(t, proto.GroupRewrapDecisionCanonical(decision))
-			if err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
+			if _, err := verifyAndConsumeGroupRewrapDecision(f.deps, decision, context); err == nil {
 				t.Fatal("other signed request accepted")
 			}
 			if _, pending := f.deps.GroupRewrapChallenges.Peek(decision.Challenge, f.clock.now()); !pending {

@@ -389,7 +389,7 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 		t.Fatalf("member rewrap evidence = %v, want the App's", got)
 	}
 	bound, err = bindManyRewrap(nil, &appManyRewrap{
-		WrappedForMeB64: "d3JhcHBlZA==", OwnerAccountID: routeOwner,
+		WrappedForMeB64: "d3JhcHBlZA==", SourceHandle: "generated-handle", OwnerAccountID: routeOwner,
 		Recipients: []appManyRecipient{{AccountID: routePeer, PublicKey: "peer", EnrollmentEvidence: evidence}},
 	})
 	if err != nil {
@@ -397,6 +397,9 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 	}
 	if got := bound.(proto.DEKUnwrapAndRewrapForManyRequest).Recipients[0].EnrollmentEvidence; got != evidence {
 		t.Fatalf("many rewrap evidence = %v, want the App's", got)
+	}
+	if got := bound.(proto.DEKUnwrapAndRewrapForManyRequest).SourceHandle; got != "generated-handle" {
+		t.Fatal("App route dropped the generated Group DEK source handle")
 	}
 	// Only an account recipient is pinned; the org archive key takes no proof.
 	if _, err := bindManyRewrap(nil, &appManyRewrap{

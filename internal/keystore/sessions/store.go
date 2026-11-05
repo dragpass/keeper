@@ -46,11 +46,14 @@ type secretEntry struct {
 // grant context the grant was opened under. A legacy handle has an empty
 // GrantPolicy.
 type Label struct {
-	OrgID       string
-	GrantPolicy string
-	GroupID     string
-	DekVersion  int
-	GrantDigest [32]byte
+	OrgID                      string
+	GrantPolicy                string
+	GroupID                    string
+	DekVersion                 int
+	GrantDigest                [32]byte
+	GeneratedSourceDigest      [32]byte
+	GeneratedAccountID         string
+	GeneratedBindingGeneration uint64
 }
 
 // Store is the shared base for opaque-handle session stores. The two existing
@@ -199,6 +202,22 @@ func (s *Store) CloseAll() int {
 		delete(s.entries, id)
 	}
 	return closed
+}
+
+// LabelFor returns only non-secret handle context, never the protected key.
+func (s *Store) LabelFor(handleID string) (Label, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[handleID]
+	if !ok {
+		return Label{}, s.errNotFound
+	}
+	if s.now().After(entry.expiresAt) {
+		entry.secret.Destroy()
+		delete(s.entries, handleID)
+		return Label{}, s.errExpired
+	}
+	return entry.label, nil
 }
 
 // Use runs fn over the raw bytes pointed to by the handle. fn runs while the

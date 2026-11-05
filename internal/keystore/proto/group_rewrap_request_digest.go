@@ -40,6 +40,7 @@ func GroupRewrapManyRequestDigest(req DEKUnwrapAndRewrapForManyRequest) ([32]byt
 	canonical, err := json.Marshal(struct {
 		Domain              string               `json:"domain"`
 		WrappedForMeB64     string               `json:"wrapped_for_me_b64"`
+		SourceHandle        string               `json:"source_handle"`
 		Recipients          []DEKRewrapRecipient `json:"recipients"`
 		OwnerAccountID      string               `json:"owner_account_id"`
 		GrantContext        *GrantContext        `json:"grant_context"`
@@ -47,6 +48,7 @@ func GroupRewrapManyRequestDigest(req DEKUnwrapAndRewrapForManyRequest) ([32]byt
 	}{
 		Domain:              "dragpass:group-rewrap-many-request:v1",
 		WrappedForMeB64:     req.WrappedForMeB64,
+		SourceHandle:        req.SourceHandle,
 		Recipients:          req.Recipients,
 		OwnerAccountID:      req.OwnerAccountID,
 		GrantContext:        req.GrantContext,

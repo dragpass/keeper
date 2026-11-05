@@ -14,8 +14,12 @@ type GroupRewrapPrepareRequest struct {
 func (r GroupRewrapPrepareRequest) Validate() error {
 	if r.Many != nil {
 		if (r.Operation != "rotation_old_grants" || r.SourceKind != "stored_member") &&
-			(r.Operation != "audit_relabel" || r.SourceKind != "retained_member") {
+			(r.Operation != "audit_relabel" || r.SourceKind != "retained_member") &&
+			(r.Operation != "rotation_new_dek" || r.SourceKind != "keeper_generated") {
 			return newValidationError("operation", "unsupported batch rewrap context")
+		}
+		if (r.SourceKind == "keeper_generated") != (r.Many.SourceHandle != "") {
+			return newValidationError("many.source_handle", "generated source requires its handle")
 		}
 		if r.Member.WrappedForMeB64 != "" || r.Many.Decision != nil ||
 			r.Many.OwnerAccountID == "" || r.Many.GrantContext == nil {
@@ -29,11 +33,8 @@ func (r GroupRewrapPrepareRequest) Validate() error {
 		}
 		return r.Many.Validate()
 	}
-	if r.Operation != "member_invite" && r.Operation != "member_add" {
-		return newValidationError("operation", "unsupported rewrap operation")
-	}
-	if r.SourceKind != "stored_member" {
-		return newValidationError("source_kind", "unsupported rewrap source")
+	if !ValidMemberRewrapContext(r.Operation, r.SourceKind) {
+		return newValidationError("operation", "unsupported member rewrap context")
 	}
 	if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
 		return err
@@ -65,4 +66,11 @@ type GroupRewrapPrepareResponseData struct {
 	Recipients              []RewrapRecipientCommitment `json:"recipients,omitempty"`
 	RecipientAccountID      string                      `json:"recipient_account_id"`
 	RecipientKeyFingerprint string                      `json:"recipient_key_fingerprint"`
+}
+
+// ValidMemberRewrapContext keeps preparation and execution on the same
+// operation/source allowlist. A server decision must still authorize it.
+func ValidMemberRewrapContext(operation, source string) bool {
+	return ((operation == "member_invite" || operation == "member_add" || operation == "member_key_refresh_current") && source == "stored_member") ||
+		((operation == "member_backfill" || operation == "member_key_refresh_retained") && source == "retained_member")
 }

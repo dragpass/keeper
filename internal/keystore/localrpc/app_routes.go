@@ -139,6 +139,7 @@ type appMemberRewrap struct {
 
 type appManyRewrap struct {
 	WrappedForMeB64 string                     `json:"wrapped_for_me_b64"`
+	SourceHandle    string                     `json:"source_handle,omitempty"`
 	Operation       string                     `json:"operation,omitempty"`
 	SourceKind      string                     `json:"source_kind,omitempty"`
 	Decision        *proto.GroupRewrapDecision `json:"decision,omitempty"`
@@ -230,6 +231,7 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 	}
 	return proto.DEKUnwrapAndRewrapForManyRequest{
 		WrappedForMeB64:     in.WrappedForMeB64,
+		SourceHandle:        in.SourceHandle,
 		Operation:           in.Operation,
 		SourceKind:          in.SourceKind,
 		Decision:            in.Decision,

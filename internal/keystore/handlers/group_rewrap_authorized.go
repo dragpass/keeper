@@ -8,6 +8,7 @@ import (
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -59,6 +60,24 @@ func batchRewrapCommitments(req proto.DEKUnwrapAndRewrapForManyRequest) (groupRe
 	return context, recipientsText, recipients, nil
 }
 
+// The App can name a generated source, but only Keeper's live generation
+// handle proves that this exact ciphertext was created here for this account.
+func generatedRewrapSourceMatches(d Deps, req proto.DEKUnwrapAndRewrapForManyRequest, digest [sha256.Size]byte) bool {
+	if d.GroupSessions == nil || d.Store == nil || req.SourceHandle == "" || req.GrantContext == nil {
+		return false
+	}
+	label, err := d.GroupSessions.LabelFor(req.SourceHandle)
+	if err != nil || label.GeneratedSourceDigest == ([sha256.Size]byte{}) ||
+		label.GeneratedSourceDigest != digest || label.OrgID != req.GrantContext.OrgID ||
+		label.GroupID != req.GrantContext.GroupID || label.DekVersion != req.GrantContext.DekVersion ||
+		label.GrantPolicy != req.GrantContext.Policy || label.GeneratedAccountID != req.OwnerAccountID {
+		return false
+	}
+	binding, found, err := keychain.GetAccountBinding(d.Store)
+	return err == nil && found && !binding.SignedOut && binding.Generation != 0 &&
+		binding.AccountID == label.GeneratedAccountID && binding.Generation == label.GeneratedBindingGeneration
+}
+
 // HandleAuthorizedDEKRewrapForMember is the external execution boundary. The
 // dispatcher holds requestMu through this check and the subsequent wrap.
 func HandleAuthorizedDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequest) proto.BaseResponse {
@@ -67,8 +86,7 @@ func HandleAuthorizedDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequ
 	}
 	if req.Validate() != nil || req.Decision == nil || req.GrantContext == nil ||
 		req.OwnerAccountID == "" || req.OtherAccountID == "" ||
-		(req.Operation != "member_invite" && req.Operation != "member_add") ||
-		req.SourceKind != "stored_member" {
+		!proto.ValidMemberRewrapContext(req.Operation, req.SourceKind) {
 		return deny()
 	}
 	source, err := base64.StdEncoding.DecodeString(req.WrappedForMeB64)
@@ -103,10 +121,17 @@ func HandleAuthorizedDEKRewrapForMember(d Deps, req proto.DEKRewrapForMemberRequ
 		outputPolicy: req.GrantContext.Policy, sourceDigest: sourceDigest,
 		requestDigest: requestDigest, recipientsDigest: recipientsDigest,
 	}
-	if err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, execution); err != nil {
+	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, execution)
+	if err != nil {
 		return deny()
 	}
-	return HandleDEKRewrapForMember(d, req)
+	response := HandleDEKRewrapForMember(d, req)
+	// Key access and wrapping can outlast the authorization horizon.
+	now := d.Now()
+	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
+		return deny()
+	}
+	return response
 }
 
 // HandleAuthorizedDEKUnwrapAndRewrapForMany is the external batch boundary.
@@ -118,17 +143,31 @@ func HandleAuthorizedDEKUnwrapAndRewrapForMany(d Deps, req proto.DEKUnwrapAndRew
 	}
 	if req.Decision == nil ||
 		((req.Operation != "rotation_old_grants" || req.SourceKind != "stored_member") &&
-			(req.Operation != "audit_relabel" || req.SourceKind != "retained_member")) {
+			(req.Operation != "audit_relabel" || req.SourceKind != "retained_member") &&
+			(req.Operation != "rotation_new_dek" || req.SourceKind != "keeper_generated")) {
+		return deny()
+	}
+	if (req.SourceKind == "keeper_generated") != (req.SourceHandle != "") {
 		return deny()
 	}
 	execution, _, _, err := batchRewrapCommitments(req)
 	if err != nil {
 		return deny()
 	}
-	execution.operation = req.Operation
-	execution.sourceKind = req.SourceKind
-	if err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, execution); err != nil {
+	if req.SourceKind == "keeper_generated" && !generatedRewrapSourceMatches(d, req, execution.sourceDigest) {
 		return deny()
 	}
-	return HandleDEKUnwrapAndRewrapForMany(d, req)
+	execution.operation = req.Operation
+	execution.sourceKind = req.SourceKind
+	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, execution)
+	if err != nil {
+		return deny()
+	}
+	response := HandleDEKUnwrapAndRewrapForMany(d, req)
+	// Key access and wrapping can outlast the authorization horizon.
+	now := d.Now()
+	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
+		return deny()
+	}
+	return response
 }
