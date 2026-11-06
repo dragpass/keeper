@@ -55,7 +55,9 @@ const (
 	//                          Extension JS heap.
 	ActionGroupDEKGenerateAndOpen   = "group_dek_generate_and_open"
 	ActionDEKRewrapForMember        = "dek_rewrap_for_member"
+	ActionDEKRewrapToPendingKey     = "dek_rewrap_to_pending_key"
 	ActionDEKUnwrapAndRewrapForMany = "dek_unwrap_and_rewrap_for_many"
+	ActionGroupRewrapPrepare        = "group_rewrap_prepare"
 
 	// GroupDecryptToClipboard: the AAD-free Group drag open. Refused with
 	// TOKEN_LEGACY_REFUSED: its tokens carry no authenticated expiry. Kept

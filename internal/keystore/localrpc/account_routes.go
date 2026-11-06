@@ -24,7 +24,7 @@ var accountRoutes = map[string]appRoute{
 		input:  func() any { return &proto.RotateUserKeypairPrepareRequest{} },
 	},
 	"/v1/account-key/rotate/rewrap-group-dek": {
-		action: proto.ActionDEKRewrapForMember,
+		action: proto.ActionDEKRewrapToPendingKey,
 		input:  func() any { return &appRotationRewrap{} },
 		bind:   bindRotationRewrap,
 	},

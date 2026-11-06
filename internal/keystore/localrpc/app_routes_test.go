@@ -276,15 +276,8 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		"owner_account_id": routeOwner, "other_account_id": routePeer,
 	}
 	code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-member", member)
-	if code != http.StatusOK || !result.Success || !strings.Contains(string(result.Data), `"pin_enforced":true`) {
-		t.Fatalf("member rewrap: %d %s", code, body)
-	}
-	var memberData struct {
-		EncryptedForOtherB64 string `json:"encrypted_for_other_b64"`
-	}
-	_ = json.Unmarshal(result.Data, &memberData)
-	if !bytes.Equal(openWith(t, peer.PrivateKey, memberData.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("member rewrap did not reach the peer")
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
+		t.Fatalf("unsigned member rewrap: %d %s", code, body)
 	}
 	for _, missing := range []string{"owner_account_id", "other_account_id"} {
 		without := map[string]any{}
@@ -298,14 +291,14 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		}
 	}
 
-	// The peer's key changes with no chain: the pin refuses and nothing is wrapped.
+	// A changed key cannot bypass the missing online decision.
 	changed := map[string]any{}
 	for key, value := range member {
 		changed[key] = value
 	}
 	changed["other_public_key"] = stranger.PublicKey
 	code, result, body = callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-member", changed)
-	if code != http.StatusOK || result.Success || result.ErrorCode != "peer_key_changed" || strings.Contains(body, "encrypted_for_other") {
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
 		t.Fatalf("changed key: %d %s", code, body)
 	}
 
@@ -323,8 +316,8 @@ func TestAppGroupDEKRoutesAlwaysEnforcePins(t *testing.T) {
 		{"account_id": routePeer, "public_key": peer.PublicKey},
 		{"public_key": archive.PublicKey, "org_archive": true},
 	}, nil)
-	if code != http.StatusOK || !result.Success {
-		t.Fatalf("many: %d %s", code, body)
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_recipients") {
+		t.Fatalf("unsigned many rewrap: %d %s", code, body)
 	}
 	refusals := map[string][]map[string]any{
 		"an exempt stranger":         {{"public_key": stranger.PublicKey}},
@@ -367,8 +360,8 @@ func TestAppGroupDEKRoutesTakeTheirOwnSizeCap(t *testing.T) {
 	if len(raw) <= maxRequestBytes {
 		t.Fatalf("payload %d is not past the default cap", len(raw))
 	}
-	if code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-many", payload); code != http.StatusOK || !result.Success {
-		t.Fatalf("large rewrap: %d %s", code, body)
+	if code, result, body := callRoute(t, server, session, csrf, "/v1/group-dek/rewrap-for-many", payload); code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
+		t.Fatalf("large unsigned rewrap was not decoded then refused: %d %s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/auth/recovery/begin", map[string]string{
 		"alias": strings.Repeat("a", maxRequestBytes), "recovery_key": "x",
@@ -396,7 +389,7 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 		t.Fatalf("member rewrap evidence = %v, want the App's", got)
 	}
 	bound, err = bindManyRewrap(nil, &appManyRewrap{
-		WrappedForMeB64: "d3JhcHBlZA==", OwnerAccountID: routeOwner,
+		WrappedForMeB64: "d3JhcHBlZA==", SourceHandle: "generated-handle", OwnerAccountID: routeOwner,
 		Recipients: []appManyRecipient{{AccountID: routePeer, PublicKey: "peer", EnrollmentEvidence: evidence}},
 	})
 	if err != nil {
@@ -404,6 +397,9 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 	}
 	if got := bound.(proto.DEKUnwrapAndRewrapForManyRequest).Recipients[0].EnrollmentEvidence; got != evidence {
 		t.Fatalf("many rewrap evidence = %v, want the App's", got)
+	}
+	if got := bound.(proto.DEKUnwrapAndRewrapForManyRequest).SourceHandle; got != "generated-handle" {
+		t.Fatal("App route dropped the generated Group DEK source handle")
 	}
 	// Only an account recipient is pinned; the org archive key takes no proof.
 	if _, err := bindManyRewrap(nil, &appManyRewrap{
@@ -427,7 +423,7 @@ func TestAppGroupDEKRoutesForwardEnrollmentEvidence(t *testing.T) {
 		"other_public_key":   peer.PublicKey, "owner_account_id": routeOwner, "other_account_id": routePeer,
 		"enrollment_evidence": evidence,
 	})
-	if code != http.StatusOK || !result.Success {
-		t.Fatalf("member rewrap with enrollment evidence: %d %s", code, body)
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
+		t.Fatalf("unsigned member rewrap with enrollment evidence: %d %s", code, body)
 	}
 }

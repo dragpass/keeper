@@ -26,11 +26,18 @@ func groupActions() map[string]action {
 		// whose size the caller controls, and the ceiling has to apply before
 		// the Group DEK is unwrapped.
 		proto.ActionDEKRewrapForMember: wrapCapped(
-			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKRewrapForMember,
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleAuthorizedDEKRewrapForMember,
 		).appOnlyAction().e2eFixtureOnNative(),
+		// Account rotation has a separate, Keeper-chosen pending-key target.
+		proto.ActionDEKRewrapToPendingKey: wrapCapped(
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKRewrapToPendingKey,
+		).appOnlyAction(),
 		proto.ActionDEKUnwrapAndRewrapForMany: wrapCapped(
-			proto.DEKRewrapMaxRequestBytes, handlers.HandleDEKUnwrapAndRewrapForMany,
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleAuthorizedDEKUnwrapAndRewrapForMany,
 		).appOnlyAction().e2eFixtureOnNative(),
+		proto.ActionGroupRewrapPrepare: wrapCapped(
+			proto.DEKRewrapMaxRequestBytes, handlers.HandleGroupRewrapPrepare,
+		).appOnlyAction(),
 
 		// decrypt-to-clipboard (Keeper-owned plaintext sink)
 		proto.ActionGroupDecryptToClipboard:  wrap(handlers.HandleGroupDecryptToClipboard),

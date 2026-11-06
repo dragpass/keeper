@@ -102,6 +102,11 @@ var authAndGroupRoutes = map[string]appRoute{
 		bind:       bindMemberRewrap,
 		plainLimit: proto.DEKRewrapMaxRequestBytes,
 	},
+	"/v1/group-dek/rewrap-prepare": {
+		action:     proto.ActionGroupRewrapPrepare,
+		input:      func() any { return &proto.GroupRewrapPrepareRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
 	"/v1/group-dek/rewrap-for-many": {
 		action:     proto.ActionDEKUnwrapAndRewrapForMany,
 		input:      func() any { return &appManyRewrap{} },
@@ -120,6 +125,9 @@ type appGenerate struct {
 type appMemberRewrap struct {
 	WrappedForMeB64    string                       `json:"wrapped_for_me_b64"`
 	OtherPublicKey     string                       `json:"other_public_key"`
+	Operation          string                       `json:"operation,omitempty"`
+	SourceKind         string                       `json:"source_kind,omitempty"`
+	Decision           *proto.GroupRewrapDecision   `json:"decision,omitempty"`
 	OwnerAccountID     string                       `json:"owner_account_id"`
 	OtherAccountID     string                       `json:"other_account_id"`
 	RotationStatements []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
@@ -130,10 +138,14 @@ type appMemberRewrap struct {
 }
 
 type appManyRewrap struct {
-	WrappedForMeB64 string              `json:"wrapped_for_me_b64"`
-	OwnerAccountID  string              `json:"owner_account_id"`
-	Recipients      []appManyRecipient  `json:"recipients"`
-	GrantContext    *proto.GrantContext `json:"grant_context,omitempty"`
+	WrappedForMeB64 string                     `json:"wrapped_for_me_b64"`
+	SourceHandle    string                     `json:"source_handle,omitempty"`
+	Operation       string                     `json:"operation,omitempty"`
+	SourceKind      string                     `json:"source_kind,omitempty"`
+	Decision        *proto.GroupRewrapDecision `json:"decision,omitempty"`
+	OwnerAccountID  string                     `json:"owner_account_id"`
+	Recipients      []appManyRecipient         `json:"recipients"`
+	GrantContext    *proto.GrantContext        `json:"grant_context,omitempty"`
 	// NarrowToDecryptOnly — the audit switch retiring a legacy version.
 	NarrowToDecryptOnly bool `json:"narrow_to_decrypt_only,omitempty"`
 }
@@ -167,6 +179,9 @@ func bindMemberRewrap(_ *Server, input any) (any, error) {
 	return proto.DEKRewrapForMemberRequest{
 		WrappedForMeB64:    in.WrappedForMeB64,
 		OtherPublicKey:     in.OtherPublicKey,
+		Operation:          in.Operation,
+		SourceKind:         in.SourceKind,
+		Decision:           in.Decision,
 		OwnerAccountID:     in.OwnerAccountID,
 		OtherAccountID:     in.OtherAccountID,
 		RotationStatements: in.RotationStatements,
@@ -216,6 +231,10 @@ func bindManyRewrap(s *Server, input any) (any, error) {
 	}
 	return proto.DEKUnwrapAndRewrapForManyRequest{
 		WrappedForMeB64:     in.WrappedForMeB64,
+		SourceHandle:        in.SourceHandle,
+		Operation:           in.Operation,
+		SourceKind:          in.SourceKind,
+		Decision:            in.Decision,
 		OwnerAccountID:      in.OwnerAccountID,
 		Recipients:          recipients,
 		GrantContext:        in.GrantContext,

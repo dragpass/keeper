@@ -79,6 +79,21 @@ func TestNewAppGroupDisplayChallengeStoreWiring(t *testing.T) {
 	}
 }
 
+func TestNewAppGroupRewrapChallengeStoreWiring(t *testing.T) {
+	injected := handlers.NewGroupRewrapChallengeStore()
+	app := NewApp(Deps{GroupRewrapChallenges: injected})
+	if app.GroupRewrapChallenges != injected || app.HandlersDeps().GroupRewrapChallenges != injected {
+		t.Fatal("injected Group rewrap challenge store was not passed to handlers")
+	}
+	fresh := NewApp(Deps{})
+	if fresh.GroupRewrapChallenges == nil || fresh.HandlersDeps().GroupRewrapChallenges != fresh.GroupRewrapChallenges {
+		t.Fatal("default Group rewrap challenge store was not passed to handlers")
+	}
+	if fresh.GroupRewrapChallenges == injected {
+		t.Fatal("different Keeper Apps shared challenge state")
+	}
+}
+
 func TestNewApp_RespectsInjection(t *testing.T) {
 	store := testdouble.NewMemorySecretStore()
 	frozen := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)

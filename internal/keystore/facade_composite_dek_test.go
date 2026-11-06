@@ -49,9 +49,7 @@ func TestHandleAppRequest_GroupDEKGenerateAndOpen_JSONDispatch(t *testing.T) {
 	})
 }
 
-// TestHandleAppRequest_DEKRewrapForMember_JSONDispatch verifies that the
-// composite action is invoked via the dispatcher and the response
-// includes encrypted_for_other_b64.
+// An App request without a server decision cannot reach the rewrap handler.
 func TestHandleAppRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 	app := newFacadeTestApp()
 	myPubPEM, _ := setupAppKeyPair(t, app)
@@ -74,17 +72,11 @@ func TestHandleAppRequest_DEKRewrapForMember_JSONDispatch(t *testing.T) {
 		wrappedJSON, pubJSON,
 	)
 	resp := app.HandleAppRequest("facade-session", "", []byte(msg))
-	if !resp.Success {
-		t.Fatalf("dispatch failed: %s", resp.Error)
+	if resp.Success || resp.ErrorCode != "not_found" || resp.Data != nil {
+		t.Fatalf("unsigned dispatch was not refused: success=%t code=%s", resp.Success, resp.ErrorCode)
 	}
 	if resp.RequestID != "r-rewrap" {
 		t.Errorf("request_id echo: got %q", resp.RequestID)
-	}
-	rawResp, _ := json.Marshal(resp.Data)
-	var data DEKRewrapForMemberResponseData
-	json.Unmarshal(rawResp, &data)
-	if data.EncryptedForOtherB64 == "" {
-		t.Error("encrypted_for_other_b64 should not be empty")
 	}
 }
 

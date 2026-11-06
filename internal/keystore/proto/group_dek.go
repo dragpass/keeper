@@ -102,8 +102,11 @@ type GroupDEKGenerateAndOpenResponseData struct {
 // check a Native Messaging caller could receive the Group DEK under a key it
 // holds and open bound tokens offline.
 type DEKRewrapForMemberRequest struct {
-	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
-	OtherPublicKey  string `json:"other_public_key"`
+	WrappedForMeB64 string               `json:"wrapped_for_me_b64"`
+	OtherPublicKey  string               `json:"other_public_key"`
+	Operation       string               `json:"operation,omitempty"`
+	SourceKind      string               `json:"source_kind,omitempty"`
+	Decision        *GroupRewrapDecision `json:"decision,omitempty"`
 	// OwnerAccountID scopes the pin. Pins belong to the account doing the
 	// wrapping, so two accounts sharing a device keep separate trust records.
 	OwnerAccountID string `json:"owner_account_id,omitempty"`
@@ -180,7 +183,11 @@ type DEKRewrapForMemberResponseData struct {
 // flat, unenforced `recipient_public_keys` list was removed in 0.0.58; a
 // payload that still sends only it decodes to no recipients and is refused.
 type DEKUnwrapAndRewrapForManyRequest struct {
-	WrappedForMeB64 string `json:"wrapped_for_me_b64"`
+	WrappedForMeB64 string               `json:"wrapped_for_me_b64"`
+	SourceHandle    string               `json:"source_handle,omitempty"`
+	Operation       string               `json:"operation,omitempty"`
+	SourceKind      string               `json:"source_kind,omitempty"`
+	Decision        *GroupRewrapDecision `json:"decision,omitempty"`
 	// A recipient with no account_id is pin-exempt: this Keeper's own key, or
 	// the one recipient marked org_archive (a resource, not an account).
 	Recipients []DEKRewrapRecipient `json:"recipients"`
@@ -233,6 +240,11 @@ const DEKRewrapMaxRequestBytes = 512 * 1024
 func (r DEKUnwrapAndRewrapForManyRequest) Validate() error {
 	if _, err := requireBase64(r.WrappedForMeB64, "wrapped_for_me_b64"); err != nil {
 		return err
+	}
+	if r.SourceHandle != "" {
+		if err := requireHandle(r.SourceHandle, "source_handle"); err != nil {
+			return err
+		}
 	}
 	if len(r.Recipients) == 0 {
 		return newValidationError("recipients", "must not be empty")
