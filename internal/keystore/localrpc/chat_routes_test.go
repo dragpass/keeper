@@ -112,6 +112,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_quorum_combine_and_rewrap",
 	"/v1/archive/archive_session_begin",
 	"/v1/archive/archive_session_end",
+	"/v1/archive/archive_share_prepare",
 	"/v1/archive/archive_share_rewrap",
 	"/v1/archive/archive_unwrap_and_rewrap",
 	"/v1/auth/login/ensure-request-key",

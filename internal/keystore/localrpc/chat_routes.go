@@ -368,6 +368,11 @@ var archiveRoutes = map[string]appRoute{
 		input:      func() any { return &proto.ArchiveKeySplitRequest{} },
 		plainLimit: proto.DEKRewrapMaxRequestBytes,
 	},
+	"/v1/archive/archive_share_prepare": {
+		action:     proto.ActionArchiveSharePrepare,
+		input:      func() any { return &proto.ArchiveSharePrepareRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
 	"/v1/archive/archive_share_rewrap": {
 		action:     proto.ActionArchiveShareRewrap,
 		input:      func() any { return &proto.ArchiveShareRewrapRequest{} },
