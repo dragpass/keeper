@@ -123,7 +123,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 // key published to the account directory that the share was wrapped to at
 // split time) to the recovery session public key, so the coordinator can
 // combine it. The share plaintext lives only briefly in Keeper memory.
-func HandleArchiveShareRewrap(d Deps, req proto.ArchiveShareRewrapRequest) proto.BaseResponse {
+func rewrapArchiveShare(d Deps, req proto.ArchiveShareRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive share rewrap processing...")
 
 	if err := req.Validate(); err != nil {

@@ -40,6 +40,7 @@ var appRouteOnlyCalls = []struct {
 		"wrapped_for_archive_b64": "AAAA", "account_archive_public_key": "x",
 	}},
 	{proto.ActionArchiveKeySplit, "/v1/archive/archive_key_split", map[string]any{}},
+	{proto.ActionArchiveSharePrepare, "/v1/archive/archive_share_prepare", map[string]any{}},
 	{proto.ActionArchiveShareRewrap, "/v1/archive/archive_share_rewrap", map[string]any{}},
 	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{}},
 	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{}},

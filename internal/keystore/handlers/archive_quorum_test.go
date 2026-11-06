@@ -260,7 +260,7 @@ func TestArchiveQuorum_SplitMissingArchiveKey(t *testing.T) {
 	}
 }
 
-// HandleArchiveShareRewrap must round-trip through an admin's own ACCOUNT
+// The internal cryptographic step must round-trip through an admin's own ACCOUNT
 // archive slot (the receiving key the share was wrapped to at split time): a
 // share wrapped to the admin's account key becomes a share wrapped to the
 // session key whose plaintext is unchanged.
@@ -276,7 +276,7 @@ func TestArchiveQuorum_ShareRewrapHandler(t *testing.T) {
 	shareBytes := []byte("serialized-shamir-share-bytes-stand-in-0123456789")
 	wk, ct, _ := crypto.HybridWrap(adminPub, shareBytes)
 
-	resp := HandleArchiveShareRewrap(adminDeps, proto.ArchiveShareRewrapRequest{
+	resp := rewrapArchiveShare(adminDeps, proto.ArchiveShareRewrapRequest{
 		WrappedKey:       wk,
 		Ciphertext:       ct,
 		SessionPublicKey: sessionKP.PublicKey,
@@ -376,7 +376,7 @@ func TestArchiveQuorum_ShareRewrapIgnoresOrgSlot(t *testing.T) {
 	orgPub, _ := crypto.ParsePublicKey(orgKP.PublicKey)
 	wk, ct, _ := crypto.HybridWrap(orgPub, []byte("share-bytes"))
 
-	resp := HandleArchiveShareRewrap(adminDeps, proto.ArchiveShareRewrapRequest{
+	resp := rewrapArchiveShare(adminDeps, proto.ArchiveShareRewrapRequest{
 		WrappedKey:       wk,
 		Ciphertext:       ct,
 		SessionPublicKey: sessionKP.PublicKey,

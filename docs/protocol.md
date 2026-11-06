@@ -287,7 +287,8 @@ dependency).
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`archive_key_split`|`org_id?` (0.0.58), `threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|App only (a Native Messaging frame is refused). Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the org archive private key (kept: the org public key; the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. Not idempotent — a missing private key → `not_found`. (0.0.58) With `org_id` the key split is the one in the slot holding the org's public key (its own, else the device-wide one) and only that slot's private half is deleted; once split, the org's own slot never falls through to the device-wide key.|
-|`archive_share_rewrap`|`wrapped_key`, `ciphertext`, `session_public_key`|`{ wrapped_key, ciphertext }`|App only (a Native Messaging frame is refused). An approving admin re-wraps their own share from their ACCOUNT archive key (the dedicated account slot — the key the share was wrapped to at split time; the org slot is not consulted) to the recovery session public key. Distinct from `archive_unwrap_and_rewrap` because shares are hybrid envelopes, not 32-byte DEKs. Missing account archive slot → `not_found`.|
+|`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
+|`archive_share_rewrap`|`account_id`, `org_id`, `recovery_session_id`, `wrapped_key`, `ciphertext`, `session_public_key`, `decision`|`{ wrapped_key, ciphertext }`|Paired App only. Requires the prepared exact request and a server-signed archive-share decision before reading the account archive private key. Missing, expired, replayed or mismatched authority returns no output. The account receiving slot is used, never the org archive slot. Expiry is checked again after cryptography before output.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|App only (a Native Messaging frame is refused). Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
 |`archive_session_end`|_empty_|`{ ended }`|App only (a Native Messaging frame is refused). Destroy the recovery-session keypair. Idempotent (`ended=false` when none was open).|
 |`archive_quorum_combine_and_rewrap`|`rewrapped_shares[]` (each `{ wrapped_key, ciphertext }` to the session key), `wrapped_old_dek_b64`, `grant_context?` (0.0.58, every re-grant carries its label), `recipients[]` (`{ account_id?, public_key, rotation_statements? }`, as on `dek_unwrap_and_rewrap_for_many`), `owner_account_id` when a recipient names an account. The flat `recipient_public_keys[]` (pre-0.0.56) was removed in 0.0.58|`{ grants: [{ recipient_fingerprint, encrypted_group_dek_b64 }] }`|App only (a Native Messaging frame is refused). Every recipient naming an account is judged by its pin before anything is reassembled; one `changed` refuses the whole call. Coordinator unwraps the re-wrapped shares with the session private key, Shamir-reconstructs the archive private key, RSA-OAEP-unwraps the OLD Group DEK, and re-wraps it to each target member. All reconstructed key material (shares, private key, raw DEK) lives only in memguard and is wiped before returning. Below-threshold or tampered shares reconstruct a non-parsable key → `crypto_failure` (no silent wrong-DEK leak). Missing session slot → `not_found`.|
@@ -3228,3 +3229,34 @@ key rotated after an unproven pin has no enrollment proof for its current key,
 so a wrap to it is refused under a trust file until a proven path exists, the
 same as for a Keeper meeting that key with no pin at all. Without independent
 witnesses a log proof is still a server-side record (see "Key Transparency").
+
+
+### Archive share rewrap authorization
+
+Archive-share decisions use the distinct `dragpass.archive.share.rewrap|1`
+domain. After that prefix, each field is encoded as `|<UTF-8-byte-length>:<value>`
+in this order: challenge, account ID, device ID, login token ID, session-issued
+nanoseconds, organization ID, recovery-session ID, quorum configuration ID,
+request digest, issued-at seconds, expires-at seconds, server key version.
+The validity window is ten seconds. Keeper checks the configured server signing
+key, local challenge deadline and current binding before consuming the challenge
+and accessing the private key. Concurrent execution admits one caller only.
+
+The SHA-256 request digest covers the domain `dragpass.archive.share.request|1`
+and the same length-prefixed encoding of account ID, organization ID,
+recovery-session ID, wrapped-key Base64, ciphertext Base64 and the exact session
+public-key PEM. Ariadne reconstructs these inputs from the stored participant
+share and pending recovery session. It checks current login, membership,
+configuration, active archive key, registered receiving key and absence of an
+approval. Authorization and its audit event commit together with the account,
+group and organization decision horizons. A changed target or source cannot be
+authorized merely by declaring a matching digest.
+
+Quorum cancellation, approval, configuration deletion and receiving-key updates
+wait for previously issued share authority to expire before committing. Existing
+account, membership, organization and archive-key revocation fences also cover
+this decision. A wait failure leaves the attempted state change uncommitted.
+This gate does not authorize direct archive regrant, key splitting or quorum
+combine. Those operations require their own authority contracts. Older callers
+without a decision are refused; newer callers do not fall back when preparation
+or the server endpoint is unavailable.

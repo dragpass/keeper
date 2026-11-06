@@ -28,6 +28,7 @@ const (
 	//   reconstructed key material is wiped before returning; only the new
 	//   per-recipient wraps are in the response.
 	ActionArchiveKeySplit               = "archive_key_split"
+	ActionArchiveSharePrepare           = "archive_share_prepare"
 	ActionArchiveShareRewrap            = "archive_share_rewrap"
 	ActionArchiveSessionBegin           = "archive_session_begin"
 	ActionArchiveSessionEnd             = "archive_session_end"

@@ -51,7 +51,8 @@ type Deps struct {
 	GroupDisplayChallenges *GroupDisplayChallengeStore
 	// GroupRewrapChallenges binds signed rewrap decisions to one exact local
 	// request. A nil store refuses preparation and execution.
-	GroupRewrapChallenges *GroupRewrapChallengeStore
+	GroupRewrapChallenges  *GroupRewrapChallengeStore
+	ArchiveShareChallenges *ArchiveShareChallengeStore
 	// ChangeBaselineChallenges binds a one-use change-baseline decision (lv83)
 	// to the exact token and entry Keeper prepared. A separate store, so a
 	// baseline challenge can never satisfy a display decision or the reverse.

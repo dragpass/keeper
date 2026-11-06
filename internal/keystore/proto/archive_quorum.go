@@ -76,9 +76,13 @@ type ArchiveKeySplitResponseData struct {
 // ArchiveShareRewrapRequest — an admin re-wraps their own hybrid-wrapped share
 // (currently under their account archive key) to the recovery session key.
 type ArchiveShareRewrapRequest struct {
-	WrappedKey       string `json:"wrapped_key"`
-	Ciphertext       string `json:"ciphertext"`
-	SessionPublicKey string `json:"session_public_key"`
+	AccountID         string                `json:"account_id"`
+	OrgID             string                `json:"org_id"`
+	RecoverySessionID string                `json:"recovery_session_id"`
+	Decision          *ArchiveShareDecision `json:"decision,omitempty"`
+	WrappedKey        string                `json:"wrapped_key"`
+	Ciphertext        string                `json:"ciphertext"`
+	SessionPublicKey  string                `json:"session_public_key"`
 }
 
 func (r ArchiveShareRewrapRequest) Validate() error {

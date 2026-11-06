@@ -84,6 +84,7 @@ type Deps struct {
 	// GroupDisplayChallenges holds one-use Group display challenges in memory.
 	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
 	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
+	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
 	// AuditAuthorizations holds the receipts and permits the audit actions
 	// consumed. Lives and dies with the process; never persisted.
 	AuditAuthorizations *handlers.AuditAuthorizationStore
@@ -108,6 +109,7 @@ type App struct {
 	MessageChallenges      *handlers.MessageChallengeStore
 	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
 	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
+	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
 	AuditAuthorizations    *handlers.AuditAuthorizationStore
 	CredentialNonces       *handlers.CredentialNonceStore
 	KeyTransparency        keytransparency.Gate
@@ -153,6 +155,7 @@ func NewApp(deps Deps) *App {
 		MessageChallenges:      deps.MessageChallenges,
 		GroupDisplayChallenges: deps.GroupDisplayChallenges,
 		GroupRewrapChallenges:  deps.GroupRewrapChallenges,
+		ArchiveShareChallenges: deps.ArchiveShareChallenges,
 		AuditAuthorizations:    deps.AuditAuthorizations,
 		CredentialNonces:       deps.CredentialNonces,
 		KeyTransparency:        deps.KeyTransparency,
@@ -188,6 +191,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.GroupDisplayChallenges == nil {
 		app.GroupDisplayChallenges = handlers.NewGroupDisplayChallengeStore()
+	}
+	if app.ArchiveShareChallenges == nil {
+		app.ArchiveShareChallenges = handlers.NewArchiveShareChallengeStore()
 	}
 	if app.GroupRewrapChallenges == nil {
 		app.GroupRewrapChallenges = handlers.NewGroupRewrapChallengeStore()
