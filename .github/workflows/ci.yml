@@ -22,7 +22,7 @@ jobs:
         include:
           - os: ubuntu-latest
             cgo: 0
-          - os: macos-14
+          - os: macos-15
             cgo: 1
           - os: windows-latest
             cgo: 0
@@ -80,7 +80,7 @@ jobs:
         include:
           - os: ubuntu-latest
             rust_target: ''
-          - os: macos-14
+          - os: macos-15
             rust_target: ''
           # Windows releases cross-build with mingw, never MSVC, so CI has to
           # name the gnu triple rather than take the runner's default host
