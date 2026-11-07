@@ -174,6 +174,9 @@ func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapReques
 	if err != nil {
 		return deny()
 	}
+	if !archiveRotationStageMatches(d, req) {
+		return deny()
+	}
 	response := archiveUnwrapAndRewrap(d, req)
 	now := d.Now()
 	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {

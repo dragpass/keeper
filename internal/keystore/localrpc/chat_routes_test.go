@@ -618,17 +618,17 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	}
 
 	// No staged key yet: the rotation target does not exist.
-	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true}); code != http.StatusBadRequest {
+	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner}); code != http.StatusBadRequest {
 		t.Fatalf("rotation rewrap with nothing staged: %d", code)
 	}
 	if code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_begin", map[string]any{}); code != http.StatusOK || !begun.Success {
 		t.Fatalf("rotate begin: %d %s", code, body)
 	}
-	code, result, body := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true})
+	code, result, body := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner})
 	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("rotation rewrap: %d %s", code, body)
 	}
-	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true})
+	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true, OwnerAccountID: routeOwner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +682,7 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	if code, committed, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_commit", map[string]any{}); code != http.StatusOK || !committed.Success {
 		t.Fatalf("rotate commit: %d %s", code, body)
 	}
-	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true}); code != http.StatusBadRequest {
+	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner}); code != http.StatusBadRequest {
 		t.Fatalf("rotation rewrap after commit: %d", code)
 	}
 }
@@ -750,12 +750,12 @@ func TestArchiveRotationRoutesAreOrgScoped(t *testing.T) {
 	}
 
 	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_unwrap_and_rewrap", map[string]any{
-		"org_id": orgA, "wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true,
+		"org_id": orgA, "wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner,
 	})
 	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("unsigned rotation rewrap A: %d %s", code, body)
 	}
-	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{OrgID: orgA, WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true})
+	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{OrgID: orgA, WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true, OwnerAccountID: routeOwner})
 	if err != nil {
 		t.Fatal(err)
 	}

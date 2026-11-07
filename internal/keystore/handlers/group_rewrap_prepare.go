@@ -50,6 +50,9 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 		var recipients []proto.RewrapRecipientCommitment
 		var err error
 		if req.Archive != nil {
+			if !archiveRotationStageMatches(d, *req.Archive) {
+				return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
+			}
 			context, recipientsDigestText, recipients, err = archiveRewrapCommitments(*req.Archive)
 		} else if req.Combine != nil {
 			context, recipientsDigestText, recipients, err = combineRewrapCommitments(*req.Combine)

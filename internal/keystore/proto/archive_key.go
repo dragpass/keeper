@@ -134,6 +134,7 @@ type AccountArchiveKeyGenerateResponseData struct {
 // instead names the registered account archive key authorized by a signed
 // archive_handoff decision. Neither shape permits an unsigned external wrap.
 type ArchiveUnwrapAndRewrapRequest struct {
+	ToStagedArchiveKey        bool                 `json:"to_staged_archive_key,omitempty"`
 	ArchiveRecipientAccountID string               `json:"archive_recipient_account_id,omitempty"`
 	Decision                  *GroupRewrapDecision `json:"decision,omitempty"`
 	// OrgID (0.0.58, optional) tries the org's own archive slot before the
@@ -172,10 +173,10 @@ func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 	if err := requireOptionalAccountUUID(r.ArchiveRecipientAccountID, "archive_recipient_account_id"); err != nil {
 		return err
 	}
-	if r.RecipientAccountID != "" && r.ArchiveRecipientAccountID != "" {
+	if (r.RecipientAccountID != "" && r.ArchiveRecipientAccountID != "") || (r.ToStagedArchiveKey && (r.RecipientAccountID != "" || r.ArchiveRecipientAccountID != "")) {
 		return newValidationError("archive_recipient_account_id", "choose one recipient key purpose")
 	}
-	if (r.OwnerAccountID == "") != (r.RecipientAccountID == "" && r.ArchiveRecipientAccountID == "") {
+	if (r.OwnerAccountID == "") != (r.RecipientAccountID == "" && r.ArchiveRecipientAccountID == "" && !r.ToStagedArchiveKey) {
 		return newValidationError("owner_account_id", "must be sent together with recipient_account_id")
 	}
 	if r.RecipientAccountID == "" && len(r.RotationStatements) > 0 {

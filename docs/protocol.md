@@ -3060,7 +3060,8 @@ calls, is App-only: a Native Messaging frame is refused with
 have their own shape (0.0.56), so a member account key is always pin-checked:
 
 - `archive_unwrap_and_rewrap`, exactly one target:
-  `{ wrapped_for_archive_b64, to_staged_archive_key: true }` wraps to the
+  `{ wrapped_for_archive_b64, to_staged_archive_key: true, owner_account_id,
+  grant_context, decision }` wraps to the
   staged key of the rotation in progress, which Keeper reads itself (400 when
   nothing is staged); (0.0.58) every shape takes `org_id?`, which picks the
   org's own stage (else the device-wide one) and is passed to the action;
@@ -3329,3 +3330,22 @@ account archive public key, and the stored owner-solo archive grant. The target
 need not already belong to the grant's group. Final handoff submission rechecks
 authority, source keys/grants and recipient key under transaction locks and waits
 out previously issued organization decisions before replacing grants.
+
+
+### Staged archive rotation authorization
+
+Operation `archive_rotation` uses `stored_archive` and commits the exact request
+under `dragpass:archive-rotation-request:v1`. The named owner is the recipient
+identity. Preparation includes the expected `recipient_public_key` and
+`to_staged_archive_key: true`; execution over App RPC selects that organization's
+current staged public key itself. Keeper checks the public stage during prepare
+and after decision verification before private-key use. A replaced stage, absent
+owner, absent context or unsigned request returns no wrapped grant. No peer pin
+is written for the staged archive key.
+
+The server checks current ownership, owner-solo source custody, the stored source
+grant and its lifetime, and reserves the existing revocation horizons. Its signed
+fingerprint is a commitment to the requested stage, not server proof of custody;
+Keeper enforces local custody. Final server rotation rechecks active owner
+membership and organization ownership under its transaction locks. The App
+requires org-scoped Keeper support and never retries as an unsigned rotation.

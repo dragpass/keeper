@@ -15,9 +15,10 @@ type GroupRewrapPrepareRequest struct {
 
 func (r GroupRewrapPrepareRequest) Validate() error {
 	if r.Archive != nil {
+		rotation := r.Operation == "archive_rotation" && r.Archive.ToStagedArchiveKey
 		member := r.Operation == "archive_member_regrant" && r.Archive.RecipientAccountID != "" && r.Archive.ArchiveRecipientAccountID == ""
 		handoff := r.Operation == "archive_handoff" && r.Archive.ArchiveRecipientAccountID != "" && r.Archive.RecipientAccountID == ""
-		if r.Many != nil || r.Combine != nil || r.Member.WrappedForMeB64 != "" || (!member && !handoff) || r.SourceKind != "stored_archive" || r.Archive.Decision != nil || r.Archive.GrantContext == nil || r.Archive.OwnerAccountID == "" {
+		if r.Many != nil || r.Combine != nil || r.Member.WrappedForMeB64 != "" || (!member && !handoff && !rotation) || r.SourceKind != "stored_archive" || r.Archive.Decision != nil || r.Archive.GrantContext == nil || r.Archive.OwnerAccountID == "" {
 			return newValidationError("archive", "exact archive operation context required")
 		}
 		if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {

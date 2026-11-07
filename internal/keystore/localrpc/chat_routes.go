@@ -413,7 +413,6 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 	in := input.(*appArchiveRewrap)
 	member := in.RecipientPublicKey != ""
 	handoff := in.AccountArchivePublicKey != ""
-	named := in.OwnerAccountID != "" || in.RecipientAccountID != "" || in.ArchiveRecipientAccountID != "" || len(in.RotationStatements) > 0 || in.EnrollmentEvidence != nil
 	targets := 0
 	for _, chosen := range []bool{in.ToStagedArchiveKey, member, handoff} {
 		if chosen {
@@ -423,7 +422,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 	if targets != 1 ||
 		(member && (in.OwnerAccountID == "" || in.RecipientAccountID == "" || in.ArchiveRecipientAccountID != "")) ||
 		(handoff && (in.OwnerAccountID == "" || in.ArchiveRecipientAccountID == "" || in.RecipientAccountID != "" || len(in.RotationStatements) > 0 || in.EnrollmentEvidence != nil)) ||
-		(in.ToStagedArchiveKey && named) {
+		(in.ToStagedArchiveKey && (in.OwnerAccountID == "" || in.RecipientAccountID != "" || in.ArchiveRecipientAccountID != "" || len(in.RotationStatements) > 0 || in.EnrollmentEvidence != nil)) {
 		return nil, errAppRouteRefused
 	}
 	if member {
@@ -457,6 +456,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 		OrgID:                     in.OrgID,
 		WrappedForArchiveB64:      in.WrappedForArchiveB64,
 		RecipientPublicKey:        target,
+		ToStagedArchiveKey:        in.ToStagedArchiveKey,
 		OwnerAccountID:            in.OwnerAccountID,
 		ArchiveRecipientAccountID: in.ArchiveRecipientAccountID,
 		GrantContext:              in.GrantContext,

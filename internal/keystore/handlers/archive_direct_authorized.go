@@ -8,18 +8,22 @@ import (
 	"errors"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
 // The key purpose fixes the operation; member authority cannot authorize handoff.
 func archiveRewrapCommitments(req proto.ArchiveUnwrapAndRewrapRequest) (groupRewrapContext, string, []proto.RewrapRecipientCommitment, error) {
 	invalid := errors.New("invalid archive member regrant")
-	if req.Validate() != nil || req.GrantContext == nil || req.OwnerAccountID == "" || (req.RecipientAccountID == "" && req.ArchiveRecipientAccountID == "") || req.OrgID != req.GrantContext.OrgID {
+	if req.Validate() != nil || req.GrantContext == nil || req.OwnerAccountID == "" || (req.RecipientAccountID == "" && req.ArchiveRecipientAccountID == "" && !req.ToStagedArchiveKey) || req.OrgID != req.GrantContext.OrgID {
 		return groupRewrapContext{}, "", nil, invalid
 	}
 	operation, domain, recipient := "archive_member_regrant", "dragpass:archive-member-regrant-request:v1", req.RecipientAccountID
 	if req.ArchiveRecipientAccountID != "" {
 		operation, domain, recipient = "archive_handoff", "dragpass:archive-handoff-request:v1", req.ArchiveRecipientAccountID
+	}
+	if req.ToStagedArchiveKey {
+		operation, domain, recipient = "archive_rotation", "dragpass:archive-rotation-request:v1", req.OwnerAccountID
 	}
 	source, err := base64.StdEncoding.DecodeString(req.WrappedForArchiveB64)
 	if err != nil {
@@ -46,4 +50,14 @@ func archiveRewrapCommitments(req proto.ArchiveUnwrapAndRewrapRequest) (groupRew
 	decoded, _ := hex.DecodeString(text)
 	copy(c.recipientsDigest[:], decoded)
 	return c, text, recipients, nil
+}
+
+// Reading only the public stage neither opens a private key nor falls back
+// after a storage error. Recheck at execution because staging can change.
+func archiveRotationStageMatches(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) bool {
+	if !req.ToStagedArchiveKey {
+		return true
+	}
+	_, public, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveStagingCandidates(req.OrgID))
+	return err == nil && found && public == req.RecipientPublicKey
 }
