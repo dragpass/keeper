@@ -45,7 +45,17 @@ func combineRewrapCommitments(req proto.ArchiveQuorumCombineAndRewrapRequest) (g
 	if err != nil {
 		return groupRewrapContext{}, "", nil, invalid
 	}
-	c := groupRewrapContext{operation: "quorum_combine", sourceKind: "archive_quorum", orgID: req.GrantContext.OrgID, groupID: req.GrantContext.GroupID, dekVersion: req.GrantContext.DekVersion, sourcePolicy: req.GrantContext.Policy, outputPolicy: req.GrantContext.Policy, sourceDigest: sha256.Sum256(source), requestDigest: sha256.Sum256(raw)}
+	// The issuer can reconstruct this commitment from its stored session and
+	// approvals without trusting caller-provided pin evidence.
+	parts := []string{"dragpass:archive-combine-source:v1", req.RecoverySessionID, base64.StdEncoding.EncodeToString(source)}
+	for _, share := range req.RewrappedShares {
+		parts = append(parts, share.WrappedKey, share.Ciphertext)
+	}
+	sourceRaw, err := json.Marshal(parts)
+	if err != nil {
+		return groupRewrapContext{}, "", nil, invalid
+	}
+	c := groupRewrapContext{operation: "quorum_combine", sourceKind: "archive_quorum", orgID: req.GrantContext.OrgID, groupID: req.GrantContext.GroupID, dekVersion: req.GrantContext.DekVersion, sourcePolicy: req.GrantContext.Policy, outputPolicy: req.GrantContext.Policy, sourceDigest: sha256.Sum256(sourceRaw), requestDigest: sha256.Sum256(raw)}
 	decoded, _ := hex.DecodeString(text)
 	copy(c.recipientsDigest[:], decoded)
 	return c, text, recipients, nil
