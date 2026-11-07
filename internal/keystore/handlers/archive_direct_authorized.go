@@ -11,11 +11,15 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-// Direct member regrant cannot authorize archive rotation or ownership handoff.
+// The key purpose fixes the operation; member authority cannot authorize handoff.
 func archiveRewrapCommitments(req proto.ArchiveUnwrapAndRewrapRequest) (groupRewrapContext, string, []proto.RewrapRecipientCommitment, error) {
 	invalid := errors.New("invalid archive member regrant")
-	if req.Validate() != nil || req.GrantContext == nil || req.OwnerAccountID == "" || req.RecipientAccountID == "" || req.OrgID != req.GrantContext.OrgID {
+	if req.Validate() != nil || req.GrantContext == nil || req.OwnerAccountID == "" || (req.RecipientAccountID == "" && req.ArchiveRecipientAccountID == "") || req.OrgID != req.GrantContext.OrgID {
 		return groupRewrapContext{}, "", nil, invalid
+	}
+	operation, domain, recipient := "archive_member_regrant", "dragpass:archive-member-regrant-request:v1", req.RecipientAccountID
+	if req.ArchiveRecipientAccountID != "" {
+		operation, domain, recipient = "archive_handoff", "dragpass:archive-handoff-request:v1", req.ArchiveRecipientAccountID
 	}
 	source, err := base64.StdEncoding.DecodeString(req.WrappedForArchiveB64)
 	if err != nil {
@@ -25,7 +29,7 @@ func archiveRewrapCommitments(req proto.ArchiveUnwrapAndRewrapRequest) (groupRew
 	if err != nil {
 		return groupRewrapContext{}, "", nil, invalid
 	}
-	recipients := []proto.RewrapRecipientCommitment{{Kind: "account", AccountID: req.RecipientAccountID, KeyFingerprint: fp}}
+	recipients := []proto.RewrapRecipientCommitment{{Kind: "account", AccountID: recipient, KeyFingerprint: fp}}
 	text, err := proto.RewrapRecipientsDigest(recipients)
 	if err != nil {
 		return groupRewrapContext{}, "", nil, invalid
@@ -34,11 +38,11 @@ func archiveRewrapCommitments(req proto.ArchiveUnwrapAndRewrapRequest) (groupRew
 	raw, err := json.Marshal(struct {
 		Domain  string                              `json:"domain"`
 		Request proto.ArchiveUnwrapAndRewrapRequest `json:"request"`
-	}{"dragpass:archive-member-regrant-request:v1", req})
+	}{domain, req})
 	if err != nil {
 		return groupRewrapContext{}, "", nil, invalid
 	}
-	c := groupRewrapContext{operation: "archive_member_regrant", sourceKind: "stored_archive", orgID: req.OrgID, groupID: req.GrantContext.GroupID, dekVersion: req.GrantContext.DekVersion, sourcePolicy: req.GrantContext.Policy, outputPolicy: req.GrantContext.Policy, sourceDigest: sha256.Sum256(source), requestDigest: sha256.Sum256(raw)}
+	c := groupRewrapContext{operation: operation, sourceKind: "stored_archive", orgID: req.OrgID, groupID: req.GrantContext.GroupID, dekVersion: req.GrantContext.DekVersion, sourcePolicy: req.GrantContext.Policy, outputPolicy: req.GrantContext.Policy, sourceDigest: sha256.Sum256(source), requestDigest: sha256.Sum256(raw)}
 	decoded, _ := hex.DecodeString(text)
 	copy(c.recipientsDigest[:], decoded)
 	return c, text, recipients, nil

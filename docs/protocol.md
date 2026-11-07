@@ -3068,8 +3068,10 @@ have their own shape (0.0.56), so a member account key is always pin-checked:
   recipient_account_id, rotation_statements? }` is a break-glass re-grant to a
   member's account key, both ids required, judged by the pin (`changed`
   refuses with `peer_key_changed`);
-  `{ wrapped_for_archive_b64, account_archive_public_key }` is an ownership
-  handoff to the new owner's account archive key.
+  `{ wrapped_for_archive_b64, account_archive_public_key, owner_account_id,
+  archive_recipient_account_id, grant_context, decision }` is an ownership
+  handoff to the named account archive key. The matching prepare request uses
+  `recipient_public_key` for that same key.
 - `archive_quorum_combine_and_rewrap` (512 KiB):
   `{ recovery_session_id, rewrapped_shares, wrapped_old_dek_b64,
   owner_account_id, recipients, grant_context, decision }`,
@@ -3313,3 +3315,17 @@ revocation horizons and records the break-glass access in the same transaction.
 This member decision cannot authorize archive-key rotation, ownership handoff,
 or quorum combine. Those callers need distinct operation contracts; missing
 or incompatible authority is refused.
+
+
+### Archive ownership handoff authorization
+
+Operation `archive_handoff` uses source kind `stored_archive`, a named owner
+and `archive_recipient_account_id`, and commits the exact request under
+`dragpass:archive-handoff-request:v1`. It requires its own prepared challenge
+and signed decision before private-key access. Member regrant decisions cannot
+authorize this operation. Archive recipient keys do not write member peer pins.
+The API checks the current owner, active organization membership, the registered
+account archive public key, and the stored owner-solo archive grant. The target
+need not already belong to the grant's group. Final handoff submission rechecks
+authority, source keys/grants and recipient key under transaction locks and waits
+out previously issued organization decisions before replacing grants.

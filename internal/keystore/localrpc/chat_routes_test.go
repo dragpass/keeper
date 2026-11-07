@@ -657,7 +657,7 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	// An ownership handoff goes to the new owner's account archive key, which
 	// no pin tracks; the route says so by name.
 	handoff := routeKeypair(t)
-	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "account_archive_public_key": handoff.PublicKey})
+	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "account_archive_public_key": handoff.PublicKey, "owner_account_id": routeOwner, "archive_recipient_account_id": routePeer})
 	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("handoff rewrap: %d %s", code, body)
 	}
