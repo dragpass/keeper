@@ -3,15 +3,31 @@ package proto
 // GroupRewrapPrepareRequest binds one member or ordered batch rewrap before
 // the App requests an online server decision.
 type GroupRewrapPrepareRequest struct {
-	Operation            string                            `json:"operation"`
-	SourceKind           string                            `json:"source_kind"`
-	TokenID              string                            `json:"token_id"`
-	SessionIssuedAtNanos int64                             `json:"session_issued_at_nanos,string"`
-	Member               DEKRewrapForMemberRequest         `json:"member"`
-	Many                 *DEKUnwrapAndRewrapForManyRequest `json:"many,omitempty"`
+	Combine              *ArchiveQuorumCombineAndRewrapRequest `json:"combine,omitempty"`
+	Operation            string                                `json:"operation"`
+	SourceKind           string                                `json:"source_kind"`
+	TokenID              string                                `json:"token_id"`
+	SessionIssuedAtNanos int64                                 `json:"session_issued_at_nanos,string"`
+	Member               DEKRewrapForMemberRequest             `json:"member"`
+	Many                 *DEKUnwrapAndRewrapForManyRequest     `json:"many,omitempty"`
 }
 
 func (r GroupRewrapPrepareRequest) Validate() error {
+	if r.Combine != nil {
+		if r.Many != nil || r.Member.WrappedForMeB64 != "" || r.Operation != "quorum_combine" || r.SourceKind != "archive_quorum" || r.Combine.Decision != nil || r.Combine.GrantContext == nil || r.Combine.OwnerAccountID == "" {
+			return newValidationError("combine", "exact combine context required")
+		}
+		if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
+			return err
+		}
+		if err := requireMessageUUID(r.Combine.RecoverySessionID, "recovery_session_id"); err != nil {
+			return err
+		}
+		if r.SessionIssuedAtNanos <= 0 {
+			return newValidationError("session_issued_at_nanos", "must be positive")
+		}
+		return r.Combine.Validate()
+	}
 	if r.Many != nil {
 		if (r.Operation != "rotation_old_grants" || r.SourceKind != "stored_member") &&
 			(r.Operation != "audit_relabel" || r.SourceKind != "retained_member") &&

@@ -3260,3 +3260,22 @@ This gate does not authorize direct archive regrant, key splitting or quorum
 combine. Those operations require their own authority contracts. Older callers
 without a decision are refused; newer callers do not fall back when preparation
 or the server endpoint is unavailable.
+
+### Quorum combine authorization boundary
+
+`/v1/group-dek/rewrap-prepare` accepts `combine` for operation
+`quorum_combine` and source kind `archive_quorum`. Preparation requires the
+live account/device binding, login token identity, recovery-session UUID, grant
+context and ordered named recipients. It stores a bounded one-use challenge.
+The request commitment covers the entire combine request except the decision,
+including encrypted shares, recovery-session ID, source grant, policy and peer
+verification evidence, under `dragpass:archive-combine-request:v1`.
+
+`archive_quorum_combine_and_rewrap` requires that prepared challenge and a
+matching server-signed Group rewrap decision for this distinct operation.
+Member or share decisions cannot authorize combine. Signature, request and
+live binding checks precede peer-pin mutation and session-private-key reads.
+The decision is consumed once and output is withheld if the authority expires
+during reconstruction. Missing authority is refused without a compatibility
+fallback. The normal recovery caller must prepare the exact request and obtain
+its online decision before executing combine.

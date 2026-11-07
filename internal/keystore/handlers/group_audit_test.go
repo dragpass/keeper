@@ -744,7 +744,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	archivePub, _ := crypto.ParsePublicKey(archiveKP.PublicKey)
 	wrapped, _ := wrapGrant(archivePub, mustHex(t, v.GroupDEKHex), audit)
 	member, _ := crypto.GenerateRSAKeyPair()
-	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrapped),
 		Recipients: archiveRecipient(member.PublicKey), GrantContext: audit,
 	})

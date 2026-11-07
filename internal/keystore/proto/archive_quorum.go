@@ -137,10 +137,12 @@ type RewrappedShareInput struct {
 //	                 shape of dek_unwrap_and_rewrap_for_many. The flat
 //	                 recipient_public_keys list was removed in 0.0.58.
 type ArchiveQuorumCombineAndRewrapRequest struct {
-	RewrappedShares  []RewrappedShareInput `json:"rewrapped_shares"`
-	WrappedOldDEKB64 string                `json:"wrapped_old_dek_b64"`
-	Recipients       []DEKRewrapRecipient  `json:"recipients"`
-	OwnerAccountID   string                `json:"owner_account_id,omitempty"`
+	RecoverySessionID string                `json:"recovery_session_id"`
+	Decision          *GroupRewrapDecision  `json:"decision,omitempty"`
+	RewrappedShares   []RewrappedShareInput `json:"rewrapped_shares"`
+	WrappedOldDEKB64  string                `json:"wrapped_old_dek_b64"`
+	Recipients        []DEKRewrapRecipient  `json:"recipients"`
+	OwnerAccountID    string                `json:"owner_account_id,omitempty"`
 	// GrantContext (0.0.58, optional) is the context of wrapped_old_dek_b64;
 	// every re-grant carries the same label.
 	GrantContext *GrantContext `json:"grant_context,omitempty"`

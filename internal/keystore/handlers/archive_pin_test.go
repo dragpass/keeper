@@ -86,7 +86,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	stranger, _ := crypto.GenerateRSAKeyPair()
 
 	combine := func(recipients ...proto.DEKRewrapRecipient) proto.BaseResponse {
-		return HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+		return archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 			RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 			OwnerAccountID: archivePinOwner, Recipients: recipients,
 		})
@@ -102,7 +102,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	if refused.Success || refused.ErrorCode != string(errs.ErrCodePeerKeyChanged) {
 		t.Fatalf("combine with a changed recipient: %+v", refused)
 	}
-	none := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	none := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		OwnerAccountID: archivePinOwner,
 	})

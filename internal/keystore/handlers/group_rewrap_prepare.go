@@ -28,6 +28,9 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 	if req.Many != nil {
 		ownerAccountID = req.Many.OwnerAccountID
 	}
+	if req.Combine != nil {
+		ownerAccountID = req.Combine.OwnerAccountID
+	}
 	if !found || binding.SignedOut || binding.Generation == 0 || binding.AccountID != ownerAccountID {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
 	}
@@ -38,8 +41,16 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 	if !found || deviceID == "" {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
 	}
-	if req.Many != nil {
-		context, recipientsDigestText, recipients, err := batchRewrapCommitments(*req.Many)
+	if req.Many != nil || req.Combine != nil {
+		var context groupRewrapContext
+		var recipientsDigestText string
+		var recipients []proto.RewrapRecipientCommitment
+		var err error
+		if req.Combine != nil {
+			context, recipientsDigestText, recipients, err = combineRewrapCommitments(*req.Combine)
+		} else {
+			context, recipientsDigestText, recipients, err = batchRewrapCommitments(*req.Many)
+		}
 		if err != nil {
 			return errs.CodeResponse(errs.ErrCodeValidation, "invalid batch rewrap request")
 		}

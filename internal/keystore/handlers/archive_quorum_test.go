@@ -119,7 +119,7 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
 	// 6) combine + re-grant.
-	combResp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	combResp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
@@ -181,7 +181,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	wrappedOld, _ := crypto.EncryptData(archivePub, groupDEK)
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
-	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
@@ -225,7 +225,7 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	wrappedOld, _ := crypto.EncryptData(archivePub, groupDEK)
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
-	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
