@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -31,6 +32,10 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
 )
+
+// The serving Keeper owner serializes journal read/create so concurrent App
+// retries cannot return two different sets of shares for one operation.
+var archiveSplitPreparationMu sync.Mutex
 
 type archiveSplitJournal struct {
 	OperationID    string                            `json:"operation_id"`
@@ -48,6 +53,9 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
+
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
 
 	// Parse all recipient keys before touching the archive key — fail early.
 	pubs := make([]*rsa.PublicKey, len(req.RecipientPublicKeys))

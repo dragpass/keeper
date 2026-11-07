@@ -6,6 +6,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,6 +64,9 @@ func TestArchiveSplitConcurrentRetryUsesOneDurableResult(t *testing.T) {
 	}
 	_, recipients := genAdminKeys(t, 2)
 	gate := &splitJournalBarrierStore{SecretStore: store, entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate.release) }) }
+	t.Cleanup(release)
 	d.Store = gate
 	req := proto.ArchiveKeySplitRequest{OperationID: "77777777-7777-4777-8777-777777777777", ThresholdN: 2, RecipientPublicKeys: recipients}
 	first := make(chan proto.BaseResponse, 1)
@@ -81,7 +85,7 @@ func TestArchiveSplitConcurrentRetryUsesOneDurableResult(t *testing.T) {
 		completed = true
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(gate.release)
+	release()
 	var firstResult proto.BaseResponse
 	select {
 	case firstResult = <-first:
