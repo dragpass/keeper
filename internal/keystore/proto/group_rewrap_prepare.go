@@ -3,6 +3,7 @@ package proto
 // GroupRewrapPrepareRequest binds one member or ordered batch rewrap before
 // the App requests an online server decision.
 type GroupRewrapPrepareRequest struct {
+	Archive              *ArchiveUnwrapAndRewrapRequest        `json:"archive,omitempty"`
 	Combine              *ArchiveQuorumCombineAndRewrapRequest `json:"combine,omitempty"`
 	Operation            string                                `json:"operation"`
 	SourceKind           string                                `json:"source_kind"`
@@ -13,6 +14,18 @@ type GroupRewrapPrepareRequest struct {
 }
 
 func (r GroupRewrapPrepareRequest) Validate() error {
+	if r.Archive != nil {
+		if r.Many != nil || r.Combine != nil || r.Member.WrappedForMeB64 != "" || r.Operation != "archive_member_regrant" || r.SourceKind != "stored_archive" || r.Archive.Decision != nil || r.Archive.GrantContext == nil || r.Archive.OwnerAccountID == "" || r.Archive.RecipientAccountID == "" {
+			return newValidationError("archive", "exact archive member regrant context required")
+		}
+		if err := requireMessageUUID(r.TokenID, "token_id"); err != nil {
+			return err
+		}
+		if r.SessionIssuedAtNanos <= 0 {
+			return newValidationError("session_issued_at_nanos", "must be positive")
+		}
+		return r.Archive.Validate()
+	}
 	if r.Combine != nil {
 		if r.Many != nil || r.Member.WrappedForMeB64 != "" || r.Operation != "quorum_combine" || r.SourceKind != "archive_quorum" || r.Combine.Decision != nil || r.Combine.GrantContext == nil || r.Combine.OwnerAccountID == "" {
 			return newValidationError("combine", "exact combine context required")

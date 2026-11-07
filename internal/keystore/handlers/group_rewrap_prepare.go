@@ -31,6 +31,9 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 	if req.Combine != nil {
 		ownerAccountID = req.Combine.OwnerAccountID
 	}
+	if req.Archive != nil {
+		ownerAccountID = req.Archive.OwnerAccountID
+	}
 	if !found || binding.SignedOut || binding.Generation == 0 || binding.AccountID != ownerAccountID {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
 	}
@@ -41,12 +44,14 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 	if !found || deviceID == "" {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "Group rewrap unavailable")
 	}
-	if req.Many != nil || req.Combine != nil {
+	if req.Many != nil || req.Combine != nil || req.Archive != nil {
 		var context groupRewrapContext
 		var recipientsDigestText string
 		var recipients []proto.RewrapRecipientCommitment
 		var err error
-		if req.Combine != nil {
+		if req.Archive != nil {
+			context, recipientsDigestText, recipients, err = archiveRewrapCommitments(*req.Archive)
+		} else if req.Combine != nil {
 			context, recipientsDigestText, recipients, err = combineRewrapCommitments(*req.Combine)
 		} else {
 			context, recipientsDigestText, recipients, err = batchRewrapCommitments(*req.Many)
@@ -72,7 +77,12 @@ func HandleGroupRewrapPrepare(d Deps, req proto.GroupRewrapPrepareRequest) proto
 		if err := d.GroupRewrapChallenges.Put(challengeText, context, d.Now()); err != nil {
 			return errs.CodeResponse(errs.ErrCodeInternal, "Group rewrap unavailable")
 		}
+		recipientAccountID, recipientFingerprint := "", ""
+		if req.Archive != nil {
+			recipientAccountID, recipientFingerprint = recipients[0].AccountID, recipients[0].KeyFingerprint
+		}
 		return proto.BaseResponse{Success: true, Data: proto.GroupRewrapPrepareResponseData{
+			RecipientAccountID: recipientAccountID, RecipientKeyFingerprint: recipientFingerprint,
 			Challenge: challengeText, Operation: req.Operation, OrgID: context.orgID,
 			GroupID: context.groupID, DEKVersion: context.dekVersion, SourceKind: context.sourceKind,
 			SourceGrantDigest: hex.EncodeToString(context.sourceDigest[:]),

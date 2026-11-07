@@ -25,3 +25,15 @@ func TestQuorumCombineRoutePreservesDecisionAndSession(t *testing.T) {
 		t.Fatal("route dropped combine authority")
 	}
 }
+
+func TestArchiveMemberRoutePreservesAuthority(t *testing.T) {
+	decision := &proto.GroupRewrapDecision{Operation: "archive_member_regrant"}
+	input := &appArchiveRewrap{OwnerAccountID: routeOwner, RecipientAccountID: routePeer, RecipientPublicKey: "test", Decision: decision}
+	bound, err := bindArchiveRewrap(nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.(proto.ArchiveUnwrapAndRewrapRequest).Decision != decision {
+		t.Fatal("archive route dropped authority")
+	}
+}

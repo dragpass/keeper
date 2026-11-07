@@ -40,7 +40,7 @@ func wrapToArchive(t *testing.T, publicPEM string, dek []byte) string {
 // result with its private key, returning the DEK.
 func rewrapAndOpen(t *testing.T, deps Deps, orgID, wrapped string, recipient *crypto.KeyPair) []byte {
 	t.Helper()
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		OrgID:                orgID,
 		WrappedForArchiveB64: wrapped,
 		RecipientPublicKey:   recipient.PublicKey,
@@ -140,7 +140,7 @@ func TestArchiveRotate_ConcurrentOrgsKeepTheirOwnStageAndKey(t *testing.T) {
 
 func rewrapToStaged(t *testing.T, deps Deps, orgID, wrapped, stagedPEM string) string {
 	t.Helper()
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		OrgID:                orgID,
 		WrappedForArchiveB64: wrapped,
 		RecipientPublicKey:   stagedPEM,

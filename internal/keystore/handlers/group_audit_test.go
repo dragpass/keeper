@@ -703,11 +703,11 @@ func TestAuditGrantKeepsTheLabelThroughRecoveryAndArchiveRegrants(t *testing.T) 
 			WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrapped),
 			RecipientPublicKey:   member.PublicKey,
 		}
-		if resp := HandleArchiveUnwrapAndRewrap(deps, req); resp.Success {
+		if resp := archiveUnwrapAndRewrap(deps, req); resp.Success {
 			t.Fatal("audit archive grant re-granted without its context")
 		}
 		req.GrantContext = audit
-		resp := HandleArchiveUnwrapAndRewrap(deps, req)
+		resp := archiveUnwrapAndRewrap(deps, req)
 		if !resp.Success {
 			t.Fatalf("archive re-grant: %+v", resp)
 		}

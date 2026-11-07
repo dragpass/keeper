@@ -134,6 +134,7 @@ type AccountArchiveKeyGenerateResponseData struct {
 // recipient is unchecked (the Native Messaging shape, and an ownership
 // handoff, whose target is an account archive key no pin tracks).
 type ArchiveUnwrapAndRewrapRequest struct {
+	Decision *GroupRewrapDecision `json:"decision,omitempty"`
 	// OrgID (0.0.58, optional) tries the org's own archive slot before the
 	// device-wide one.
 	OrgID                string                   `json:"org_id,omitempty"`

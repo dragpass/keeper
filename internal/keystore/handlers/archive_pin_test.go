@@ -30,7 +30,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 	stranger, _ := crypto.GenerateRSAKeyPair()
 
 	pinned := func(recipient string) proto.BaseResponse {
-		return HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+		return archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 			WrappedForArchiveB64: wrappedB64, RecipientPublicKey: recipient,
 			OwnerAccountID: archivePinOwner, RecipientAccountID: archivePinMember,
 		})
@@ -46,7 +46,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 		t.Fatal("a refused re-grant carried a wrap")
 	}
 	// The Native Messaging shape without account ids keeps its parity.
-	if legacy := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	if legacy := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: wrappedB64, RecipientPublicKey: stranger.PublicKey,
 	}); !legacy.Success {
 		t.Fatalf("unpinned re-grant: %+v", legacy)
@@ -56,7 +56,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 		"statements alone":  {WrappedForArchiveB64: wrappedB64, RecipientPublicKey: member.PublicKey, RotationStatements: []proto.KeyRotationStatement{{}}},
 		"a recipient alone": {WrappedForArchiveB64: wrappedB64, RecipientPublicKey: member.PublicKey, RecipientAccountID: archivePinMember},
 	} {
-		if response := HandleArchiveUnwrapAndRewrap(deps, bad); response.Success || response.ErrorCode != string(errs.ErrCodeValidation) {
+		if response := archiveUnwrapAndRewrap(deps, bad); response.Success || response.ErrorCode != string(errs.ErrCodeValidation) {
 			t.Fatalf("%s: %+v", name, response)
 		}
 	}

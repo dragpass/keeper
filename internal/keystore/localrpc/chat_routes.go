@@ -395,15 +395,17 @@ func archiveEmptyRoute(action string) appRoute {
 // for a break-glass re-grant, with both account ids so the pin is enforced;
 // or the new owner's account archive key for an ownership handoff.
 type appArchiveRewrap struct {
-	OrgID                   string                       `json:"org_id,omitempty"`
-	WrappedForArchiveB64    string                       `json:"wrapped_for_archive_b64"`
-	ToStagedArchiveKey      bool                         `json:"to_staged_archive_key,omitempty"`
-	RecipientPublicKey      string                       `json:"recipient_public_key,omitempty"`
-	OwnerAccountID          string                       `json:"owner_account_id,omitempty"`
-	RecipientAccountID      string                       `json:"recipient_account_id,omitempty"`
-	RotationStatements      []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
-	AccountArchivePublicKey string                       `json:"account_archive_public_key,omitempty"`
-	GrantContext            *proto.GrantContext          `json:"grant_context,omitempty"`
+	EnrollmentEvidence      *proto.KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	Decision                *proto.GroupRewrapDecision     `json:"decision,omitempty"`
+	OrgID                   string                         `json:"org_id,omitempty"`
+	WrappedForArchiveB64    string                         `json:"wrapped_for_archive_b64"`
+	ToStagedArchiveKey      bool                           `json:"to_staged_archive_key,omitempty"`
+	RecipientPublicKey      string                         `json:"recipient_public_key,omitempty"`
+	OwnerAccountID          string                         `json:"owner_account_id,omitempty"`
+	RecipientAccountID      string                         `json:"recipient_account_id,omitempty"`
+	RotationStatements      []proto.KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	AccountArchivePublicKey string                         `json:"account_archive_public_key,omitempty"`
+	GrantContext            *proto.GrantContext            `json:"grant_context,omitempty"`
 }
 
 func bindArchiveRewrap(s *Server, input any) (any, error) {
@@ -422,6 +424,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 	}
 	if member {
 		return proto.ArchiveUnwrapAndRewrapRequest{
+			Decision: in.Decision, EnrollmentEvidence: in.EnrollmentEvidence,
 			OrgID:                in.OrgID,
 			WrappedForArchiveB64: in.WrappedForArchiveB64,
 			RecipientPublicKey:   in.RecipientPublicKey,
@@ -446,6 +449,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 		target = staged
 	}
 	return proto.ArchiveUnwrapAndRewrapRequest{
+		Decision: in.Decision, EnrollmentEvidence: in.EnrollmentEvidence,
 		OrgID:                in.OrgID,
 		WrappedForArchiveB64: in.WrappedForArchiveB64,
 		RecipientPublicKey:   target,

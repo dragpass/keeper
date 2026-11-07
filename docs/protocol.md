@@ -3279,3 +3279,26 @@ The decision is consumed once and output is withheld if the authority expires
 during reconstruction. Missing authority is refused without a compatibility
 fallback. The normal recovery caller must prepare the exact request and obtain
 its online decision before executing combine.
+
+
+### Direct archive member regrant authorization
+
+`/v1/group-dek/rewrap-prepare` accepts `archive` for operation
+`archive_member_regrant` and source kind `stored_archive`. Its explicit organization
+must match the grant context. The request includes a named owner and recipient,
+registered recipient public key, source envelope, grant context and any peer-key
+verification evidence. The full request excluding `decision` is committed under
+`dragpass:archive-member-regrant-request:v1`.
+
+The external `archive_unwrap_and_rewrap` handler validates the matching signed
+Group rewrap decision and consumes its prepared challenge before pin mutation
+or archive-key unwrap. It rechecks expiry before returning encrypted output.
+The App obtains the decision using the same login token used for preparation;
+it never falls back to an unsigned request. The API requires the current owner,
+owner-solo Keeper custody, an active stored archive grant, and the recipient's
+current organization/group membership and registered key. Issuance reserves
+revocation horizons and records the break-glass access in the same transaction.
+
+This member decision cannot authorize archive-key rotation, ownership handoff,
+or quorum combine. Those callers need distinct operation contracts; missing
+or incompatible authority is refused.

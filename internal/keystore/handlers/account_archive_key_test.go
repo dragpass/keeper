@@ -71,7 +71,7 @@ func TestHandleArchiveUnwrapAndRewrap_AccountSlotFallback(t *testing.T) {
 	wrapped, _ := crypto.EncryptData(accountPub, groupDEK)
 
 	memberKP, _ := crypto.GenerateRSAKeyPair()
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrapped),
 		RecipientPublicKey:   memberKP.PublicKey,
 	})
@@ -107,7 +107,7 @@ func TestHandleArchiveUnwrapAndRewrap_FallbackErrorCodes(t *testing.T) {
 		wrapped, _ := crypto.EncryptData(otherPub, make([]byte, 32))
 
 		memberKP, _ := crypto.GenerateRSAKeyPair()
-		resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+		resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 			WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrapped),
 			RecipientPublicKey:   memberKP.PublicKey,
 		})
@@ -122,7 +122,7 @@ func TestHandleArchiveUnwrapAndRewrap_FallbackErrorCodes(t *testing.T) {
 	t.Run("both slots empty -> not_found", func(t *testing.T) {
 		deps, _, _ := newTestDeps(t)
 		memberKP, _ := crypto.GenerateRSAKeyPair()
-		resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+		resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 			WrappedForArchiveB64: base64.StdEncoding.EncodeToString([]byte("x")),
 			RecipientPublicKey:   memberKP.PublicKey,
 		})

@@ -106,7 +106,7 @@ func TestHandleArchiveKeyRotate_BeginCommitHappyPath(t *testing.T) {
 		t.Fatalf("EncryptData (old active): %v", err)
 	}
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
-	rewrapResp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	rewrapResp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrappedToOld),
 		RecipientPublicKey:   recipientKP.PublicKey,
 	})
@@ -236,7 +236,7 @@ func TestHandleArchiveKeyRotate_RewrapBeforeCommitUsesOldKey(t *testing.T) {
 
 	// Re-wrap the old-key grant to the STAGED public key — must succeed
 	// because the active slot still holds the old private key.
-	rewrapResp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	rewrapResp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrappedToOld),
 		RecipientPublicKey:   beginData.PublicKey,
 	})
