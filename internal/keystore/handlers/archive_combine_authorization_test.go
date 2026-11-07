@@ -212,3 +212,27 @@ func TestArchiveCombineWithholdsOutputIfAuthorityExpiresDuringCrypto(t *testing.
 		t.Fatal("expired combine returned output")
 	}
 }
+
+func TestArchiveCombineSourceBindsStoredSessionAndShares(t *testing.T) {
+	_, req := authorizedCombineFixture(t)
+	first, _, _, err := combineRewrapCommitments(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RecoverySessionID = "88888888-8888-4888-8888-888888888888"
+	changed, _, _, err := combineRewrapCommitments(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.sourceDigest == changed.sourceDigest {
+		t.Fatal("source authority does not bind the stored recovery session")
+	}
+	req.RewrappedShares[0].Ciphertext = "AA=="
+	shareChanged, _, _, err := combineRewrapCommitments(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.sourceDigest == shareChanged.sourceDigest {
+		t.Fatal("source authority does not bind the stored approval shares")
+	}
+}
