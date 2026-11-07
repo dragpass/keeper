@@ -3071,14 +3071,15 @@ have their own shape (0.0.56), so a member account key is always pin-checked:
   `{ wrapped_for_archive_b64, account_archive_public_key }` is an ownership
   handoff to the new owner's account archive key.
 - `archive_quorum_combine_and_rewrap` (512 KiB):
-  `{ rewrapped_shares, wrapped_old_dek_b64, owner_account_id, recipients }`,
+  `{ recovery_session_id, rewrapped_shares, wrapped_old_dek_b64,
+  owner_account_id, recipients, grant_context, decision }`,
   every recipient `{ account_id, public_key, rotation_statements? }` naming its
   account; there is no `recipient_public_keys[]`.
 
-Accepted gap (threat model §4.11): the handoff target, the split recipients
-(account archive keys) and the share rewrap target (the ephemeral key of a
-recovery session) are keys no pin tracks, so they stay chosen by the paired
-App session.
+Archive share targets require the separate server-signed share authorization
+below; they are not authorized by pairing alone. Split preparation retains the
+original key and does not complete quorum activation. Archive handoff requires
+its own authority contract and remains blocked where that contract is absent.
 
 **Account and device routes.** The App's settings run the account key
 rotation and the device wipe. (0.0.59) `rotate_user_keypair_prepare` and
@@ -3272,6 +3273,14 @@ context and ordered named recipients. It stores a bounded one-use challenge.
 The request commitment covers the entire combine request except the decision,
 including encrypted shares, recovery-session ID, source grant, policy and peer
 verification evidence, under `dragpass:archive-combine-request:v1`.
+The source commitment is SHA-256 of the JSON string array containing
+`dragpass:archive-combine-source:v1`, the recovery-session UUID, canonical
+standard-Base64 archive-wrapped DEK, then each ordered approval envelope
+(wrapped key, ciphertext). Ariadne reconstructs this commitment from stored
+rows, so an opaque full-request digest cannot authorize substituted shares.
+Ariadne checks current owner, participants, recipient keys, the ready session,
+active historical configuration, grant policy and expiry before reserving the
+revocation horizon. Existing account approvals do not prove distinct people.
 
 `archive_quorum_combine_and_rewrap` requires that prepared challenge and a
 matching server-signed Group rewrap decision for this distinct operation.
