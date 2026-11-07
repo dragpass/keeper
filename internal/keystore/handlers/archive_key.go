@@ -160,6 +160,29 @@ func unwrapWithOrgArchiveKey(d Deps, orgID string, encrypted []byte, gc *proto.G
 // org slot may hold an unrelated key (or none). Both slots failing surfaces
 // the org-slot error (not_found when neither slot has a key).
 func HandleArchiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) proto.BaseResponse {
+	deny := func() proto.BaseResponse {
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive regrant unavailable")
+	}
+	if req.Decision == nil {
+		return deny()
+	}
+	context, _, _, err := archiveRewrapCommitments(req)
+	if err != nil {
+		return deny()
+	}
+	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, context)
+	if err != nil {
+		return deny()
+	}
+	response := archiveUnwrapAndRewrap(d, req)
+	now := d.Now()
+	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
+		return deny()
+	}
+	return response
+}
+
+func archiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive unwrap and rewrap request processing...")
 
 	if err := req.Validate(); err != nil {

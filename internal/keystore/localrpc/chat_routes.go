@@ -395,33 +395,40 @@ func archiveEmptyRoute(action string) appRoute {
 // for a break-glass re-grant, with both account ids so the pin is enforced;
 // or the new owner's account archive key for an ownership handoff.
 type appArchiveRewrap struct {
-	OrgID                   string                       `json:"org_id,omitempty"`
-	WrappedForArchiveB64    string                       `json:"wrapped_for_archive_b64"`
-	ToStagedArchiveKey      bool                         `json:"to_staged_archive_key,omitempty"`
-	RecipientPublicKey      string                       `json:"recipient_public_key,omitempty"`
-	OwnerAccountID          string                       `json:"owner_account_id,omitempty"`
-	RecipientAccountID      string                       `json:"recipient_account_id,omitempty"`
-	RotationStatements      []proto.KeyRotationStatement `json:"rotation_statements,omitempty"`
-	AccountArchivePublicKey string                       `json:"account_archive_public_key,omitempty"`
-	GrantContext            *proto.GrantContext          `json:"grant_context,omitempty"`
+	ArchiveRecipientAccountID string                         `json:"archive_recipient_account_id,omitempty"`
+	EnrollmentEvidence        *proto.KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	Decision                  *proto.GroupRewrapDecision     `json:"decision,omitempty"`
+	OrgID                     string                         `json:"org_id,omitempty"`
+	WrappedForArchiveB64      string                         `json:"wrapped_for_archive_b64"`
+	ToStagedArchiveKey        bool                           `json:"to_staged_archive_key,omitempty"`
+	RecipientPublicKey        string                         `json:"recipient_public_key,omitempty"`
+	OwnerAccountID            string                         `json:"owner_account_id,omitempty"`
+	RecipientAccountID        string                         `json:"recipient_account_id,omitempty"`
+	RotationStatements        []proto.KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	AccountArchivePublicKey   string                         `json:"account_archive_public_key,omitempty"`
+	GrantContext              *proto.GrantContext            `json:"grant_context,omitempty"`
 }
 
 func bindArchiveRewrap(s *Server, input any) (any, error) {
 	in := input.(*appArchiveRewrap)
 	member := in.RecipientPublicKey != ""
 	handoff := in.AccountArchivePublicKey != ""
-	named := in.OwnerAccountID != "" || in.RecipientAccountID != "" || len(in.RotationStatements) > 0
+	named := in.OwnerAccountID != "" || in.RecipientAccountID != "" || in.ArchiveRecipientAccountID != "" || len(in.RotationStatements) > 0 || in.EnrollmentEvidence != nil
 	targets := 0
 	for _, chosen := range []bool{in.ToStagedArchiveKey, member, handoff} {
 		if chosen {
 			targets++
 		}
 	}
-	if targets != 1 || named != member || (member && (in.OwnerAccountID == "" || in.RecipientAccountID == "")) {
+	if targets != 1 ||
+		(member && (in.OwnerAccountID == "" || in.RecipientAccountID == "" || in.ArchiveRecipientAccountID != "")) ||
+		(handoff && (in.OwnerAccountID == "" || in.ArchiveRecipientAccountID == "" || in.RecipientAccountID != "" || len(in.RotationStatements) > 0 || in.EnrollmentEvidence != nil)) ||
+		(in.ToStagedArchiveKey && named) {
 		return nil, errAppRouteRefused
 	}
 	if member {
 		return proto.ArchiveUnwrapAndRewrapRequest{
+			Decision: in.Decision, EnrollmentEvidence: in.EnrollmentEvidence,
 			OrgID:                in.OrgID,
 			WrappedForArchiveB64: in.WrappedForArchiveB64,
 			RecipientPublicKey:   in.RecipientPublicKey,
@@ -446,21 +453,26 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 		target = staged
 	}
 	return proto.ArchiveUnwrapAndRewrapRequest{
-		OrgID:                in.OrgID,
-		WrappedForArchiveB64: in.WrappedForArchiveB64,
-		RecipientPublicKey:   target,
-		GrantContext:         in.GrantContext,
+		Decision: in.Decision, EnrollmentEvidence: in.EnrollmentEvidence,
+		OrgID:                     in.OrgID,
+		WrappedForArchiveB64:      in.WrappedForArchiveB64,
+		RecipientPublicKey:        target,
+		OwnerAccountID:            in.OwnerAccountID,
+		ArchiveRecipientAccountID: in.ArchiveRecipientAccountID,
+		GrantContext:              in.GrantContext,
 	}, nil
 }
 
 // appQuorumCombine is the combine with only the pin-carrying recipient list:
 // every re-grant target names its account.
 type appQuorumCombine struct {
-	RewrappedShares  []proto.RewrappedShareInput `json:"rewrapped_shares"`
-	WrappedOldDEKB64 string                      `json:"wrapped_old_dek_b64"`
-	OwnerAccountID   string                      `json:"owner_account_id"`
-	Recipients       []proto.DEKRewrapRecipient  `json:"recipients"`
-	GrantContext     *proto.GrantContext         `json:"grant_context,omitempty"`
+	RecoverySessionID string                      `json:"recovery_session_id"`
+	Decision          *proto.GroupRewrapDecision  `json:"decision,omitempty"`
+	RewrappedShares   []proto.RewrappedShareInput `json:"rewrapped_shares"`
+	WrappedOldDEKB64  string                      `json:"wrapped_old_dek_b64"`
+	OwnerAccountID    string                      `json:"owner_account_id"`
+	Recipients        []proto.DEKRewrapRecipient  `json:"recipients"`
+	GrantContext      *proto.GrantContext         `json:"grant_context,omitempty"`
 }
 
 func bindQuorumCombine(_ *Server, input any) (any, error) {
@@ -474,6 +486,7 @@ func bindQuorumCombine(_ *Server, input any) (any, error) {
 		}
 	}
 	return proto.ArchiveQuorumCombineAndRewrapRequest{
+		RecoverySessionID: in.RecoverySessionID, Decision: in.Decision,
 		RewrappedShares:  in.RewrappedShares,
 		WrappedOldDEKB64: in.WrappedOldDEKB64,
 		OwnerAccountID:   in.OwnerAccountID,

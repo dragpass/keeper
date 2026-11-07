@@ -38,7 +38,7 @@ func TestHandleArchiveUnwrapAndRewrap_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := HandleArchiveUnwrapAndRewrap(deps, tc.req)
+			resp := archiveUnwrapAndRewrap(deps, tc.req)
 			if resp.Success {
 				t.Errorf("expected validation failure for %q, got success", tc.name)
 			}
@@ -52,7 +52,7 @@ func TestHandleArchiveUnwrapAndRewrap_MissingArchiveSlot(t *testing.T) {
 	deps, _, _ := newTestDeps(t) // no archive private key stored
 
 	recipientKP, _ := crypto.GenerateRSAKeyPair()
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString([]byte("doesnt-matter")),
 		RecipientPublicKey:   recipientKP.PublicKey,
 	})
@@ -97,7 +97,7 @@ func TestHandleArchiveUnwrapAndRewrap_RoundTrip(t *testing.T) {
 		t.Fatalf("EncryptData (archive): %v", err)
 	}
 
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrappedForArchive),
 		RecipientPublicKey:   memberKP.PublicKey,
 	})
@@ -155,7 +155,7 @@ func TestHandleArchiveUnwrapAndRewrap_NoRawInResponse(t *testing.T) {
 	archivePub, _ := crypto.ParsePublicKey(archiveKP.PublicKey)
 	wrappedForArchive, _ := crypto.EncryptData(archivePub, groupDEK)
 
-	resp := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	resp := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrappedForArchive),
 		RecipientPublicKey:   memberKP.PublicKey,
 	})

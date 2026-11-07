@@ -703,11 +703,11 @@ func TestAuditGrantKeepsTheLabelThroughRecoveryAndArchiveRegrants(t *testing.T) 
 			WrappedForArchiveB64: base64.StdEncoding.EncodeToString(wrapped),
 			RecipientPublicKey:   member.PublicKey,
 		}
-		if resp := HandleArchiveUnwrapAndRewrap(deps, req); resp.Success {
+		if resp := archiveUnwrapAndRewrap(deps, req); resp.Success {
 			t.Fatal("audit archive grant re-granted without its context")
 		}
 		req.GrantContext = audit
-		resp := HandleArchiveUnwrapAndRewrap(deps, req)
+		resp := archiveUnwrapAndRewrap(deps, req)
 		if !resp.Success {
 			t.Fatalf("archive re-grant: %+v", resp)
 		}
@@ -730,7 +730,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)
 	adminKPs, adminPems := genAdminKeys(t, 3)
-	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{ThresholdN: 2, RecipientPublicKeys: adminPems})
+	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !split.Success {
 		t.Fatalf("split: %s", split.Error)
 	}
@@ -744,7 +744,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	archivePub, _ := crypto.ParsePublicKey(archiveKP.PublicKey)
 	wrapped, _ := wrapGrant(archivePub, mustHex(t, v.GroupDEKHex), audit)
 	member, _ := crypto.GenerateRSAKeyPair()
-	resp := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrapped),
 		Recipients: archiveRecipient(member.PublicKey), GrantContext: audit,
 	})

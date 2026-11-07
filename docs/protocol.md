@@ -260,8 +260,8 @@ A second, independent archive keypair in its own slots
 half is what the account publishes to the server account directory
 (`account_archive_keys`) so the account can RECEIVE material wrapped to it:
 ownership-handoff re-wrapped grants and archive quorum Shamir shares. It is
-deliberately not the org archive keypair — `archive_key_split` deletes the org
-private key when quorum is enabled, and the account receiving key must survive
+deliberately not the org archive keypair — `archive_key_split` prepares shares while retaining the org
+private key until authenticated finalization, and the account receiving key must survive
 that wipe. Kept as separate actions (rather than a slot parameter on
 `archive_key_*`) because the two keys have different lifecycles.
 
@@ -272,8 +272,10 @@ that wipe. Kept as separate actions (rather than a slot parameter on
 #### Archive-key admin quorum (Shamir N-of-M break-glass)
 
 An alternative custody where the archive private key is Shamir-split across M
-admin devices instead of held whole on the owner's device. After split the
-whole private key exists nowhere at rest, only as shares. Break-glass then
+admin devices instead of held whole on the owner's device. After authenticated quorum finalization, the whole private key exists
+nowhere at rest, only as shares. Split preparation retains the original in
+Keeper protected storage. The current candidate does not yet provide signed
+finalization, so its preparation result is not a completed quorum transition. Break-glass then
 requires N of M admins to approve within a coordinator-run recovery session.
 
 A Shamir share of the archive private-key PEM (~1.7 KB) exceeds the RSA-OAEP
@@ -286,7 +288,7 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`archive_key_split`|`org_id?` (0.0.58), `threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|App only (a Native Messaging frame is refused). Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then **delete** the org archive private key (kept: the org public key; the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. Not idempotent — a missing private key → `not_found`. (0.0.58) With `org_id` the key split is the one in the slot holding the org's public key (its own, else the device-wide one) and only that slot's private half is deleted; once split, the org's own slot never falls through to the device-wide key.|
+|`archive_key_split`|`operation_id`, `org_id?` (0.0.58), `threshold_n`, `recipient_public_keys[]` (M admin account archive PEMs)|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint }] }`|App only (a Native Messaging frame is refused). Shamir-split the ORG archive private key into M shares (threshold N), hybrid-wrap share _i_ to `recipient_public_keys[i]`, then durably record the preparation and **retain** the org archive private key (the account archive slot is never touched). `key_fingerprint` is derived from the private key being split so the server can verify the coordinator split the org's actual active archive key. A retry of the same operation ID and exact request returns the stored shares; a different operation ID is refused while preparation is pending. A missing private key returns `not_found`. (0.0.58) With `org_id` the key split is the one in the slot holding the org's public key (its own, else the device-wide one) and only that slot is prepared; it is not deleted before authenticated finalization.|
 |`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
 |`archive_share_rewrap`|`account_id`, `org_id`, `recovery_session_id`, `wrapped_key`, `ciphertext`, `session_public_key`, `decision`|`{ wrapped_key, ciphertext }`|Paired App only. Requires the prepared exact request and a server-signed archive-share decision before reading the account archive private key. Missing, expired, replayed or mismatched authority returns no output. The account receiving slot is used, never the org archive slot. Expiry is checked again after cryptography before output.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|App only (a Native Messaging frame is refused). Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
@@ -3066,17 +3068,20 @@ have their own shape (0.0.56), so a member account key is always pin-checked:
   recipient_account_id, rotation_statements? }` is a break-glass re-grant to a
   member's account key, both ids required, judged by the pin (`changed`
   refuses with `peer_key_changed`);
-  `{ wrapped_for_archive_b64, account_archive_public_key }` is an ownership
-  handoff to the new owner's account archive key.
+  `{ wrapped_for_archive_b64, account_archive_public_key, owner_account_id,
+  archive_recipient_account_id, grant_context, decision }` is an ownership
+  handoff to the named account archive key. The matching prepare request uses
+  `recipient_public_key` for that same key.
 - `archive_quorum_combine_and_rewrap` (512 KiB):
-  `{ rewrapped_shares, wrapped_old_dek_b64, owner_account_id, recipients }`,
+  `{ recovery_session_id, rewrapped_shares, wrapped_old_dek_b64,
+  owner_account_id, recipients, grant_context, decision }`,
   every recipient `{ account_id, public_key, rotation_statements? }` naming its
   account; there is no `recipient_public_keys[]`.
 
-Accepted gap (threat model §4.11): the handoff target, the split recipients
-(account archive keys) and the share rewrap target (the ephemeral key of a
-recovery session) are keys no pin tracks, so they stay chosen by the paired
-App session.
+Archive share targets require the separate server-signed share authorization
+below; they are not authorized by pairing alone. Split preparation retains the
+original key and does not complete quorum activation. Archive handoff requires
+its own authority contract and remains blocked where that contract is absent.
 
 **Account and device routes.** The App's settings run the account key
 rotation and the device wipe. (0.0.59) `rotate_user_keypair_prepare` and
@@ -3260,3 +3265,67 @@ This gate does not authorize direct archive regrant, key splitting or quorum
 combine. Those operations require their own authority contracts. Older callers
 without a decision are refused; newer callers do not fall back when preparation
 or the server endpoint is unavailable.
+
+### Quorum combine authorization boundary
+
+`/v1/group-dek/rewrap-prepare` accepts `combine` for operation
+`quorum_combine` and source kind `archive_quorum`. Preparation requires the
+live account/device binding, login token identity, recovery-session UUID, grant
+context and ordered named recipients. It stores a bounded one-use challenge.
+The request commitment covers the entire combine request except the decision,
+including encrypted shares, recovery-session ID, source grant, policy and peer
+verification evidence, under `dragpass:archive-combine-request:v1`.
+The source commitment is SHA-256 of the JSON string array containing
+`dragpass:archive-combine-source:v1`, the recovery-session UUID, canonical
+standard-Base64 archive-wrapped DEK, then each ordered approval envelope
+(wrapped key, ciphertext). Ariadne reconstructs this commitment from stored
+rows, so an opaque full-request digest cannot authorize substituted shares.
+Ariadne checks current owner, participants, recipient keys, the ready session,
+active historical configuration, grant policy and expiry before reserving the
+revocation horizon. Existing account approvals do not prove distinct people.
+
+`archive_quorum_combine_and_rewrap` requires that prepared challenge and a
+matching server-signed Group rewrap decision for this distinct operation.
+Member or share decisions cannot authorize combine. Signature, request and
+live binding checks precede peer-pin mutation and session-private-key reads.
+The decision is consumed once and output is withheld if the authority expires
+during reconstruction. Missing authority is refused without a compatibility
+fallback. The normal recovery caller must prepare the exact request and obtain
+its online decision before executing combine.
+
+
+### Direct archive member regrant authorization
+
+`/v1/group-dek/rewrap-prepare` accepts `archive` for operation
+`archive_member_regrant` and source kind `stored_archive`. Its explicit organization
+must match the grant context. The request includes a named owner and recipient,
+registered recipient public key, source envelope, grant context and any peer-key
+verification evidence. The full request excluding `decision` is committed under
+`dragpass:archive-member-regrant-request:v1`.
+
+The external `archive_unwrap_and_rewrap` handler validates the matching signed
+Group rewrap decision and consumes its prepared challenge before pin mutation
+or archive-key unwrap. It rechecks expiry before returning encrypted output.
+The App obtains the decision using the same login token used for preparation;
+it never falls back to an unsigned request. The API requires the current owner,
+owner-solo Keeper custody, an active stored archive grant, and the recipient's
+current organization/group membership and registered key. Issuance reserves
+revocation horizons and records the break-glass access in the same transaction.
+
+This member decision cannot authorize archive-key rotation, ownership handoff,
+or quorum combine. Those callers need distinct operation contracts; missing
+or incompatible authority is refused.
+
+
+### Archive ownership handoff authorization
+
+Operation `archive_handoff` uses source kind `stored_archive`, a named owner
+and `archive_recipient_account_id`, and commits the exact request under
+`dragpass:archive-handoff-request:v1`. It requires its own prepared challenge
+and signed decision before private-key access. Member regrant decisions cannot
+authorize this operation. Archive recipient keys do not write member peer pins.
+The API checks the current owner, active organization membership, the registered
+account archive public key, and the stored owner-solo archive grant. The target
+need not already belong to the grant's group. Final handoff submission rechecks
+authority, source keys/grants and recipient key under transaction locks and waits
+out previously issued organization decisions before replacing grants.

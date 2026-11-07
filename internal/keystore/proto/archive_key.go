@@ -130,10 +130,12 @@ type AccountArchiveKeyGenerateResponseData struct {
 //
 // OwnerAccountID / RecipientAccountID / RotationStatements (0.0.56) name
 // whose account key RecipientPublicKey is meant to be, as on
-// dek_rewrap_for_member, and turn the peer key pin on. Without them the
-// recipient is unchecked (the Native Messaging shape, and an ownership
-// handoff, whose target is an account archive key no pin tracks).
+// dek_rewrap_for_member, and turn the peer key pin on. ArchiveRecipientAccountID
+// instead names the registered account archive key authorized by a signed
+// archive_handoff decision. Neither shape permits an unsigned external wrap.
 type ArchiveUnwrapAndRewrapRequest struct {
+	ArchiveRecipientAccountID string               `json:"archive_recipient_account_id,omitempty"`
+	Decision                  *GroupRewrapDecision `json:"decision,omitempty"`
 	// OrgID (0.0.58, optional) tries the org's own archive slot before the
 	// device-wide one.
 	OrgID                string                   `json:"org_id,omitempty"`
@@ -167,7 +169,13 @@ func (r ArchiveUnwrapAndRewrapRequest) Validate() error {
 	if err := requireOptionalAccountUUID(r.RecipientAccountID, "recipient_account_id"); err != nil {
 		return err
 	}
-	if (r.OwnerAccountID == "") != (r.RecipientAccountID == "") {
+	if err := requireOptionalAccountUUID(r.ArchiveRecipientAccountID, "archive_recipient_account_id"); err != nil {
+		return err
+	}
+	if r.RecipientAccountID != "" && r.ArchiveRecipientAccountID != "" {
+		return newValidationError("archive_recipient_account_id", "choose one recipient key purpose")
+	}
+	if (r.OwnerAccountID == "") != (r.RecipientAccountID == "" && r.ArchiveRecipientAccountID == "") {
 		return newValidationError("owner_account_id", "must be sent together with recipient_account_id")
 	}
 	if r.RecipientAccountID == "" && len(r.RotationStatements) > 0 {

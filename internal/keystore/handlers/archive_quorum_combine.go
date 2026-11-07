@@ -33,6 +33,29 @@ import (
 // the target members. All reconstructed key material is wiped before the
 // response, which carries only the new per-recipient wraps.
 func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
+	deny := func() proto.BaseResponse {
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive combine unavailable")
+	}
+	if req.Decision == nil {
+		return deny()
+	}
+	context, _, _, err := combineRewrapCommitments(req)
+	if err != nil {
+		return deny()
+	}
+	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, context)
+	if err != nil {
+		return deny()
+	}
+	response := archiveQuorumCombineAndRewrap(d, req)
+	now := d.Now()
+	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
+		return deny()
+	}
+	return response
+}
+
+func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive quorum combine and rewrap processing...")
 
 	if err := req.Validate(); err != nil {

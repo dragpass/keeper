@@ -30,7 +30,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 	stranger, _ := crypto.GenerateRSAKeyPair()
 
 	pinned := func(recipient string) proto.BaseResponse {
-		return HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+		return archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 			WrappedForArchiveB64: wrappedB64, RecipientPublicKey: recipient,
 			OwnerAccountID: archivePinOwner, RecipientAccountID: archivePinMember,
 		})
@@ -46,7 +46,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 		t.Fatal("a refused re-grant carried a wrap")
 	}
 	// The Native Messaging shape without account ids keeps its parity.
-	if legacy := HandleArchiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
+	if legacy := archiveUnwrapAndRewrap(deps, proto.ArchiveUnwrapAndRewrapRequest{
 		WrappedForArchiveB64: wrappedB64, RecipientPublicKey: stranger.PublicKey,
 	}); !legacy.Success {
 		t.Fatalf("unpinned re-grant: %+v", legacy)
@@ -56,7 +56,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 		"statements alone":  {WrappedForArchiveB64: wrappedB64, RecipientPublicKey: member.PublicKey, RotationStatements: []proto.KeyRotationStatement{{}}},
 		"a recipient alone": {WrappedForArchiveB64: wrappedB64, RecipientPublicKey: member.PublicKey, RecipientAccountID: archivePinMember},
 	} {
-		if response := HandleArchiveUnwrapAndRewrap(deps, bad); response.Success || response.ErrorCode != string(errs.ErrCodeValidation) {
+		if response := archiveUnwrapAndRewrap(deps, bad); response.Success || response.ErrorCode != string(errs.ErrCodeValidation) {
 			t.Fatalf("%s: %+v", name, response)
 		}
 	}
@@ -69,7 +69,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)
 	adminKPs, adminPems := genAdminKeys(t, 3)
-	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{ThresholdN: 2, RecipientPublicKeys: adminPems})
+	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !split.Success {
 		t.Fatalf("split: %s", split.Error)
 	}
@@ -86,7 +86,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	stranger, _ := crypto.GenerateRSAKeyPair()
 
 	combine := func(recipients ...proto.DEKRewrapRecipient) proto.BaseResponse {
-		return HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+		return archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 			RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 			OwnerAccountID: archivePinOwner, Recipients: recipients,
 		})
@@ -102,7 +102,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	if refused.Success || refused.ErrorCode != string(errs.ErrCodePeerKeyChanged) {
 		t.Fatalf("combine with a changed recipient: %+v", refused)
 	}
-	none := HandleArchiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	none := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		OwnerAccountID: archivePinOwner,
 	})

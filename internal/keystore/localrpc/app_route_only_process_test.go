@@ -38,6 +38,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveKeyRotateAbort, "/v1/archive/archive_key_rotate_abort", map[string]any{}},
 	{proto.ActionArchiveUnwrapAndRewrap, "/v1/archive/archive_unwrap_and_rewrap", map[string]any{
 		"wrapped_for_archive_b64": "AAAA", "account_archive_public_key": "x",
+		"owner_account_id": routeOnlyOwner, "archive_recipient_account_id": routeOnlyPeer,
 	}},
 	{proto.ActionArchiveKeySplit, "/v1/archive/archive_key_split", map[string]any{}},
 	{proto.ActionArchiveSharePrepare, "/v1/archive/archive_share_prepare", map[string]any{}},
