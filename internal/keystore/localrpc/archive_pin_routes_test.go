@@ -23,28 +23,22 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	archive := routeKeypair(t)
 	_ = keychain.SaveArchivePrivateKey(store, archive.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
-	admins := []*crypto.KeyPair{routeKeypair(t), routeKeypair(t)}
-	// The quorum actions are App-only: set up through the App caller.
-	split := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_key_split","payload":`+mustJSON(t, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
-		ThresholdN: 2, RecipientPublicKeys: []string{admins[0].PublicKey, admins[1].PublicKey},
-	})+`}`))
-	if !split.Success {
-		t.Fatalf("split: %+v", split)
-	}
-	var splitData proto.ArchiveKeySplitResponseData
-	_ = remarshal(split.Data, &splitData)
+	// archive_key_split refuses without a signed split decision, so the test
+	// builds the session-wrapped shares directly from the archive key.
 	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin"}`))
 	var sessionData proto.ArchiveSessionBeginResponseData
 	_ = remarshal(begun.Data, &sessionData)
 	sessionPub, _ := crypto.ParsePublicKey(sessionData.SessionPublicKey)
+	split, err := crypto.SplitSecret([]byte(archive.PrivateKey), 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	shares := make([]map[string]string, 2)
-	for i, admin := range admins {
-		private, _ := crypto.ParsePrivateKey(admin.PrivateKey)
-		raw, err := crypto.HybridUnwrap(private, splitData.Shares[i].WrappedKey, splitData.Shares[i].Ciphertext)
+	for i, share := range split {
+		wrappedKey, ciphertext, err := crypto.HybridWrap(sessionPub, crypto.SerializeShare(share))
 		if err != nil {
 			t.Fatal(err)
 		}
-		wrappedKey, ciphertext, _ := crypto.HybridWrap(sessionPub, raw)
 		shares[i] = map[string]string{"wrapped_key": wrappedKey, "ciphertext": ciphertext}
 	}
 	archivePub, _ := crypto.ParsePublicKey(archive.PublicKey)

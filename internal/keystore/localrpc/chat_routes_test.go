@@ -708,11 +708,12 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
 		t.Fatalf("split without operation id: status=%d error=%s", code, result.ErrorCode)
 	}
+	// A well-formed split still refuses until a signed split decision exists.
 	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
 		"operation_id": "44444444-4444-4444-8444-444444444444",
 		"threshold_n":  2, "recipient_public_keys": admins,
 	})
-	if code != http.StatusOK || !result.Success {
+	if code != http.StatusOK || result.Success || result.ErrorCode != "archive_split_authority_required" || strings.Contains(body, "shares") {
 		t.Fatalf("split: %d %s", code, body)
 	}
 	for _, path := range []string{"/v1/archive/archive_share_rewrap", "/v1/archive/archive_quorum_combine_and_rewrap", "/v1/archive/archive_key_split"} {
