@@ -25,7 +25,7 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
 	admins := []*crypto.KeyPair{routeKeypair(t), routeKeypair(t)}
 	// The quorum actions are App-only: set up through the App caller.
-	split := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_key_split","payload":`+mustJSON(t, proto.ArchiveKeySplitRequest{
+	split := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_key_split","payload":`+mustJSON(t, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: 2, RecipientPublicKeys: []string{admins[0].PublicKey, admins[1].PublicKey},
 	})+`}`))
 	if !split.Success {
@@ -66,10 +66,10 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 			"recipients":       []map[string]any{{"account_id": routePeer, "public_key": key}},
 		}
 	}
-	if code, result, body := combine(pinned(member.PublicKey)); code != http.StatusOK || !result.Success {
-		t.Fatalf("pinned combine: %d %s", code, body)
+	if code, result, body := combine(pinned(member.PublicKey)); code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
+		t.Fatalf("unsigned combine: %d %s", code, body)
 	}
-	if code, result, body := combine(pinned(stranger.PublicKey)); code != http.StatusOK || result.ErrorCode != "peer_key_changed" || strings.Contains(body, "encrypted_group_dek") {
+	if code, result, body := combine(pinned(stranger.PublicKey)); code != http.StatusOK || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_group_dek") {
 		t.Fatalf("combine to a changed key: %d %s", code, body)
 	}
 	for name, extra := range map[string]map[string]any{

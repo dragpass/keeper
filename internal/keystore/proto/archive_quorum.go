@@ -36,14 +36,18 @@ type WrappedShare struct {
 // Each recipient PEM is an admin's account archive public key (the coordinator
 // may include their own).
 type ArchiveKeySplitRequest struct {
+	OperationID string `json:"operation_id"`
 	// OrgID (0.0.58, optional) splits the org's own archive key when it has
-	// one, and wipes only that slot; otherwise the device-wide key, as before.
+	// one, otherwise the device-wide key. Preparation never deletes the key.
 	OrgID               string   `json:"org_id,omitempty"`
 	ThresholdN          int      `json:"threshold_n"`
 	RecipientPublicKeys []string `json:"recipient_public_keys"`
 }
 
 func (r ArchiveKeySplitRequest) Validate() error {
+	if err := requireMessageUUID(r.OperationID, "operation_id"); err != nil {
+		return err
+	}
 	if err := validateArchiveOrgID(r.OrgID); err != nil {
 		return err
 	}
@@ -137,10 +141,12 @@ type RewrappedShareInput struct {
 //	                 shape of dek_unwrap_and_rewrap_for_many. The flat
 //	                 recipient_public_keys list was removed in 0.0.58.
 type ArchiveQuorumCombineAndRewrapRequest struct {
-	RewrappedShares  []RewrappedShareInput `json:"rewrapped_shares"`
-	WrappedOldDEKB64 string                `json:"wrapped_old_dek_b64"`
-	Recipients       []DEKRewrapRecipient  `json:"recipients"`
-	OwnerAccountID   string                `json:"owner_account_id,omitempty"`
+	RecoverySessionID string                `json:"recovery_session_id"`
+	Decision          *GroupRewrapDecision  `json:"decision,omitempty"`
+	RewrappedShares   []RewrappedShareInput `json:"rewrapped_shares"`
+	WrappedOldDEKB64  string                `json:"wrapped_old_dek_b64"`
+	Recipients        []DEKRewrapRecipient  `json:"recipients"`
+	OwnerAccountID    string                `json:"owner_account_id,omitempty"`
 	// GrantContext (0.0.58, optional) is the context of wrapped_old_dek_b64;
 	// every re-grant carries the same label.
 	GrantContext *GrantContext `json:"grant_context,omitempty"`

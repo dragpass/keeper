@@ -618,21 +618,23 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	}
 
 	// No staged key yet: the rotation target does not exist.
-	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true}); code != http.StatusBadRequest {
+	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner}); code != http.StatusBadRequest {
 		t.Fatalf("rotation rewrap with nothing staged: %d", code)
 	}
 	if code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_begin", map[string]any{}); code != http.StatusOK || !begun.Success {
 		t.Fatalf("rotate begin: %d %s", code, body)
 	}
-	code, result, body := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true})
-	if code != http.StatusOK || !result.Success {
+	code, result, body := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("rotation rewrap: %d %s", code, body)
 	}
-	var data proto.ArchiveUnwrapAndRewrapResponseData
-	_ = json.Unmarshal(result.Data, &data)
-	staged, _ := keychain.OrgArchiveStagingSlot("").GetPrivate(store)
-	if !bytes.Equal(openWith(t, staged, data.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("the rotation rewrap is not to the staged archive key")
+	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true, OwnerAccountID: routeOwner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, staged, found, err := keychain.FindArchiveKey(store, keychain.OrgArchiveStagingCandidates(""))
+	if err != nil || !found || bound.(proto.ArchiveUnwrapAndRewrapRequest).RecipientPublicKey != staged {
+		t.Fatal("rotation binder lost staged target")
 	}
 
 	// Break-glass re-grants to a member's account key, judged by its pin.
@@ -644,28 +646,20 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 		}
 	}
 	code, result, body = rewrap(regrant(member.PublicKey))
-	if code != http.StatusOK || !result.Success {
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("member re-grant: %d %s", code, body)
 	}
-	_ = json.Unmarshal(result.Data, &data)
-	if !bytes.Equal(openWith(t, member.PrivateKey, data.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("the member re-grant did not reach the member")
-	}
 	code, result, body = rewrap(regrant(stranger.PublicKey))
-	if code != http.StatusOK || result.Success || result.ErrorCode != "peer_key_changed" || strings.Contains(body, "encrypted_for_other") {
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" || strings.Contains(body, "encrypted_for_other") {
 		t.Fatalf("re-grant to a changed key: %d %s", code, body)
 	}
 
 	// An ownership handoff goes to the new owner's account archive key, which
 	// no pin tracks; the route says so by name.
 	handoff := routeKeypair(t)
-	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "account_archive_public_key": handoff.PublicKey})
-	if code != http.StatusOK || !result.Success {
+	code, result, body = rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "account_archive_public_key": handoff.PublicKey, "owner_account_id": routeOwner, "archive_recipient_account_id": routePeer})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
 		t.Fatalf("handoff rewrap: %d %s", code, body)
-	}
-	_ = json.Unmarshal(result.Data, &data)
-	if !bytes.Equal(openWith(t, handoff.PrivateKey, data.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("the handoff rewrap did not reach the new owner")
 	}
 
 	for name, request := range map[string]map[string]any{
@@ -688,7 +682,7 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	if code, committed, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_commit", map[string]any{}); code != http.StatusOK || !committed.Success {
 		t.Fatalf("rotate commit: %d %s", code, body)
 	}
-	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true}); code != http.StatusBadRequest {
+	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner}); code != http.StatusBadRequest {
 		t.Fatalf("rotation rewrap after commit: %d", code)
 	}
 }
@@ -709,8 +703,14 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 		}
 	}
 	admins := []string{routeKeypair(t).PublicKey, routeKeypair(t).PublicKey, routeKeypair(t).PublicKey}
-	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
 		"threshold_n": 2, "recipient_public_keys": admins,
+	}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
+		t.Fatalf("split without operation id: status=%d error=%s", code, result.ErrorCode)
+	}
+	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
+		"operation_id": "44444444-4444-4444-8444-444444444444",
+		"threshold_n":  2, "recipient_public_keys": admins,
 	})
 	if code != http.StatusOK || !result.Success {
 		t.Fatalf("split: %d %s", code, body)
@@ -726,7 +726,6 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 // rotation rewrap targets the named org's stage.
 func TestArchiveRotationRoutesAreOrgScoped(t *testing.T) {
 	server, _ := newChatTestServer(t)
-	store := server.app.Store.(*testdouble.MemorySecretStore)
 	session, csrf := openTestSession(t, server)
 	const orgA, orgB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
@@ -751,16 +750,17 @@ func TestArchiveRotationRoutesAreOrgScoped(t *testing.T) {
 	}
 
 	code, result, body := callRoute(t, server, session, csrf, "/v1/archive/archive_unwrap_and_rewrap", map[string]any{
-		"org_id": orgA, "wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true,
+		"org_id": orgA, "wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner,
 	})
-	if code != http.StatusOK || !result.Success {
-		t.Fatalf("rotation rewrap A: %d %s", code, body)
+	if code != http.StatusOK || result.Success || result.ErrorCode != "not_found" {
+		t.Fatalf("unsigned rotation rewrap A: %d %s", code, body)
 	}
-	var data proto.ArchiveUnwrapAndRewrapResponseData
-	_ = json.Unmarshal(result.Data, &data)
-	stagedA, _ := keychain.OrgArchiveStagingSlot(orgA).GetPrivate(store)
-	if !bytes.Equal(openWith(t, stagedA, data.EncryptedForOtherB64), groupDEK) {
-		t.Fatal("the rotation rewrap is not to org A's stage")
+	bound, err := bindArchiveRewrap(server, &appArchiveRewrap{OrgID: orgA, WrappedForArchiveB64: wrapped, ToStagedArchiveKey: true, OwnerAccountID: routeOwner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.(proto.ArchiveUnwrapAndRewrapRequest).RecipientPublicKey != stages[orgA].PublicKey {
+		t.Fatal("rotation binder selected another organization")
 	}
 
 	code, committed, body := callRoute(t, server, session, csrf, "/v1/archive/archive_key_rotate_commit", map[string]any{
