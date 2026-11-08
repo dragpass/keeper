@@ -4,8 +4,9 @@
 // see archive_quorum_combine.go for the flow overview. This file covers the two
 // steps that produce and re-target shares:
 //
-//   - HandleArchiveKeySplit: persist a split preparation and retain the original
-//     org archive private key until authenticated finalization.
+//   - HandleArchiveKeySplit: refuses every split until a server-signed split
+//     decision exists. prepareArchiveKeySplit keeps the durable preparation
+//     (journal, retained original key) for that decision to gate.
 //   - HandleArchiveShareRewrap: an admin re-wraps their own share from their
 //     account archive key to the recovery-session key.
 //
@@ -44,10 +45,22 @@ type archiveSplitJournal struct {
 	Result         proto.ArchiveKeySplitResponseData `json:"result"`
 }
 
-// HandleArchiveKeySplit prepares wrapped shares while keeping the source key.
+// HandleArchiveKeySplit is the external split action. The request names its
+// own recipient keys, so without a server-signed split decision a paired App
+// process could collect every share under keys it controls. No such decision
+// contract exists yet, so the action refuses before parsing the request or
+// touching the keychain: no archive-key read, no journal write, no output.
+func HandleArchiveKeySplit(d Deps, _ proto.ArchiveKeySplitRequest) proto.BaseResponse {
+	d.Logger.Println("archive key split refused: no signed split decision")
+	return errs.CodeResponse(errs.ErrCodeArchiveSplitAuthorityRequired,
+		"archive key split requires a server-signed split decision")
+}
+
+// prepareArchiveKeySplit prepares wrapped shares while keeping the source key.
 // A separate authenticated finalization must confirm server persistence before
-// removing the source private key. Missing source key returns not_found.
-func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
+// removing the source private key. Missing source key returns not_found. Only
+// an authorized split handler may call it; the external action does not.
+func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
 	d.Logger.Println("archive key split processing...")
 
 	if err := req.Validate(); err != nil {

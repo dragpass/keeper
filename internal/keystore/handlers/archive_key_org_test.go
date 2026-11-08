@@ -246,7 +246,7 @@ func TestArchiveSplit_OrgScopedPreparationPreservesKeys(t *testing.T) {
 		t.Fatalf("commit A: %s", r.Error)
 	}
 	_, adminPems := genAdminKeys(t, 3)
-	split := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
+	split := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !split.Success {
 		t.Fatalf("split A: %s", split.Error)
 	}
@@ -261,7 +261,7 @@ func TestArchiveSplit_OrgScopedPreparationPreservesKeys(t *testing.T) {
 	}
 	// A retry of the same operation returns the stored result without changing
 	// A's key or falling through to the device-wide key.
-	again := HandleArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
+	again := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", OrgID: testOrgA, ThresholdN: 2, RecipientPublicKeys: adminPems})
 	if !again.Success || !reflect.DeepEqual(split.Data, again.Data) {
 		t.Fatalf("split retry of A changed its result: %+v", again)
 	}

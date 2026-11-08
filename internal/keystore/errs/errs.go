@@ -43,6 +43,11 @@ const (
 	// Extension prompts the user to upgrade Keeper.
 	ErrCodeUnsupported ErrorCode = "unsupported"
 
+	// ErrCodeArchiveSplitAuthorityRequired: archive_key_split needs a
+	// server-signed split decision that this Keeper does not yet accept, so it
+	// refuses every split. Nothing was read, written or returned.
+	ErrCodeArchiveSplitAuthorityRequired ErrorCode = "archive_split_authority_required"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"
