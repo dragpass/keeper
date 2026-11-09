@@ -157,7 +157,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"archive_key_rotate_abort", "archive_key_rotate_begin", "archive_key_rotate_commit",
 		"archive_key_split", "archive_key_status", "archive_quorum_combine_and_rewrap",
 		"archive_session_begin", "archive_session_end", "archive_share_prepare", "archive_share_rewrap",
-		"archive_unwrap_and_rewrap",
+		"archive_split_prepare", "archive_unwrap_and_rewrap",
 		"auth_login_pending_sign_alias", "auth_login_pending_sign_challenge",
 		"auth_recovery_abort", "auth_recovery_begin", "auth_recovery_prepare",
 		"auth_recovery_reissue_prepare", "auth_signup_abort", "auth_signup_prepare",

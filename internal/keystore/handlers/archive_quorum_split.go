@@ -4,9 +4,8 @@
 // see archive_quorum_combine.go for the flow overview. This file covers the two
 // steps that produce and re-target shares:
 //
-//   - HandleArchiveKeySplit: refuses every split until a server-signed split
-//     decision exists. prepareArchiveKeySplit keeps the durable preparation
-//     (journal, retained original key) for that decision to gate.
+//   - prepareArchiveKeySplit: the durable preparation (journal, retained
+//     original key) behind the signed split gate in archive_split_authority.go.
 //   - HandleArchiveShareRewrap: an admin re-wraps their own share from their
 //     account archive key to the recovery-session key.
 //
@@ -42,25 +41,25 @@ type archiveSplitJournal struct {
 	OperationID    string                            `json:"operation_id"`
 	RequestDigest  string                            `json:"request_digest"`
 	KeyFingerprint string                            `json:"key_fingerprint"`
+	Binding        archiveSplitBinding               `json:"binding"`
 	Result         proto.ArchiveKeySplitResponseData `json:"result"`
 }
 
-// HandleArchiveKeySplit is the external split action. The request names its
-// own recipient keys, so without a server-signed split decision a paired App
-// process could collect every share under keys it controls. No such decision
-// contract exists yet, so the action refuses before parsing the request or
-// touching the keychain: no archive-key read, no journal write, no output.
-func HandleArchiveKeySplit(d Deps, _ proto.ArchiveKeySplitRequest) proto.BaseResponse {
-	d.Logger.Println("archive key split refused: no signed split decision")
-	return errs.CodeResponse(errs.ErrCodeArchiveSplitAuthorityRequired,
-		"archive key split requires a server-signed split decision")
+// archiveSplitBinding is the part of the verified split decision the journal
+// keeps, so a retry under a fresh decision must name the same requester,
+// configuration and archive key, and finalization can be checked against it.
+type archiveSplitBinding struct {
+	AccountID                 string `json:"account_id"`
+	ConfigDigest              string `json:"config_digest"`
+	ArchiveKeySPKIFingerprint string `json:"archive_key_spki_fingerprint"`
+	SplitRequestDigest        string `json:"split_request_digest"`
 }
 
 // prepareArchiveKeySplit prepares wrapped shares while keeping the source key.
 // A separate authenticated finalization must confirm server persistence before
 // removing the source private key. Missing source key returns not_found. Only
-// an authorized split handler may call it; the external action does not.
-func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
+// HandleArchiveKeySplit calls it, after the signed split decision passed.
+func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding archiveSplitBinding) proto.BaseResponse {
 	d.Logger.Println("archive key split processing...")
 
 	if err := req.Validate(); err != nil {
@@ -91,6 +90,8 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.Base
 	if !found {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key unavailable")
 	}
+	// The decision changes on every retry; the journal names the request only.
+	req.Decision = nil
 	requestBytes, err := json.Marshal(req)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid split request")
@@ -104,6 +105,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.Base
 			journal.OperationID != req.OperationID ||
 			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||
 			journal.KeyFingerprint == "" ||
+			journal.Binding != binding ||
 			journal.KeyFingerprint != journal.Result.KeyFingerprint ||
 			!found || fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
 			len(journal.Result.Shares) != len(req.RecipientPublicKeys) {
@@ -162,7 +164,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.Base
 	result := proto.ArchiveKeySplitResponseData{KeyFingerprint: keyFingerprint, Shares: out}
 	journalBytes, err := json.Marshal(archiveSplitJournal{
 		OperationID: req.OperationID, RequestDigest: hex.EncodeToString(requestDigest[:]),
-		KeyFingerprint: keyFingerprint, Result: result,
+		KeyFingerprint: keyFingerprint, Binding: binding, Result: result,
 	})
 	if err != nil || d.Store.Set(config.Service, journalAccount, string(journalBytes)) != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive split preparation failed")

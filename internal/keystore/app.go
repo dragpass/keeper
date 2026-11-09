@@ -85,6 +85,8 @@ type Deps struct {
 	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
 	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
 	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveSplitChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveProofChallenges *handlers.ArchiveShareChallengeStore
 	// AuditAuthorizations holds the receipts and permits the audit actions
 	// consumed. Lives and dies with the process; never persisted.
 	AuditAuthorizations *handlers.AuditAuthorizationStore
@@ -110,6 +112,8 @@ type App struct {
 	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
 	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
 	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveSplitChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveProofChallenges *handlers.ArchiveShareChallengeStore
 	AuditAuthorizations    *handlers.AuditAuthorizationStore
 	CredentialNonces       *handlers.CredentialNonceStore
 	KeyTransparency        keytransparency.Gate
@@ -156,6 +160,8 @@ func NewApp(deps Deps) *App {
 		GroupDisplayChallenges: deps.GroupDisplayChallenges,
 		GroupRewrapChallenges:  deps.GroupRewrapChallenges,
 		ArchiveShareChallenges: deps.ArchiveShareChallenges,
+		ArchiveSplitChallenges: deps.ArchiveSplitChallenges,
+		ArchiveProofChallenges: deps.ArchiveProofChallenges,
 		AuditAuthorizations:    deps.AuditAuthorizations,
 		CredentialNonces:       deps.CredentialNonces,
 		KeyTransparency:        deps.KeyTransparency,
@@ -194,6 +200,12 @@ func NewApp(deps Deps) *App {
 	}
 	if app.ArchiveShareChallenges == nil {
 		app.ArchiveShareChallenges = handlers.NewArchiveShareChallengeStore()
+	}
+	if app.ArchiveSplitChallenges == nil {
+		app.ArchiveSplitChallenges = handlers.NewArchiveShareChallengeStore()
+	}
+	if app.ArchiveProofChallenges == nil {
+		app.ArchiveProofChallenges = handlers.NewArchiveShareChallengeStore()
 	}
 	if app.GroupRewrapChallenges == nil {
 		app.GroupRewrapChallenges = handlers.NewGroupRewrapChallengeStore()

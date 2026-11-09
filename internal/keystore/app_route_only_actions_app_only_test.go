@@ -33,6 +33,7 @@ var appRouteOnlyActions = []string{
 	proto.ActionArchiveKeyRotateAbort,
 	proto.ActionArchiveUnwrapAndRewrap,
 	proto.ActionArchiveKeySplit,
+	proto.ActionArchiveSplitPrepare,
 	proto.ActionArchiveShareRewrap,
 	proto.ActionArchiveSessionBegin,
 	proto.ActionArchiveSessionEnd,
