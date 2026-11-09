@@ -35,6 +35,10 @@ type splitAccessProbe struct {
 	privateReads, journalReads int
 	sets, deletes              int
 	beforePrivateRead          func()
+	privateDeletes             int
+	// deleteHook runs outside the probe lock before each delete; an error
+	// fails that delete.
+	deleteHook func(account string) error
 }
 
 func (p *splitAccessProbe) Get(service, account string) (string, error) {
@@ -62,7 +66,16 @@ func (p *splitAccessProbe) Set(service, account, value string) error {
 func (p *splitAccessProbe) Delete(service, account string) error {
 	p.mu.Lock()
 	p.deletes++
+	if p.private[account] {
+		p.privateDeletes++
+	}
+	hook := p.deleteHook
 	p.mu.Unlock()
+	if hook != nil {
+		if err := hook(account); err != nil {
+			return err
+		}
+	}
 	return p.SecretStore.Delete(service, account)
 }
 

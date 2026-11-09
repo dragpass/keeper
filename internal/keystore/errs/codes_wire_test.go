@@ -18,6 +18,7 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeUnsupported, "unsupported"},
 		{ErrCodeInternal, "internal_error"},
 		{ErrCodeArchiveSplitAuthorityRequired, "archive_split_authority_required"},
+		{ErrCodeArchiveSplitCleanupPending, "archive_split_cleanup_pending"},
 		{ErrCodePasswordInvalid, "password_invalid"},
 		{ErrCodeSignupPending, "signup_pending"},
 		{ErrCodeAccountKeyStaged, "account_key_staged"},

@@ -43,10 +43,17 @@ const (
 	// Extension prompts the user to upgrade Keeper.
 	ErrCodeUnsupported ErrorCode = "unsupported"
 
-	// ErrCodeArchiveSplitAuthorityRequired: archive_key_split needs a
-	// server-signed split decision that this Keeper does not yet accept, so it
-	// refuses every split. Nothing was read, written or returned.
+	// ErrCodeArchiveSplitAuthorityRequired: archive_key_split had no valid
+	// prepared challenge and server-signed split decision for this exact
+	// request. No archive private key or split journal was read, written or
+	// returned.
 	ErrCodeArchiveSplitAuthorityRequired ErrorCode = "archive_split_authority_required"
+
+	// ErrCodeArchiveSplitCleanupPending: archive_split_finalize accepted the
+	// finalization receipt but could not finish deleting the original archive
+	// private key or its split journal. The journal is kept; retrying with the
+	// same receipt repeats the deletion. Never a completed finalization.
+	ErrCodeArchiveSplitCleanupPending ErrorCode = "archive_split_cleanup_pending"
 
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.

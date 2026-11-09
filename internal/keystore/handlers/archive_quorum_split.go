@@ -38,17 +38,20 @@ import (
 var archiveSplitPreparationMu sync.Mutex
 
 type archiveSplitJournal struct {
-	OperationID    string                            `json:"operation_id"`
-	RequestDigest  string                            `json:"request_digest"`
-	KeyFingerprint string                            `json:"key_fingerprint"`
-	Binding        archiveSplitBinding               `json:"binding"`
-	Result         proto.ArchiveKeySplitResponseData `json:"result"`
+	OperationID    string              `json:"operation_id"`
+	RequestDigest  string              `json:"request_digest"`
+	KeyFingerprint string              `json:"key_fingerprint"`
+	Binding        archiveSplitBinding `json:"binding"`
+	// State is empty (prepared) until finalization starts deleting.
+	State  string                            `json:"state,omitempty"`
+	Result proto.ArchiveKeySplitResponseData `json:"result"`
 }
 
 // archiveSplitBinding is the part of the verified split decision the journal
 // keeps, so a retry under a fresh decision must name the same requester,
 // configuration and archive key, and finalization can be checked against it.
 type archiveSplitBinding struct {
+	OrgID                     string `json:"org_id"`
 	AccountID                 string `json:"account_id"`
 	ConfigDigest              string `json:"config_digest"`
 	ArchiveKeySPKIFingerprint string `json:"archive_key_spki_fingerprint"`
@@ -105,7 +108,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 			journal.OperationID != req.OperationID ||
 			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||
 			journal.KeyFingerprint == "" ||
-			journal.Binding != binding ||
+			journal.Binding != binding || journal.State != "" ||
 			journal.KeyFingerprint != journal.Result.KeyFingerprint ||
 			!found || fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
 			len(journal.Result.Shares) != len(req.RecipientPublicKeys) {

@@ -112,7 +112,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		return denyArchiveSplit()
 	}
 	response := prepareArchiveKeySplit(d, req, archiveSplitBinding{
-		AccountID: c.accountID, ConfigDigest: decision.ConfigDigest,
+		OrgID: c.orgID, AccountID: c.accountID, ConfigDigest: decision.ConfigDigest,
 		ArchiveKeySPKIFingerprint: decision.ArchiveKeySPKIFingerprint, SplitRequestDigest: digest,
 	})
 	if !response.Success {
