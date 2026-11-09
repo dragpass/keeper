@@ -25,7 +25,11 @@ type archiveShareContext struct {
 	bindingGeneration uint64
 	orgID             string
 	recoverySessionID string
-	requestDigest     string
+	// operationID and shareIndex bind split and share-open proof challenges
+	// (lv86); they are empty or zero for share rewrap challenges.
+	operationID   string
+	shareIndex    int
+	requestDigest string
 }
 
 type archiveShareEntry struct {

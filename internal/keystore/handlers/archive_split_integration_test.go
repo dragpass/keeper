@@ -25,7 +25,7 @@ func TestArchiveSplitIntegrationPreservesOriginalBeforeConfirmation(t *testing.T
 		t.Fatal(err)
 	}
 	_, recipients := genAdminKeys(t, 2)
-	response := prepareArchiveKeySplit(d, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: recipients})
+	response := prepareUnboundArchiveKeySplit(d, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444", ThresholdN: 2, RecipientPublicKeys: recipients})
 	if !response.Success {
 		t.Fatal("split preparation refused")
 	}
@@ -71,13 +71,13 @@ func TestArchiveSplitConcurrentRetryUsesOneDurableResult(t *testing.T) {
 	req := proto.ArchiveKeySplitRequest{OperationID: "77777777-7777-4777-8777-777777777777", ThresholdN: 2, RecipientPublicKeys: recipients}
 	first := make(chan proto.BaseResponse, 1)
 	second := make(chan proto.BaseResponse, 1)
-	go func() { first <- prepareArchiveKeySplit(d, req) }()
+	go func() { first <- prepareUnboundArchiveKeySplit(d, req) }()
 	select {
 	case <-gate.entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("first preparation did not reach journal write")
 	}
-	go func() { second <- prepareArchiveKeySplit(d, req) }()
+	go func() { second <- prepareUnboundArchiveKeySplit(d, req) }()
 	var secondResult proto.BaseResponse
 	completed := false
 	select {

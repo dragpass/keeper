@@ -76,7 +76,7 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 	adminKPs, adminPems := genAdminKeys(t, total)
 
 	// 1) prepare M shares while retaining the original archive private key.
-	splitResp := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
+	splitResp := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN:          threshold,
 		RecipientPublicKeys: adminPems,
 	})
@@ -166,7 +166,7 @@ func TestArchiveQuorum_SplitPreparationPreservesOriginalKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, recipients := genAdminKeys(t, 2)
-	response := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
+	response := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
 		OperationID: "11111111-1111-4111-8111-111111111111",
 		ThresholdN:  2, RecipientPublicKeys: recipients,
 	})
@@ -192,32 +192,32 @@ func TestArchiveQuorum_SplitPreparationRetriesSameStoredShares(t *testing.T) {
 		OperationID: "22222222-2222-4222-8222-222222222222",
 		ThresholdN:  2, RecipientPublicKeys: recipients,
 	}
-	first := prepareArchiveKeySplit(deps, request)
+	first := prepareUnboundArchiveKeySplit(deps, request)
 	if !first.Success {
 		t.Fatalf("initial split preparation failed: %s", first.ErrorCode)
 	}
 	// Reconstructing dependencies with the same protected store simulates restart.
 	restarted, _, _ := newTestDeps(t)
 	restarted.Store = store
-	second := prepareArchiveKeySplit(restarted, request)
+	second := prepareUnboundArchiveKeySplit(restarted, request)
 	if !second.Success || !reflect.DeepEqual(first.Data, second.Data) {
 		t.Fatal("retry after restart must return exactly the stored shares")
 	}
 	_, changedRecipients := genAdminKeys(t, 2)
 	changedRequest := request
 	changedRequest.RecipientPublicKeys = changedRecipients
-	if changed := prepareArchiveKeySplit(restarted, changedRequest); changed.Success {
+	if changed := prepareUnboundArchiveKeySplit(restarted, changedRequest); changed.Success {
 		t.Fatal("same operation id must not authorize changed recipient keys")
 	}
 	request.OperationID = "33333333-3333-4333-8333-333333333333"
-	if other := prepareArchiveKeySplit(restarted, request); other.Success {
+	if other := prepareUnboundArchiveKeySplit(restarted, request); other.Success {
 		t.Fatal("a different split operation must not replace the pending result")
 	}
 	if err := keychain.SaveArchivePublicKey(store, changedRecipients[0]); err != nil {
 		t.Fatal(err)
 	}
 	request.OperationID = "22222222-2222-4222-8222-222222222222"
-	if stale := prepareArchiveKeySplit(restarted, request); stale.Success {
+	if stale := prepareUnboundArchiveKeySplit(restarted, request); stale.Success {
 		t.Fatal("old preparation must not be returned after the active key changes")
 	}
 	if stored, err := keychain.GetArchivePrivateKey(store); err != nil || stored != archive.PrivateKey {
@@ -235,7 +235,7 @@ func TestArchiveQuorum_SplitPreparationStoreFailurePreservesKeyAndReturnsNoShare
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
 	_, recipients := genAdminKeys(t, 2)
 	deps.Store = failingSetStore{store}
-	response := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
+	response := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
 		OperationID: "55555555-5555-4555-8555-555555555555",
 		ThresholdN:  2, RecipientPublicKeys: recipients,
 	})
@@ -255,7 +255,7 @@ func TestArchiveQuorum_SplitPreparationRequiresRecoverablePublicSlot(t *testing.
 	}
 	_ = keychain.SaveArchivePrivateKey(store, archive.PrivateKey)
 	_, recipients := genAdminKeys(t, 2)
-	response := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
+	response := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{
 		OperationID: "66666666-6666-4666-8666-666666666666",
 		ThresholdN:  2, RecipientPublicKeys: recipients,
 	})
@@ -277,7 +277,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	const total, threshold = 5, 3
 	adminKPs, adminPems := genAdminKeys(t, total)
 
-	splitData := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
+	splitData := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: threshold, RecipientPublicKeys: adminPems,
 	}).Data.(proto.ArchiveKeySplitResponseData)
 
@@ -318,7 +318,7 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 
 	const total, threshold = 3, 2
 	adminKPs, adminPems := genAdminKeys(t, total)
-	splitData := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
+	splitData := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: threshold, RecipientPublicKeys: adminPems,
 	}).Data.(proto.ArchiveKeySplitResponseData)
 	sessionPubPEM := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{}).
@@ -364,7 +364,7 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 func TestArchiveQuorum_SplitMissingArchiveKey(t *testing.T) {
 	deps, _, _ := newTestDeps(t) // no archive key stored
 	_, adminPems := genAdminKeys(t, 3)
-	resp := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
+	resp := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: 2, RecipientPublicKeys: adminPems,
 	})
 	if resp.Success {
@@ -451,7 +451,7 @@ func TestArchiveQuorum_SplitPreservesAccountSlotAndReportsFingerprint(t *testing
 	_ = keychain.SaveAccountArchivePublicKey(store, accountKP.PublicKey)
 
 	_, adminPems := genAdminKeys(t, 3)
-	resp := prepareArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
+	resp := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: 2, RecipientPublicKeys: adminPems,
 	})
 	if !resp.Success {

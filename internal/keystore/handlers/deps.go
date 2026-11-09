@@ -53,6 +53,11 @@ type Deps struct {
 	// request. A nil store refuses preparation and execution.
 	GroupRewrapChallenges  *GroupRewrapChallengeStore
 	ArchiveShareChallenges *ArchiveShareChallengeStore
+	// ArchiveSplitChallenges and ArchiveProofChallenges are separate stores,
+	// so a split challenge can never satisfy a share rewrap or proof decision
+	// or the reverse. A nil store refuses preparation and execution.
+	ArchiveSplitChallenges *ArchiveShareChallengeStore
+	ArchiveProofChallenges *ArchiveShareChallengeStore
 	// ChangeBaselineChallenges binds a one-use change-baseline decision (lv83)
 	// to the exact token and entry Keeper prepared. A separate store, so a
 	// baseline challenge can never satisfy a display decision or the reverse.

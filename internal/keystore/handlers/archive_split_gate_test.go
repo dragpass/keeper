@@ -63,3 +63,9 @@ func TestArchiveKeySplit_RefusedWithoutSignedSplitDecision(t *testing.T) {
 		})
 	}
 }
+
+// prepareUnboundArchiveKeySplit drives the durable preparation directly, for
+// tests of its journal and custody behaviour that do not exercise the gate.
+func prepareUnboundArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
+	return prepareArchiveKeySplit(d, req, archiveSplitBinding{})
+}

@@ -272,11 +272,14 @@ that wipe. Kept as separate actions (rather than a slot parameter on
 #### Archive-key admin quorum (Shamir N-of-M break-glass)
 
 An alternative custody where the archive private key is Shamir-split across M
-admin devices instead of held whole on the owner's device. After authenticated quorum finalization, the whole private key exists
-nowhere at rest, only as shares. Split preparation retains the original in
-Keeper protected storage. The current candidate does not yet provide signed
-finalization, so its preparation result is not a completed quorum transition. Break-glass then
+admin devices instead of held whole on the owner's device. A split runs only
+under a server-signed split decision and retains the original private key in
+Keeper protected storage. Keeper deletes the original only when a server-signed
+finalization receipt matches its split journal and current key; after that the
+whole private key exists nowhere at rest, only as shares. Break-glass then
 requires N of M admins to approve within a coordinator-run recovery session.
+See "Archive split authorization, share-open proof and finalization" for the
+signed formats.
 
 A Shamir share of the archive private-key PEM (~1.7 KB) exceeds the RSA-OAEP
 plaintext limit, so every wrapped share is a **hybrid envelope**: `wrapped_key`
@@ -288,7 +291,13 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`archive_key_split`|`operation_id`, `org_id?`, `threshold_n`, `recipient_public_keys[]`|error|App only (a Native Messaging frame is refused). **Refused for every request** with `archive_split_authority_required`. The recipient keys come from the caller, so without a server-signed split decision a paired App process could collect every share under keys it controls; Keeper accepts no such decision yet. The refusal happens before the archive key is read: nothing is read, no preparation journal is written, no share is returned, and no key is deleted. The Local RPC route still decodes the typed request (an unknown field is HTTP 400, a missing `operation_id` is `validation_error`). Existing quorum recovery (`archive_share_rewrap`, `archive_quorum_combine_and_rewrap`) is unaffected. The durable split preparation (operation-ID journal, original private key retained until authenticated finalization) remains in Keeper for a future signed split decision but is not reachable from any action.|
+|`archive_split_prepare`|`request` (the exact `archive_key_split` request without `decision`), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|App only. Records a process-local, one-use challenge for ten seconds bound to the current account binding generation, device, login token, organization, operation and split request digest. `request.account_id` must equal the bound account. Reads no private key. Any refusal is `archive_split_authority_required`.|
+|`archive_key_split`|`operation_id`, `account_id`, `org_id`, `threshold_n`, `recipient_public_keys[]`, `recipient_account_ids[]` (same order, distinct), `config_digest`, `decision`|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint, proof_public_key }] }`|App only. Requires the prepared challenge and a server-signed `archive_split` decision for this exact request. The decision, challenge, live binding, device, and the org's current archive public key (PEM and SPKI fingerprints) are checked before any archive private-key or journal access. The key must be in the org-scoped slot (`org_archive_*:<org_id>`); an org still on the device-wide fallback slot is refused, because that key may serve other orgs on the device and finalization would delete it for all of them. The org rotates to its own key first; every refusal is `archive_split_authority_required` with nothing read, written or returned. On success Keeper splits the key, wraps each share to its recipient, derives each share's proof public key, and writes the journal `archive_quorum_split_pending:<private slot>` with the operation, request digest, key fingerprint, decision binding (org, requester, config digest, SPKI fingerprint, split request digest) and result. The original private key is kept. A retry of the same operation and request under a fresh decision returns the journaled result; a different request, binding or key returns `not_found`, as does a retry once finalization started. Output is withheld if the decision expires during the call.|
+|`archive_split_status`|`org_id`|`{ state, operation_id? }`|App only. `state` is `none`, `prepared`, `deleting` or `cleanup_pending` for the org's active archive slot. Reads public slots and the journal only; returns no shares, keys or receipts.|
+|`archive_split_finalize`|`org_id`, `receipt` (finalization receipt)|`{ state: "finalized", operation_id }`|App only. Acts only on the org-scoped slot; a device-wide fallback slot is refused with `not_found` and nothing is deleted. Deletes the original archive private key only when the signed receipt names the journaled operation, organization, config digest, archive key SPKI fingerprint and shares digest, and the org's current public key is still the journaled one. Otherwise `not_found` and nothing changes, so a receipt for an older operation or a key rotated since the split never deletes the newer key. The journal is marked `deleting`, the private slot is deleted, then the journal. A failed deletion keeps the journal and returns `archive_split_cleanup_pending`; a retry with the same receipt repeats the deletion. The split journal mutex is held from the journal read through deletion, so concurrent calls delete once. The public slot is kept. After completion there is no journal and a repeated call is `not_found`; `archive_split_status` then reports `none`.|
+|`archive_split_abandon`|`org_id`, `receipt` (closure receipt)|`{ state: "none", operation_id }`|App only. Acts only on the org-scoped slot (`not_found` for a device-wide fallback slot, nothing deleted). Drops a `prepared` journal when the signed closure receipt (`cancelled`, `expired` or `invalidated`) names its operation, organization and archive key SPKI fingerprint. The archive private key is kept. A journal whose deletion started is never abandoned (`not_found`).|
+|`archive_share_proof_prepare`|`request` (the exact `archive_share_open_proof` request without `decision`), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|App only. Records a one-use ten-second challenge bound to binding generation, device, login token, organization, operation, share index and proof request digest, in a store separate from split and share-rewrap challenges. Reads no private key.|
+|`archive_share_open_proof`|`account_id`, `org_id`, `operation_id`, `config_digest`, `share_index`, `wrapped_key`, `ciphertext`, `proof_public_key`, `decision`|`{ signature }`|App only. Verifies the prepared challenge and the signed share-open proof decision, the live binding and device before reading the account archive private key; any mismatch is `not_found` with no key read. Then opens the share, requires its embedded index to equal `share_index`, re-derives the share proof key, and refuses with `crypto_failure` when it differs from `proof_public_key`. Signs the proof statement with the derived key and returns only the Base64 Ed25519 signature. The share, seed and private key are zeroized and never leave Keeper. Output is withheld if the decision expires during the call.|
 |`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
 |`archive_share_rewrap`|`account_id`, `org_id`, `recovery_session_id`, `wrapped_key`, `ciphertext`, `session_public_key`, `decision`|`{ wrapped_key, ciphertext }`|Paired App only. Requires the prepared exact request and a server-signed archive-share decision before reading the account archive private key. Missing, expired, replayed or mismatched authority returns no output. The account receiving slot is used, never the org archive slot. Expiry is checked again after cryptography before output.|
 |`archive_session_begin`|_empty_|`{ session_public_key, fingerprint }`|App only (a Native Messaging frame is refused). Coordinator generates an ephemeral recovery-session keypair in its own slot (`org_archive_session_private_key`) and returns the public key. Supersedes any prior session key.|
@@ -577,8 +586,10 @@ a key other than this Keeper's own (`dek_rewrap_for_member`,
 `dek_unwrap_and_rewrap_for_many`, `archive_unwrap_and_rewrap`,
 `archive_quorum_combine_and_rewrap`, `archive_share_rewrap`) runs only with a
 server-signed decision for the exact prepared request, verified before any
-pin, private-key read or unwrap. `archive_key_split` refuses every request
-(`archive_split_authority_required`) because no signed split decision exists.
+pin, private-key read or unwrap. `archive_key_split` runs only with a
+server-signed `archive_split` decision for the exact prepared request, verified
+before any archive private-key read (`archive_split_authority_required`
+otherwise).
 
 Accepted gaps:
 
@@ -2591,7 +2602,8 @@ message. Codes are stable enums; messages are not.
 |`storage_failure`|OS Keychain access denied / file permission.|Surface to user as a permission prompt.|
 |`unsupported`|Unknown `action` name, or protocol version mismatch.|Prompt user to upgrade Keeper.|
 |`internal_error`|Unexpected error not covered by the above.|Bug — capture for diagnostics.|
-|`archive_split_authority_required`|`archive_key_split`: Keeper accepts no server-signed split decision yet and refuses every split. Nothing was read, written or returned.|Do not offer quorum setup; existing quorum recovery is unaffected.|
+|`archive_split_authority_required`|`archive_split_prepare` / `archive_key_split`: no valid prepared challenge and server-signed split decision for this exact request and current archive key, or the org's archive key is still the device-wide fallback slot. Nothing was read, written or returned.|Prepare again and request a fresh split decision; an org on the device-wide slot rotates its archive key first. Existing quorum recovery is unaffected.|
+|`archive_split_cleanup_pending`|`archive_split_finalize`: the receipt matched, but deleting the original archive private key or the split journal did not complete. The journal is kept.|Retry `archive_split_finalize` with the same receipt; never report the finalization as complete.|
 |`password_invalid`|`auth_login_pending_sign_challenge`: the password does not open the server's password-wrapped DEK. A distinct code there because a `crypto_failure` would not say whether the password or a server signature failed.|Tell the user the password is wrong. Nothing was signed or stored.|
 |`signup_pending`|`auth_signup_prepare`: a signup keypair is staged and the input is not the one that staged it.|Sign in with the alias and password of that signup (the pending sign-in promotes it), or `auth_signup_abort` it once the server refused it. Nothing was written.|
 |`account_key_staged`|`auth_recovery_reissue_prepare`: the account key the server may hold is still staged.|Sign in first; the pending sign-in promotes the staged key. Nothing was written.|
@@ -3062,8 +3074,11 @@ Native Messaging only.
 `archive_session_end` (all `{}`), `archive_key_status`,
 `archive_key_rotate_begin`, `archive_key_rotate_abort` (`{ org_id? }`,
 0.0.58), `archive_key_rotate_commit` (`{ org_id?, expected_fingerprint? }`),
-`archive_key_split` (512 KiB) and `archive_share_rewrap`, each with the
-action's request. (0.0.59) Every action behind these routes except
+`archive_key_split`, `archive_split_prepare`, `archive_share_proof_prepare`,
+`archive_share_open_proof` (512 KiB each), `archive_split_status`,
+`archive_split_finalize`, `archive_split_abandon` and `archive_share_rewrap`,
+each with the action's request, decoded strictly and forwarded unchanged,
+including its signed decision or receipt. (0.0.59) Every action behind these routes except
 `archive_key_generate`, which the Extension's E2E organization fixture still
 calls, is App-only: a Native Messaging frame is refused with
 `chat_app_caller_required`, so only these route shapes reach them. Two routes
@@ -3276,6 +3291,87 @@ This gate does not authorize direct archive regrant, key splitting or quorum
 combine. Those operations require their own authority contracts. Older callers
 without a decision are refused; newer callers do not fall back when preparation
 or the server endpoint is unavailable.
+
+### Archive split authorization, share-open proof and finalization
+
+All formats below use the length-prefixed canonical encoding of "Archive share
+rewrap authorization": the domain, then `|<UTF-8-byte-length>:<value>` per
+field. Integers are decimal. Digests and fingerprints are 64 lowercase hex
+characters. Decisions are signed by the configured server signing key, verified
+by Keeper with the decision's server key version, and valid for exactly ten
+seconds (`expires_at - issued_at = 10`). Challenges and the server nonce are
+unpadded base64url of 32 bytes.
+
+Fingerprints. The archive key PEM fingerprint is `hex(SHA-256(public key PEM
+as stored))`, the value `archive_key_split` returns as `key_fingerprint`. The
+archive key SPKI fingerprint is `hex(SHA-256(PKIX DER))` of the parsed key.
+A recipient key fingerprint is `hex(SHA-256(recipient PEM bytes as sent))`.
+
+Split request digest: SHA-256 hex of domain `dragpass.archive.split.request|1`
+with account ID, organization ID, operation ID, config digest, threshold N, the
+recipient count M, then for each recipient in order its account ID and key
+fingerprint.
+
+Split decision (`dragpass.archive.split.decision|1`), field order: challenge,
+account ID, device ID, login token ID, session-issued nanoseconds, organization
+ID, operation ID, config digest, archive key PEM fingerprint, archive key SPKI
+fingerprint, threshold N, recipient count M, then each recipient's account ID
+and key fingerprint in order, request digest, issued-at seconds, expires-at
+seconds, server key version. JSON carries the recipients as
+`recipients: [{ account_id, key_fingerprint }]` and
+`session_issued_at_nanos` as a decimal string.
+
+Proof key. For each share, `seed = HKDF-SHA256(ikm = x || y (the serialized
+share as wrapped), salt = empty, info, 32 bytes)` with `info` the canonical
+`dragpass.archive.share.proof-key|1` with operation ID and share index; the key
+pair is `ed25519.NewKeyFromSeed(seed)`. `proof_public_key` is the standard
+padded Base64 of the 32-byte public key. The seed and private key are zeroized
+after use.
+
+Share digest: SHA-256 hex of domain `dragpass.archive.share.envelope|1` with
+share index, `wrapped_key` Base64 and `ciphertext` Base64 as sent. It is not a
+digest of any JSON serialization of the envelope.
+
+Shares digest: SHA-256 hex of domain `dragpass.archive.split.shares|1` with the
+share count, then for each share in split order its index, share digest and
+proof public key.
+
+Proof request digest: SHA-256 hex of domain
+`dragpass.archive.share.open-proof.request|1` with account ID, organization ID,
+operation ID, config digest, share index, share digest and proof public key.
+
+Share-open proof decision (`dragpass.archive.share.open-proof.decision|1`),
+field order: challenge, account ID, device ID, login token ID, session-issued
+nanoseconds, organization ID, operation ID, config digest, archive key SPKI
+fingerprint, person ID, share index, share digest, proof public key, server
+nonce, request digest, issued-at seconds, expires-at seconds, server key
+version. Keeper checks the operation, organization, account, share index,
+config digest, proof public key and share digest against its request and does
+not interpret the person ID; the server verifies it.
+
+Proof statement signed with the share proof key
+(`dragpass.archive.share.open-proof|1`), field order: server nonce, operation
+ID, config digest, archive key SPKI fingerprint, organization ID, person ID,
+account ID, device ID, share index, share digest, proof public key, decision
+expires-at seconds. The response is the standard Base64 Ed25519 signature.
+
+Finalization receipt (`dragpass.archive.split.finalized|1`), field order:
+operation ID, organization ID, archive key SPKI fingerprint, config digest,
+shares digest, finalized-at Unix seconds, server key version. JSON:
+`{ operation_id, org_id, archive_key_spki_fingerprint, config_digest,
+shares_digest, finalized_at, server_key_version, signature }`.
+
+Closure receipt (`dragpass.archive.split.closed|1`), field order: operation ID,
+organization ID, status (`cancelled`, `expired` or `invalidated`), archive key
+SPKI fingerprint, server key version. JSON: `{ operation_id, org_id, status,
+archive_key_spki_fingerprint, server_key_version, signature }`.
+
+Receipts carry no expiry; Keeper accepts them only against its split journal
+and, for finalization, the org's current archive public key. Split, proof and
+share-rewrap challenges live in separate process-local stores, so one kind
+never satisfies another. A malicious server can still authorize any split or
+confirm any finalization; the coordinator Keeper holds the whole key at split
+time and derives every proof key.
 
 ### Quorum combine authorization boundary
 

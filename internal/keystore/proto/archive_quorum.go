@@ -1,9 +1,10 @@
 // archive_quorum.go — payloads for the org archive-key admin quorum
 // (Shamir N-of-M break-glass) actions.
 //
-//   - archive_key_split  : Shamir-split the org archive private key into M
-//     shares, hybrid-wrap each to an admin's account archive public key, then
-//     delete the whole private key. At rest the key exists only as shares.
+//   - archive_key_split  : under a server-signed split decision, Shamir-split
+//     the org archive private key into M shares and hybrid-wrap each to an
+//     admin's account archive public key. The original is kept until
+//     archive_split_finalize deletes it against a signed finalization receipt.
 //   - archive_session_begin / _end : create/destroy the coordinator's
 //     ephemeral recovery-session keypair.
 //   - archive_share_rewrap : an admin re-wraps their own share from their
@@ -30,6 +31,10 @@ type WrappedShare struct {
 	WrappedKey           string `json:"wrapped_key"`           // Base64 RSA-OAEP(AES key)
 	Ciphertext           string `json:"ciphertext"`            // Base64 IV||AES-GCM(share)
 	RecipientFingerprint string `json:"recipient_fingerprint"` // hex(sha256(recipient PEM))
+	// ProofPublicKey is the Base64 raw Ed25519 public key derived from this
+	// share (see ArchiveShareProofKeyInfo). Its holder proves it opened the
+	// share by signing with the re-derived private key.
+	ProofPublicKey string `json:"proof_public_key"`
 }
 
 // ArchiveKeySplitRequest — threshold_n of len(recipient_public_keys) split.
@@ -37,11 +42,21 @@ type WrappedShare struct {
 // may include their own).
 type ArchiveKeySplitRequest struct {
 	OperationID string `json:"operation_id"`
+	// AccountID is the requesting (coordinator) account; the signed split
+	// decision and the prepared challenge both bind it.
+	AccountID string `json:"account_id,omitempty"`
 	// OrgID (0.0.58, optional) splits the org's own archive key when it has
 	// one, otherwise the device-wide key. Preparation never deletes the key.
 	OrgID               string   `json:"org_id,omitempty"`
 	ThresholdN          int      `json:"threshold_n"`
 	RecipientPublicKeys []string `json:"recipient_public_keys"`
+	// RecipientAccountIDs names the participant account of each recipient key,
+	// in the same order.
+	RecipientAccountIDs []string `json:"recipient_account_ids,omitempty"`
+	// ConfigDigest is the server's quorum configuration digest for the
+	// operation; Keeper only binds and journals it.
+	ConfigDigest string                `json:"config_digest,omitempty"`
+	Decision     *ArchiveSplitDecision `json:"decision,omitempty"`
 }
 
 func (r ArchiveKeySplitRequest) Validate() error {

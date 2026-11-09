@@ -368,6 +368,32 @@ var archiveRoutes = map[string]appRoute{
 		input:      func() any { return &proto.ArchiveKeySplitRequest{} },
 		plainLimit: proto.DEKRewrapMaxRequestBytes,
 	},
+	// Split custody (lv86): each request carries its own signed decision or
+	// receipt, which the handler verifies; the route only forwards it.
+	"/v1/archive/archive_split_prepare": {
+		action:     proto.ActionArchiveSplitPrepare,
+		input:      func() any { return &proto.ArchiveSplitPrepareRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
+	"/v1/archive/archive_share_proof_prepare": {
+		action:     proto.ActionArchiveShareProofPrepare,
+		input:      func() any { return &proto.ArchiveShareProofPrepareRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
+	"/v1/archive/archive_share_open_proof": {
+		action:     proto.ActionArchiveShareOpenProof,
+		input:      func() any { return &proto.ArchiveShareOpenProofRequest{} },
+		plainLimit: proto.DEKRewrapMaxRequestBytes,
+	},
+	"/v1/archive/archive_split_status": {action: proto.ActionArchiveSplitStatus, input: func() any { return &proto.ArchiveSplitStatusRequest{} }},
+	"/v1/archive/archive_split_finalize": {
+		action: proto.ActionArchiveSplitFinalize,
+		input:  func() any { return &proto.ArchiveSplitFinalizeRequest{} },
+	},
+	"/v1/archive/archive_split_abandon": {
+		action: proto.ActionArchiveSplitAbandon,
+		input:  func() any { return &proto.ArchiveSplitAbandonRequest{} },
+	},
 	"/v1/archive/archive_share_prepare": {
 		action:     proto.ActionArchiveSharePrepare,
 		input:      func() any { return &proto.ArchiveSharePrepareRequest{} },
