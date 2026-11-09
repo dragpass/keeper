@@ -187,3 +187,9 @@ func validateArchiveLogin(tokenID string, sessionNanos int64) error {
 	}
 	return nil
 }
+
+// ArchiveShareProofKeyInfo is the HKDF info for a share's proof key:
+// "dragpass.archive.share.proof-key|1" | len:operation_id | len:share_index.
+func ArchiveShareProofKeyInfo(operationID string, shareIndex int) string {
+	return archiveShareCanonical("dragpass.archive.share.proof-key|1", operationID, strconv.Itoa(shareIndex))
+}

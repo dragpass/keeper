@@ -147,17 +147,22 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 	for i, s := range shares {
 		serialized := crypto.SerializeShare(s)
 		wrappedKey, ciphertext, wrapErr := crypto.HybridWrap(pubs[i], serialized)
+		proofPublicKey, proofErr := archiveShareProofPublicKey(serialized, req.OperationID, int(s.X))
 		secure.Zeroize(serialized)
 		secure.Zeroize(s.Y)
 		if wrapErr != nil {
 			return errs.CodeResponse(errs.ErrCodeCryptoFailure,
 				fmt.Sprintf("hybrid wrap share %d failed: %v", i, wrapErr))
 		}
+		if proofErr != nil {
+			return errs.CodeResponse(errs.ErrCodeCryptoFailure, "derive share proof key failed")
+		}
 		out[i] = proto.WrappedShare{
 			ShareIndex:           int(s.X),
 			WrappedKey:           wrappedKey,
 			Ciphertext:           ciphertext,
 			RecipientFingerprint: fingerprintBase64Public(req.RecipientPublicKeys[i]),
+			ProofPublicKey:       proofPublicKey,
 		}
 	}
 
