@@ -117,7 +117,9 @@ func HandleArchiveSplitFinalize(d Deps, req proto.ArchiveSplitFinalizeRequest) p
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
 	slot, activePublic, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
-	if err != nil || !found {
+	// Only an org-scoped slot is ever deleted; the split gate refuses the
+	// device-wide slot, and this repeats that check before any deletion.
+	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg {
 		return denyArchiveSplitReceipt()
 	}
 	spki, err := crypto.RewrapKeyFingerprint(activePublic)
@@ -168,7 +170,8 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
 	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
-	if err != nil || !found || journal.State != "" || journal.OperationID != receipt.OperationID ||
+	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State != "" ||
+		journal.OperationID != receipt.OperationID ||
 		journal.Binding.OrgID != receipt.OrgID ||
 		journal.Binding.ArchiveKeySPKIFingerprint != receipt.ArchiveKeySPKIFingerprint {
 		return denyArchiveSplitReceipt()

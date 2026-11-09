@@ -95,9 +95,12 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		return denyArchiveSplit()
 	}
 	// Public slot only: the key Keeper would split must be the one the server
-	// authorized, by both its stored PEM and its parsed SPKI.
-	_, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
-	if err != nil || !found || fingerprintBase64Public(activePublic) != decision.ArchiveKeyFingerprint {
+	// authorized, by both its stored PEM and its parsed SPKI. It must also be
+	// the org's own slot: the device-wide fallback key may still serve other
+	// orgs on this device, and finalization would delete it for all of them.
+	slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg ||
+		fingerprintBase64Public(activePublic) != decision.ArchiveKeyFingerprint {
 		return denyArchiveSplit()
 	}
 	if spki, err := crypto.RewrapKeyFingerprint(activePublic); err != nil || spki != decision.ArchiveKeySPKIFingerprint {
