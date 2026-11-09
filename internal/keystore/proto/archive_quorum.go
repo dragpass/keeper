@@ -1,9 +1,10 @@
 // archive_quorum.go — payloads for the org archive-key admin quorum
 // (Shamir N-of-M break-glass) actions.
 //
-//   - archive_key_split  : Shamir-split the org archive private key into M
-//     shares, hybrid-wrap each to an admin's account archive public key, then
-//     delete the whole private key. At rest the key exists only as shares.
+//   - archive_key_split  : under a server-signed split decision, Shamir-split
+//     the org archive private key into M shares and hybrid-wrap each to an
+//     admin's account archive public key. The original is kept until
+//     archive_split_finalize deletes it against a signed finalization receipt.
 //   - archive_session_begin / _end : create/destroy the coordinator's
 //     ephemeral recovery-session keypair.
 //   - archive_share_rewrap : an admin re-wraps their own share from their
