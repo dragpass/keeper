@@ -14,8 +14,8 @@ import (
 )
 
 // Chat runs only in the App. The ungated reads and statements are App-only
-// too, except org_member_removal_sign, which the Extension's E2E member
-// fixture signs over Native Messaging.
+// too. org_member_removal_sign stays reachable over Native Messaging only in a
+// keeper_e2e build, for the Extension's E2E member fixture (lv78).
 func mlsChatActions() map[string]action {
 	return map[string]action{
 		proto.MLSGroupCreate:               direct(handlers.HandleMLSGroupCreate).gated(),
@@ -34,7 +34,7 @@ func mlsChatActions() map[string]action {
 		proto.MLSEpochComparison:           direct(handlers.HandleMLSEpochComparison).chatFree().appOnlyAction(),
 		proto.MLSRejoinRequestSign:         direct(handlers.HandleMLSRejoinRequestSign).chatFree().appOnlyAction(),
 		proto.MLSLeaveRequestSign:          direct(handlers.HandleMLSLeaveRequestSign).chatFree().appOnlyAction(),
-		proto.OrgMemberRemovalSign:         wrap(handlers.HandleOrgMemberRemovalSign).chatFree(),
+		proto.OrgMemberRemovalSign:         wrap(handlers.HandleOrgMemberRemovalSign).chatFree().appOnlyAction().e2eFixtureOnNative(),
 		proto.MLSDeviceRevokeSign:          wrap(handlers.HandleMLSDeviceRevokeSign).chatFree().appOnlyAction(),
 	}
 }

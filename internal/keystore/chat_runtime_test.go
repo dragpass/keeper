@@ -137,7 +137,7 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 				t.Fatalf("%s ran although it was refused", action)
 			}
 		}
-		for _, action := range []string{"ping", "org_member_removal_sign", "getpublickey", "peer_key_pin_get", "rotate_user_keypair_status"} {
+		for _, action := range []string{"ping", "getpublickey", "peer_key_pin_get", "rotate_user_keypair_status"} {
 			response := app.HandleRequest([]byte(`{"action":"` + action + `"}`))
 			if response.ErrorCode == ErrCodeChatAppCallerRequired || response.ErrorCode == ErrCodeChatRuntimeBusy {
 				t.Fatalf("%s was refused to the Extension (leased=%v): %+v", action, leased, response)
@@ -148,7 +148,8 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 
 // The App-only set is pinned: every gated action but the two revocations,
 // the room name display open, the Secure Message seal and display, the
-// organization emergency code seed derivation, the App session refresh
+// organization emergency code seed derivation, the organization member
+// removal statement (lv78), the App session refresh
 // signature, account entry, and the actions only App routes call
 // (appRouteOnlyActions).
 func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
@@ -178,7 +179,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"mls_leaf_status", "mls_leave_request_sign",
 		"mls_mark_sent", "mls_process", "mls_rejoin_request_sign",
 		"mls_room_name_open", "mls_room_name_seal",
-		"org_emergency_seed_derive",
+		"org_emergency_seed_derive", "org_member_removal_sign",
 		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number", "personal_dek_bind",
 		"recovery_session_close",
 		"rotate_user_keypair_prepare", "rotate_user_keypair_promote",

@@ -14,13 +14,17 @@ func TestE2ERegistryHasTheClipboardHashQuery(t *testing.T) {
 	}
 }
 
-// The E2E binary serves the Group DEK wrap actions to the Extension's
-// organization fixtures over Native Messaging and nothing else App-only.
+// The E2E binary serves the Group DEK wrap actions and the organization
+// removal statement to the Extension's fixtures over Native Messaging and
+// nothing else App-only.
 func TestE2EBuildServesOnlyTheGroupDEKWrapFixturesOverNative(t *testing.T) {
 	fixtures := map[string]bool{
 		proto.ActionGroupDEKGenerateAndOpen:   true,
 		proto.ActionDEKRewrapForMember:        true,
 		proto.ActionDEKUnwrapAndRewrapForMany: true,
+		// The Extension's E2E member fixture signs organization removals
+		// (lv78: App-only in a release build).
+		proto.OrgMemberRemovalSign: true,
 	}
 	for name, entry := range actionRegistry {
 		if !entry.appOnly {
