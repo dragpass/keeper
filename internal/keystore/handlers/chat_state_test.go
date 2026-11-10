@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -150,11 +151,29 @@ func (f *chatStateFixture) seedConversation(t *testing.T, ownerAccountID string)
 	}
 }
 
+// purge erases the account's state as a legitimate current-sign-in logout
+// does: it names the current chat state generation, binding the account first
+// when the fixture never did.
 func (f *chatStateFixture) purge(t *testing.T, ownerAccountID string) proto.BaseResponse {
 	t.Helper()
-	return HandleChatStatePurge(f.deps, chatMarshal(t, proto.ChatStatePurgeRequest{
-		OwnerAccountID: ownerAccountID,
-	}))
+	generation, err := keychain.GetChatStateGeneration(f.deps.Store, ownerAccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation == "" {
+		if len(ownerAccountID) == 36 {
+			binding, _, err := keychain.SetAccountBinding(f.deps.Store, ownerAccountID, "alice", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generation = binding.ChatStateGeneration
+		}
+	}
+	request := map[string]any{"owner_account_id": ownerAccountID}
+	if generation != "" {
+		request["expected_generation"] = generation
+	}
+	return HandleChatStatePurge(f.deps, chatMarshal(t, request))
 }
 
 // assertStateRootAbsent is the assertion the whole permit gate exists to make

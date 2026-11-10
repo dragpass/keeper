@@ -452,7 +452,9 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 	revocations := []struct {
 		name, frame, reason string
 	}{
-		{"logout purge", `{"action":"chat_state_purge","request_id":"ext","payload":{"owner_account_id":"` + rvAccount + `"}}`, keystore.ChatRuntimeRevokedPurged},
+		// The logout purge names the current sign-in's generation (lv78); the
+		// frame is built once the Extension host can ask for it.
+		{"logout purge", "", keystore.ChatRuntimeRevokedPurged},
 		{"device reset", `{"action":"reset_device_identity","request_id":"ext","payload":{}}`, keystore.ChatRuntimeRevokedReset},
 	}
 	server := newRVServer(t)
@@ -475,7 +477,11 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 			rvMust(t, client, "/v1/request-signature", rvSignature(client, "POST", "/api/v1/conversations/"+rvConv+"/messages", 1), nil)
 
 			host := d.startExtension(t)
-			if result := host.send(t, revocation.frame); !result.Success {
+			if revocation.frame == "" {
+				// The signed-in App records its binding, as sign-in does.
+				rvMust(t, client, "/v1/account/binding", proto.AccountBindingSetRequest{AccountID: rvAccount, Alias: "alice"}, nil)
+			}
+			if result := host.send(t, revocationFrame(t, host, revocation.frame)); !result.Success {
 				t.Fatalf("Extension %s while the App is mid-send: %+v\n%s", revocation.name, result, owner.stderr.String())
 			}
 			assertOldRuntimeFenced(t, d, client, bob, revocation.reason, messageID, "a1111111-7777-4777-8777-700000000002")
@@ -524,7 +530,11 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 				raced <- result
 			}()
 			close(start)
-			if result := host.send(t, revocation.frame); !result.Success {
+			if revocation.frame == "" {
+				// The signed-in App records its binding, as sign-in does.
+				rvMust(t, client, "/v1/account/binding", proto.AccountBindingSetRequest{AccountID: rvAccount, Alias: "alice"}, nil)
+			}
+			if result := host.send(t, revocationFrame(t, host, revocation.frame)); !result.Success {
 				t.Fatalf("Extension %s while the App is mid-Commit: %+v\n%s", revocation.name, result, owner.stderr.String())
 			}
 			if result := <-raced; !result.Success && result.ErrorCode != keystore.ErrCodeChatRuntimeRevoked {
@@ -533,4 +543,25 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 			assertOldRuntimeFenced(t, d, client, bob, revocation.reason, "eeeeeeee-eeee-4eee-8eee-100000000001", commitID)
 		})
 	}
+}
+
+// revocationFrame returns frame, or for "" the Extension's logout purge of
+// rvAccount naming the chat state generation device_account_status reports.
+func revocationFrame(t *testing.T, host *nativeHost, frame string) string {
+	t.Helper()
+	if frame != "" {
+		return frame
+	}
+	status := host.send(t, `{"action":"device_account_status","request_id":"ext-status","payload":{}}`)
+	raw, _ := json.Marshal(status.Data)
+	var data struct {
+		ChatStateGeneration string `json:"chat_state_generation"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if !status.Success || data.ChatStateGeneration == "" {
+		t.Fatalf("no chat state generation to name in the logout purge: %+v", status)
+	}
+	purge, _ := json.Marshal(map[string]any{"action": "chat_state_purge", "request_id": "ext",
+		"payload": map[string]string{"owner_account_id": rvAccount, "expected_generation": data.ChatStateGeneration}})
+	return string(purge)
 }

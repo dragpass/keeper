@@ -38,6 +38,10 @@ type action struct {
 	// revokes is the revocation reason of a gated action that erases chat
 	// state: it moves the chat runtime epoch for any caller.
 	revokes string
+	// revokesOnErase defers that revocation until the handler reports it
+	// erased the state it named (lv78): a purge that matched no current
+	// sign-in must not end the current sign-in's runtime.
+	revokesOnErase bool
 	// mcp marks the actions `@dragpass/mcp` and `dragpass-run` call.
 	mcp bool
 	// plaintext marks an action whose response carries decrypted user data.
@@ -75,6 +79,13 @@ const (
 // Extension's logout and device reset erase chat state too.
 func (a action) gated() action    { a.chat = chatGated; a.appOnly = true; return a }
 func (a action) chatFree() action { a.chat = chatFree; return a }
+
+// revokingOnErase is revoking, applied only after the handler erased state.
+func (a action) revokingOnErase(reason string) action {
+	a = a.revoking(reason)
+	a.revokesOnErase = true
+	return a
+}
 
 func (a action) revoking(reason string) action {
 	a.chat = chatGated
@@ -182,6 +193,25 @@ func buildRegistry(fragments []actionFragment) map[string]action {
 func ChatRuntimeClass(name string) (gated bool, revocation string) {
 	entry := actionRegistry[name]
 	return entry.chat == chatGated, entry.revokes
+}
+
+// ChatRuntimeRevocationDeferred reports whether action's revocation waits for
+// its handler's answer (see RevocationAfter) instead of happening at admission.
+func ChatRuntimeRevocationDeferred(name string) bool {
+	return actionRegistry[name].revokesOnErase
+}
+
+// RevocationAfter is the revocation reason a deferred-revocation action earns
+// with resp: only a successful purge that reports it erased state revokes.
+func RevocationAfter(name string, resp proto.BaseResponse) string {
+	entry := actionRegistry[name]
+	if !entry.revokesOnErase || !resp.Success {
+		return ""
+	}
+	if data, ok := resp.Data.(proto.ChatStatePurgeResponseData); ok && data.Purged {
+		return entry.revokes
+	}
+	return ""
 }
 
 // AppOnly reports whether only the authenticated App caller may run action.

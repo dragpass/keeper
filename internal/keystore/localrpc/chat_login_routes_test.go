@@ -217,3 +217,33 @@ func TestSequentialChatHoldersRemainRecoverable(t *testing.T) {
 		}
 	}
 }
+
+// lv78 cleanup audit: the other local cleanup actions are refused for an older
+// sign-in before their handlers run, so a stale request cannot drop a newer
+// sign-in's group state or pending leaf.
+func TestOldLoginCleanupActionsAreRefusedBeforeTheyRun(t *testing.T) {
+	s := newTestServer(t)
+	keys := routeKeypair(t)
+	_ = keychain.SavePublicKey(s.app.Store, keys.PublicKey)
+	token, csrf := openTestSession(t, s)
+	old := loginForFence(t, s, token, csrf, "AAAAAAAAAAAAAAAAAAAAAA", "")
+	current := loginForFence(t, s, token, csrf, "BBBBBBBBBBBBBBBBBBBBBB", old)
+	grant := callFencedRoute(t, s, token, csrf, current, "", "/v1/chat/runtime/claim", map[string]any{"holder_id": routeHolder, "sequence": 1})
+	if !grant.Success {
+		t.Fatal("new login claim failed")
+	}
+	var data struct {
+		Epoch string `json:"epoch"`
+	}
+	_ = json.Unmarshal(grant.Data, &data)
+	for _, path := range []string{
+		"/v1/chat/mls_group_discard_unaccepted",
+		"/v1/chat/mls_conversation_forget_removed",
+		"/v1/chat/mls_leaf_abort",
+	} {
+		stale := callFencedRoute(t, s, token, csrf, old, data.Epoch, path, map[string]any{})
+		if stale.Success || stale.ErrorCode != "chat_session_binding_required" {
+			t.Fatalf("%s from the old login was not refused at admission: %+v", path, stale)
+		}
+	}
+}

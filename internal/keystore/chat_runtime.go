@@ -318,7 +318,7 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 			if refusal, ok := a.chatLoginAdmission(caller.loginGeneration); !ok {
 				return refusal, false
 			}
-			if revokes {
+			if revokes && !dispatch.ChatRuntimeRevocationDeferred(action) {
 				a.revokeLocked(revocation)
 			}
 			return proto.BaseResponse{}, true
@@ -328,8 +328,10 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		// action is App-only and was refused above. The rest is the kill
 		// harness build (nativeFramesDriveChat).
 		if revokes {
-			a.revokeLocked(revocation)
-			l.extensionAt = now
+			if !dispatch.ChatRuntimeRevocationDeferred(action) {
+				a.revokeLocked(revocation)
+				l.extensionAt = now
+			}
 			return proto.BaseResponse{}, true
 		}
 		if live {
@@ -341,5 +343,24 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		}
 		l.extensionAt = now
 		return proto.BaseResponse{}, true
+	}
+}
+
+// chatRuntimeAfter applies a revocation deferred to the handler's answer
+// (dispatch.RevocationAfter): a purge revokes the runtime only once it erased
+// the state of the sign-in it named.
+func (a *App) chatRuntimeAfter(caller chatRuntimeCaller) dispatch.After {
+	return func(action string, resp proto.BaseResponse) {
+		reason := dispatch.RevocationAfter(action, resp)
+		if reason == "" {
+			return
+		}
+		l := &a.chatRuntime
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		a.revokeLocked(reason)
+		if !caller.app {
+			l.extensionAt = a.Clock()
+		}
 	}
 }

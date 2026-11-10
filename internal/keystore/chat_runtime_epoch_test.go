@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	purgeFrame = `{"action":"chat_state_purge","request_id":"p-1","payload":{"owner_account_id":"a1111111-1111-4111-8111-111111111111"}}`
 	resetFrame = `{"action":"reset_device_identity","request_id":"x-1","payload":{}}`
 )
 
@@ -75,11 +74,15 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 	for _, tc := range []struct {
 		name, frame, reason string
 	}{
-		{"purge", purgeFrame, ChatRuntimeRevokedPurged},
+		{"purge", "", ChatRuntimeRevokedPurged},
 		{"reset", resetFrame, ChatRuntimeRevokedReset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app, clock, store := newLeaseApp(t)
+			frame := tc.frame
+			if frame == "" {
+				frame = string(purgeFrameWith(t, bindPurgeOwner(t, store)))
+			}
 			epoch := claimed(t, app, clock, holderA, sessionA, "")
 			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
 				t.Fatalf("the holder's gated call: %+v", response)
@@ -88,7 +91,7 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 				t.Fatalf("an ordinary Extension gated call is still refused: %+v", response)
 			}
 
-			if response := app.HandleRequest([]byte(tc.frame)); !response.Success {
+			if response := app.HandleRequest([]byte(frame)); !response.Success {
 				t.Fatalf("Extension %s while the App holds the lease: %+v", tc.name, response)
 			}
 
@@ -134,9 +137,10 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 // The App's own purge revokes its runtime too, so nothing it still has in
 // flight lands on the purged state.
 func TestChatRuntimeAppPurgeRevokesItsOwnEpoch(t *testing.T) {
-	app, clock, _ := newLeaseApp(t)
+	app, clock, store := newLeaseApp(t)
+	frame := purgeFrameWith(t, bindPurgeOwner(t, store))
 	epoch := claimed(t, app, clock, holderA, sessionA, "")
-	if response := app.HandleAppRequest(sessionA, epoch, []byte(purgeFrame)); !response.Success {
+	if response := app.HandleAppRequest(sessionA, epoch, frame); !response.Success {
 		t.Fatalf("App purge: %+v", response)
 	}
 	if reason := revokedReason(t, app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame))); reason != ChatRuntimeRevokedPurged {

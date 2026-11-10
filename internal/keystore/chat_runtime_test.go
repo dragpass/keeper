@@ -223,8 +223,8 @@ func TestChatRuntimeAppCallerNeedsTheLeaseForGatedActions(t *testing.T) {
 }
 
 func TestChatRuntimeExtensionRevocationBlocksAnAppClaimForItsWindow(t *testing.T) {
-	app, clock, _ := newLeaseApp(t)
-	if response := app.HandleRequest([]byte(purgeFrame)); !response.Success {
+	app, clock, store := newLeaseApp(t)
+	if response := app.HandleRequest(purgeFrameWith(t, bindPurgeOwner(t, store))); !response.Success {
 		t.Fatalf("Extension purge with no lease: %+v", response)
 	}
 	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "")

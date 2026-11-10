@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 func epochOf(data json.RawMessage) string {
@@ -44,7 +45,22 @@ func callWithEpoch(t *testing.T, server *Server, session, csrf, path string, bod
 	return response.Code, result
 }
 
-const extensionPurgeFrame = `{"action":"chat_state_purge","request_id":"ext-purge","payload":{"owner_account_id":"a1111111-1111-4111-8111-111111111111"}}`
+// extensionPurgeFrame is the Extension's logout purge for the current sign-in:
+// it names the chat state generation the binding reports (lv78).
+func extensionPurgeFrame(t *testing.T, server *Server) string {
+	t.Helper()
+	const owner = "a1111111-1111-4111-8111-111111111111"
+	binding, _, err := keychain.SetAccountBinding(server.app.Store, owner, "alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := json.Marshal(map[string]any{"action": "chat_state_purge", "request_id": "ext-purge",
+		"payload": map[string]string{"owner_account_id": owner, "expected_generation": binding.ChatStateGeneration}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(frame)
+}
 
 func TestChatRuntimeClaimRouteGrantsAnEpochAndRefusesAStaleOne(t *testing.T) {
 	server, _ := newChatTestServer(t)
@@ -91,7 +107,7 @@ func TestExtensionPurgeRevokesTheAppRuntimeOverLocalRPC(t *testing.T) {
 	session, csrf := openTestSession(t, server)
 	epoch := epochOf(claimLease(t, server, session, csrf, routeHolder).Data)
 
-	if purged := proxiedFrame(t, server, extensionPurgeFrame); !purged.Success {
+	if purged := proxiedFrame(t, server, extensionPurgeFrame(t, server)); !purged.Success {
 		t.Fatalf("Extension purge while the App holds the lease: %+v", purged)
 	}
 	for _, path := range []string{"/v1/chat/mls_leaf_abort", "/v1/chat/mls_mark_sent", "/v1/chat/chat_state_purge"} {

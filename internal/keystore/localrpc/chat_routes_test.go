@@ -327,7 +327,7 @@ func TestChatRuntimeLeaseRefusesTheExtensionAndDiesWithItsSession(t *testing.T) 
 	}
 
 	// An Extension logout keeps the App out for the window.
-	if purged := proxiedFrame(t, server, extensionPurgeFrame); !purged.Success {
+	if purged := proxiedFrame(t, server, extensionPurgeFrame(t, server)); !purged.Success {
 		t.Fatalf("proxied purge: %+v", purged)
 	}
 	if result := claimLease(t, server, next, nextCSRF, routeHolder); result.Success || !strings.Contains(string(result.Data), `"holder":"extension"`) {
