@@ -1218,19 +1218,23 @@ unchanged binding preserves it. Binding deletion and recreation do not
 reuse it. It is not authentication and never replaces the paired caller,
 lease, epoch or account permit.
 
-A purge carrying `expected_generation` compares it to the named account's
-incarnation and erases under the same keychain process lock that serializes
-binding changes. Equality returns `purged: true` after successful erasure;
-inequality returns `purged: false`, zero removed conversations, and erases
-nothing. Missing or unreadable incarnation never authorizes a conditional
-erasure. Explicit null, empty or malformed conditions are refused, never
-interpreted as omission. Omission retains legacy unconditional erasure for
-old clients. An uncertain response confirms neither erasure nor a no-op.
+`chat_state_purge` requires `expected_generation`. The Keeper compares it
+to the named account's incarnation and erases under the same keychain
+process lock that serializes binding changes. Equality returns
+`purged: true` after successful erasure; inequality returns
+`purged: false`, zero removed conversations, and erases nothing. Missing or
+unreadable incarnation never authorizes an erasure. A request without
+`expected_generation` is refused with `CHAT_STATE_INVALID_INPUT` and erases
+nothing; explicit null, empty or malformed values are refused the same way.
+There is no unconditional erasure through this action: an old client that
+omits the generation gets the refusal, not a purge. An uncertain response
+confirms neither erasure nor a no-op.
 
-Runtime admission still revokes the epoch before the purge handler runs.
-A conditional mismatch can revoke a live lease even while preserving the
-account state. A continuing client must claim a fresh epoch and must not
-clear the account records merely because a conditional request succeeded.
+The chat runtime epoch moves (`chat_runtime_revoked`, reason `purged`) only
+after the handler reports `purged: true`. Admission does not revoke for this
+action, so a purge that erased nothing (a generation mismatch, a refusal or
+a failure) leaves the current runtime and its lease alone. A client must not
+clear its account records merely because a request answered `purged: false`.
 
 The incarnation guarantee covers successful binding writes, not arbitrary
 App logins: the App currently allows login after an unanswered or failed
