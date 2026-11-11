@@ -202,13 +202,19 @@ func ChatRuntimeRevocationDeferred(name string) bool {
 }
 
 // RevocationAfter is the revocation reason a deferred-revocation action earns
-// with resp: only a successful purge that reports it erased state revokes.
+// with resp: a successful purge that reports it erased state revokes, and so
+// does a failed purge whose erase steps ran (erase_incomplete), because the
+// state it named is no longer intact.
 func RevocationAfter(name string, resp proto.BaseResponse) string {
 	entry := actionRegistry[name]
-	if !entry.revokesOnErase || !resp.Success {
+	if !entry.revokesOnErase {
 		return ""
 	}
-	if data, ok := resp.Data.(proto.ChatStatePurgeResponseData); ok && data.Purged {
+	data, ok := resp.Data.(proto.ChatStatePurgeResponseData)
+	if !ok {
+		return ""
+	}
+	if (resp.Success && data.Purged) || (!resp.Success && data.EraseIncomplete) {
 		return entry.revokes
 	}
 	return ""

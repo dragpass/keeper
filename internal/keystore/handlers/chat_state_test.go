@@ -161,19 +161,15 @@ func (f *chatStateFixture) purge(t *testing.T, ownerAccountID string) proto.Base
 		t.Fatal(err)
 	}
 	if generation == "" {
-		if len(ownerAccountID) == 36 {
-			binding, _, err := keychain.SetAccountBinding(f.deps.Store, ownerAccountID, "alice", true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			generation = binding.ChatStateGeneration
+		binding, _, err := keychain.SetAccountBinding(f.deps.Store, ownerAccountID, "alice", true)
+		if err != nil {
+			t.Fatal(err)
 		}
+		generation = binding.ChatStateGeneration
 	}
-	request := map[string]any{"owner_account_id": ownerAccountID}
-	if generation != "" {
-		request["expected_generation"] = generation
-	}
-	return HandleChatStatePurge(f.deps, chatMarshal(t, request))
+	return HandleChatStatePurge(f.deps, chatMarshal(t, map[string]any{
+		"owner_account_id": ownerAccountID, "expected_generation": generation,
+	}))
 }
 
 // assertStateRootAbsent is the assertion the whole permit gate exists to make
@@ -430,9 +426,22 @@ func TestChatState_PurgeRemovesTheStateAndNeedsNoPermit(t *testing.T) {
 	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), string(errs.ErrCodeChatStateNotFound))
 }
 
+// The request carries a well-formed generation, so the only thing wrong with
+// it is the owner: the refusal must come from owner validation, not from the
+// generation check that runs first.
 func TestChatState_PurgeRejectsAMalformedOwner(t *testing.T) {
 	f := newChatStateFixture(t)
-	assertChatStateFailure(t, f.purge(t, "not-a-uuid"), string(errs.ErrCodeChatStateInvalidInput))
+	binding, _, err := keychain.SetAccountBinding(f.deps.Store, chatAccountID, "alice", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := HandleChatStatePurge(f.deps, chatMarshal(t, map[string]any{
+		"owner_account_id": "not-a-uuid", "expected_generation": binding.ChatStateGeneration,
+	}))
+	assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
+	if !strings.Contains(resp.Error, "owner_account_id") {
+		t.Fatalf("refused for %q, want the owner_account_id check", resp.Error)
+	}
 }
 
 // The wire spells the two ratchets and the store stores them, so a drift here

@@ -385,4 +385,8 @@ func (r ChatStatePurgeRequest) ExpectedGenerationValue() string {
 type ChatStatePurgeResponseData struct {
 	Purged               bool `json:"purged"`
 	RemovedConversations int  `json:"removed_conversations"`
+	// EraseIncomplete rides on a failed purge whose erase steps ran: part of
+	// the state may be gone, so the runtime working on it is revoked even
+	// though the purge did not finish.
+	EraseIncomplete bool `json:"erase_incomplete,omitempty"`
 }

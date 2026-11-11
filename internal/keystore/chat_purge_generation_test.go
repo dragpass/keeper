@@ -2,9 +2,15 @@ package keystore
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/chatstate"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
 const purgeOwner = "a1111111-1111-4111-8111-111111111111"
@@ -52,5 +58,49 @@ func TestChatPurgeThatErasesNothingLeavesTheAppRuntimeAlone(t *testing.T) {
 				t.Fatalf("the current App runtime was revoked by a purge that erased nothing: %+v", response)
 			}
 		})
+	}
+}
+
+// sealKeyUndeletableStore fails every delete of a chat state seal key, so a
+// purge runs its other destructive steps (anchors, the owner directory) and
+// then fails on the last one.
+type sealKeyUndeletableStore struct {
+	SecretStore
+}
+
+func (s sealKeyUndeletableStore) Delete(service, account string) error {
+	if strings.HasPrefix(account, config.ChatStateSealKeyPrefix) {
+		return errors.New("seal key delete refused")
+	}
+	return s.SecretStore.Delete(service, account)
+}
+
+// lv78: a purge whose generation matched runs its destructive steps even when
+// one of them fails, so the state it named is no longer intact. The runtime
+// that was working on that state must stop, and the answer must not claim a
+// complete erase.
+func TestChatPurgeThatFailsPartwayRevokesTheRuntime(t *testing.T) {
+	t.Setenv(chatstate.RootEnvVar, t.TempDir())
+	clock := &leaseClock{now: time.Unix(1_800_000_000, 0)}
+	store := sealKeyUndeletableStore{SecretStore: testdouble.NewMemorySecretStore()}
+	app := NewApp(Deps{Store: store, Clock: clock.Now})
+	generation := bindPurgeOwner(t, store)
+	epoch := claimed(t, app, clock, holderA, sessionA, "")
+
+	response := app.HandleRequest(purgeFrameWith(t, generation))
+	if response.Success {
+		t.Fatalf("a purge that could not delete the seal key reported success: %+v", response)
+	}
+	raw, _ := json.Marshal(response.Data)
+	var data struct {
+		Purged     bool `json:"purged"`
+		Incomplete bool `json:"erase_incomplete"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if data.Purged || !data.Incomplete {
+		t.Fatalf("a partial erase must report erase_incomplete and not purged: %+v", response)
+	}
+	if reason := revokedReason(t, app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame))); reason != ChatRuntimeRevokedPurged {
+		t.Fatalf("revocation reason %q, want %q", reason, ChatRuntimeRevokedPurged)
 	}
 }
