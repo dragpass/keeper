@@ -772,9 +772,8 @@ Credentials:
 시작 단계에서 종료하므로, 테스트가 릴리스 바이너리를 잡더라도 실제 Keychain으로
 넘어가지 않고, 환경 변수로 릴리스 Keeper의 신뢰 범위를 넓힐 수도 없습니다.
 루트 키를 내장하지 않은 빌드는 `refresh_server_keys` 요청을 모두 거부하며, 서버 키를
-검증 없이 설치하는 것은 태그 빌드뿐입니다. `make check-release-no-e2e BIN=<binary>
-ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>`는 이 태그나 `keeper_killseam`으로 빌드된
-바이너리와 그 루트 키를 담지 않은 바이너리를 거부하고, 릴리스 워크플로가 이를 실행하며, `scripts/release-probe.sh`는 시작 거부를
+검증 없이 설치하는 것은 태그 빌드뿐입니다. `make check-release-no-e2e BIN=<binary>`는 이 태그나 `keeper_killseam`으로 빌드된
+바이너리를 거부하고, 릴리스 워크플로가 이를 실행하며, `scripts/release-probe.sh`는 시작 거부를
 확인합니다. `make test-e2e-tag`는 태그를 붙여 테스트를 실행합니다.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)

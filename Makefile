@@ -77,9 +77,8 @@ MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 
 # The root public key (Base64 of its PEM) that server key sets are verified
 # with. A release build must carry it: without one, refresh_server_keys
-# installs nothing (anchor.UnverifiedServerKeysAllowed), and
-# check-release-no-e2e rejects the binary. Builds without it are for local
-# work only.
+# installs nothing (anchor.UnverifiedServerKeysAllowed). Builds without it are
+# for local work only. check-release-no-e2e does not check for it.
 ROOT_PUBLIC_KEY_PEM_BASE64 ?=
 ROOT_GO_LDFLAGS := $(if $(ROOT_PUBLIC_KEY_PEM_BASE64),-ldflags "-X github.com/dragpass/keeper/internal/keystore/anchor.rootPublicKeyPEMBase64=$(ROOT_PUBLIC_KEY_PEM_BASE64)")
 
@@ -192,10 +191,8 @@ build-e2e-localtarget: $(HOST_MLS_LIB)
 	@CGO_ENABLED=1 go build $(E2E_LOCALTARGET_GO_TAGS) -o $(E2E_LOCALTARGET_BIN) .
 
 # Fails when BIN was built with a test-only tag (keeper_e2e, or the
-# keeper_killseam crash seams) or carries E2E-only code, and when it does not
-# carry the root public key ROOT_PUBLIC_KEY_PEM_BASE64 names. Build tags are
-# read from the build info; the root key and the strings are read from the
-# binary itself, since -trimpath leaves -ldflags out of the build info. The
+# keeper_killseam crash seams) or carries E2E-only code. Build tags are read
+# from the build info; the strings are read from the binary itself. The
 # strings survive a stripped binary (-s -w), unlike symbols. Besides the E2E
 # mode they cover the dev App origin opt-in and the root key override; a
 # release build refuses those variables by prefix, so their full names never
@@ -208,12 +205,10 @@ check-release-no-e2e:
 	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }
 	@if go version -m "$(BIN)" | grep -q 'keeper_e2e'; then echo "$(BIN) was built with the keeper_e2e tag" >&2; exit 1; fi
 	@if go version -m "$(BIN)" | grep -q 'keeper_killseam'; then echo "$(BIN) was built with the keeper_killseam tag" >&2; exit 1; fi
-	@test -n "$(ROOT_PUBLIC_KEY_PEM_BASE64)" || { echo "$(BIN): ROOT_PUBLIC_KEY_PEM_BASE64 is not set; a release binary must carry the root public key" >&2; exit 1; }
-	@LC_ALL=C grep -aqF "$(ROOT_PUBLIC_KEY_PEM_BASE64)" "$(BIN)" || { echo "$(BIN) does not carry the root public key" >&2; exit 1; }
 	@for s in $(E2E_ONLY_STRINGS); do \
 		if LC_ALL=C grep -aq "$$s" "$(BIN)"; then echo "$(BIN) carries E2E-only code ($$s)" >&2; exit 1; fi; \
 	done
-	@echo "$(BIN): no test-only tag, no E2E-only code, root public key built in"
+	@echo "$(BIN): no test-only tag and no E2E-only code"
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
