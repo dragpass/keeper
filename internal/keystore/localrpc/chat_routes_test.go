@@ -386,7 +386,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 27 {
+	if len(paths) != 28 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}
