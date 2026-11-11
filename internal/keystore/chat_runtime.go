@@ -270,6 +270,9 @@ type chatRuntimeCaller struct {
 	// onlineDecision is set only by the online decision path after it
 	// verified and consumed a decision for this exact call (lv78).
 	onlineDecision bool
+	// accountOnlineDecision is the same for the account-level MLS actions
+	// (lv78 A1b); neither decision admits an action of the other set.
+	accountOnlineDecision bool
 }
 
 func leaseRequired() proto.BaseResponse {
@@ -309,6 +312,13 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		// The kill harness build drives chat over Native frames without the
 		// App or the API; every other caller needs a decision (lv78 K3).
 		if dispatch.OnlineDecisionRequired(action) && !caller.onlineDecision && (caller.app || !nativeFramesDriveChat) {
+			return onlineDecisionRequired(), false
+		}
+		// lv78 A1b: the account-level MLS actions likewise. The only Native
+		// frame exempt is an Extension E2E fixture in a keeper_e2e build
+		// (compile time; never a release).
+		if dispatch.AccountOnlineDecisionRequired(action) && !caller.accountOnlineDecision &&
+			(caller.app || !(nativeFramesDriveChat || dispatch.NativeFixtureExempt(action))) {
 			return onlineDecisionRequired(), false
 		}
 		gated, revocation := dispatch.ChatRuntimeClass(action)

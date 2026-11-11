@@ -28,6 +28,8 @@ var ChatCapabilities = []string{
 	"removed_accounts.v1",  // mls_process reports the accounts a confirmed Commit removed
 	"app_runtime.v1",       // chat runtime lease and the App's /v1/chat/* local routes
 	"online_decision.v1",   // protected MLS actions run only through /v1/chat/online/{prepare,execute}
+	// account-level MLS actions run only through /v1/chat/account-online/{prepare,execute}
+	"account_online_decision.v1",
 }
 
 // GroupCapabilities names what this build's Group DEK actions do. Like

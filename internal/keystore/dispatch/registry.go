@@ -58,6 +58,10 @@ type action struct {
 	// verified, unused API online decision for this call (lv78 D1). The App
 	// lease and the chat state permit alone do not admit it.
 	onlineDecision bool
+	// accountOnlineDecision marks an account-level MLS action that uses the
+	// device or leaf key and runs only with a verified, unused API account
+	// online decision for this call (lv78 A1b).
+	accountOnlineDecision bool
 }
 
 type chatRuntimeClass uint8
@@ -108,6 +112,10 @@ func (a action) e2eFixtureOnNative() action { a.e2eNativeFixture = true; return 
 // needsOnlineDecision marks an action that runs only through the online
 // decision path (lv78 K3).
 func (a action) needsOnlineDecision() action { a.onlineDecision = true; return a }
+
+// needsAccountOnlineDecision marks an account-level action that runs only
+// through the account online decision path (lv78 A1b).
+func (a action) needsAccountOnlineDecision() action { a.accountOnlineDecision = true; return a }
 
 func (a action) onMCP() action            { a.mcp = true; return a }
 func (a action) returnsPlaintext() action { a.plaintext = true; return a }
@@ -237,6 +245,25 @@ func OnlineDecisionRequired(name string) bool {
 // OnlineDecisionActions returns the actions that need an online decision, sorted.
 func OnlineDecisionActions() []string {
 	return actionNames(func(a action) bool { return a.onlineDecision })
+}
+
+// AccountOnlineDecisionRequired reports whether action runs only with a
+// verified API account-level online decision for the call (lv78 A1b).
+func AccountOnlineDecisionRequired(name string) bool {
+	return actionRegistry[name].accountOnlineDecision
+}
+
+// AccountOnlineDecisionActions returns the actions that need an account-level
+// online decision, sorted.
+func AccountOnlineDecisionActions() []string {
+	return actionNames(func(a action) bool { return a.accountOnlineDecision })
+}
+
+// NativeFixtureExempt reports whether a Native Messaging frame may run action
+// without its online decision: only in a keeper_e2e build, only for an action
+// marked as an Extension E2E fixture. A release build never exempts one.
+func NativeFixtureExempt(name string) bool {
+	return actionRegistry[name].e2eNativeFixture && nativeFixturesAllowed
 }
 
 // AppOnly reports whether only the authenticated App caller may run action.

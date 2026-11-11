@@ -366,13 +366,16 @@ func bobKeyPackage(t *testing.T, server rvServer) proto.MLSMemberKeyPackage {
 	if claim, err := client.claim(routeHolder); err != nil || !claim.Success || client.epoch == "" {
 		t.Fatalf("Bob's claim: %+v %v", claim, err)
 	}
+	// The account-level actions need the API's account decision (lv78
+	// A1b), which binds Bob's sign-in and device.
+	rvSignIn(t, client, rvBob, rvBobDev)
 	var declared proto.MLSLeafDeclareResponseData
-	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafDeclare, leafDeclaration(bob, t, rvBob, rvBobDev), &declared)
-	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafPromote, bob.promotion(t, declared), nil)
+	rvAccountMust(t, bob, client, rvBob, rvBobDev, proto.ActionMLSLeafDeclare, leafDeclaration(bob, t, rvBob, rvBobDev), &declared)
+	rvAccountMust(t, bob, client, rvBob, rvBobDev, proto.ActionMLSLeafPromote, bob.promotion(t, declared), nil)
 	challenge := "dragpass.mls.keypackage.challenge|1|" + rvBob + "|" + rvBobDev + "|" + rvNonce + "|" +
 		strconv.FormatInt(time.Now().Unix()+proto.MLSKeyPackageChallengeTTLSeconds, 10)
 	var generated proto.MLSKeyPackageGenerateResponseData
-	rvMust(t, client, "/v1/chat/"+proto.MLSKeyPackageGenerate, proto.MLSKeyPackageGenerateRequest{
+	rvAccountMust(t, bob, client, rvBob, rvBobDev, proto.MLSKeyPackageGenerate, proto.MLSKeyPackageGenerateRequest{
 		ChallengeToken: challenge, ServerSignature: bob.sign(t, challenge), ServerKeyVersion: 1,
 		AccountID: rvBob, DeviceID: rvBobDev, Count: 1,
 	}, &generated)
@@ -388,13 +391,12 @@ func setUpRoom(t *testing.T, d *rvDeviceDir, client *testAppClient, bob proto.ML
 	if claim, err := client.claim(routeHolder); err != nil || !claim.Success || client.epoch == "" {
 		t.Fatalf("claim: %+v %v", claim, err)
 	}
-	var declared proto.MLSLeafDeclareResponseData
-	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafDeclare, leafDeclaration(d, t, rvAccount, rvDevice), &declared)
-	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafPromote, d.promotion(t, declared), nil)
 	// The signed-in App records its device and binding, as sign-in does;
-	// the online decision binds both (lv78).
-	rvMust(t, client, "/v1/device/id", proto.DeviceIDEnsureRequest{CandidateDeviceID: rvDevice}, nil)
-	rvMust(t, client, "/v1/account/binding", proto.AccountBindingSetRequest{AccountID: rvAccount, Alias: "alice"}, nil)
+	// the online decisions bind both (lv78, A1b).
+	rvSignIn(t, client, rvAccount, rvDevice)
+	var declared proto.MLSLeafDeclareResponseData
+	rvAccountMust(t, d, client, rvAccount, rvDevice, proto.ActionMLSLeafDeclare, leafDeclaration(d, t, rvAccount, rvDevice), &declared)
+	rvAccountMust(t, d, client, rvAccount, rvDevice, proto.ActionMLSLeafPromote, d.promotion(t, declared), nil)
 	create := "a1111111-7777-4777-8777-700000000001"
 	rvProtectedMust(t, d, client, proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 		Permit: d.permit(t), Roles: rvOwnerRoles, OrgID: rvOrg, ConversationID: rvConv,

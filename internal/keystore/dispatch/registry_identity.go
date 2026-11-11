@@ -100,15 +100,15 @@ func identityActions() map[string]action {
 		proto.ActionRotateRequestKeyAbort:   wrap(handlers.HandleRotateRequestKeyAbort),
 
 		// MLS leaf signature key + its declaration under the account key
-		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare).gated(),
-		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote).gated(),
+		proto.ActionMLSLeafDeclare: wrap(handlers.HandleMLSLeafDeclare).gated().needsAccountOnlineDecision(),
+		proto.ActionMLSLeafPromote: wrap(handlers.HandleMLSLeafPromote).gated().needsAccountOnlineDecision(),
 		proto.ActionMLSLeafAbort:   wrap(handlers.HandleMLSLeafAbort).gated(),
 		proto.ActionMLSLeafStatus:  wrap(handlers.HandleMLSLeafStatus).chatFree().appOnlyAction(),
 		// the old device's approval of a takeover (design Q1)
-		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign).chatFree().appOnlyAction(),
+		proto.ActionMLSLeafHandoverSign: wrap(handlers.HandleMLSLeafHandoverSign).chatFree().appOnlyAction().needsAccountOnlineDecision(),
 
 		// KeyPackages for the active leaf, gated by the purpose-bound
 		// KeyPackage challenge; their private keys go to the sealed pool.
-		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate).gated(),
+		proto.MLSKeyPackageGenerate: wrap(handlers.HandleMLSKeyPackageGenerate).gated().needsAccountOnlineDecision(),
 	}
 }

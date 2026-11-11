@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dragpass/keeper/internal/keystore"
+	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/secure"
@@ -125,6 +126,18 @@ func chatRoutes() map[string]appRoute {
 			run:        runChatOnlineExecute,
 			plainLimit: chatOnlineCap,
 		},
+		// The account-level MLS actions (lv78 A1b) take the same path with
+		// the API's account decision, under their own challenges.
+		"/v1/chat/account-online/prepare": {
+			input:      func() any { return &proto.MLSAccountOnlinePrepareRequest{} },
+			run:        runMLSAccountOnlinePrepare,
+			plainLimit: chatOnlineCap,
+		},
+		"/v1/chat/account-online/execute": {
+			input:      func() any { return &proto.MLSAccountOnlineExecuteRequest{} },
+			run:        runMLSAccountOnlineExecute,
+			plainLimit: chatOnlineCap,
+		},
 	}
 	for _, r := range chatActionSpecs {
 		path, route := chatActionRoute(r.action, r.input, r.limit)
@@ -165,6 +178,36 @@ func runChatOnlineExecute(s *Server, request appRequest, input any) (proto.BaseR
 		return proto.BaseResponse{}, errAppRouteRefused
 	}
 	response := s.app.ExecuteChatOnline(request.token, request.epoch, request.generation, *in)
+	if s.onAction != nil {
+		s.onAction(in.Action, in.Request, response)
+	}
+	return response, nil
+}
+
+// admitsAccountActionRequest is admitsActionRequest for the account-level
+// path: only an action that needs an account decision.
+func admitsAccountActionRequest(action string, request []byte) bool {
+	return dispatch.AccountOnlineDecisionRequired(action) && admitsActionRequest(action, request)
+}
+
+func runMLSAccountOnlinePrepare(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
+	in := input.(*proto.MLSAccountOnlinePrepareRequest)
+	defer secure.Zeroize(in.Request)
+	if !admitsAccountActionRequest(in.Action, in.Request) {
+		return proto.BaseResponse{}, errAppRouteRefused
+	}
+	return s.app.PrepareMLSAccountOnline(request.generation, *in), nil
+}
+
+// runMLSAccountOnlineExecute hands the action the request bytes the App sent
+// inside the body, which are the bytes the commitment was made over.
+func runMLSAccountOnlineExecute(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
+	in := input.(*proto.MLSAccountOnlineExecuteRequest)
+	defer secure.Zeroize(in.Request)
+	if !admitsAccountActionRequest(in.Action, in.Request) {
+		return proto.BaseResponse{}, errAppRouteRefused
+	}
+	response := s.app.ExecuteMLSAccountOnline(request.token, request.epoch, request.generation, *in)
 	if s.onAction != nil {
 		s.onAction(in.Action, in.Request, response)
 	}

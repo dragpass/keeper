@@ -124,6 +124,8 @@ type App struct {
 
 	// chatOnline holds the process-local online decision challenges (lv78).
 	chatOnline chatOnlineChallenges
+	// accountOnline holds the account-level ones (lv78 A1b), apart from chat.
+	accountOnline chatOnlineChallenges
 
 	// requestMu runs every handler one at a time in this process (Native
 	// Messaging stdio, proxied hosts, App routes, composed App steps), so

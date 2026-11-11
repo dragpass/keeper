@@ -140,6 +140,8 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/signup/abort",
 	"/v1/auth/signup/prepare",
 	"/v1/auth/signup/save-session-code",
+	"/v1/chat/account-online/execute",
+	"/v1/chat/account-online/prepare",
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
 	"/v1/chat/chat_state_read_outbox",
@@ -393,6 +395,9 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	for _, action := range dispatch.OnlineDecisionActions() {
 		online[action] = true
 	}
+	for _, action := range dispatch.AccountOnlineDecisionActions() {
+		online[action] = true
+	}
 	for _, path := range paths {
 		action := strings.TrimPrefix(path, "/v1/chat/")
 		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"not_a_field": 1}); code != http.StatusBadRequest {
@@ -405,8 +410,9 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
-		// A protected action needs an online decision before anything else
-		// (lv78); the other lease-gated actions need the lease.
+		// A protected action, chat or account-level, needs an online decision
+		// before anything else (lv78, A1b); the other lease-gated actions need
+		// the lease.
 		want := ""
 		switch {
 		case online[action]:

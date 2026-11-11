@@ -1325,7 +1325,7 @@ their own `/v1/chat/<action>` route, and from any other caller, they are
 refused before the handler with `chat_online_decision_required`. Cleanup
 (`chat_state_purge`, `mls_group_discard_unaccepted`,
 `mls_conversation_forget_removed`, `mls_leaf_abort`) needs no decision. The
-six account-level MLS actions are not gated by this contract yet.
+account-level MLS actions take their own decision (next section).
 
 The App runs a protected action in three steps; the chat runtime epoch and
 login generation headers apply to all of them as to every chat route.
@@ -1372,6 +1372,59 @@ A decision does not replace the chat state permit, which the action still
 requires. It gates new Keeper work only: plaintext and signatures already
 returned, and a response whose check (c) passed before a revocation, are not
 recalled.
+
+### Online decision for account-level MLS actions (unreleased, lv78 A1b)
+
+Capability `account_online_decision.v1` in `chat_capabilities`. These six
+actions use this device's leaf or account signing key, or create KeyPackage
+private keys, and run only with an API-signed account decision issued for
+that exact call: `mls_leaf_declare`, `mls_leaf_promote`,
+`mls_key_package_generate`, `mls_leaf_handover_sign`,
+`mls_device_revoke_sign`, `org_member_removal_sign`
+(`dispatch.AccountOnlineDecisionActions`, pinned against the API issuer's
+authority set). On their own `/v1/chat/<action>` route, and from any other
+caller, they are refused before the handler with
+`chat_online_decision_required`. A Native Messaging frame never runs them in a
+release build. The one exception is compile time: a `keeper_e2e` build keeps
+serving `org_member_removal_sign` to the Extension's E2E member fixture over
+Native Messaging. `mls_leaf_abort` and `mls_leaf_status` need no decision: the
+API defines no authority for them; abort only drops a pending leaf and status
+only reads.
+
+The three steps are those of the chat decision, on their own routes and with
+their own challenges (a chat challenge is never executed here, nor an account
+challenge on the chat path):
+
+1. `POST /v1/chat/account-online/prepare` with `{action, request, token_id,
+   session_issued_at_nanos, takeover_request_id?}`. Keeper requires its
+   account binding and device id, and derives the target from the request:
+   `device:<this device>` for `mls_leaf_declare` and
+   `mls_key_package_generate` (whose request must name this account and this
+   device) and `mls_leaf_promote`; `device:<device_id>` for
+   `mls_device_revoke_sign` (request `account_id` must be this account);
+   `org:<org_id>/account:<removed_account_id>` for `org_member_removal_sign`
+   (`admin_account_id` must be this account); and
+   `takeover:<takeover_request_id>` for `mls_leaf_handover_sign`, whose request
+   does not name the takeover request, so the App names it here (only for
+   this action). Answer: `{challenge, request_commitment, target}` with
+   `request_commitment = hex(HMAC-SHA256(key, "dragpass.mls.account_online.request|1|len:action|len:target|len:request"))`.
+2. The App sends `{action, challenge, request_commitment, target}` to
+   `POST /api/v1/account/mls-online-decision` with its App session; `target`
+   is the object form the API takes (`device_id`, `takeover_request_id`, or
+   `org_id` and `removed_account_id`).
+3. `POST /v1/chat/account-online/execute` with `{action, request, decision}`.
+
+Decision: domain `dragpass.mls.account_online|1`, canonical
+`domain|len:field|...` over `challenge`, `account_id`, `device_id`,
+`token_id`, `session_issued_at_nanos`, `action`, `target`,
+`request_commitment`, `issued_at`, `expires_at`, `server_key_version`; the
+same signature, key version and lifetime rules as the chat decision. Execute
+runs the same phases (a) to (c), with `target` compared in place of
+organization and conversation, the same refusal and
+`chat_online_output_withheld` answers, and the same limits: it gates new
+Keeper work only. The handover target is the App's claim: the API checks this
+device holds the live declaration of that pending takeover request, but
+Keeper cannot tie the request's new declaration to that takeover request.
 
 ### MLS chat (chat v2 MLS actions)
 
