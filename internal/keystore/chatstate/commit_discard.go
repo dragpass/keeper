@@ -7,7 +7,10 @@
 // refusal is not a verdict about the epoch: the server answered that it will
 // not take this Commit (a removal is pending in the conversation, the caller
 // lost its authority, the room's owner is leaving, the member set moved) and
-// stored nothing. Left pending, the Commit is posted again by whatever the
+// stored nothing. A refusal alone does not prove that: the server checks
+// access before it looks the Commit up, so a lost authority is also the
+// answer to a Commit it took earlier; the handshake log check below decides.
+// Left pending, the Commit is posted again by whatever the
 // person does next, and once the reason for the refusal goes away it lands:
 // a change the person was told was refused is applied later without anyone
 // asking again. The app therefore drops it and rebuilds from the person's
