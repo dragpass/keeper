@@ -4,10 +4,17 @@ import "slices"
 
 // MLSCommitDiscardRefusedDefinitiveCodes are the server answers to a Commit
 // post that refuse it for good and store nothing (ariadne
-// `POST /conversations/:id/mls/commit`). Each is returned after the server
-// looked the client_commit_id up and found no stored Commit, so it is never
-// the answer to a Commit the server took. Anything else, a lost or unreadable
-// answer, 5xx, 429, CHAT_MLS_EPOCH_STALE, keeps the Commit pending for the
+// `POST /conversations/:id/mls/commit`). Not every one of them proves that the
+// server holds no Commit under that client_commit_id: ariadne checks
+// conversation access (CHAT_ACCESS_DENIED) before its replay lookup, so a
+// Commit accepted before the caller lost access is answered with it too.
+// CHAT_MLS_REMOVAL_PENDING refuses a Commit competing with someone's pending
+// Remove Commit; the remover's own stored Remove Commit is answered with
+// CHAT_MLS_REMOVAL_IN_PROGRESS instead (MLSCommitNeverDiscardCodes). The
+// Keeper cannot see the server's log, so the caller (the App) must read the
+// handshake log and find no row at expected_epoch + 1 before it asks for a
+// discard. Anything else, a lost or unreadable answer, 5xx, 429,
+// CHAT_MLS_EPOCH_STALE, keeps the Commit pending for the
 // check-log-then-resend path. Sorted.
 var MLSCommitDiscardRefusedDefinitiveCodes = []string{
 	"CHAT_ACCESS_DENIED",
@@ -17,6 +24,18 @@ var MLSCommitDiscardRefusedDefinitiveCodes = []string{
 	"CHAT_ROOM_OWNER_LEAVING",
 	"CHAT_ROOM_ROLE_REQUIRED",
 	"CHAT_SELF_REMOVE_REFUSED",
+}
+
+// MLSCommitNeverDiscardCodes are server answers to a Commit post that mean
+// the server holds, or may yet take, this Commit: CHAT_MLS_REMOVAL_IN_PROGRESS
+// (the remover's own Remove Commit is stored and the server applies it when
+// its wait ends) and CHAT_MLS_EPOCH_STALE (another Commit took the epoch; the
+// log decides). Dropping such a Commit could fork this device off the group,
+// so Validate refuses these codes before the allowed list is consulted, and
+// a code never sits in both lists (pinned by test).
+var MLSCommitNeverDiscardCodes = []string{
+	"CHAT_MLS_EPOCH_STALE",
+	"CHAT_MLS_REMOVAL_IN_PROGRESS",
 }
 
 // MLSCommitDiscardRefusedRequest drops this device's own pending Commit after
@@ -45,6 +64,9 @@ func (r MLSCommitDiscardRefusedRequest) Validate() error {
 	// Epoch 0 is a create, which mls_group_discard_unaccepted drops.
 	if r.ExpectedEpoch < 1 {
 		return newValidationError("expected_epoch", "must be a positive epoch")
+	}
+	if slices.Contains(MLSCommitNeverDiscardCodes, r.RefusalCode) {
+		return newValidationError("refusal_code", "the server holds or may take this Commit; never a discard reason")
 	}
 	if !slices.Contains(MLSCommitDiscardRefusedDefinitiveCodes, r.RefusalCode) {
 		return newValidationError("refusal_code", "must be a definitive Commit refusal")
