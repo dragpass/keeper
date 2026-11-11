@@ -179,7 +179,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"dek_rotate_to_new_password", "dek_unwrap_and_rewrap_for_many",
 		"group_decrypt_with_aad_for_app_display", "group_dek_generate_and_open", "group_rewrap_prepare",
 		"message_display_prepare", "message_seal",
-		"mls_commit_build", "mls_commit_confirm",
+		"mls_commit_build", "mls_commit_confirm", "mls_commit_discard_refused",
 		"mls_conversation_forget_removed", "mls_conversation_status",
 		"mls_decrypt_batch_for_app_display", "mls_device_revoke_sign", "mls_encrypt",
 		"mls_epoch_comparison",
@@ -315,7 +315,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 func TestChatRuntimeGatedActionListIsPinned(t *testing.T) {
 	want := []string{
 		"chat_state_purge", "chat_state_read_outbox",
-		"mls_commit_build", "mls_commit_confirm",
+		"mls_commit_build", "mls_commit_confirm", "mls_commit_discard_refused",
 		"mls_conversation_forget_removed", "mls_decrypt_batch_for_app_display", "mls_encrypt",
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",
 		"mls_key_package_generate",

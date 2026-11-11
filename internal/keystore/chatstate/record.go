@@ -133,6 +133,14 @@ type PendingCommit struct {
 	// Status, not by a retried build: an app that asks a retry for no name
 	// refuses an answer that carries one.
 	Name *PendingRoomName `json:"name,omitempty"`
+
+	// LoginGeneration is the chat login generation this Commit was built
+	// under. A refused Commit is discarded only under the same one
+	// (DiscardRefusedCommit), so a discard decided before a sign-out and
+	// sign-in cannot reach a Commit of the next session. Empty when the build
+	// ran with no confirmed chat login; such a Commit is never discarded
+	// that way.
+	LoginGeneration string `json:"login_generation,omitempty"`
 }
 
 // PendingRoomName is SealedRoomName as the record stores it. The epoch is the
