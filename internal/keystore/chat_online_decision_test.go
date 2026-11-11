@@ -225,17 +225,39 @@ func TestOnlineDecisionForAnotherRequestIsRefused(t *testing.T) {
 }
 
 // lv78 K2: the wall-clock window of the decision holds, with the 5-second
-// allowance only for an issue time ahead of this device's clock.
+// allowance only for an issue time ahead of this device's clock. A decision
+// outside it is refused in phase (a): the action does not run, and the
+// challenge stays for the right decision.
 func TestOnlineDecisionOutsideItsWindowIsRefused(t *testing.T) {
 	for name, shift := range map[string]int64{"expired": -10, "issued too far ahead": 6} {
 		t.Run(name, func(t *testing.T) {
 			f := newOnlineFixture(t)
 			request := onlineRequest(onlineConv)
-			d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
+			valid := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
+			d := valid
 			d.IssuedAt += shift
 			d.ExpiresAt += shift
-			refusedByDecision(t, f.execute("mls_encrypt", request, f.sign(t, d)))
+			refusedBeforeTheAction(t, func() proto.BaseResponse {
+				return f.execute("mls_encrypt", request, f.sign(t, d))
+			})
+			if response := f.execute("mls_encrypt", request, valid); !admitted(response) {
+				t.Fatalf("the challenge did not survive a decision outside its window: %+v", response)
+			}
 		})
+	}
+}
+
+// refusedBeforeTheAction runs one execution and requires the decision's
+// refusal with the protected action never reached.
+func refusedBeforeTheAction(t *testing.T, execute func() proto.BaseResponse) {
+	t.Helper()
+	ran := false
+	restore := setChatOnlineAfterWorkForTesting(func() { ran = true })
+	response := execute()
+	restore()
+	refusedByDecision(t, response)
+	if ran {
+		t.Fatal("the protected action ran before the decision was refused")
 	}
 }
 
@@ -273,13 +295,135 @@ func TestRefusedDecisionLeavesTheChallengeAndAValidOneIsSingleUse(t *testing.T) 
 // lv78 K2: a sign-out or another sign-in between prepare and execute ends
 // every challenge minted for the earlier sign-in.
 func TestOnlineDecisionAfterTheBindingChangedIsRefused(t *testing.T) {
+	for name, change := range map[string]func(*onlineFixture) error{
+		"signed in again": func(f *onlineFixture) error {
+			_, _, err := keychain.SetAccountBinding(f.store, onlineAccount, "alice", true)
+			return err
+		},
+		"signed out": func(f *onlineFixture) error {
+			_, _, err := keychain.SignOutAccountBinding(f.store)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newOnlineFixture(t)
+			request := onlineRequest(onlineConv)
+			d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
+			if err := change(f); err != nil {
+				t.Fatal(err)
+			}
+			refusedBeforeTheAction(t, func() proto.BaseResponse { return f.execute("mls_encrypt", request, d) })
+		})
+	}
+}
+
+// lv78 K2: the decision names the device the challenge was minted on; a
+// device id that changed in between (a device reset) ends the challenge.
+func TestOnlineDecisionAfterTheDeviceIDChangedIsRefused(t *testing.T) {
 	f := newOnlineFixture(t)
 	request := onlineRequest(onlineConv)
 	d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
-	if _, _, err := keychain.SetAccountBinding(f.store, onlineAccount, "alice", true); err != nil {
+	if err := f.store.Set(config.Service, config.DeviceID, "d9999999-4444-4444-8444-444444444444"); err != nil {
 		t.Fatal(err)
 	}
-	refusedByDecision(t, f.execute("mls_encrypt", request, d))
+	refusedBeforeTheAction(t, func() proto.BaseResponse { return f.execute("mls_encrypt", request, d) })
+}
+
+// lv78 K2: a challenge minted under one chat sign-in is not executed under
+// another, even when the decision and the lease would admit the later one.
+func TestOnlineDecisionPreparedUnderAnotherChatSignInIsRefused(t *testing.T) {
+	f := newOnlineFixture(t)
+	request := onlineRequest(onlineConv)
+	response := f.app.PrepareChatOnline("an-earlier-chat-sign-in", proto.ChatOnlinePrepareRequest{
+		Action: "mls_encrypt", Request: request, TokenID: onlineToken, SessionIssuedAtNanos: onlineSession,
+	})
+	prepared, ok := response.Data.(proto.ChatOnlinePrepareResponseData)
+	if !response.Success || !ok {
+		t.Fatalf("prepare: %+v", response)
+	}
+	d := f.decide(t, "mls_encrypt", prepared)
+	refusedBeforeTheAction(t, func() proto.BaseResponse { return f.execute("mls_encrypt", request, d) })
+}
+
+// lv78 K2: the decision names its key version; version 0 never means "the
+// active key", even when the active key signed it.
+func TestOnlineDecisionWithoutAKeyVersionIsRefused(t *testing.T) {
+	f := newOnlineFixture(t)
+	if err := keychain.SaveActiveServerKeyVersion(f.store, 1); err != nil {
+		t.Fatal(err)
+	}
+	request := onlineRequest(onlineConv)
+	d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
+	d.ServerKeyVersion = 0
+	refusedBeforeTheAction(t, func() proto.BaseResponse { return f.execute("mls_encrypt", request, f.sign(t, d)) })
+}
+
+// lv78 K2: the challenge consumed must be the one every check ran against.
+// Nothing can replace a pending challenge while requestMu is held; the
+// verifier stands in for that here, between the checks and the consume.
+func TestOnlineDecisionIsRefusedWhenItsChallengeChangedBeforeTheConsume(t *testing.T) {
+	f := newOnlineFixture(t)
+	request := onlineRequest(onlineConv)
+	d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
+	f.app.ServerKeyVerifier = swapBeforeConsume{inner: f.app.ServerKeyVerifier, swap: func() {
+		f.app.chatOnline.mu.Lock()
+		defer f.app.chatOnline.mu.Unlock()
+		entry := f.app.chatOnline.entries[d.Challenge]
+		entry.context.tokenID = "e9999999-5555-4555-8555-555555555555"
+		f.app.chatOnline.entries[d.Challenge] = entry
+	}}
+	refusedBeforeTheAction(t, func() proto.BaseResponse { return f.execute("mls_encrypt", request, d) })
+}
+
+type swapBeforeConsume struct {
+	inner ServerKeyVerifier
+	swap  func()
+}
+
+func (v swapBeforeConsume) Verify(token, sigB64 string, version uint) error {
+	err := v.inner.Verify(token, sigB64, version)
+	v.swap()
+	return err
+}
+
+// lv78 K2: prepare mints a challenge only for a call a decision could
+// admit: a protected action, for the signed-in account, while signed in.
+func TestPrepareRefusesACallNoDecisionCouldAdmit(t *testing.T) {
+	otherAccount := func() json.RawMessage {
+		var r map[string]any
+		_ = json.Unmarshal(onlineRequest(onlineConv), &r)
+		r["permit"].(map[string]any)["account_id"] = "a9999999-1111-4111-8111-111111111111"
+		raw, _ := json.Marshal(r)
+		return raw
+	}
+	for name, tc := range map[string]struct {
+		action  string
+		request json.RawMessage
+		before  func(*onlineFixture) error
+	}{
+		"an action that needs no decision": {action: "chat_state_purge", request: onlineRequest(onlineConv)},
+		"another account's permit":         {action: "mls_encrypt", request: otherAccount()},
+		"signed out": {action: "mls_encrypt", request: onlineRequest(onlineConv), before: func(f *onlineFixture) error {
+			_, _, err := keychain.SignOutAccountBinding(f.store)
+			return err
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newOnlineFixture(t)
+			if tc.before != nil {
+				if err := tc.before(f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			response := f.app.PrepareChatOnline("", proto.ChatOnlinePrepareRequest{
+				Action: tc.action, Request: tc.request, TokenID: onlineToken, SessionIssuedAtNanos: onlineSession,
+			})
+			refusedByDecision(t, response)
+			if pending := len(f.app.chatOnline.entries); pending != 0 {
+				t.Fatalf("%d challenges minted for a refused prepare", pending)
+			}
+		})
+	}
 }
 
 // lv78 K2: two executions racing on one decision yield at most one admission.
@@ -313,12 +457,21 @@ func TestConcurrentExecutionsOfOneDecisionAdmitAtMostOne(t *testing.T) {
 }
 
 // lv78 K3, phase (c): a deadline that passes while the action runs (the
-// process was suspended after the sensitive work) withholds the output.
+// process was suspended after the sensitive work) withholds the output. The
+// answer says the action ran, so the App reads its state again instead of
+// taking it for a refusal (review F7); it carries nothing of the output.
 func TestOutputIsWithheldWhenTheDeadlinePassesDuringTheCall(t *testing.T) {
 	f := newOnlineFixture(t)
 	request := onlineRequest(onlineConv)
 	d := f.decide(t, "mls_encrypt", f.prepare(t, "mls_encrypt", request))
-	restore := setChatOnlineAfterWorkForTesting(func() { f.clock.advance(proto.ChatOnlineDecisionTTLSeconds * time.Second) })
+	ran := false
+	restore := setChatOnlineAfterWorkForTesting(func() {
+		ran = true
+		f.clock.advance(proto.ChatOnlineDecisionTTLSeconds * time.Second)
+	})
 	defer restore()
-	refusedByDecision(t, f.execute("mls_encrypt", request, d))
+	response := f.execute("mls_encrypt", request, d)
+	if !ran || response.Success || response.ErrorCode != ErrCodeChatOnlineOutputWithheld || response.Data != nil {
+		t.Fatalf("ran=%v, want %s without data, got %+v", ran, ErrCodeChatOnlineOutputWithheld, response)
+	}
 }
