@@ -401,6 +401,8 @@ func HandleMLSCommitBuild(d Deps, payload json.RawMessage) proto.BaseResponse {
 		ExpectedEpoch:  req.ExpectedEpoch,
 		RoomName:       name,
 		AppContext:     appContext,
+
+		LoginGeneration: buildLoginGeneration(d),
 	}, cipher)
 	if err != nil {
 		return chatStateFailure(d, "mls commit build", err)

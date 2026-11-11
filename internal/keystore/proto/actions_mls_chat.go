@@ -52,6 +52,23 @@ const (
 	//   Output: { discarded, generation }
 	MLSGroupDiscardUnaccepted = "mls_group_discard_unaccepted"
 
+	// MLSCommitDiscardRefused drops this device's own pending Commit after the
+	// server definitively refused it (lv78): the refusal_code is one of
+	// MLSCommitDiscardRefusedDefinitiveCodes and the handshake log showed no
+	// row at expected_epoch + 1. It succeeds only when the pending Commit is
+	// the one named, built on expected_epoch (never 0), the group's confirmed
+	// epoch is still that one, and the Commit was built under the chat login
+	// generation current now, read under the keychain process lock. Then the
+	// pending Commit goes and the confirmed state stays. Any other state is
+	// CHAT_STATE_CONFLICT and writes nothing. Not idempotent: with nothing
+	// pending it is refused, so a late discard never reaches a Commit built
+	// since. Local binding only; no online decision (protocol.md).
+	//
+	//   Inputs: permit, org_id, conversation_id, client_commit_id,
+	//           expected_epoch (>= 1), refusal_code
+	//   Output: { discarded, generation }
+	MLSCommitDiscardRefused = "mls_commit_discard_refused"
+
 	// MLSConversationForgetRemoved drops the group state of a conversation
 	// this device was removed from, so that a Welcome that adds it again is
 	// joined into a clean record: a device takeover that was undone leaves

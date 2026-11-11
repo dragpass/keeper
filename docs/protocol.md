@@ -1324,7 +1324,8 @@ only with an API-signed decision issued for that exact call:
 their own `/v1/chat/<action>` route, and from any other caller, they are
 refused before the handler with `chat_online_decision_required`. Cleanup
 (`chat_state_purge`, `mls_group_discard_unaccepted`,
-`mls_conversation_forget_removed`, `mls_leaf_abort`) needs no decision. The
+`mls_commit_discard_refused`, `mls_conversation_forget_removed`,
+`mls_leaf_abort`) needs no decision. The
 account-level MLS actions take their own decision (next section).
 
 The App runs a protected action in three steps; the chat runtime epoch and
@@ -1852,6 +1853,7 @@ batch with `CHAT_MLS_FAILED`, so nothing after it in the room ever showed.
 |---|---|---|---|
 |`mls_group_create`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID), `members` (1..32 × `{ account_id, device_id, key_package_b64 (≤8192B) }`, one entry per device, not the caller), `rotation_statements?`, `room_name_plaintext_b64?` (1..256B, UTF-8; rooms only, 0.0.52), `app_context_b64?` (1..65536B; 0.0.55), `roles` (`{ kind: "room"\|"dm", entries: [{ account_id, role }] }`; a room names this account owner; 0.0.55, required 0.0.58)|`{ client_commit_id, expected_epoch (0), commit_b64, welcome_b64, welcome_releasable (false), created, generation, name_epoch?, name_iv_b64?, name_ciphertext_b64?, leaf_trust? }`|(0.0.55) `roles` is written into the group context at create (see "Room roles"); (0.0.58) it is required, and a request without it is `CHAT_STATE_INVALID_INPUT`. Creates the conversation's group at epoch 0, verifies every member (§5.3 plus the credential match), and builds the Add, pending, in one transaction. Idempotent on `client_commit_id`: a retry answers from the stored Commit with `created: false`. A conversation that already holds a group or a pending Commit is `CHAT_STATE_CONFLICT`. (0.0.52) With `room_name_plaintext_b64` the name is resealed for epoch 1 from the pending create and returned as `name_*` (see "Room names" below); a retry reseals it again under a fresh IV. (0.0.55) `app_context_b64` is the app's own description of the Commit, opaque to the Keeper and never a secret by contract; it is stored with the pending Commit and returned by `mls_conversation_status` as `pending_app_context_b64` until the verdict, and a retry under the same `client_commit_id` keeps the first one. The name the first build sealed is stored with the pending Commit too (ciphertext only) and reported by `mls_conversation_status` as `pending_name_epoch` / `pending_name_iv_b64` / `pending_name_ciphertext_b64`; a retried build still answers with a name only when it carries one. (0.0.55) `leaf_trust` lists how the leaf verifier judged each account this call let in (see "Trust state in MLS responses" below); absent when it let none in. A retry answered from the stored Commit judges nothing and carries none.|
 |`mls_group_discard_unaccepted`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID)|`{ discarded, generation }`|(0.0.52) Drops this device's own group create that was never accepted, so `mls_join` can take the winning create's Welcome. Succeeds **only** when the pending Commit is the one named, was built against epoch 0 (the create), and the record was never confirmed past epoch 0; then the group state and the pending Commit are removed and nothing else changes. Every other state — another `client_commit_id`, a confirmed group, a joined group, a pending Commit that is not a create — is `CHAT_STATE_CONFLICT` and writes nothing. Idempotent: with no group and no pending Commit left it answers `discarded: false`. See "A lost create" below.|
+|`mls_commit_discard_refused`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID), `expected_epoch` (>= 1), `refusal_code`|`{ discarded, generation }`|Drops this device's own pending Commit that the server definitively refused. `refusal_code` must be one of `CHAT_ACCESS_DENIED`, `CHAT_MLS_MEMBER_SET_STALE`, `CHAT_MLS_REMOVAL_PENDING`, `CHAT_ROOM_MEMBER_LIMIT`, `CHAT_ROOM_OWNER_LEAVING`, `CHAT_ROOM_ROLE_REQUIRED`, `CHAT_SELF_REMOVE_REFUSED` (`CHAT_STATE_INVALID_INPUT` otherwise). Succeeds **only** when the pending Commit is the one named, was built on `expected_epoch`, the group's confirmed epoch is still that epoch, and the Commit was built under the chat login generation current now (read under the keychain process lock); then the pending Commit is dropped and the confirmed state is written back unchanged. Every other state, including nothing pending, is `CHAT_STATE_CONFLICT` and writes nothing. Not idempotent. See "A refused Commit" below.|
 |`mls_epoch_comparison`|`permit`, `org_id`, `conversation_id`|`{ epoch, digest_b64 }`|(0.0.56) App only (a Native Messaging frame is refused). Returns a room- and confirmed-epoch-bound SHA-256 digest derived inside the Rust MLS boundary from the MLS epoch authenticator. The raw authenticator never crosses the C ABI or Go. Refuses when a Commit is pending, no group exists, or the loaded MLS epoch disagrees with the sealed record. This is an App-only manual comparison aid: matching values observed and compared through an independent channel provide evidence that the participants hold the same MLS state at that epoch. It is not a server-independent identity proof, is not persisted as a verified status, and does not automatically detect a split view. The typed App Local RPC route exposes it to the App; no Extension caller is added, and the action stays off the MCP surface.|
 |`mls_conversation_forget_removed`|`permit`, `org_id`, `conversation_id`|`{ forgotten, generation }`|(0.0.53) Drops the group state of a conversation this device was removed from, so a later `mls_join` lands in a clean record. Succeeds **only** when the last Commit applied to the confirmed state removed this device's leaf (`mls_process` or `mls_commit_confirm` answered `removed: true`, and no join or create has replaced the group since); then the group state, the pending Commit, the removal latch and the leaf-replacement latch are removed. The sealed local history, the received marks, the outbox and the confirmed epoch stay, so a re-read keeps working and the rollback anchor is judged as before. Every other state is `CHAT_STATE_CONFLICT` and writes nothing, and a record latched `NeedsRekey` is `CHAT_STATE_REKEY_REQUIRED`. Idempotent: with no group and no pending Commit left it answers `forgotten: false`. Call it **before** `mls_join`. See "Switching back after a takeover" below.|
 |`mls_commit_build`|`permit`, `org_id`, `conversation_id`, `client_commit_id`, `expected_epoch` (≥1), exactly one of `add` (1..32 members), `remove_account_ids` (1..64 UUIDs; every leaf of each account), `replace` (1..32 × `{ account_id, key_package_b64 (≤8192B), handover? }`, one entry per account; 0.0.51, `handover` 0.0.55), `rejoin` (1..32 × `{ account_id, device_id, key_package_b64 (≤8192B), request }`, one entry per account, `request` as `mls_rejoin_request_sign` returns it; 0.0.55), `revoke_devices` (1..64 × `{ account_id, device_id }`; 0.0.55), `update_self: true`, or `set_roles` alone; `set_roles?` (the complete new role list; alone, or with `add`, `remove_account_ids` or `revoke_devices`; 0.0.55); `org_removal_statements?`, `leave_statements?`, `device_revocations?` (each ≤64; 0.0.55); `user_initiated?` (`add`, `remove_account_ids`, `set_roles`, `replace`; 0.0.55); `rotation_statements?`; `app_context_b64?` (1..65536B; 0.0.55); `room_name_plaintext_b64?` (1..256B, UTF-8; rooms only, 0.0.52)|as `mls_group_create`; `welcome_b64` empty unless the Commit adds; `leaf_trust` only for `add` and `replace` (0.0.55)|One pending Commit of one kind. A plan that mixes kinds is refused (validation, and `chatstate.CommitPlan` below it). `expected_epoch` is checked against the confirmed epoch before anything is built (`CHAT_MLS_EPOCH_STALE`). A Remove never refuses on the S-1 latch: it is the way out of it. A Remove naming an account with no leaf in the group is `CHAT_MLS_FAILED` rather than a smaller Commit. **`replace`** (design M4.4) is the way out of the leaf-replacement latch: for each entry, one Commit removes every leaf of the account whose signature key fingerprint is not the replacement's and adds the given KeyPackage. Every account must be one this permit lists in `pending_leaf_replacements` (`CHAT_STATE_INVALID_INPUT` otherwise, before anything is opened). The KeyPackage's credential must name that account, and its leaf's signature key fingerprint must equal the `new_signature_key_fp` the **current permit** lists for it: any other key — the old device's, or one substituted — is `CHAT_MLS_LEAF_UNTRUSTED`. It then passes the full §5.3 verification as an entering leaf, freshness included. An account with no leaf under another key is `CHAT_MLS_FAILED`: there is nothing it replaces. (0.0.55) Each entry needs the old device's `handover` ("Device succession" above): it must be signed by the leaf the replace removes and name the KeyPackage's leaf (`CHAT_MLS_HANDOVER_INVALID` otherwise), and it rides in the Commit's authenticated data ("Commit evidence" above). An entry without one is an account recovery ("Account recovery seats a new identity" above): it needs `user_initiated: true` and a leaf carrying another account key than the one it replaces, and is `CHAT_MLS_COMMIT_UNAUTHORIZED` otherwise. Several accounts in one `replace` are fine. A refusal builds and writes nothing. A device the replace removes still processes the Commit (the leaf it adds is verified like any entering leaf) and sees `removed: true`. (0.0.52) With `room_name_plaintext_b64` — the name as this device last opened it — the name is resealed for `expected_epoch + 1` from the pending Commit, before the CAS, and returned as `name_epoch` / `name_iv_b64` / `name_ciphertext_b64` for `POST /:id/mls/commit` to store atomically with the Commit. A reseal that fails refuses the build and persists no Commit. (0.0.55) `app_context_b64` and the stored first name as for `mls_group_create`: an app that lost its own note of a pending Commit reads the description and the name back from `mls_conversation_status` and rebuilds the same request, which answers with the stored Commit and Welcome, so it can post the Commit again rather than leave the conversation `commit_pending` for good. (0.0.55) Every kind is held to the Commit authority rules above before anything is built, over the change it would make: the group's roles, the signed statements handed in (verified first: `CHAT_MLS_STATEMENT_UNVERIFIED`, and carried in the Commit together with any handovers as one evidence document), and `user_initiated` as the app's intent; a refusal is `CHAT_MLS_COMMIT_UNAUTHORIZED`. **`revoke_devices`** removes exactly the leaf of each `(account_id, device_id)`, on a matching signed `device_revocations` entry; a device with no leaf is `CHAT_MLS_FAILED`. **`set_roles`** writes the new roles into the group context (a GroupContextExtensions proposal the rules judge); a member whose leaf lacks `0xF0D1` makes it `CHAT_MLS_ROLES_UNSUPPORTED`. **`rejoin`** re-seats each account in one Commit (every leaf it holds out, the KeyPackage in) after verifying its signed request (see "Signed rejoin" above; `CHAT_MLS_REJOIN_UNVERIFIED` otherwise); an account with no leaf in the group is `CHAT_MLS_COMMIT_UNAUTHORIZED`. The Removes a build makes are exactly the ones approved to the library's rules for that build.|
@@ -1987,6 +1989,39 @@ nothing is encrypted while a Commit is pending, and epoch 0 has no other
 member. What the Keeper cannot check is the server's verdict: an accepted create
 whose answer was lost looks the same locally, so call it only after the server
 gave the epoch to another create (ask by `client_commit_id` when unsure).
+
+**A refused Commit (lv78).** The server can refuse a Commit for good and store
+nothing: a member removal is pending in the conversation
+(`CHAT_MLS_REMOVAL_PENDING`, when the pending removal is not this caller's own
+Remove Commit), the caller is no longer a member or lacks the room role
+(`CHAT_ACCESS_DENIED`, `CHAT_ROOM_ROLE_REQUIRED`), the Commit names a leaving
+member as owner (`CHAT_ROOM_OWNER_LEAVING`), the room's member set moved
+(`CHAT_MLS_MEMBER_SET_STALE`), or the Commit is malformed for the room
+(`CHAT_ROOM_MEMBER_LIMIT`, `CHAT_SELF_REMOVE_REFUSED`). ariadne returns each
+of these only after it looked the `client_commit_id` up and found no stored
+Commit. Left pending, such a Commit would be posted again by whatever the
+person does next and could land once the reason went away, so a change the
+person was told was refused would be applied later without a new request.
+After one of these answers the App reads the handshake log: a row at
+`expected_epoch + 1` settles the Commit as accepted or superseded as usual;
+with no row it calls `mls_commit_discard_refused`, may rebuild from the same
+intent at the latest epoch within the same user action, and otherwise reports
+the change as not applied. A lost or unreadable answer, a 5xx, a 429, a
+timeout and `CHAT_MLS_EPOCH_STALE` are never a reason to discard; the Commit
+stays pending for the check-log-then-resend path.
+
+The Keeper cannot see the log. What it enforces is the binding: the named id
+and epoch, a confirmed epoch nothing has moved, and the login generation the
+Commit was built under (`mls_commit_build` records it), so a discard decided in
+one sign-in never reaches a Commit of the next. An accepted Commit is
+confirmed and no longer pending, so a discard after the confirm is refused.
+The action takes no online decision: it releases nothing and uses no key
+outward, and the refusals it follows include the loss of the authority a
+decision would require, which would leave the refused Commit pending.
+Accepted limit: an earlier post of the same Commit still in flight when the
+log was read could land after the discard; the device then holds no secrets
+for that epoch and the next sync stops on the Commit it cannot apply, failing
+closed rather than applying anything.
 
 **Switching back after a takeover (0.0.53).** A takeover undone, Bob → Bob2 →
 Bob, leaves the old device a record that blocks the new group. The replace
@@ -3100,7 +3135,8 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
   `app rotate-secret` (which drops every session).
 - Gated actions (every action that writes chat state, MLS group state, leaf
   slots or the KeyPackage pool, and the display decrypt): `mls_group_create`,
-  `mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+  `mls_group_discard_unaccepted`, `mls_commit_discard_refused`,
+  `mls_conversation_forget_removed`,
   `mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
   `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
   both `chat_state_*`, `mls_leaf_declare`, `mls_leaf_promote`,
@@ -3167,7 +3203,8 @@ missing keys. The cap is the one the handler enforces: 1 MiB for
 `mls_group_create`, `mls_commit_build`, `mls_commit_confirm`, `mls_process`,
 `mls_join`; 3 MiB for `mls_decrypt_batch_for_app_display`; 32 KiB for the
 rest. The action list is exactly: `mls_group_create`,
-`mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+`mls_group_discard_unaccepted`, `mls_commit_discard_refused`,
+`mls_conversation_forget_removed`,
 `mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
 `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
 `mls_room_name_seal`, `mls_room_name_open`, `mls_conversation_status`,

@@ -20,6 +20,7 @@ func mlsChatActions() map[string]action {
 	return map[string]action{
 		proto.MLSGroupCreate:               direct(handlers.HandleMLSGroupCreate).gated().needsOnlineDecision(),
 		proto.MLSGroupDiscardUnaccepted:    direct(handlers.HandleMLSGroupDiscardUnaccepted).gated(),
+		proto.MLSCommitDiscardRefused:      direct(handlers.HandleMLSCommitDiscardRefused).gated(),
 		proto.MLSConversationForgetRemoved: direct(handlers.HandleMLSConversationForgetRemoved).gated(),
 		proto.MLSCommitBuild:               direct(handlers.HandleMLSCommitBuild).gated().needsOnlineDecision(),
 		proto.MLSCommitConfirm:             direct(handlers.HandleMLSCommitConfirm).gated().needsOnlineDecision(),

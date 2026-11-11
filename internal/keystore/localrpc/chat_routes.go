@@ -63,6 +63,7 @@ type chatActionSpec struct {
 var chatActionSpecs = []chatActionSpec{
 	{proto.MLSGroupCreate, func() any { return &proto.MLSGroupCreateRequest{} }, mlsCap},
 	{proto.MLSGroupDiscardUnaccepted, func() any { return &proto.MLSGroupDiscardUnacceptedRequest{} }, stateCap},
+	{proto.MLSCommitDiscardRefused, func() any { return &proto.MLSCommitDiscardRefusedRequest{} }, stateCap},
 	{proto.MLSConversationForgetRemoved, func() any { return &proto.MLSConversationForgetRemovedRequest{} }, stateCap},
 	{proto.MLSCommitBuild, func() any { return &proto.MLSCommitBuildRequest{} }, mlsCap},
 	{proto.MLSCommitConfirm, func() any { return &proto.MLSCommitConfirmRequest{} }, mlsCap},
