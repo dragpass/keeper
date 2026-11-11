@@ -110,7 +110,7 @@ func TestExtensionPurgeRevokesTheAppRuntimeOverLocalRPC(t *testing.T) {
 	if purged := proxiedFrame(t, server, extensionPurgeFrame(t, server)); !purged.Success {
 		t.Fatalf("Extension purge while the App holds the lease: %+v", purged)
 	}
-	for _, path := range []string{"/v1/chat/mls_leaf_abort", "/v1/chat/mls_mark_sent", "/v1/chat/chat_state_purge"} {
+	for _, path := range []string{"/v1/chat/mls_leaf_abort", "/v1/chat/mls_group_discard_unaccepted", "/v1/chat/chat_state_purge"} {
 		_, result := callWithEpoch(t, server, session, csrf, path, map[string]any{}, epoch)
 		if result.ErrorCode != keystore.ErrCodeChatRuntimeRevoked || reasonOf(result.Data) != keystore.ChatRuntimeRevokedPurged {
 			t.Fatalf("%s after the purge: %+v", path, result)

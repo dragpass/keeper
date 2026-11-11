@@ -1311,6 +1311,67 @@ the server and the Extension:
 |`CHAT_MLS_PEER_UNVERIFIED`|(0.0.55) This device's strict policy (`require_verified_peers`) is on and the operation would bring in, or send to, another account whose pin is not `verified` (no pin counts): a local Add (`mls_group_create`, `mls_commit_build` add / replace / rejoin), a Join, or a send in a conversation that holds one. **Carries `data: { unverified_account_ids }`**. Nothing was built, joined, consumed or written. Reading is never refused, and neither is a received Commit (see "Strict policy in chat").|
 |`CHAT_STATE_STORAGE_FAILURE`|The state directory or the keyring could not be read or written. Nothing was committed.|
 
+### Online decision for protected App MLS actions (unreleased, lv78)
+
+Capability `online_decision.v1` in `chat_capabilities`. These 15 actions run
+only with an API-signed decision issued for that exact call:
+`chat_state_read_outbox`, `mls_commit_build`, `mls_commit_confirm`,
+`mls_conversation_status`, `mls_decrypt_batch_for_app_display`,
+`mls_encrypt`, `mls_epoch_comparison`, `mls_group_create`, `mls_join`,
+`mls_leave_request_sign`, `mls_mark_sent`, `mls_process`,
+`mls_rejoin_request_sign`, `mls_room_name_open`, `mls_room_name_seal`
+(`dispatch.OnlineDecisionActions`, pinned against the API issuer's set). On
+their own `/v1/chat/<action>` route, and from any other caller, they are
+refused before the handler with `chat_online_decision_required`. Cleanup
+(`chat_state_purge`, `mls_group_discard_unaccepted`,
+`mls_conversation_forget_removed`, `mls_leaf_abort`) needs no decision. The
+six account-level MLS actions are not gated by this contract yet.
+
+The App runs a protected action in three steps; the chat runtime epoch and
+login generation headers apply to all of them as to every chat route.
+
+1. `POST /v1/chat/online/prepare` with `{action, request, token_id,
+   session_issued_at_nanos}`. `request` is the exact JSON the action takes
+   (its own cap and strict decode apply). Keeper requires its account binding
+   (signed in, naming the permit's account) and its device id, draws a
+   32-byte challenge and a 32-byte commitment key, and keeps them in process
+   memory for 10 seconds (monotonic; at most 128 pending; a restart forgets
+   all). Answer: `{challenge, request_commitment}` with
+   `request_commitment = hex(HMAC-SHA256(key, "dragpass.chat.online.request|1|len:action|len:request"))`.
+   The key never leaves Keeper.
+2. The App sends `{action, challenge, request_commitment}` to
+   `POST /api/v1/conversations/:id/keeper-online-decision` with its App session
+   and receives the decision.
+3. `POST /v1/chat/online/execute` with `{action, request, decision}`; `request`
+   must be byte for byte the prepared one.
+
+Decision: domain `dragpass.chat.online|1`, canonical
+`domain|len:field|...` over `challenge`, `account_id`, `device_id`,
+`token_id`, `session_issued_at_nanos` (decimal; a JSON string), `action`,
+`org_id`, `conversation_id`, `request_commitment`, `issued_at`,
+`expires_at`, `server_key_version`; RSA-PSS SHA-256 by the pinned server key
+of the named version (0 is refused); `expires_at - issued_at == 10`.
+
+Execute, under the request lock: (a) the decision's shape; its wall-clock
+window (`issued_at <= now + 5`, `now < expires_at`); the challenge exists and
+is before its deadline; the commitment recomputed over the request equals the
+stored one and the decision's; action, account, device, token id, session
+start, organization, conversation and login generation equal what the
+challenge was minted for; the signature verifies; the binding and device id
+are unchanged. Only then is the challenge consumed, so a refused decision
+leaves it for the right one and two racing executions admit at most one.
+(b) The action runs through the ordinary chat gate (lease, epoch, login
+generation). (c) The challenge deadline and the decision expiry are checked
+again; if either passed, the answer is replaced by
+`chat_online_decision_refused` (state the action wrote stays written). Every
+refusal in (a) and (c) is `chat_online_decision_refused` without saying which
+check failed.
+
+A decision does not replace the chat state permit, which the action still
+requires. It gates new Keeper work only: plaintext and signatures already
+returned, and a response whose check (c) passed before a revocation, are not
+recalled.
+
 ### MLS chat (chat v2 MLS actions)
 
 The MLS half of chat v2, on top of the conversation-state layer above: the

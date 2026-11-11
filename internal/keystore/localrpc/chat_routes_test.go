@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore"
+	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
@@ -165,6 +166,8 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_rejoin_request_sign",
 	"/v1/chat/mls_room_name_open",
 	"/v1/chat/mls_room_name_seal",
+	"/v1/chat/online/execute",
+	"/v1/chat/online/prepare",
 	"/v1/chat/org_member_removal_sign",
 	"/v1/chat/room_row_name_seal",
 	"/v1/chat/runtime/claim",
@@ -386,6 +389,10 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	for _, action := range keystore.ChatRuntimeGatedActions() {
 		gated[action] = true
 	}
+	online := map[string]bool{}
+	for _, action := range dispatch.OnlineDecisionActions() {
+		online[action] = true
+	}
 	for _, path := range paths {
 		action := strings.TrimPrefix(path, "/v1/chat/")
 		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"not_a_field": 1}); code != http.StatusBadRequest {
@@ -398,7 +405,16 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
-		if gated[action] != (result.ErrorCode == "chat_runtime_lease_required") {
+		// A protected action needs an online decision before anything else
+		// (lv78); the other lease-gated actions need the lease.
+		want := ""
+		switch {
+		case online[action]:
+			want = keystore.ErrCodeChatOnlineDecisionRequired
+		case gated[action]:
+			want = "chat_runtime_lease_required"
+		}
+		if want != "" && result.ErrorCode != want || want == "" && (result.ErrorCode == "chat_runtime_lease_required" || result.ErrorCode == keystore.ErrCodeChatOnlineDecisionRequired) {
 			t.Fatalf("%s without a lease: %+v", path, result)
 		}
 	}
@@ -423,7 +439,7 @@ func TestChatActionRoutesRunWithTheLeaseAndKeepTheRawRequest(t *testing.T) {
 	// The route hands the handler the bytes it was sent, so the handler's
 	// strict decoder still sees (and refuses) a duplicate key.
 	duplicate := `{"org_id":"` + routeOwner + `","org_id":"` + routePeer + `"}`
-	response := localRequest(server, http.MethodPost, "/v1/chat/mls_conversation_status", duplicate, session, csrf)
+	response := localRequest(server, http.MethodPost, "/v1/chat/mls_group_discard_unaccepted", duplicate, session, csrf)
 	var status routeResult
 	_ = json.Unmarshal(response.Body.Bytes(), &status)
 	if response.Code != http.StatusOK || status.Success || status.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) || !strings.Contains(status.Error, "duplicate") {
@@ -442,9 +458,12 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 		}
 		return map[string]any{"messages": messages}
 	}
+	// A protected action's own route decodes up to its cap and then refuses
+	// without an online decision (lv78), so reaching that refusal shows the
+	// cap admitted the request.
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(200))
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 2 MB display batch did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != keystore.ErrCodeChatOnlineDecisionRequired {
+		t.Fatalf("a 2 MB display batch did not pass the route cap: %d %.200s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(320)); code != http.StatusBadRequest {
 		t.Fatalf("a display batch past 3 MiB was accepted: %d", code)
@@ -457,8 +476,8 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 	code, result, body = callRoute(t, server, session, csrf, "/v1/chat/mls_commit_build", map[string]any{
 		"app_context_b64": strings.Repeat("A", 200_000),
 	})
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 200 KB commit build did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != keystore.ErrCodeChatOnlineDecisionRequired {
+		t.Fatalf("a 200 KB commit build did not pass the route cap: %d %.200s", code, body)
 	}
 }
 

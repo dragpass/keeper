@@ -122,6 +122,9 @@ type App struct {
 	// ChangeCompareChallenges holds one-use comparison challenges (lv83 H1).
 	ChangeCompareChallenges *handlers.GroupDisplayChallengeStore
 
+	// chatOnline holds the process-local online decision challenges (lv78).
+	chatOnline chatOnlineChallenges
+
 	// requestMu runs every handler one at a time in this process (Native
 	// Messaging stdio, proxied hosts, App routes, composed App steps), so
 	// handlers need no mutex of their own against each other. Another Keeper

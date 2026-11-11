@@ -1,6 +1,7 @@
 package localrpc
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -44,15 +45,56 @@ func chatActionRoute(action string, input func() any, limit int) (string, appRou
 	return "/v1/chat/" + action, appRoute{action: action, input: input, plainLimit: limit}
 }
 
+const (
+	mlsCap     = proto.MLSChatMaxRequestBytes
+	stateCap   = proto.ChatStateMaxRequestBytes
+	displayCap = proto.MLSDecryptMaxRequestBytes
+)
+
+// chatActionSpec is one chat action's route: its request type and the cap
+// its handler enforces.
+type chatActionSpec struct {
+	action string
+	input  func() any
+	limit  int
+}
+
+var chatActionSpecs = []chatActionSpec{
+	{proto.MLSGroupCreate, func() any { return &proto.MLSGroupCreateRequest{} }, mlsCap},
+	{proto.MLSGroupDiscardUnaccepted, func() any { return &proto.MLSGroupDiscardUnacceptedRequest{} }, stateCap},
+	{proto.MLSConversationForgetRemoved, func() any { return &proto.MLSConversationForgetRemovedRequest{} }, stateCap},
+	{proto.MLSCommitBuild, func() any { return &proto.MLSCommitBuildRequest{} }, mlsCap},
+	{proto.MLSCommitConfirm, func() any { return &proto.MLSCommitConfirmRequest{} }, mlsCap},
+	{proto.MLSProcess, func() any { return &proto.MLSProcessRequest{} }, mlsCap},
+	{proto.MLSJoin, func() any { return &proto.MLSJoinRequest{} }, mlsCap},
+	{proto.MLSEncrypt, func() any { return &proto.MLSEncryptRequest{} }, stateCap},
+	{proto.MLSMarkSent, func() any { return &proto.MLSMarkSentRequest{} }, stateCap},
+	{proto.MLSDecryptBatchForAppDisplay, func() any { return &proto.MLSDecryptBatchForAppDisplayRequest{} }, displayCap},
+	{proto.MLSRoomNameSeal, func() any { return &proto.MLSRoomNameSealRequest{} }, stateCap},
+	{proto.MLSRoomNameOpen, func() any { return &proto.MLSRoomNameOpenRequest{} }, stateCap},
+	{proto.MLSConversationStatus, func() any { return &proto.MLSConversationStatusRequest{} }, stateCap},
+	{proto.MLSEpochComparison, func() any { return &proto.MLSEpochComparisonRequest{} }, stateCap},
+	{proto.MLSRejoinRequestSign, func() any { return &proto.MLSRejoinRequestSignRequest{} }, stateCap},
+	{proto.MLSLeaveRequestSign, func() any { return &proto.MLSLeaveRequestSignRequest{} }, stateCap},
+	{proto.ChatStateReadOutbox, func() any { return &proto.ChatStateReadOutboxRequest{} }, stateCap},
+	{proto.ChatStatePurge, func() any { return &proto.ChatStatePurgeRequest{} }, stateCap},
+	// The leaf, KeyPackage and statement actions decode leniently and have
+	// no cap of their own; their fixed-field requests fit the chat state
+	// cap with room to spare.
+	{proto.ActionMLSLeafStatus, func() any { return &proto.MLSLeafStatusRequest{} }, stateCap},
+	{proto.ActionMLSLeafDeclare, func() any { return &proto.MLSLeafDeclareRequest{} }, stateCap},
+	{proto.ActionMLSLeafPromote, func() any { return &proto.MLSLeafPromoteRequest{} }, stateCap},
+	{proto.ActionMLSLeafAbort, func() any { return &proto.MLSLeafAbortRequest{} }, stateCap},
+	{proto.ActionMLSLeafHandoverSign, func() any { return &proto.MLSLeafHandoverSignRequest{} }, stateCap},
+	{proto.MLSKeyPackageGenerate, func() any { return &proto.MLSKeyPackageGenerateRequest{} }, stateCap},
+	{proto.OrgMemberRemovalSign, func() any { return &proto.OrgMemberRemovalSignRequest{} }, stateCap},
+	{proto.MLSDeviceRevokeSign, func() any { return &proto.MLSDeviceRevokeSignRequest{} }, stateCap},
+}
+
 // chatRoutes is the App's chat surface. Whether an action needs the chat
 // runtime lease is decided in keystore (chat_runtime.go) for every caller,
 // not here.
 func chatRoutes() map[string]appRoute {
-	const (
-		mlsCap     = proto.MLSChatMaxRequestBytes
-		stateCap   = proto.ChatStateMaxRequestBytes
-		displayCap = proto.MLSDecryptMaxRequestBytes
-	)
 	routes := map[string]appRoute{
 		"/v1/chat/capability": {
 			input: func() any { return &struct{}{} },
@@ -70,46 +112,63 @@ func chatRoutes() map[string]appRoute {
 			input: func() any { return &roomRowNameSeal{} },
 			run:   runRoomRowNameSeal,
 		},
+		// The online decision path (lv78): every protected MLS action runs
+		// only through prepare, the App's API request, then execute. Each
+		// carries the action's full request, so they take the largest cap.
+		"/v1/chat/online/prepare": {
+			input:      func() any { return &proto.ChatOnlinePrepareRequest{} },
+			run:        runChatOnlinePrepare,
+			plainLimit: chatOnlineCap,
+		},
+		"/v1/chat/online/execute": {
+			input:      func() any { return &proto.ChatOnlineExecuteRequest{} },
+			run:        runChatOnlineExecute,
+			plainLimit: chatOnlineCap,
+		},
 	}
-	for _, r := range []struct {
-		action string
-		input  func() any
-		limit  int
-	}{
-		{proto.MLSGroupCreate, func() any { return &proto.MLSGroupCreateRequest{} }, mlsCap},
-		{proto.MLSGroupDiscardUnaccepted, func() any { return &proto.MLSGroupDiscardUnacceptedRequest{} }, stateCap},
-		{proto.MLSConversationForgetRemoved, func() any { return &proto.MLSConversationForgetRemovedRequest{} }, stateCap},
-		{proto.MLSCommitBuild, func() any { return &proto.MLSCommitBuildRequest{} }, mlsCap},
-		{proto.MLSCommitConfirm, func() any { return &proto.MLSCommitConfirmRequest{} }, mlsCap},
-		{proto.MLSProcess, func() any { return &proto.MLSProcessRequest{} }, mlsCap},
-		{proto.MLSJoin, func() any { return &proto.MLSJoinRequest{} }, mlsCap},
-		{proto.MLSEncrypt, func() any { return &proto.MLSEncryptRequest{} }, stateCap},
-		{proto.MLSMarkSent, func() any { return &proto.MLSMarkSentRequest{} }, stateCap},
-		{proto.MLSDecryptBatchForAppDisplay, func() any { return &proto.MLSDecryptBatchForAppDisplayRequest{} }, displayCap},
-		{proto.MLSRoomNameSeal, func() any { return &proto.MLSRoomNameSealRequest{} }, stateCap},
-		{proto.MLSRoomNameOpen, func() any { return &proto.MLSRoomNameOpenRequest{} }, stateCap},
-		{proto.MLSConversationStatus, func() any { return &proto.MLSConversationStatusRequest{} }, stateCap},
-		{proto.MLSEpochComparison, func() any { return &proto.MLSEpochComparisonRequest{} }, stateCap},
-		{proto.MLSRejoinRequestSign, func() any { return &proto.MLSRejoinRequestSignRequest{} }, stateCap},
-		{proto.MLSLeaveRequestSign, func() any { return &proto.MLSLeaveRequestSignRequest{} }, stateCap},
-		{proto.ChatStateReadOutbox, func() any { return &proto.ChatStateReadOutboxRequest{} }, stateCap},
-		{proto.ChatStatePurge, func() any { return &proto.ChatStatePurgeRequest{} }, stateCap},
-		// The leaf, KeyPackage and statement actions decode leniently and have
-		// no cap of their own; their fixed-field requests fit the chat state
-		// cap with room to spare.
-		{proto.ActionMLSLeafStatus, func() any { return &proto.MLSLeafStatusRequest{} }, stateCap},
-		{proto.ActionMLSLeafDeclare, func() any { return &proto.MLSLeafDeclareRequest{} }, stateCap},
-		{proto.ActionMLSLeafPromote, func() any { return &proto.MLSLeafPromoteRequest{} }, stateCap},
-		{proto.ActionMLSLeafAbort, func() any { return &proto.MLSLeafAbortRequest{} }, stateCap},
-		{proto.ActionMLSLeafHandoverSign, func() any { return &proto.MLSLeafHandoverSignRequest{} }, stateCap},
-		{proto.MLSKeyPackageGenerate, func() any { return &proto.MLSKeyPackageGenerateRequest{} }, stateCap},
-		{proto.OrgMemberRemovalSign, func() any { return &proto.OrgMemberRemovalSignRequest{} }, stateCap},
-		{proto.MLSDeviceRevokeSign, func() any { return &proto.MLSDeviceRevokeSignRequest{} }, stateCap},
-	} {
+	for _, r := range chatActionSpecs {
 		path, route := chatActionRoute(r.action, r.input, r.limit)
 		routes[path] = route
 	}
 	return routes
+}
+
+// chatOnlineCap is the largest protected request plus the decision.
+const chatOnlineCap = max(proto.MLSChatMaxRequestBytes, proto.MLSDecryptMaxRequestBytes, proto.ChatStateMaxRequestBytes) + 8*1024
+
+// admitsActionRequest applies the protected action's own route rules to the
+// request the online routes carry for it: its cap and its strict decode.
+func admitsActionRequest(action string, request []byte) bool {
+	for _, spec := range chatActionSpecs {
+		if spec.action == action {
+			return len(request) <= spec.limit && decodeStrict(bytes.NewReader(request), spec.input()) == nil
+		}
+	}
+	return false
+}
+
+func runChatOnlinePrepare(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
+	in := input.(*proto.ChatOnlinePrepareRequest)
+	defer secure.Zeroize(in.Request)
+	if !admitsActionRequest(in.Action, in.Request) {
+		return proto.BaseResponse{}, errAppRouteRefused
+	}
+	return s.app.PrepareChatOnline(request.generation, *in), nil
+}
+
+// runChatOnlineExecute hands the action the request bytes the App sent
+// inside the body, which are the bytes the commitment was made over.
+func runChatOnlineExecute(s *Server, request appRequest, input any) (proto.BaseResponse, error) {
+	in := input.(*proto.ChatOnlineExecuteRequest)
+	defer secure.Zeroize(in.Request)
+	if !admitsActionRequest(in.Action, in.Request) {
+		return proto.BaseResponse{}, errAppRouteRefused
+	}
+	response := s.app.ExecuteChatOnline(request.token, request.epoch, request.generation, *in)
+	if s.onAction != nil {
+		s.onAction(in.Action, in.Request, response)
+	}
+	return response, nil
 }
 
 // runChatCapability is ping without the binary path, which the App does not

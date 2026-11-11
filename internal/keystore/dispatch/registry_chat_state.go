@@ -19,7 +19,7 @@ import (
 
 func chatStateActions() map[string]action {
 	return map[string]action{
-		proto.ChatStateReadOutbox: direct(handlers.HandleChatStateReadOutbox).gated(),
+		proto.ChatStateReadOutbox: direct(handlers.HandleChatStateReadOutbox).gated().needsOnlineDecision(),
 		proto.ChatStatePurge:      direct(handlers.HandleChatStatePurge).revokingOnErase(ChatRuntimeRevokedPurged),
 	}
 }

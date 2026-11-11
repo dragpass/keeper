@@ -331,7 +331,7 @@ func rvSignature(client *testAppClient, method, path string, n int) map[string]s
 		"body_sha256": strings.Repeat("0", 64),
 		"account_id":  rvAccount,
 		"token_id":    "22222222-2222-4222-8222-222222222222",
-		"device_id":   "device-12345678",
+		"device_id":   rvDevice, // the device id the App recorded at sign-in
 	}
 }
 
@@ -391,12 +391,16 @@ func setUpRoom(t *testing.T, d *rvDeviceDir, client *testAppClient, bob proto.ML
 	var declared proto.MLSLeafDeclareResponseData
 	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafDeclare, leafDeclaration(d, t, rvAccount, rvDevice), &declared)
 	rvMust(t, client, "/v1/chat/"+proto.ActionMLSLeafPromote, d.promotion(t, declared), nil)
+	// The signed-in App records its device and binding, as sign-in does;
+	// the online decision binds both (lv78).
+	rvMust(t, client, "/v1/device/id", proto.DeviceIDEnsureRequest{CandidateDeviceID: rvDevice}, nil)
+	rvMust(t, client, "/v1/account/binding", proto.AccountBindingSetRequest{AccountID: rvAccount, Alias: "alice"}, nil)
 	create := "a1111111-7777-4777-8777-700000000001"
-	rvMust(t, client, "/v1/chat/"+proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+	rvProtectedMust(t, d, client, proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 		Permit: d.permit(t), Roles: rvOwnerRoles, OrgID: rvOrg, ConversationID: rvConv,
 		ClientCommitID: create, Members: []proto.MLSMemberKeyPackage{bob},
 	}, nil)
-	rvMust(t, client, "/v1/chat/"+proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
+	rvProtectedMust(t, d, client, proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
 		Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 		ClientCommitID: create, Outcome: proto.MLSCommitOutcomeAccepted,
 	}, nil)
@@ -414,29 +418,43 @@ func assertRevoked(t *testing.T, what string, result rvResult, reason string) {
 }
 
 // Every write the old runtime could still attempt, each refused as revoked.
+// A protected MLS action goes the App's way, through an online decision
+// (lv78): the revoked epoch refuses it after the decision, or the reset
+// identity refuses its preparation. Either way nothing runs.
 func assertOldRuntimeFenced(t *testing.T, d *rvDeviceDir, client *testAppClient, bob proto.MLSMemberKeyPackage, reason, messageID, commitID string) {
 	t.Helper()
 	conversation := "/api/v1/conversations/" + rvConv
 	for _, attempt := range []struct {
-		what, path string
-		body       any
+		what, action string
+		body         any
 	}{
-		{"mark sent", "/v1/chat/" + proto.MLSMarkSent, proto.MLSMarkSentRequest{
+		{"mark sent", proto.MLSMarkSent, proto.MLSMarkSentRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, ClientMessageID: messageID, Seq: 2}},
-		{"read outbox", "/v1/chat/" + proto.ChatStateReadOutbox, proto.ChatStateReadOutboxRequest{
+		{"read outbox", proto.ChatStateReadOutbox, proto.ChatStateReadOutboxRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, ClientMessageID: messageID}},
-		{"encrypt again", "/v1/chat/" + proto.MLSEncrypt, proto.MLSEncryptRequest{
+		{"encrypt again", proto.MLSEncrypt, proto.MLSEncryptRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 			ClientMessageID: "eeeeeeee-eeee-4eee-8eee-100000000009", ExpectedEpoch: 1,
 			PlaintextB64: base64.StdEncoding.EncodeToString([]byte("after"))}},
-		{"commit confirm", "/v1/chat/" + proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
+		{"commit confirm", proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 			ClientCommitID: commitID, Outcome: proto.MLSCommitOutcomeAccepted}},
-		{"process", "/v1/chat/" + proto.MLSProcess, proto.MLSProcessRequest{
+		{"process", proto.MLSProcess, proto.MLSProcessRequest{
 			Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv, Seq: 3, Epoch: 1, CommitB64: "AAAA"}},
-		{"group create", "/v1/chat/" + proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
+		{"group create", proto.MLSGroupCreate, proto.MLSGroupCreateRequest{
 			Permit: d.permit(t), Roles: rvOwnerRoles, OrgID: rvOrg, ConversationID: rvConv,
 			ClientCommitID: "a1111111-7777-4777-8777-700000000009", Members: []proto.MLSMemberKeyPackage{bob}}},
+	} {
+		result := rvProtected(t, d, client, attempt.action, attempt.body)
+		if result.ErrorCode == keystore.ErrCodeChatOnlineDecisionRefused && !result.Success {
+			continue
+		}
+		assertRevoked(t, attempt.what, result, reason)
+	}
+	for _, attempt := range []struct {
+		what, path string
+		body       any
+	}{
 		{"sign message send", "/v1/request-signature", rvSignature(client, "POST", conversation+"/messages", 101)},
 		{"sign commit post", "/v1/request-signature", rvSignature(client, "POST", conversation+"/mls/commit", 201)},
 		{"reclaim", "/v1/chat/runtime/claim", map[string]string{"holder_id": routeHolder, "epoch": client.epoch}},
@@ -469,7 +487,7 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 			// The message is encrypted and in the outbox; the server POST and
 			// mark_sent are still ahead.
 			messageID := "eeeeeeee-eeee-4eee-8eee-100000000001"
-			rvMust(t, client, "/v1/chat/"+proto.MLSEncrypt, proto.MLSEncryptRequest{
+			rvProtectedMust(t, d, client, proto.MLSEncrypt, proto.MLSEncryptRequest{
 				Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 				ClientMessageID: messageID, ExpectedEpoch: 1,
 				PlaintextB64: base64.StdEncoding.EncodeToString([]byte("hello")),
@@ -505,21 +523,30 @@ func TestExtensionRevocationFencesAnAppMidSendAndMidCommit(t *testing.T) {
 			// An Update Commit is built and pending; the POST to the server and
 			// the confirm are still ahead.
 			commitID := "a1111111-7777-4777-8777-700000000002"
-			rvMust(t, client, "/v1/chat/"+proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
+			rvProtectedMust(t, d, client, proto.MLSCommitBuild, proto.MLSCommitBuildRequest{
 				Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
 				ClientCommitID: commitID, ExpectedEpoch: 1, UpdateSelf: true,
 			}, nil)
 
 			// The confirm races the revocation: it either lands first and is
 			// erased with the rest, or it is fenced. Nothing survives either way.
+			// Its decision was issued before the revocation.
 			host := d.startExtension(t)
+			confirm, _ := json.Marshal(proto.MLSCommitConfirmRequest{
+				Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
+				ClientCommitID: commitID, Outcome: proto.MLSCommitOutcomeAccepted,
+			})
+			preparedConfirm, prepareResult := rvPrepare(t, client, proto.MLSCommitConfirm, confirm)
+			if !prepareResult.Success {
+				t.Fatalf("prepare the confirm: %+v", prepareResult)
+			}
+			confirmDecision := rvDecide(t, d, proto.MLSCommitConfirm, preparedConfirm, 0)
 			raced := make(chan rvResult, 1)
 			start := make(chan struct{})
 			go func() {
 				<-start
-				response, err := client.call("/v1/chat/"+proto.MLSCommitConfirm, proto.MLSCommitConfirmRequest{
-					Permit: d.permit(t), OrgID: rvOrg, ConversationID: rvConv,
-					ClientCommitID: commitID, Outcome: proto.MLSCommitOutcomeAccepted,
+				response, err := client.call("/v1/chat/online/execute", map[string]any{
+					"action": proto.MLSCommitConfirm, "request": json.RawMessage(confirm), "decision": confirmDecision,
 				})
 				if err != nil {
 					t.Errorf("raced confirm: %v", err)

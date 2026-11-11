@@ -54,6 +54,10 @@ type action struct {
 	// a Native Messaging frame, for the Extension's E2E organization
 	// fixtures. A release build ignores it (nativeFixturesAllowed).
 	e2eNativeFixture bool
+	// onlineDecision marks a protected App MLS action that runs only with a
+	// verified, unused API online decision for this call (lv78 D1). The App
+	// lease and the chat state permit alone do not admit it.
+	onlineDecision bool
 }
 
 type chatRuntimeClass uint8
@@ -100,6 +104,10 @@ func (a action) appOnlyAction() action { a.appOnly = true; return a }
 // e2eNativeFixture marks an App-only action the Extension's E2E fixtures may
 // still run over Native Messaging in a keeper_e2e build.
 func (a action) e2eFixtureOnNative() action { a.e2eNativeFixture = true; return a }
+
+// needsOnlineDecision marks an action that runs only through the online
+// decision path (lv78 K3).
+func (a action) needsOnlineDecision() action { a.onlineDecision = true; return a }
 
 func (a action) onMCP() action            { a.mcp = true; return a }
 func (a action) returnsPlaintext() action { a.plaintext = true; return a }
@@ -218,6 +226,17 @@ func RevocationAfter(name string, resp proto.BaseResponse) string {
 		return entry.revokes
 	}
 	return ""
+}
+
+// OnlineDecisionRequired reports whether action runs only with a verified API
+// online decision for the call.
+func OnlineDecisionRequired(name string) bool {
+	return actionRegistry[name].onlineDecision
+}
+
+// OnlineDecisionActions returns the actions that need an online decision, sorted.
+func OnlineDecisionActions() []string {
+	return actionNames(func(a action) bool { return a.onlineDecision })
 }
 
 // AppOnly reports whether only the authenticated App caller may run action.

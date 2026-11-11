@@ -267,6 +267,9 @@ type chatRuntimeCaller struct {
 	session         string
 	epoch           string
 	chatWrite       bool
+	// onlineDecision is set only by the online decision path after it
+	// verified and consumed a decision for this exact call (lv78).
+	onlineDecision bool
 }
 
 func leaseRequired() proto.BaseResponse {
@@ -287,10 +290,26 @@ func appCallerRequired() proto.BaseResponse {
 	}
 }
 
+// ErrCodeChatOnlineDecisionRequired refuses a protected MLS action that did
+// not come through the online decision path; nothing ran.
+const ErrCodeChatOnlineDecisionRequired = "chat_online_decision_required"
+
+func onlineDecisionRequired() proto.BaseResponse {
+	return proto.BaseResponse{
+		Error:     "this chat action needs a current online decision",
+		ErrorCode: ErrCodeChatOnlineDecisionRequired,
+	}
+}
+
 func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 	return func(action string) (proto.BaseResponse, bool) {
 		if !caller.app && !nativeFramesDriveChat && dispatch.AppOnly(action) {
 			return appCallerRequired(), false
+		}
+		// The kill harness build drives chat over Native frames without the
+		// App or the API; every other caller needs a decision (lv78 K3).
+		if dispatch.OnlineDecisionRequired(action) && !caller.onlineDecision && (caller.app || !nativeFramesDriveChat) {
+			return onlineDecisionRequired(), false
 		}
 		gated, revocation := dispatch.ChatRuntimeClass(action)
 		if !gated && !caller.chatWrite {
