@@ -776,9 +776,13 @@ Credentials:
 進まず、環境変数でリリース Keeper の信頼範囲を広げることもできません。ルート鍵を
 埋め込んでいないビルドは `refresh_server_keys` の要求をすべて拒否し、サーバー鍵を
 検証なしで設定するのはタグ付きビルドだけです。`make check-release-no-e2e BIN=<binary>
-ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>` はこのタグや `keeper_killseam` 付きでビルドされた
-バイナリと、そのルート鍵を持たないバイナリを拒否し、リリースワークフローがこれを実行し、`scripts/release-probe.sh` は
-起動時の拒否を確認します。`make test-e2e-tag` はタグ付きでテストを実行します。
+ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>` は `mls` タグなしのバイナリ、このタグや
+`keeper_killseam` 付きでビルドされたバイナリ、そのルート鍵を持たないバイナリを拒否し、
+`make check-release-package PKG=<package>` は `.pkg`、`.deb`、Homebrew `.tar.gz` の中の
+バイナリに同じ検査を実行します。すべての配布経路（Makefile のパッケージターゲット、
+`release-build.yml`、GoReleaser の Homebrew ビルド）はこの一つの変数（GitHub Actions では
+同名のリポジトリ変数）からルート鍵を埋め込み、配布物にこの検査を実行します。既定の鍵はなく、
+変数がなければリリースは失敗します。`scripts/release-probe.sh` は起動時の拒否を確認します。`make test-e2e-tag` はタグ付きでテストを実行します。
 
 ### KEEPER_E2E_KEYRING_FILE（複数プロセス間でのキーリング共有）
 

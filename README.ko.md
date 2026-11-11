@@ -773,9 +773,13 @@ Credentials:
 넘어가지 않고, 환경 변수로 릴리스 Keeper의 신뢰 범위를 넓힐 수도 없습니다.
 루트 키를 내장하지 않은 빌드는 `refresh_server_keys` 요청을 모두 거부하며, 서버 키를
 검증 없이 설치하는 것은 태그 빌드뿐입니다. `make check-release-no-e2e BIN=<binary>
-ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>`는 이 태그나 `keeper_killseam`으로 빌드된
-바이너리와 그 루트 키를 담지 않은 바이너리를 거부하고, 릴리스 워크플로가 이를 실행하며, `scripts/release-probe.sh`는 시작 거부를
-확인합니다. `make test-e2e-tag`는 태그를 붙여 테스트를 실행합니다.
+ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>`는 `mls` 태그 없이 빌드된 바이너리, 이 태그나
+`keeper_killseam`으로 빌드된 바이너리, 그 루트 키를 담지 않은 바이너리를 거부하고,
+`make check-release-package PKG=<package>`는 `.pkg`, `.deb`, Homebrew `.tar.gz` 안의
+바이너리에 같은 검사를 실행합니다. 모든 배포 경로(Makefile 패키지 타깃, `release-build.yml`,
+GoReleaser Homebrew 빌드)는 이 변수 하나(GitHub Actions에서는 같은 이름의 저장소 변수)에서
+루트 키를 내장하고, 배포하는 결과물에 이 검사를 실행합니다. 기본 키는 없으며 변수가 없으면
+릴리스가 실패합니다. `scripts/release-probe.sh`는 시작 거부를 확인합니다. `make test-e2e-tag`는 태그를 붙여 테스트를 실행합니다.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
