@@ -1363,9 +1363,10 @@ leaves it for the right one and two racing executions admit at most one.
 (b) The action runs through the ordinary chat gate (lease, epoch, login
 generation). (c) The challenge deadline and the decision expiry are checked
 again; if either passed, the answer is replaced by
-`chat_online_decision_refused` (state the action wrote stays written). Every
-refusal in (a) and (c) is `chat_online_decision_refused` without saying which
-check failed.
+`chat_online_output_withheld` with no data. The action ran and state it wrote
+stays written, so the App reads that state again (an unknown outcome, not a
+refusal). Every refusal in (a) is `chat_online_decision_refused` without
+saying which check failed, and means the action did not run.
 
 A decision does not replace the chat state permit, which the action still
 requires. It gates new Keeper work only: plaintext and signatures already

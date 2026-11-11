@@ -16,9 +16,15 @@ import (
 
 // ErrCodeChatOnlineDecisionRefused answers a decision that did not admit the
 // call (lv78 K2): unknown or expired challenge, a binding that does not match,
-// a signature that does not verify, or a deadline that passed before the
-// output could be returned. The App learns nothing about which check failed.
+// or a signature that does not verify. The action did not run. The App learns
+// nothing about which check failed.
 const ErrCodeChatOnlineDecisionRefused = "chat_online_decision_refused"
+
+// ErrCodeChatOnlineOutputWithheld answers a protected action that ran, but
+// whose decision deadline or expiry passed before the answer could be
+// returned (phase c). Unlike a refusal, local state the action wrote may have
+// moved, so the App reads it again. The answer carries no output.
+const ErrCodeChatOnlineOutputWithheld = "chat_online_output_withheld"
 
 const (
 	chatOnlineChallengeTTL = proto.ChatOnlineDecisionTTLSeconds * time.Second
@@ -29,6 +35,13 @@ func onlineDecisionRefused() proto.BaseResponse {
 	return proto.BaseResponse{
 		Error:     "the online decision did not admit this chat action",
 		ErrorCode: ErrCodeChatOnlineDecisionRefused,
+	}
+}
+
+func onlineOutputWithheld() proto.BaseResponse {
+	return proto.BaseResponse{
+		Error:     "the chat action ran but its answer was withheld",
+		ErrorCode: ErrCodeChatOnlineOutputWithheld,
 	}
 }
 
@@ -169,7 +182,9 @@ func (a *App) PrepareChatOnline(loginGeneration string, in proto.ChatOnlinePrepa
 // right one until its deadline. (b) The action runs through the ordinary chat
 // gate (lease, epoch, sign-in generation). (c) The challenge deadline and the
 // decision's expiry are checked again before anything is returned; if either
-// passed, the answer is withheld. State the action wrote is not rolled back.
+// passed, the answer is withheld as chat_online_output_withheld, not as a
+// refusal: state the action wrote is not rolled back, so the App must read it
+// again.
 func (a *App) ExecuteChatOnline(session, epoch, loginGeneration string, in proto.ChatOnlineExecuteRequest) proto.BaseResponse {
 	a.requestMu.Lock()
 	defer a.requestMu.Unlock()
@@ -219,7 +234,7 @@ func (a *App) ExecuteChatOnline(session, epoch, loginGeneration string, in proto
 	}
 	now = a.Clock()
 	if !now.Before(entry.deadline) || now.Unix() >= decision.ExpiresAt {
-		withheld := onlineDecisionRefused()
+		withheld := onlineOutputWithheld()
 		withheld.RequestID = response.RequestID
 		return withheld
 	}
