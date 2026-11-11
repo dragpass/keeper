@@ -2,6 +2,7 @@ package proto
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -62,7 +63,10 @@ func TestMLSAccountOnlineDecisionValidateTakesOnlyTheFixedLifetimeANamedVersionA
 		"version 0":           func(d *MLSAccountOnlineDecision) { d.ServerKeyVersion = 0 },
 		"version over uint32": func(d *MLSAccountOnlineDecision) { d.ServerKeyVersion = math.MaxUint32 + 1 },
 		"no target":           func(d *MLSAccountOnlineDecision) { d.Target = "" },
-		"upper-case account":  func(d *MLSAccountOnlineDecision) { d.AccountID = "AAAAAAAA-1111-4111-8111-111111111111" },
+		"target too long": func(d *MLSAccountOnlineDecision) {
+			d.Target = strings.Repeat("x", MLSAccountOnlineTargetMaxLen+1)
+		},
+		"upper-case account": func(d *MLSAccountOnlineDecision) { d.AccountID = "AAAAAAAA-1111-4111-8111-111111111111" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := valid

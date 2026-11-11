@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
@@ -21,6 +22,36 @@ type accountOnlineScope struct {
 	OrgID            string `json:"org_id"`
 	RemovedAccountID string `json:"removed_account_id"`
 	AdminAccountID   string `json:"admin_account_id"`
+	// mls_leaf_handover_sign: what the handover statement signs besides
+	// this device's own leaf.
+	NewDeclaration struct {
+		AccountID               string `json:"account_id"`
+		DeviceID                string `json:"device_id"`
+		SignatureKeyFingerprint string `json:"signature_key_fingerprint"`
+	} `json:"new_declaration"`
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// MLSHandoverOnlineTarget names one takeover request together with the
+// content a handover for it signs: the new device, its leaf key fingerprint
+// and the request's expiry. The API derives the same string from its stored
+// request (ariadne mlsHandoverOnlineTarget), so a decision for one request
+// admits no handover of other content (lv78 A1b review A1).
+func MLSHandoverOnlineTarget(takeover, newDevice, newFingerprint string, expiresAt int64) string {
+	return "takeover:" + takeover + "/new_device:" + newDevice + "/new_fp:" + newFingerprint +
+		"/expires_at:" + strconv.FormatInt(expiresAt, 10)
+}
+
+func isLowerHex64(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // accountOnlineTarget derives the decision's target from the request, against
@@ -51,12 +82,14 @@ func accountOnlineTarget(action string, request []byte, takeover, account, devic
 		return "device:" + scope.DeviceID, true
 	case proto.ActionMLSLeafHandoverSign:
 		// The handover request does not name its takeover request; the App
-		// does, and the API checks this device holds the live declaration
-		// it answers.
-		if scope.AccountID != account || !proto.ChatOnlineUUID(takeover) {
+		// does. The target also carries what the handover signs, which the
+		// API compares with the request it stores.
+		decl := scope.NewDeclaration
+		if scope.AccountID != account || decl.AccountID != account || !proto.ChatOnlineUUID(takeover) ||
+			!proto.ChatOnlineUUID(decl.DeviceID) || !isLowerHex64(decl.SignatureKeyFingerprint) || scope.ExpiresAt <= 0 {
 			return "", false
 		}
-		return "takeover:" + takeover, true
+		return MLSHandoverOnlineTarget(takeover, decl.DeviceID, decl.SignatureKeyFingerprint, scope.ExpiresAt), true
 	case proto.OrgMemberRemovalSign:
 		if scope.AdminAccountID != account || !proto.ChatOnlineUUID(scope.OrgID) || !proto.ChatOnlineUUID(scope.RemovedAccountID) {
 			return "", false

@@ -89,6 +89,11 @@ func MLSAccountOnlineRequestCommitment(key []byte, action, target string, reques
 // Validate checks the decision's shape before anything is compared or
 // verified: a 32-byte challenge, lowercase UUID identities, a target, a
 // commitment, the fixed lifetime and a named key version.
+// MLSAccountOnlineTargetMaxLen bounds a decision's target. The longest is a
+// handover's, which names the takeover request, the new device, its key
+// fingerprint and the request's expiry (187 bytes for a ten-digit expiry).
+const MLSAccountOnlineTargetMaxLen = 256
+
 func (d MLSAccountOnlineDecision) Validate() error {
 	b, err := base64.RawURLEncoding.DecodeString(d.Challenge)
 	if err != nil || len(b) != 32 || base64.RawURLEncoding.EncodeToString(b) != d.Challenge {
@@ -102,7 +107,7 @@ func (d MLSAccountOnlineDecision) Validate() error {
 	if err := requireMessageDigest(d.RequestCommitment, "decision.request_commitment"); err != nil {
 		return err
 	}
-	if d.Action == "" || d.Target == "" || len(d.Target) > 128 || d.SessionIssuedAtNanos <= 0 || d.IssuedAt <= 0 ||
+	if d.Action == "" || d.Target == "" || len(d.Target) > MLSAccountOnlineTargetMaxLen || d.SessionIssuedAtNanos <= 0 || d.IssuedAt <= 0 ||
 		d.ExpiresAt-d.IssuedAt != MLSAccountOnlineDecisionTTLSeconds ||
 		d.ServerKeyVersion == 0 || d.ServerKeyVersion > math.MaxUint32 {
 		return newValidationError("decision", "invalid action, target, validity or version")

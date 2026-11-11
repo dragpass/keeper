@@ -21,7 +21,26 @@ const (
 	accountOnlineOtherDevice = "d7777777-4444-4444-8444-444444444444"
 	accountOnlineRemoved     = "a8888888-1111-4111-8111-111111111111"
 	accountOnlineTakeover    = "f9999999-6666-4666-8666-666666666666"
+	// The new declaration's key and the request's expiry, as the stored
+	// takeover request has them.
+	accountOnlineNewFP          = "abababababababababababababababababababababababababababababababab"
+	accountOnlineHandoverExpiry = int64(1900000000)
 )
+
+// handoverRequest is an mls_leaf_handover_sign request for a new declaration
+// of this account. Its declaration is not signed, so the handler refuses it:
+// reaching that refusal shows the gate admitted the call.
+func handoverRequest(newDevice, newFP string, expiresAt int64) json.RawMessage {
+	return rawJSON(map[string]any{
+		"account_id": onlineAccount,
+		"new_declaration": map[string]any{
+			"account_id": onlineAccount, "device_id": newDevice, "signature_key": "AA==",
+			"signature_key_fingerprint": newFP, "not_before": 1, "not_after": 2,
+			"reason": "rotate", "signature": "AA==",
+		},
+		"expires_at": expiresAt,
+	})
+}
 
 // accountCall is one account-level call: the action, its exact request, the
 // takeover request the App names (handover only) and the target Keeper must
@@ -51,9 +70,9 @@ func accountCalls() map[string]accountCall {
 			"challenge_token": "c", "server_signature": "AA==", "server_key_version": 1,
 			"account_id": onlineAccount, "device_id": onlineDevice, "count": 1,
 		}), target: "device:" + onlineDevice},
-		"mls_leaf_handover_sign": {action: "mls_leaf_handover_sign", request: rawJSON(map[string]any{
-			"account_id": onlineAccount, "new_declaration": map[string]any{}, "expires_at": 1,
-		}), takeover: accountOnlineTakeover, target: "takeover:" + accountOnlineTakeover},
+		"mls_leaf_handover_sign": {action: "mls_leaf_handover_sign", request: handoverRequest(accountOnlineOtherDevice, accountOnlineNewFP, accountOnlineHandoverExpiry),
+			takeover: accountOnlineTakeover, target: "takeover:" + accountOnlineTakeover + "/new_device:" + accountOnlineOtherDevice +
+				"/new_fp:" + accountOnlineNewFP + "/expires_at:1900000000"},
 		"mls_device_revoke_sign": {action: "mls_device_revoke_sign", request: rawJSON(map[string]any{
 			"account_id": onlineAccount, "device_id": accountOnlineOtherDevice,
 		}), target: "device:" + accountOnlineOtherDevice},
@@ -257,6 +276,14 @@ func TestAccountPrepareRefusesACallNoDecisionCouldAdmit(t *testing.T) {
 		c.request = rawJSON(r)
 		return c
 	}
+	withDeclaration := func(field string, value any) accountCall {
+		c := calls["mls_leaf_handover_sign"]
+		var r map[string]any
+		_ = json.Unmarshal(c.request, &r)
+		r["new_declaration"].(map[string]any)[field] = value
+		c.request = rawJSON(r)
+		return c
+	}
 	noTakeover := calls["mls_leaf_handover_sign"]
 	noTakeover.takeover = ""
 	badTakeover := calls["mls_leaf_handover_sign"]
@@ -267,19 +294,23 @@ func TestAccountPrepareRefusesACallNoDecisionCouldAdmit(t *testing.T) {
 		call   accountCall
 		before func(*onlineFixture) error
 	}{
-		"a chat action":                       {call: accountCall{action: "mls_encrypt", request: onlineRequest(onlineConv)}},
-		"an action without issuer authority":  {call: accountCall{action: "mls_leaf_abort", request: rawJSON(map[string]any{})}},
-		"declare for another device":          {call: with(calls["mls_leaf_declare"], "device_id", accountOnlineOtherDevice)},
-		"declare for another account":         {call: with(calls["mls_leaf_declare"], "account_id", accountOnlineRemoved)},
-		"KeyPackages for another device":      {call: with(calls["mls_key_package_generate"], "device_id", accountOnlineOtherDevice)},
-		"revocation for another account":      {call: with(calls["mls_device_revoke_sign"], "account_id", accountOnlineRemoved)},
-		"revocation of a malformed device":    {call: with(calls["mls_device_revoke_sign"], "device_id", "D7777777-4444-4444-8444-444444444444")},
-		"removal signed for another admin":    {call: with(calls["org_member_removal_sign"], "admin_account_id", accountOnlineRemoved)},
-		"handover for another account":        {call: with(calls["mls_leaf_handover_sign"], "account_id", accountOnlineRemoved)},
-		"handover without its takeover":       {call: noTakeover},
-		"handover with a malformed takeover":  {call: badTakeover},
-		"a takeover named for another action": {call: strayTakeover},
-		"a request that is not a JSON object": {call: accountCall{action: "mls_leaf_promote", request: json.RawMessage(`[]`)}},
+		"a chat action":                             {call: accountCall{action: "mls_encrypt", request: onlineRequest(onlineConv)}},
+		"an action without issuer authority":        {call: accountCall{action: "mls_leaf_abort", request: rawJSON(map[string]any{})}},
+		"declare for another device":                {call: with(calls["mls_leaf_declare"], "device_id", accountOnlineOtherDevice)},
+		"declare for another account":               {call: with(calls["mls_leaf_declare"], "account_id", accountOnlineRemoved)},
+		"KeyPackages for another device":            {call: with(calls["mls_key_package_generate"], "device_id", accountOnlineOtherDevice)},
+		"revocation for another account":            {call: with(calls["mls_device_revoke_sign"], "account_id", accountOnlineRemoved)},
+		"revocation of a malformed device":          {call: with(calls["mls_device_revoke_sign"], "device_id", "D7777777-4444-4444-8444-444444444444")},
+		"removal signed for another admin":          {call: with(calls["org_member_removal_sign"], "admin_account_id", accountOnlineRemoved)},
+		"handover for another account":              {call: with(calls["mls_leaf_handover_sign"], "account_id", accountOnlineRemoved)},
+		"handover without its takeover":             {call: noTakeover},
+		"handover with a malformed takeover":        {call: badTakeover},
+		"handover of another account's declaration": {call: withDeclaration("account_id", accountOnlineRemoved)},
+		"handover of a malformed new device":        {call: withDeclaration("device_id", "D7777777-4444-4444-8444-444444444444")},
+		"handover of a malformed new key":           {call: withDeclaration("signature_key_fingerprint", strings.Repeat("AB", 32))},
+		"handover without its expiry":               {call: with(calls["mls_leaf_handover_sign"], "expires_at", 0)},
+		"a takeover named for another action":       {call: strayTakeover},
+		"a request that is not a JSON object":       {call: accountCall{action: "mls_leaf_promote", request: json.RawMessage(`[]`)}},
 		"signed out": {call: calls["mls_leaf_promote"], before: func(f *onlineFixture) error {
 			_, _, err := keychain.SignOutAccountBinding(f.store)
 			return err
@@ -430,5 +461,33 @@ func TestAccountOutputIsWithheldWhenTheDeadlinePassesDuringTheCall(t *testing.T)
 	response := f.executeAccount(call, call.request, d)
 	if !ran || response.Success || response.ErrorCode != ErrCodeChatOnlineOutputWithheld || response.Data != nil {
 		t.Fatalf("ran=%v, want %s without data, got %+v", ran, ErrCodeChatOnlineOutputWithheld, response)
+	}
+}
+
+// lv78 A1b review A1: the API issues a handover decision for the takeover
+// request it stores, whose new device, new key and expiry it knows. That
+// decision admits only a handover of exactly that content: not one for
+// another device declaration of the same account, another key, or another
+// expiry. The API's target is what Keeper derives from the stored request.
+func TestHandoverDecisionAdmitsOnlyTheStoredRequestsContent(t *testing.T) {
+	stored := accountCalls()["mls_leaf_handover_sign"]
+	const secondDevice = "d6666666-4444-4444-8444-444444444444"
+	const secondFP = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	for name, request := range map[string]json.RawMessage{
+		"another device declaration":    handoverRequest(secondDevice, secondFP, accountOnlineHandoverExpiry),
+		"another key of the new device": handoverRequest(accountOnlineOtherDevice, secondFP, accountOnlineHandoverExpiry),
+		"another expires_at":            handoverRequest(accountOnlineOtherDevice, accountOnlineNewFP, accountOnlineHandoverExpiry+300),
+	} {
+		t.Run(name, func(t *testing.T) {
+			issuerTarget := newOnlineFixture(t).prepareAccount(t, stored).Target
+			f := newOnlineFixture(t)
+			changed := stored
+			changed.request = request
+			prepared := f.prepareAccount(t, changed)
+			forStored := stored
+			forStored.target = issuerTarget
+			d := f.decideAccount(t, forStored, prepared)
+			refusedBeforeTheAccountAction(t, func() proto.BaseResponse { return f.executeAccount(changed, changed.request, d) })
+		})
 	}
 }
