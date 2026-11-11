@@ -13,9 +13,10 @@
 //   - Tests: a keeper_e2e build falls back to the
 //     `KEEPER_ROOT_PUBLIC_KEY_BASE64` env var (root_pubkey_e2e.go); a release
 //     build never reads it and refuses to start when it is set (main)
-//   - If both are empty, RootMissing mode (skip signature verification,
-//     fingerprint TOFU pin) — a safety net for compatibility and gradual
-//     rollout.
+//   - If both are empty, a release build refuses every refresh_server_keys
+//     request and keeps the keys it already pins. Only a keeper_e2e build
+//     installs keys unverified (UnverifiedServerKeysAllowed), so a test stack
+//     can run without a root key.
 //
 // **Fingerprint format**: `"sha256:" + hex(sha256(pemBytes))`. The server
 // hashes the same input with the same function — any format drift causes a
@@ -47,7 +48,8 @@ import (
 
 // rootPublicKeyPEMBase64 is the Base64 of the Root pubkey PEM injected at
 // build time via -ldflags. If empty, a keeper_e2e build falls back to an env
-// var (rootPublicKeyOverride). If that is also empty, RootMissing mode.
+// var (rootPublicKeyOverride). If that is also empty, no root key: see
+// UnverifiedServerKeysAllowed.
 //
 // **ldflags injection path**:
 //

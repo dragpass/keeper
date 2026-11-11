@@ -281,3 +281,41 @@ func TestHandleRefreshServerKeys_VersionedChallengeAfterRefresh(t *testing.T) {
 	// inside this package only, not for external tests.
 	_ = bootstrapServerKeyVersionForTest
 }
+
+func TestHandleRefreshServerKeys_RootMissing_SkipsVerification(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	resetServerKeySlots(t, store)
+
+	// Root not embedded: a keeper_e2e build accepts the keys unverified so a
+	// test stack can run without a root key. A release build refuses
+	// (refresh_server_keys_release_test.go).
+	t.Setenv("KEEPER_ROOT_PUBLIC_KEY_BASE64", "")
+
+	pem := "-----BEGIN PUBLIC KEY-----\nFREE\n-----END PUBLIC KEY-----\n"
+	req := RefreshServerKeysRequest{
+		Keys: []SystemServerKeyEntry{
+			{
+				Version:      1,
+				PublicKeyPEM: pem,
+				IssuedAt:     time.Unix(1700000000, 0),
+				ExpiresAt:    time.Unix(1800000000, 0),
+				Status:       "active",
+				// no signature
+			},
+		},
+		RootPublicKeyFingerprint: "sha256:server-only-pin",
+	}
+
+	resp := HandleRefreshServerKeys(deps, req)
+	if !resp.Success {
+		t.Fatalf("root-missing should accept unsigned response, got error: %s", resp.Error)
+	}
+	data := resp.Data.(RefreshServerKeysResponseData)
+	if data.RootVerified {
+		t.Errorf("root_verified should be false in missing-root mode")
+	}
+	pinned, _ := keychain.GetRootPublicKeyFingerprint(store)
+	if pinned != "sha256:server-only-pin" {
+		t.Errorf("fingerprint should be TOFU-pinned, got %q", pinned)
+	}
+}

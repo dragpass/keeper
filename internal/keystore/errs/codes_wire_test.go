@@ -63,6 +63,8 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeChatMLSStatementUnverified, "CHAT_MLS_STATEMENT_UNVERIFIED"},
 		{ErrCodeChatMLSRolesUnsupported, "CHAT_MLS_ROLES_UNSUPPORTED"},
 		{ErrCodeChatMLSHandoverInvalid, "CHAT_MLS_HANDOVER_INVALID"},
+		{ErrCodeChatMLSLeafPendingChanged, "CHAT_MLS_LEAF_PENDING_CHANGED"},
+		{ErrCodeChatMLSLeafBindingStale, "CHAT_MLS_LEAF_BINDING_STALE"},
 	}
 	seen := map[ErrorCode]bool{}
 	for _, p := range pinned {

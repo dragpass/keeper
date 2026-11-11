@@ -10,3 +10,8 @@ import "os"
 const rootPublicKeyEnvVar = "KEEPER_ROOT_PUBLIC_KEY_BASE64"
 
 func rootPublicKeyOverride() string { return os.Getenv(rootPublicKeyEnvVar) }
+
+// UnverifiedServerKeysAllowed lets a test stack without a root key install
+// the server keys it serves. Only a keeper_e2e build has this mode; the
+// release check rejects that tag.
+func UnverifiedServerKeysAllowed() bool { return true }

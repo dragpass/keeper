@@ -23,8 +23,9 @@ const handoverSignClockSkewSeconds = 60
 //
 // What it checks before signing, all against what this device holds:
 //
-//   - this device has a usable active leaf, for account_id. That leaf is the
-//     one every group tree holds for this account, and its key signs.
+//   - this device has a usable active leaf, for account_id, and it is the
+//     leaf old_signature_key_fingerprint names. That leaf is the one every
+//     group tree holds for this account, and its key signs.
 //   - new_declaration is a rotate for account_id, for another device, whose
 //     signature verifies under the account public key this device holds. A
 //     server that swaps in a declaration of another account key, or of this
@@ -77,6 +78,15 @@ func HandleMLSLeafHandoverSign(d Deps, req proto.MLSLeafHandoverSignRequest) pro
 		}
 		if active.DeviceID == decl.DeviceID {
 			resp = refuse("the new declaration is for this device itself")
+			return nil
+		}
+		// The leaf named by the request is the one the account decision was
+		// issued for (lv78 old leaf binding). A leaf replaced since then
+		// signs nothing; the check sits under the lock the signing key is
+		// read under.
+		if activeFP, err := crypto.MLSLeafSignatureKeyFingerprint(active.PublicKey); err != nil ||
+			activeFP != req.OldSignatureKeyFingerprint {
+			resp = refuse("the active leaf is not the one the request names")
 			return nil
 		}
 		resp = signHandover(active, decl, now, req.ExpiresAt)

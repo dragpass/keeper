@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
+	"github.com/dragpass/keeper/internal/keystore/errs"
+	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
 
@@ -66,8 +68,16 @@ const (
 )
 
 // gatedFrame is an action the lease guards that touches the keychain when it
-// runs, so a refusal is visible as zero store calls.
-const gatedFrame = `{"action":"mls_leaf_abort","request_id":"r-1","payload":{}}`
+// runs, so a refusal is visible as zero store calls. These apps have no
+// account binding, so the handler, once reached, answers with its own
+// binding refusal (gatedActionRan).
+const gatedFrame = `{"action":"mls_leaf_abort","request_id":"r-1","payload":{"account_id":"a1111111-1111-4111-8111-111111111111",` +
+	`"binding_generation":1,"pending_signature_key_fingerprint":"0000000000000000000000000000000000000000000000000000000000000000"}}`
+
+// gatedActionRan reports whether gatedFrame got past the gate to its handler.
+func gatedActionRan(response proto.BaseResponse) bool {
+	return response.ErrorCode == string(errs.ErrCodeChatMLSLeafBindingStale)
+}
 
 func farSession(*leaseClock) time.Duration { return 10 * time.Minute }
 
@@ -95,7 +105,7 @@ func TestChatRuntimeClaimRenewRebindAndRelease(t *testing.T) {
 	if response := app.HandleAppRequest(sessionA, claim.Epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("the old session still holds the lease: %+v", response)
 	}
-	if response := app.HandleAppRequest(sessionA2, claim.Epoch, []byte(gatedFrame)); !response.Success {
+	if response := app.HandleAppRequest(sessionA2, claim.Epoch, []byte(gatedFrame)); !gatedActionRan(response) {
 		t.Fatalf("the rebound session cannot run a gated action: %+v", response)
 	}
 
@@ -137,7 +147,7 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 				t.Fatalf("%s ran although it was refused", action)
 			}
 		}
-		for _, action := range []string{"ping", "org_member_removal_sign", "getpublickey", "peer_key_pin_get", "rotate_user_keypair_status"} {
+		for _, action := range []string{"ping", "getpublickey", "peer_key_pin_get", "rotate_user_keypair_status"} {
 			response := app.HandleRequest([]byte(`{"action":"` + action + `"}`))
 			if response.ErrorCode == ErrCodeChatAppCallerRequired || response.ErrorCode == ErrCodeChatRuntimeBusy {
 				t.Fatalf("%s was refused to the Extension (leased=%v): %+v", action, leased, response)
@@ -148,7 +158,8 @@ func TestChatRuntimeRefusesExtensionAppOnlyActionsAndRunsNothing(t *testing.T) {
 
 // The App-only set is pinned: every gated action but the two revocations,
 // the room name display open, the Secure Message seal and display, the
-// organization emergency code seed derivation, the App session refresh
+// organization emergency code seed derivation, the organization member
+// removal statement (lv78), the App session refresh
 // signature, account entry, and the actions only App routes call
 // (appRouteOnlyActions).
 func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
@@ -178,7 +189,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"mls_leaf_status", "mls_leave_request_sign",
 		"mls_mark_sent", "mls_process", "mls_rejoin_request_sign",
 		"mls_room_name_open", "mls_room_name_seal",
-		"org_emergency_seed_derive",
+		"org_emergency_seed_derive", "org_member_removal_sign",
 		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number", "personal_dek_bind",
 		"recovery_session_close",
 		"rotate_user_keypair_prepare", "rotate_user_keypair_promote",
@@ -214,7 +225,7 @@ func TestChatRuntimeAppCallerNeedsTheLeaseForGatedActions(t *testing.T) {
 		t.Fatalf("a caller with no session ran a gated action: %+v", response)
 	}
 	epoch := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "").Epoch
-	if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
+	if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !gatedActionRan(response) {
 		t.Fatalf("gated action with the lease: %+v", response)
 	}
 	if response := app.HandleAppRequest(sessionB, epoch, []byte(gatedFrame)); response.ErrorCode != ErrCodeChatRuntimeLeaseRequired {
@@ -223,8 +234,8 @@ func TestChatRuntimeAppCallerNeedsTheLeaseForGatedActions(t *testing.T) {
 }
 
 func TestChatRuntimeExtensionRevocationBlocksAnAppClaimForItsWindow(t *testing.T) {
-	app, clock, _ := newLeaseApp(t)
-	if response := app.HandleRequest([]byte(purgeFrame)); !response.Success {
+	app, clock, store := newLeaseApp(t)
+	if response := app.HandleRequest(purgeFrameWith(t, bindPurgeOwner(t, store))); !response.Success {
 		t.Fatalf("Extension purge with no lease: %+v", response)
 	}
 	claim := app.ClaimChatRuntime(holderA, sessionA, farSession(clock), "")
@@ -285,7 +296,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 	app3, clock3, _ := newLeaseApp(t)
 	epoch3 := app3.ClaimChatRuntime(holderA, sessionA, farSession(clock3), "").Epoch
 	app3.DropChatRuntimeSession(sessionB)
-	if response := app3.HandleAppRequest(sessionA, epoch3, []byte(gatedFrame)); !response.Success {
+	if response := app3.HandleAppRequest(sessionA, epoch3, []byte(gatedFrame)); !gatedActionRan(response) {
 		t.Fatalf("dropping another session dropped the lease: %+v", response)
 	}
 	app3.DropChatRuntimeSession(sessionA)
@@ -367,7 +378,7 @@ func TestChatRuntimeClaimAndExtensionCallsNeverBothSucceed(t *testing.T) {
 			go func() {
 				defer done.Done()
 				start.Wait()
-				if app.HandleRequest([]byte(gatedFrame)).Success {
+				if gatedActionRan(app.HandleRequest([]byte(gatedFrame))) {
 					extensionRan.Add(1)
 				}
 			}()

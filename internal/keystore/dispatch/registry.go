@@ -38,6 +38,10 @@ type action struct {
 	// revokes is the revocation reason of a gated action that erases chat
 	// state: it moves the chat runtime epoch for any caller.
 	revokes string
+	// revokesOnErase defers that revocation until the handler reports it
+	// erased the state it named (lv78): a purge that matched no current
+	// sign-in must not end the current sign-in's runtime.
+	revokesOnErase bool
 	// mcp marks the actions `@dragpass/mcp` and `dragpass-run` call.
 	mcp bool
 	// plaintext marks an action whose response carries decrypted user data.
@@ -50,6 +54,14 @@ type action struct {
 	// a Native Messaging frame, for the Extension's E2E organization
 	// fixtures. A release build ignores it (nativeFixturesAllowed).
 	e2eNativeFixture bool
+	// onlineDecision marks a protected App MLS action that runs only with a
+	// verified, unused API online decision for this call (lv78 D1). The App
+	// lease and the chat state permit alone do not admit it.
+	onlineDecision bool
+	// accountOnlineDecision marks an account-level MLS action that uses the
+	// device or leaf key and runs only with a verified, unused API account
+	// online decision for this call (lv78 A1b).
+	accountOnlineDecision bool
 }
 
 type chatRuntimeClass uint8
@@ -76,6 +88,13 @@ const (
 func (a action) gated() action    { a.chat = chatGated; a.appOnly = true; return a }
 func (a action) chatFree() action { a.chat = chatFree; return a }
 
+// revokingOnErase is revoking, applied only after the handler erased state.
+func (a action) revokingOnErase(reason string) action {
+	a = a.revoking(reason)
+	a.revokesOnErase = true
+	return a
+}
+
 func (a action) revoking(reason string) action {
 	a.chat = chatGated
 	a.revokes = reason
@@ -89,6 +108,14 @@ func (a action) appOnlyAction() action { a.appOnly = true; return a }
 // e2eNativeFixture marks an App-only action the Extension's E2E fixtures may
 // still run over Native Messaging in a keeper_e2e build.
 func (a action) e2eFixtureOnNative() action { a.e2eNativeFixture = true; return a }
+
+// needsOnlineDecision marks an action that runs only through the online
+// decision path (lv78 K3).
+func (a action) needsOnlineDecision() action { a.onlineDecision = true; return a }
+
+// needsAccountOnlineDecision marks an account-level action that runs only
+// through the account online decision path (lv78 A1b).
+func (a action) needsAccountOnlineDecision() action { a.accountOnlineDecision = true; return a }
 
 func (a action) onMCP() action            { a.mcp = true; return a }
 func (a action) returnsPlaintext() action { a.plaintext = true; return a }
@@ -182,6 +209,61 @@ func buildRegistry(fragments []actionFragment) map[string]action {
 func ChatRuntimeClass(name string) (gated bool, revocation string) {
 	entry := actionRegistry[name]
 	return entry.chat == chatGated, entry.revokes
+}
+
+// ChatRuntimeRevocationDeferred reports whether action's revocation waits for
+// its handler's answer (see RevocationAfter) instead of happening at admission.
+func ChatRuntimeRevocationDeferred(name string) bool {
+	return actionRegistry[name].revokesOnErase
+}
+
+// RevocationAfter is the revocation reason a deferred-revocation action earns
+// with resp: a successful purge that reports it erased state revokes, and so
+// does a failed purge whose erase steps ran (erase_incomplete), because the
+// state it named is no longer intact.
+func RevocationAfter(name string, resp proto.BaseResponse) string {
+	entry := actionRegistry[name]
+	if !entry.revokesOnErase {
+		return ""
+	}
+	data, ok := resp.Data.(proto.ChatStatePurgeResponseData)
+	if !ok {
+		return ""
+	}
+	if (resp.Success && data.Purged) || (!resp.Success && data.EraseIncomplete) {
+		return entry.revokes
+	}
+	return ""
+}
+
+// OnlineDecisionRequired reports whether action runs only with a verified API
+// online decision for the call.
+func OnlineDecisionRequired(name string) bool {
+	return actionRegistry[name].onlineDecision
+}
+
+// OnlineDecisionActions returns the actions that need an online decision, sorted.
+func OnlineDecisionActions() []string {
+	return actionNames(func(a action) bool { return a.onlineDecision })
+}
+
+// AccountOnlineDecisionRequired reports whether action runs only with a
+// verified API account-level online decision for the call (lv78 A1b).
+func AccountOnlineDecisionRequired(name string) bool {
+	return actionRegistry[name].accountOnlineDecision
+}
+
+// AccountOnlineDecisionActions returns the actions that need an account-level
+// online decision, sorted.
+func AccountOnlineDecisionActions() []string {
+	return actionNames(func(a action) bool { return a.accountOnlineDecision })
+}
+
+// NativeFixtureExempt reports whether a Native Messaging frame may run action
+// without its online decision: only in a keeper_e2e build, only for an action
+// marked as an Extension E2E fixture. A release build never exempts one.
+func NativeFixtureExempt(name string) bool {
+	return actionRegistry[name].e2eNativeFixture && nativeFixturesAllowed
 }
 
 // AppOnly reports whether only the authenticated App caller may run action.

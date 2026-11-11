@@ -67,6 +67,11 @@ var (
 	// message. Refusing is the point: two plaintexts at one position is the
 	// key-reuse failure this package is built to prevent.
 	ErrPositionTaken = errors.New("chain position already carries a message")
+
+	// ErrPurgeIncomplete wraps the failure of a purge whose steps ran: some
+	// of the owner's state may already be gone, so it can no longer be
+	// treated as intact even though the erase did not finish.
+	ErrPurgeIncomplete = errors.New("chat state purge ran but did not finish")
 )
 
 const (

@@ -229,7 +229,9 @@ func PurgeAll(secrets keychain.SecretStore) (int, error) {
 // stopping early leaves more behind than carrying on does: it would skip the
 // seal key, which is the step that makes whatever survived unopenable. The
 // caller is told what failed and every step is idempotent, so a retry costs
-// nothing.
+// nothing. Any failure here is wrapped in ErrPurgeIncomplete: by the time it
+// is reported the other steps have run, so the caller must treat the state as
+// already broken, not as untouched.
 func purgeOwner(secrets keychain.SecretStore, root, tag string) (int, error) {
 	dir := filepath.Join(root, tag)
 	conversations, err := conversationTagsIn(dir)
@@ -247,7 +249,10 @@ func purgeOwner(secrets keychain.SecretStore, root, tag string) (int, error) {
 		!errors.Is(err, keychain.ErrSecretNotFound) {
 		failures = append(failures, err)
 	}
-	return removed, errors.Join(failures...)
+	if err := errors.Join(failures...); err != nil {
+		return removed, fmt.Errorf("%w: %w", ErrPurgeIncomplete, err)
+	}
+	return removed, nil
 }
 
 // ────────────────────────────────────────────────────────────────────────

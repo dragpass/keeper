@@ -357,7 +357,12 @@ type ChatStatePurgeRequest struct {
 }
 
 func (r ChatStatePurgeRequest) Validate() error {
-	if len(r.ExpectedGeneration) > 0 {
+	// lv78: a purge must name the sign-in it belongs to. Without it a late or
+	// misdirected request would erase a newer sign-in's state.
+	if len(r.ExpectedGeneration) == 0 {
+		return newValidationError("expected_generation", "is required")
+	}
+	{
 		var value string
 		if err := json.Unmarshal(r.ExpectedGeneration, &value); err != nil || value == "" {
 			return newValidationError("expected_generation", "must be a nonempty generation")
@@ -380,4 +385,8 @@ func (r ChatStatePurgeRequest) ExpectedGenerationValue() string {
 type ChatStatePurgeResponseData struct {
 	Purged               bool `json:"purged"`
 	RemovedConversations int  `json:"removed_conversations"`
+	// EraseIncomplete rides on a failed purge whose erase steps ran: part of
+	// the state may be gone, so the runtime working on it is revoked even
+	// though the purge did not finish.
+	EraseIncomplete bool `json:"erase_incomplete,omitempty"`
 }

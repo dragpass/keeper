@@ -307,18 +307,41 @@ type MLSLeafPromoteResponseData struct {
 	Fingerprint string `json:"signature_key_fingerprint"`
 }
 
-type MLSLeafAbortRequest struct{}
+// MLSLeafAbortRequest names the pending leaf to discard and the sign-in the
+// caller saw it under: the account binding's account and generation, as
+// mls_leaf_status reported them. The Keeper deletes the pending entry only
+// while that binding is current and the entry is still the one named.
+type MLSLeafAbortRequest struct {
+	AccountID                      string `json:"account_id"`
+	BindingGeneration              uint64 `json:"binding_generation"`
+	PendingSignatureKeyFingerprint string `json:"pending_signature_key_fingerprint"`
+}
 
-func (r MLSLeafAbortRequest) Validate() error { return nil }
+func (r MLSLeafAbortRequest) Validate() error {
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if r.BindingGeneration == 0 {
+		return newValidationError("binding_generation", "is required")
+	}
+	return requireKeyFingerprint(r.PendingSignatureKeyFingerprint, "pending_signature_key_fingerprint")
+}
 
-// MLSLeafAbortResponseData — Aborted is false when there was no pending entry.
+// MLSLeafAbortResponseData — Aborted is true: a refusal is an error, not
+// aborted false.
 type MLSLeafAbortResponseData struct {
 	Aborted bool `json:"aborted"`
 }
 
-type MLSLeafStatusRequest struct{}
+// MLSLeafStatusRequest names the account the caller is signed in as. The
+// Keeper answers only while that account's binding is current.
+type MLSLeafStatusRequest struct {
+	AccountID string `json:"account_id"`
+}
 
-func (r MLSLeafStatusRequest) Validate() error { return nil }
+func (r MLSLeafStatusRequest) Validate() error {
+	return requireMessageUUID(r.AccountID, "account_id")
+}
 
 // MLSLeafStatusResponseData names the entries by their signature key
 // fingerprints and validity windows, and nothing else. HasActive is false for
@@ -329,7 +352,12 @@ func (r MLSLeafStatusRequest) Validate() error { return nil }
 // ariadne refuses a retried declaration once its not_before is more than 24
 // hours old or its not_after has passed, and from then on the only way forward
 // is mls_leaf_abort and a fresh declare. The Keeper never aborts on its own.
+//
+// AccountID and BindingGeneration name the sign-in the answer is for; an
+// mls_leaf_abort decided on this answer carries them back.
 type MLSLeafStatusResponseData struct {
+	AccountID          string `json:"account_id"`
+	BindingGeneration  uint64 `json:"binding_generation"`
 	HasActive          bool   `json:"has_active"`
 	ActiveFingerprint  string `json:"active_signature_key_fingerprint"`
 	ActiveNotAfter     int64  `json:"active_not_after"`

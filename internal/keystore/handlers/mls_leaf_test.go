@@ -133,13 +133,50 @@ func leafSlots(t *testing.T, store keychain.SecretStore) [2]string {
 	return out
 }
 
+// bindLeafTestAccount signs this Keeper in as the leaf tests' account on the
+// leaf tests' device, which mls_leaf_status and mls_leaf_abort require
+// (lv78), and returns the binding generation. Idempotent.
+func bindLeafTestAccount(t *testing.T, store keychain.SecretStore) uint64 {
+	t.Helper()
+	if err := store.Set(config.Service, config.DeviceID, leafTestDeviceID); err != nil {
+		t.Fatal(err)
+	}
+	binding, _, err := keychain.SetAccountBinding(store, leafTestAccountID, "alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding.Generation
+}
+
+func leafStatusRequest() proto.MLSLeafStatusRequest {
+	return proto.MLSLeafStatusRequest{AccountID: leafTestAccountID}
+}
+
+// leafStatus answers for the bound account and strips the binding fields,
+// which TestMLSLeafStatus binding tests pin, so callers compare slots only.
 func leafStatus(t *testing.T, deps Deps) proto.MLSLeafStatusResponseData {
 	t.Helper()
-	resp := HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{})
+	generation := bindLeafTestAccount(t, deps.Store)
+	resp := HandleMLSLeafStatus(deps, leafStatusRequest())
 	if !resp.Success {
 		t.Fatalf("mls_leaf_status failed: %s", resp.Error)
 	}
-	return resp.Data.(proto.MLSLeafStatusResponseData)
+	data := resp.Data.(proto.MLSLeafStatusResponseData)
+	if data.AccountID != leafTestAccountID || data.BindingGeneration != generation {
+		t.Fatalf("status names binding %s/%d, want %s/%d", data.AccountID, data.BindingGeneration, leafTestAccountID, generation)
+	}
+	data.AccountID, data.BindingGeneration = "", 0
+	return data
+}
+
+// abortPending aborts the pending entry by its fingerprint, for the bound
+// account at its current generation.
+func abortPending(t *testing.T, deps Deps, fingerprint string) proto.BaseResponse {
+	t.Helper()
+	return HandleMLSLeafAbort(deps, proto.MLSLeafAbortRequest{
+		AccountID: leafTestAccountID, BindingGeneration: bindLeafTestAccount(t, deps.Store),
+		PendingSignatureKeyFingerprint: fingerprint,
+	})
 }
 
 func TestHandleMLSLeafDeclare_EnrollSignsAVerifiableDeclarationIntoPending(t *testing.T) {
@@ -509,7 +546,8 @@ func TestHandleMLSLeaf_ARetiredVersionTwoRecordIsUnreadableUntilReset(t *testing
 		t.Fatal(err)
 	}
 
-	if resp := HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{}); resp.Success ||
+	bindLeafTestAccount(t, store)
+	if resp := HandleMLSLeafStatus(deps, leafStatusRequest()); resp.Success ||
 		resp.ErrorCode != string(errs.ErrCodeStorageFailure) {
 		t.Fatalf("status over a v2 record = %+v, want storage_failure", resp)
 	}
@@ -726,18 +764,22 @@ func TestHandleMLSLeafPromote_AnInterruptedPromoteLeavesNoPhantomPending(t *test
 	}
 }
 
-func TestHandleMLSLeafAbort_DiscardsOnlyThePendingEntryAndIsIdempotent(t *testing.T) {
+func TestHandleMLSLeafAbort_DiscardsOnlyTheNamedPendingEntry(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	seedActiveKeypairForRotateTest(t, store)
 	enrolled := enrollLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
 	staged := declareLeaf(t, deps, leafDeclareRequest(proto.MLSLeafReasonRotate))
 	active := leafSlots(t, store)[0]
 
-	for i, want := range []bool{true, false} {
-		resp := HandleMLSLeafAbort(deps, proto.MLSLeafAbortRequest{})
-		if !resp.Success || resp.Data.(proto.MLSLeafAbortResponseData).Aborted != want {
-			t.Fatalf("abort #%d = %+v, want aborted=%v", i+1, resp, want)
-		}
+	resp := abortPending(t, deps, staged.SignatureKeyFingerprint)
+	if !resp.Success || !resp.Data.(proto.MLSLeafAbortResponseData).Aborted {
+		t.Fatalf("abort = %+v, want aborted", resp)
+	}
+	// A repeated abort names a pending entry that is gone: refused, nothing
+	// deleted (lv78).
+	if resp := abortPending(t, deps, staged.SignatureKeyFingerprint); resp.Success ||
+		resp.ErrorCode != string(errs.ErrCodeChatMLSLeafPendingChanged) {
+		t.Fatalf("repeated abort = %+v", resp)
 	}
 	if leafSlots(t, store) != [2]string{active, ""} {
 		t.Fatal("abort touched the active slot or left the pending one")
@@ -775,7 +817,7 @@ func TestHandleMLSLeafStatus_ReportsFingerprintsAndNoSecret(t *testing.T) {
 		t.Fatalf("status = %+v, want %+v", got, want)
 	}
 
-	encoded, err := json.Marshal(HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{}))
+	encoded, err := json.Marshal(HandleMLSLeafStatus(deps, leafStatusRequest()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,11 +836,12 @@ func TestHandleMLSLeafStatus_ReportsFingerprintsAndNoSecret(t *testing.T) {
 func TestMLSLeafLifecycle_HoldsTheLockWithoutReentering(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 	seedActiveKeypairForRotateTest(t, store)
+	generation := bindLeafTestAccount(t, store)
 
 	done := make(chan error, 1)
 	go func() {
 		steps := []func() proto.BaseResponse{
-			func() proto.BaseResponse { return HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{}) },
+			func() proto.BaseResponse { return HandleMLSLeafStatus(deps, leafStatusRequest()) },
 			func() proto.BaseResponse {
 				return HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonEnroll))
 			},
@@ -813,8 +856,15 @@ func TestMLSLeafLifecycle_HoldsTheLockWithoutReentering(t *testing.T) {
 			func() proto.BaseResponse {
 				return HandleMLSLeafDeclare(deps, leafDeclareRequest(proto.MLSLeafReasonRotate))
 			},
-			func() proto.BaseResponse { return HandleMLSLeafAbort(deps, proto.MLSLeafAbortRequest{}) },
-			func() proto.BaseResponse { return HandleMLSLeafStatus(deps, proto.MLSLeafStatusRequest{}) },
+			func() proto.BaseResponse {
+				pending, _, _ := keychain.GetMLSLeafPending(store)
+				decl, _ := storedMLSLeafDeclaration(pending)
+				return HandleMLSLeafAbort(deps, proto.MLSLeafAbortRequest{
+					AccountID: leafTestAccountID, BindingGeneration: generation,
+					PendingSignatureKeyFingerprint: decl.SignatureKeyFingerprint,
+				})
+			},
+			func() proto.BaseResponse { return HandleMLSLeafStatus(deps, leafStatusRequest()) },
 		}
 		for i, step := range steps {
 			if resp := step(); !resp.Success {

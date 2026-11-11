@@ -38,6 +38,15 @@ type Gate func(action string) (refusal proto.BaseResponse, admitted bool)
 // The caller (App) injects log and deps explicitly so the keystore root is
 // not imported, avoiding an import cycle.
 func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate Gate) proto.BaseResponse {
+	return HandleRequestGatedAfter(log, deps, msg, gate, nil)
+}
+
+// After sees each admitted action's answer before it is returned, still under
+// the caller's request lock.
+type After func(action string, resp proto.BaseResponse)
+
+// HandleRequestGatedAfter is HandleRequestGated with an after hook.
+func HandleRequestGatedAfter(log logger.Logger, deps handlers.Deps, msg []byte, gate Gate, after After) proto.BaseResponse {
 	var base proto.BaseRequest
 	if err := json.Unmarshal(msg, &base); err != nil {
 		log.Printf("failed to unmarshal base request: %v", err)
@@ -57,6 +66,9 @@ func HandleRequestGated(log logger.Logger, deps handlers.Deps, msg []byte, gate 
 		resp = refusal
 	} else {
 		resp = dispatchAction(log, deps, base)
+		if after != nil {
+			after(base.Action, resp)
+		}
 	}
 	resp.RequestID = base.RequestID
 	return resp

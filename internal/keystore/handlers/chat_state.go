@@ -98,7 +98,16 @@ func HandleChatStatePurge(d Deps, payload json.RawMessage) proto.BaseResponse {
 		return err
 	})
 	if err != nil {
-		return chatStateFailure(d, "purge", err)
+		resp := chatStateFailure(d, "purge", err)
+		if errors.Is(err, chatstate.ErrPurgeIncomplete) {
+			// The erase steps ran and one failed: the state is no longer
+			// intact. Say so, so the runtime on it is revoked (fail closed),
+			// while the purge itself still reports failure and stays retryable.
+			resp.Data = proto.ChatStatePurgeResponseData{
+				RemovedConversations: removed, EraseIncomplete: true,
+			}
+		}
+		return resp
 	}
 	d.Logger.Printf("chat state purge finished: purged=%t conversations=%d", purged, removed)
 	return proto.BaseResponse{Success: true, Data: proto.ChatStatePurgeResponseData{

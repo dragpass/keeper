@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore"
+	"github.com/dragpass/keeper/internal/keystore/dispatch"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/localsecret"
@@ -139,6 +140,8 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/signup/abort",
 	"/v1/auth/signup/prepare",
 	"/v1/auth/signup/save-session-code",
+	"/v1/chat/account-online/execute",
+	"/v1/chat/account-online/prepare",
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
 	"/v1/chat/chat_state_read_outbox",
@@ -165,6 +168,8 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/mls_rejoin_request_sign",
 	"/v1/chat/mls_room_name_open",
 	"/v1/chat/mls_room_name_seal",
+	"/v1/chat/online/execute",
+	"/v1/chat/online/prepare",
 	"/v1/chat/org_member_removal_sign",
 	"/v1/chat/room_row_name_seal",
 	"/v1/chat/runtime/claim",
@@ -327,7 +332,7 @@ func TestChatRuntimeLeaseRefusesTheExtensionAndDiesWithItsSession(t *testing.T) 
 	}
 
 	// An Extension logout keeps the App out for the window.
-	if purged := proxiedFrame(t, server, extensionPurgeFrame); !purged.Success {
+	if purged := proxiedFrame(t, server, extensionPurgeFrame(t, server)); !purged.Success {
 		t.Fatalf("proxied purge: %+v", purged)
 	}
 	if result := claimLease(t, server, next, nextCSRF, routeHolder); result.Success || !strings.Contains(string(result.Data), `"holder":"extension"`) {
@@ -386,6 +391,13 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	for _, action := range keystore.ChatRuntimeGatedActions() {
 		gated[action] = true
 	}
+	online := map[string]bool{}
+	for _, action := range dispatch.OnlineDecisionActions() {
+		online[action] = true
+	}
+	for _, action := range dispatch.AccountOnlineDecisionActions() {
+		online[action] = true
+	}
 	for _, path := range paths {
 		action := strings.TrimPrefix(path, "/v1/chat/")
 		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"not_a_field": 1}); code != http.StatusBadRequest {
@@ -398,7 +410,17 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
-		if gated[action] != (result.ErrorCode == "chat_runtime_lease_required") {
+		// A protected action, chat or account-level, needs an online decision
+		// before anything else (lv78, A1b); the other lease-gated actions need
+		// the lease.
+		want := ""
+		switch {
+		case online[action]:
+			want = keystore.ErrCodeChatOnlineDecisionRequired
+		case gated[action]:
+			want = "chat_runtime_lease_required"
+		}
+		if want != "" && result.ErrorCode != want || want == "" && (result.ErrorCode == "chat_runtime_lease_required" || result.ErrorCode == keystore.ErrCodeChatOnlineDecisionRequired) {
 			t.Fatalf("%s without a lease: %+v", path, result)
 		}
 	}
@@ -416,14 +438,16 @@ func TestChatActionRoutesRunWithTheLeaseAndKeepTheRawRequest(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	claimLease(t, server, session, csrf, routeHolder)
+	// Past the gate the handler refuses the empty request itself (lv78: an
+	// abort names its sign-in and pending leaf).
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{})
-	if code != http.StatusOK || !result.Success {
+	if code != http.StatusOK || result.ErrorCode != "validation_error" {
 		t.Fatalf("leaf abort with the lease: %d %s", code, body)
 	}
 	// The route hands the handler the bytes it was sent, so the handler's
 	// strict decoder still sees (and refuses) a duplicate key.
 	duplicate := `{"org_id":"` + routeOwner + `","org_id":"` + routePeer + `"}`
-	response := localRequest(server, http.MethodPost, "/v1/chat/mls_conversation_status", duplicate, session, csrf)
+	response := localRequest(server, http.MethodPost, "/v1/chat/mls_group_discard_unaccepted", duplicate, session, csrf)
 	var status routeResult
 	_ = json.Unmarshal(response.Body.Bytes(), &status)
 	if response.Code != http.StatusOK || status.Success || status.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) || !strings.Contains(status.Error, "duplicate") {
@@ -442,9 +466,12 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 		}
 		return map[string]any{"messages": messages}
 	}
+	// A protected action's own route decodes up to its cap and then refuses
+	// without an online decision (lv78), so reaching that refusal shows the
+	// cap admitted the request.
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(200))
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 2 MB display batch did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != keystore.ErrCodeChatOnlineDecisionRequired {
+		t.Fatalf("a 2 MB display batch did not pass the route cap: %d %.200s", code, body)
 	}
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/chat/mls_decrypt_batch_for_app_display", batch(320)); code != http.StatusBadRequest {
 		t.Fatalf("a display batch past 3 MiB was accepted: %d", code)
@@ -457,8 +484,8 @@ func TestChatActionRoutesTakeTheirHandlersSizeCaps(t *testing.T) {
 	code, result, body = callRoute(t, server, session, csrf, "/v1/chat/mls_commit_build", map[string]any{
 		"app_context_b64": strings.Repeat("A", 200_000),
 	})
-	if code != http.StatusOK || result.ErrorCode != string(errs.ErrCodeChatStateInvalidInput) {
-		t.Fatalf("a 200 KB commit build did not reach the handler: %d %.200s", code, body)
+	if code != http.StatusOK || result.ErrorCode != keystore.ErrCodeChatOnlineDecisionRequired {
+		t.Fatalf("a 200 KB commit build did not pass the route cap: %d %.200s", code, body)
 	}
 }
 
