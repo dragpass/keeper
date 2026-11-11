@@ -1253,6 +1253,35 @@ slots; login and cleanup across a downgrade are outside this guarantee.
 An old Keeper has no atomic conditional erasure. A client must never fall
 back to unconditional erasure after an uncertain conditional request.
 
+### Erasing chat state with no generation (unreleased)
+
+A Keeper before the generation slot (0.0.58) wrote chat state that no
+generation names, and a client that signed out on it never learned one, so
+`chat_state_purge` cannot erase that state. `chat_state_purge_unversioned`
+is the separate, App-only action for it (a Native Messaging frame is refused
+with `chat_app_caller_required` before the handler runs; it is gated by the
+chat runtime lease like `chat_state_purge`).
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`chat_state_purge_unversioned`|`owner_account_id`, `require_no_generation: true`, `require_not_signed_in: true`|`{ removed_conversations, purged, kept? }`; a failure after the erase steps ran carries `{ removed_conversations, purged: false, erase_incomplete: true }`|Erases one account's chat state only when, read under the keychain process lock in the same hold as the erase, the account has no chat state generation slot **and** the binding is not that account signed in (another account, signed out, or no binding). Otherwise it erases nothing and answers `purged: false` with `kept: "generation_present"` or `kept: "account_signed_in"`, a definite answer that does not change on retry until the evidence does. A request that does not set both conditions to `true`, names no account, or carries any other field is refused (`CHAT_STATE_INVALID_INPUT`) and erases nothing. While a chat login is committing it is refused and erases nothing. The chat runtime epoch moves as for `chat_state_purge`: after `purged: true` or `erase_incomplete: true` only.|
+
+Both conditions are needed. "No slot" alone also holds for a 0.0.58 binding
+restored without `renew`, which never rotates the generation, so a live
+session may be running on that state; the binding check keeps it. "Not
+signed in" alone also holds for a newer sign-in's state after a sign-out,
+which only `chat_state_purge` with that sign-in's generation may erase; the
+slot check keeps it.
+
+This is not a generation-less `chat_state_purge`. That action still refuses
+a request without `expected_generation`, and a client must never retry an
+uncertain conditional purge through this action. This action never erases
+state that has a generation, whatever the request says, and it erases only
+on evidence the Keeper reads itself under the lock that orders sign-ins, not
+on the caller's word. A same-account sign-in on an updated Keeper gives the
+account a slot, after which this action keeps that state and only a device
+reset (`reset_device_identity`) removes it.
+
 
 **No new plaintext carve-out.** Nothing in this group returns plaintext:
 `ciphertext_b64` and `iv_b64` are the bytes that go on the wire, and `epoch` /

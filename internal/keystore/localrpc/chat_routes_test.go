@@ -144,6 +144,7 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/account-online/prepare",
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
+	"/v1/chat/chat_state_purge_unversioned",
 	"/v1/chat/chat_state_read_outbox",
 	"/v1/chat/mls_commit_build",
 	"/v1/chat/mls_commit_confirm",

@@ -174,7 +174,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"auth_login_pending_sign_alias", "auth_login_pending_sign_challenge",
 		"auth_recovery_abort", "auth_recovery_begin", "auth_recovery_prepare",
 		"auth_recovery_reissue_prepare", "auth_signup_abort", "auth_signup_prepare",
-		"chat_state_read_outbox",
+		"chat_state_purge_unversioned", "chat_state_read_outbox",
 		"dek_rewrap_for_member", "dek_rewrap_to_pending_key", "dek_rewrap_with_old_key_to_self", "dek_rotate_to_device_key",
 		"dek_rotate_to_new_password", "dek_unwrap_and_rewrap_for_many",
 		"group_decrypt_with_aad_for_app_display", "group_dek_generate_and_open", "group_rewrap_prepare",
@@ -314,7 +314,7 @@ func TestChatRuntimeLeaseExpiresAndDiesWithItsSession(t *testing.T) {
 // writer from going ungated by omission.
 func TestChatRuntimeGatedActionListIsPinned(t *testing.T) {
 	want := []string{
-		"chat_state_purge", "chat_state_read_outbox",
+		"chat_state_purge", "chat_state_purge_unversioned", "chat_state_read_outbox",
 		"mls_commit_build", "mls_commit_confirm", "mls_commit_discard_refused",
 		"mls_conversation_forget_removed", "mls_decrypt_batch_for_app_display", "mls_encrypt",
 		"mls_group_create", "mls_group_discard_unaccepted", "mls_join",

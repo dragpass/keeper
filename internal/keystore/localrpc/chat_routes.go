@@ -80,6 +80,7 @@ var chatActionSpecs = []chatActionSpec{
 	{proto.MLSLeaveRequestSign, func() any { return &proto.MLSLeaveRequestSignRequest{} }, stateCap},
 	{proto.ChatStateReadOutbox, func() any { return &proto.ChatStateReadOutboxRequest{} }, stateCap},
 	{proto.ChatStatePurge, func() any { return &proto.ChatStatePurgeRequest{} }, stateCap},
+	{proto.ChatStatePurgeUnversioned, func() any { return &proto.ChatStatePurgeUnversionedRequest{} }, stateCap},
 	// The leaf, KeyPackage and statement actions decode leniently and have
 	// no cap of their own; their fixed-field requests fit the chat state
 	// cap with room to spare.
