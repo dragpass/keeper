@@ -10,8 +10,15 @@
 #     requires the "MLS library linked" line that only a working C ABI link
 #     produces.
 # No binary may carry the E2E mode: `make check-release-no-e2e` rejects the
-# keeper_e2e tag and E2E-only code, and the probe requires the binary to
-# refuse KEEPER_E2E_MODE.
+# keeper_e2e and keeper_killseam tags and E2E-only code, and the probe
+# requires the binary to refuse KEEPER_E2E_MODE.
+# Every binary embeds the production root public key from the repository
+# variable ROOT_PUBLIC_KEY_PEM_BASE64, the one name every distribution path
+# reads (.goreleaser.yml included). There is no default: without the variable
+# each job fails at its first step, and the release check fails on any binary
+# or package that does not carry the key. The check also runs on the exact
+# packages uploaded: the .pkg and .deb are expanded, and the Windows installer
+# is installed on a Windows runner.
 # Linux binaries are built inside ubuntu:20.04 and must need no newer glibc
 # than 2.31. The .deb is installed and probed on ubuntu:20.04 and debian:11.
 name: release-build
@@ -34,6 +41,7 @@ permissions: {}
 env:
   LINUX_BASELINE_IMAGE: ubuntu:20.04
   LINUX_MAX_GLIBC: '2.31'
+  ROOT_PUBLIC_KEY_PEM_BASE64: ${{ vars.ROOT_PUBLIC_KEY_PEM_BASE64 }}
 
 jobs:
   macos:
@@ -47,6 +55,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: root public key is set
+        run: scripts/check-root-public-key.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -62,7 +72,7 @@ jobs:
           mv dragpass-keeper-macos-* baseline/
       - name: build + package (x86_64, arm64)
         run: make pkg-macos VERSION="${{ inputs.version }}"
-      - name: each binary is its own arch and carries the mls tag
+      - name: each binary is its own arch and passes the release check
         run: |
           for pair in x86_64:x86_64 arm64:arm64; do
             bin="dragpass-keeper-macos-${pair%%:*}"
@@ -71,6 +81,11 @@ jobs:
             [ "$archs" = "${pair##*:}" ]
             go version -m "$bin" | grep -q -- '-tags=mls'
             make check-release-no-e2e BIN="$bin"
+          done
+      - name: the binary inside each uploaded .pkg passes the release check
+        run: |
+          for pkg in output/macos/*.pkg; do
+            make check-release-package PKG="$pkg"
           done
       - name: install Rosetta for the x86_64 probe
         run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
@@ -124,6 +139,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: root public key is set
+        run: scripts/check-root-public-key.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -141,6 +158,7 @@ jobs:
             -v "$PWD:/work" -w /work \
             -v "$(go env GOROOT):/usr/local/go:ro" \
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            -e ROOT_PUBLIC_KEY_PEM_BASE64 \
             "$LINUX_BASELINE_IMAGE" \
             scripts/linux-baseline-build.sh "${{ matrix.arch }}" "${{ inputs.version }}"
       # -o keeps make from rebuilding the binary on the runner, whose glibc is
@@ -151,6 +169,7 @@ jobs:
         run: |
           go version -m "${{ matrix.bin }}" | grep -q -- '-tags=mls'
           make check-release-no-e2e BIN="${{ matrix.bin }}"
+          make check-release-package PKG="output/linux/${{ matrix.bin }}.deb"
           scripts/check-glibc-baseline.sh "${{ matrix.bin }}" "$LINUX_MAX_GLIBC"
           dpkg-deb -f "output/linux/${{ matrix.bin }}.deb" Depends
       - name: install the .deb and probe on ubuntu:20.04 and debian:11
@@ -194,6 +213,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: root public key is set
+        run: scripts/check-root-public-key.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -250,6 +271,8 @@ jobs:
           name: sizes-windows
           path: sizes-windows.txt
 
+  # The installer is what users and WinGet install, and no portable extractor
+  # reads it, so it is installed here and the installed binary is checked.
   windows-probe:
     name: Windows probe
     needs: windows
@@ -261,9 +284,29 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: windows-binaries
           path: bin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-packages
+          path: installer
       - name: probe
         run: scripts/release-probe.sh ./bin/dragpass-keeper.exe "${{ inputs.version }}"
+      - name: install the installer silently
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'keeper-install'
+          $p = Start-Process -FilePath 'installer\dragpass-keeper.exe' -Wait -PassThru `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir"
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+      - name: the installed binary passes the release check and the probe
+        run: |
+          installed="$(cygpath -u "$RUNNER_TEMP")/keeper-install/dragpass-keeper.exe"
+          scripts/check-release-binary.sh "$installed"
+          cmp "$installed" ./bin/dragpass-keeper.exe
+          scripts/release-probe.sh "$installed" "${{ inputs.version }}"

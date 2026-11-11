@@ -6,6 +6,11 @@
 # release-build.yml is the same workflow release.yml runs, including its
 # checks. This adds the GoReleaser (Homebrew) darwin build and a size report
 # comparing each binary with the library-free build of the same commit.
+#
+# Both builds embed the root public key from the repository variable
+# ROOT_PUBLIC_KEY_PEM_BASE64 and run the same release check on what they
+# produce. Until the production root public key is provisioned, this workflow
+# fails by design: a missing key is a release gate, and no test key stands in.
 name: release-check
 
 on:
@@ -26,6 +31,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  ROOT_PUBLIC_KEY_PEM_BASE64: ${{ vars.ROOT_PUBLIC_KEY_PEM_BASE64 }}
 
 concurrency:
   group: release-check-${{ github.ref }}
@@ -64,16 +72,21 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+      - name: root public key is set
+        run: scripts/check-root-public-key.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
       - name: rust targets
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      # The same pipeline release.yml runs up to the archives, without
+      # publishing. The post-build hook in .goreleaser.yml runs the release
+      # check on each binary before it is archived.
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: build --snapshot --clean
+          args: release --snapshot --clean --skip=publish,homebrew
       - name: install Rosetta for the x86_64 probe
         run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
       - name: each binary is its own arch, carries the mls tag, and answers
@@ -86,6 +99,12 @@ jobs:
             go version -m "$bin" | grep -q -- '-tags=mls'
             make check-release-no-e2e BIN="$bin"
             scripts/release-probe.sh "$bin" "${{ needs.version.outputs.version }}"
+          done
+      - name: the binary inside each Homebrew archive passes the release check
+        run: |
+          ls dist/*.tar.gz
+          for archive in dist/*.tar.gz; do
+            make check-release-package PKG="$archive"
           done
 
   sizes:

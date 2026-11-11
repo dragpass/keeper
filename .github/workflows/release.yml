@@ -13,6 +13,12 @@
 #
 # GPG_PRIVATE_KEY and optional GPG_PASSPHRASE enable detached signatures.
 # Checksums remain available when signing is not configured.
+#
+# Every distributed binary (the packages from release-build.yml, the Homebrew
+# archives from GoReleaser, and through the published installer the WinGet
+# submission) embeds the root public key from the repository variable
+# ROOT_PUBLIC_KEY_PEM_BASE64 and passes the same release check. Without the
+# variable the release fails; there is no default key.
 name: release
 
 on:
@@ -323,6 +329,9 @@ jobs:
 
   # Homebrew tap 채널 — GoReleaser 가 darwin tar.gz 를 릴리스에 append 하고
   # dragpass/homebrew-tap 의 Formula/keeper.rb 를 자동 갱신한다 (.goreleaser.yml).
+  # The post-build hook in .goreleaser.yml runs the release check on each
+  # binary before it is archived, so a failing binary stops GoReleaser before
+  # it publishes the archive or updates the tap.
   brew:
     name: goreleaser brew tap
     needs: release
@@ -330,6 +339,7 @@ jobs:
     env:
       # Same minimum macOS as the release-build.yml macOS job.
       MACOSX_DEPLOYMENT_TARGET: '14.0'
+      ROOT_PUBLIC_KEY_PEM_BASE64: ${{ vars.ROOT_PUBLIC_KEY_PEM_BASE64 }}
     permissions:
       contents: write
       id-token: write
@@ -339,6 +349,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+      - name: root public key is set
+        run: scripts/check-root-public-key.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -357,6 +369,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - name: the binary inside each Homebrew archive passes the release check
+        run: |
+          for archive in dist/*.tar.gz; do
+            make check-release-package PKG="$archive"
+          done
       - name: attest Homebrew archive provenance
         id: brew_provenance
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6

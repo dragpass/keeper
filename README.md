@@ -855,9 +855,16 @@ startup when any `KEEPER_E2E_*`, `DRAGPASS_KEEPER_DEV_*` or
 release binary cannot fall through to the real Keychain, and the environment
 cannot widen whom a release Keeper trusts. A build without an embedded root key
 refuses every `refresh_server_keys` request; only a tagged build installs
-server keys unverified. `make check-release-no-e2e BIN=<binary>` rejects a
-binary built with the tag or with `keeper_killseam`; the release workflows run
-it, and `scripts/release-probe.sh` requires the startup refusal. `make test-e2e-tag` runs the test suite with the tag.
+server keys unverified. `make check-release-no-e2e BIN=<binary>
+ROOT_PUBLIC_KEY_PEM_BASE64=<base64 PEM>` rejects a binary built without the
+`mls` tag, with the tag or with `keeper_killseam`, and one that does not carry
+that root key, and `make check-release-package PKG=<package>` runs the same
+check on the binary inside a `.pkg`, `.deb` or Homebrew `.tar.gz`. Every
+distribution path (the Makefile package targets, `release-build.yml`, and the
+GoReleaser Homebrew build) embeds the root key from that one variable, in
+GitHub Actions the repository variable of the same name, and runs the check
+on what it ships. There is no default key: without the variable a release
+fails. `scripts/release-probe.sh` requires the startup refusal. `make test-e2e-tag` runs the test suite with the tag.
 
 ### KEEPER_E2E_KEYRING_FILE (multi-process keyring sharing)
 
