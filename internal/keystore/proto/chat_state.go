@@ -389,4 +389,7 @@ type ChatStatePurgeResponseData struct {
 	// the state may be gone, so the runtime working on it is revoked even
 	// though the purge did not finish.
 	EraseIncomplete bool `json:"erase_incomplete,omitempty"`
+	// Kept is why chat_state_purge_unversioned left the state in place
+	// (ChatStatePurgeKept*); empty otherwise.
+	Kept string `json:"kept,omitempty"`
 }

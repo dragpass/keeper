@@ -144,6 +144,7 @@ var pinnedAppRoutes = []string{
 	"/v1/chat/account-online/prepare",
 	"/v1/chat/capability",
 	"/v1/chat/chat_state_purge",
+	"/v1/chat/chat_state_purge_unversioned",
 	"/v1/chat/chat_state_read_outbox",
 	"/v1/chat/mls_commit_build",
 	"/v1/chat/mls_commit_confirm",
@@ -384,7 +385,7 @@ func TestChatActionRoutesDecodeStrictlyAndAreGated(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	paths := chatActionPaths()
-	if len(paths) != 26 {
+	if len(paths) != 27 {
 		t.Fatalf("chat action routes: %d %v", len(paths), paths)
 	}
 	gated := map[string]bool{}
