@@ -308,7 +308,7 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`refresh_server_keys`|`keys`, `root_public_key_fingerprint?`|`{ updated_versions, active_version, root_verified, rejected }`|Verify server `GET /api/v1/system/server-keys` response under embedded Root and update Keychain multi-version slots. `keys` is an array of `{ version, public_key_pem, issued_at, expires_at, status, root_signature? }`. `rejected` is reserved (currently always `[]`).|
+|`refresh_server_keys`|`keys`, `root_public_key_fingerprint?`|`{ updated_versions, active_version, root_verified, rejected }`|Verify server `GET /api/v1/system/server-keys` response under embedded Root and update Keychain multi-version slots. A build with no embedded Root key installs nothing and answers `crypto_failure` (the keys it pins stay); only a `keeper_e2e` build accepts keys unverified (`root_verified: false`). `keys` is an array of `{ version, public_key_pem, issued_at, expires_at, status, root_signature? }`. `rejected` is reserved (currently always `[]`).|
 
 ### User keypair rotation (Phase 13e + 14a)
 
