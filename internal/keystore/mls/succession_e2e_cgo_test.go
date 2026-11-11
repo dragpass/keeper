@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/chatstate"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/mls"
@@ -68,8 +69,16 @@ func newSuccession(t *testing.T) succession {
 // signedHandover is Bob's old device approving decl through its Keeper.
 func (s succession) signedHandover(t *testing.T, decl proto.MLSLeafDeclaration) chatstate.LeafHandover {
 	t.Helper()
+	active, found, err := keychain.GetMLSLeafKey(s.bob.deps.Store)
+	if err != nil || !found {
+		t.Fatalf("bob's active leaf: found=%v err=%v", found, err)
+	}
+	oldFP, err := crypto.MLSLeafSignatureKeyFingerprint(active.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resp := handlers.HandleMLSLeafHandoverSign(s.bob.deps, proto.MLSLeafHandoverSignRequest{
-		AccountID: s.bob.id, NewDeclaration: decl, ExpiresAt: time.Now().Unix() + 600,
+		AccountID: s.bob.id, OldSignatureKeyFingerprint: oldFP, NewDeclaration: decl, ExpiresAt: time.Now().Unix() + 600,
 	})
 	if !resp.Success {
 		t.Fatalf("handover sign: %s", resp.Error)

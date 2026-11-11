@@ -90,7 +90,9 @@ func TestChatActionRoutesNeedTheEpochHeader(t *testing.T) {
 	if _, result := callWithEpoch(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{}, ""); result.ErrorCode != keystore.ErrCodeChatRuntimeLeaseRequired {
 		t.Fatalf("gated route without the epoch header: %+v", result)
 	}
-	if _, result := callWithEpoch(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{}, epoch); !result.Success {
+	// Past the gate the handler refuses the empty request itself (lv78: an
+	// abort names its sign-in and pending leaf).
+	if _, result := callWithEpoch(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{}, epoch); result.ErrorCode != "validation_error" {
 		t.Fatalf("gated route with the epoch header: %+v", result)
 	}
 	for _, bad := range []string{"no-dot", strings.Repeat("a", 60) + ".12345", "a b.1", "abc.x"} {

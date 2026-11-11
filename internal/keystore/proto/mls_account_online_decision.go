@@ -90,9 +90,10 @@ func MLSAccountOnlineRequestCommitment(key []byte, action, target string, reques
 // verified: a 32-byte challenge, lowercase UUID identities, a target, a
 // commitment, the fixed lifetime and a named key version.
 // MLSAccountOnlineTargetMaxLen bounds a decision's target. The longest is a
-// handover's, which names the takeover request, the new device, its key
-// fingerprint and the request's expiry (187 bytes for a ten-digit expiry).
-const MLSAccountOnlineTargetMaxLen = 256
+// handover's, which names the takeover request, the old leaf's key
+// fingerprint, the new device, its key fingerprint and the request's expiry
+// (259 bytes for a ten-digit expiry, 268 for the longest int64).
+const MLSAccountOnlineTargetMaxLen = 320
 
 func (d MLSAccountOnlineDecision) Validate() error {
 	b, err := base64.RawURLEncoding.DecodeString(d.Challenge)

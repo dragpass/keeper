@@ -58,9 +58,12 @@ type chatOnlineContext struct {
 	orgID             string
 	conversationID    string
 	// target is the account-level action's object (lv78 A1b); empty for chat.
-	target        string
-	commitment    string
-	commitmentKey [32]byte
+	target string
+	// activeLeafFingerprint is the active leaf a handover decision binds
+	// (lv78 old leaf binding); empty for every other action.
+	activeLeafFingerprint string
+	commitment            string
+	commitmentKey         [32]byte
 }
 
 type chatOnlineEntry struct {

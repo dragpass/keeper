@@ -2,6 +2,7 @@ package keystore
 
 import (
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/config"
+	keepercrypto "github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -27,12 +29,35 @@ const (
 	accountOnlineHandoverExpiry = int64(1900000000)
 )
 
+// accountOnlineOldLeaf is the old device's active leaf the handover calls
+// name; prepareAccount stores it when no active leaf is there yet.
+var accountOnlineOldLeaf = ed25519.NewKeyFromSeed([]byte("lv78-old-leaf-binding-test-seed!"))
+
+var accountOnlineOldFP = func() string {
+	fp, _ := keepercrypto.MLSLeafSignatureKeyFingerprint(accountOnlineOldLeaf.Public().(ed25519.PublicKey))
+	return fp
+}()
+
+func ensureActiveLeaf(t *testing.T, store keychain.SecretStore) {
+	t.Helper()
+	if _, found, err := keychain.GetMLSLeafKey(store); err != nil || found {
+		return
+	}
+	if err := keychain.SaveMLSLeafKey(store, keychain.MLSLeafKey{
+		AccountID: onlineAccount, DeviceID: onlineDevice, SecretKey: append([]byte(nil), accountOnlineOldLeaf...),
+		PublicKey: append([]byte(nil), accountOnlineOldLeaf.Public().(ed25519.PublicKey)...), Declaration: []byte("declaration"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // handoverRequest is an mls_leaf_handover_sign request for a new declaration
 // of this account. Its declaration is not signed, so the handler refuses it:
 // reaching that refusal shows the gate admitted the call.
 func handoverRequest(newDevice, newFP string, expiresAt int64) json.RawMessage {
 	return rawJSON(map[string]any{
-		"account_id": onlineAccount,
+		"account_id":                    onlineAccount,
+		"old_signature_key_fingerprint": accountOnlineOldFP,
 		"new_declaration": map[string]any{
 			"account_id": onlineAccount, "device_id": newDevice, "signature_key": "AA==",
 			"signature_key_fingerprint": newFP, "not_before": 1, "not_after": 2,
@@ -71,7 +96,8 @@ func accountCalls() map[string]accountCall {
 			"account_id": onlineAccount, "device_id": onlineDevice, "count": 1,
 		}), target: "device:" + onlineDevice},
 		"mls_leaf_handover_sign": {action: "mls_leaf_handover_sign", request: handoverRequest(accountOnlineOtherDevice, accountOnlineNewFP, accountOnlineHandoverExpiry),
-			takeover: accountOnlineTakeover, target: "takeover:" + accountOnlineTakeover + "/new_device:" + accountOnlineOtherDevice +
+			takeover: accountOnlineTakeover, target: "takeover:" + accountOnlineTakeover + "/old_fp:" + accountOnlineOldFP +
+				"/new_device:" + accountOnlineOtherDevice +
 				"/new_fp:" + accountOnlineNewFP + "/expires_at:1900000000"},
 		"mls_device_revoke_sign": {action: "mls_device_revoke_sign", request: rawJSON(map[string]any{
 			"account_id": onlineAccount, "device_id": accountOnlineOtherDevice,
@@ -84,6 +110,9 @@ func accountCalls() map[string]accountCall {
 
 func (f *onlineFixture) prepareAccount(t *testing.T, call accountCall) proto.MLSAccountOnlinePrepareResponseData {
 	t.Helper()
+	if call.action == proto.ActionMLSLeafHandoverSign {
+		ensureActiveLeaf(t, f.store)
+	}
 	response := f.app.PrepareMLSAccountOnline("", proto.MLSAccountOnlinePrepareRequest{
 		Action: call.action, Request: call.request, TokenID: onlineToken,
 		SessionIssuedAtNanos: onlineSession, TakeoverRequestID: call.takeover,

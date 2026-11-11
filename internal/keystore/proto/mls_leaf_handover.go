@@ -65,14 +65,20 @@ func (h MLSLeafHandover) Validate(field string) error {
 // account's groups, to approve new_declaration taking its seat. expires_at is
 // the takeover request's own expiry as the server relayed it; the Keeper
 // refuses one that has passed or lies further out than the window allows.
+// old_signature_key_fingerprint names the active leaf that is to sign, the
+// one the takeover request was made against; the Keeper signs with no other.
 type MLSLeafHandoverSignRequest struct {
-	AccountID      string             `json:"account_id"`
-	NewDeclaration MLSLeafDeclaration `json:"new_declaration"`
-	ExpiresAt      int64              `json:"expires_at"`
+	AccountID                  string             `json:"account_id"`
+	OldSignatureKeyFingerprint string             `json:"old_signature_key_fingerprint"`
+	NewDeclaration             MLSLeafDeclaration `json:"new_declaration"`
+	ExpiresAt                  int64              `json:"expires_at"`
 }
 
 func (r MLSLeafHandoverSignRequest) Validate() error {
 	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	if err := requireKeyFingerprint(r.OldSignatureKeyFingerprint, "old_signature_key_fingerprint"); err != nil {
 		return err
 	}
 	if err := r.NewDeclaration.Validate(); err != nil {

@@ -84,7 +84,7 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 				frame = string(purgeFrameWith(t, bindPurgeOwner(t, store)))
 			}
 			epoch := claimed(t, app, clock, holderA, sessionA, "")
-			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
+			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !gatedActionRan(response) {
 				t.Fatalf("the holder's gated call: %+v", response)
 			}
 			if response := app.HandleRequest([]byte(gatedFrame)); response.ErrorCode != ErrCodeChatAppCallerRequired {
@@ -118,7 +118,7 @@ func TestChatRuntimeExtensionRevocationWinsOverALiveAppLease(t *testing.T) {
 			if fresh == epoch {
 				t.Fatal("the revocation did not move the epoch")
 			}
-			if response := app.HandleAppRequest(sessionB, fresh, []byte(gatedFrame)); !response.Success {
+			if response := app.HandleAppRequest(sessionB, fresh, []byte(gatedFrame)); !gatedActionRan(response) {
 				t.Fatalf("the new runtime's gated call: %+v", response)
 			}
 

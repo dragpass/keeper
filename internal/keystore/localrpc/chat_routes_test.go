@@ -438,8 +438,10 @@ func TestChatActionRoutesRunWithTheLeaseAndKeepTheRawRequest(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
 	claimLease(t, server, session, csrf, routeHolder)
+	// Past the gate the handler refuses the empty request itself (lv78: an
+	// abort names its sign-in and pending leaf).
 	code, result, body := callRoute(t, server, session, csrf, "/v1/chat/mls_leaf_abort", map[string]any{})
-	if code != http.StatusOK || !result.Success {
+	if code != http.StatusOK || result.ErrorCode != "validation_error" {
 		t.Fatalf("leaf abort with the lease: %d %s", code, body)
 	}
 	// The route hands the handler the bytes it was sent, so the handler's

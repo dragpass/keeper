@@ -54,7 +54,7 @@ func TestChatPurgeThatErasesNothingLeavesTheAppRuntimeAlone(t *testing.T) {
 			bindPurgeOwner(t, store) // a newer sign-in
 			epoch := claimed(t, app, clock, holderA, sessionA, "")
 			app.HandleRequest(frame(old))
-			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
+			if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !gatedActionRan(response) {
 				t.Fatalf("the current App runtime was revoked by a purge that erased nothing: %+v", response)
 			}
 		})
@@ -119,7 +119,7 @@ func TestAppPurgeRevokesOnlyAfterItErasedTheNamedState(t *testing.T) {
 		if response := app.HandleAppRequest(sessionA, epoch, purgeFrameWith(t, old)); !response.Success {
 			t.Fatalf("the App purge naming an older sign-in was refused: %+v", response)
 		}
-		if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
+		if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !gatedActionRan(response) {
 			t.Fatalf("the App's own purge that erased nothing revoked its runtime: %+v", response)
 		}
 	})
