@@ -104,3 +104,34 @@ func TestChatPurgeThatFailsPartwayRevokesTheRuntime(t *testing.T) {
 		t.Fatalf("revocation reason %q, want %q", reason, ChatRuntimeRevokedPurged)
 	}
 }
+
+// lv78: the App sends chat_state_purge too, over its own local RPC session.
+// On that caller path the revocation must also wait for the handler's answer:
+// a purge from the App that erased nothing (an older sign-in's generation)
+// must leave the current runtime alone, and a purge that erased the state it
+// named must still revoke it.
+func TestAppPurgeRevokesOnlyAfterItErasedTheNamedState(t *testing.T) {
+	t.Run("stale generation leaves the runtime alone", func(t *testing.T) {
+		app, clock, store := newLeaseApp(t)
+		old := bindPurgeOwner(t, store)
+		bindPurgeOwner(t, store) // a newer sign-in
+		epoch := claimed(t, app, clock, holderA, sessionA, "")
+		if response := app.HandleAppRequest(sessionA, epoch, purgeFrameWith(t, old)); !response.Success {
+			t.Fatalf("the App purge naming an older sign-in was refused: %+v", response)
+		}
+		if response := app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame)); !response.Success {
+			t.Fatalf("the App's own purge that erased nothing revoked its runtime: %+v", response)
+		}
+	})
+	t.Run("current generation revokes after the erase", func(t *testing.T) {
+		app, clock, store := newLeaseApp(t)
+		generation := bindPurgeOwner(t, store)
+		epoch := claimed(t, app, clock, holderA, sessionA, "")
+		if response := app.HandleAppRequest(sessionA, epoch, purgeFrameWith(t, generation)); !response.Success {
+			t.Fatalf("the App purge of the current sign-in failed: %+v", response)
+		}
+		if reason := revokedReason(t, app.HandleAppRequest(sessionA, epoch, []byte(gatedFrame))); reason != ChatRuntimeRevokedPurged {
+			t.Fatalf("revocation reason %q, want %q", reason, ChatRuntimeRevokedPurged)
+		}
+	})
+}
