@@ -326,7 +326,10 @@ jobs:
   brew:
     name: goreleaser brew tap
     needs: release
-    runs-on: macos-14
+    runs-on: macos-15
+    env:
+      # Same minimum macOS as the release-build.yml macOS job.
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
     permissions:
       contents: write
       id-token: write
