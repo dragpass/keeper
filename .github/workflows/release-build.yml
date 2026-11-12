@@ -39,6 +39,10 @@ jobs:
   macos:
     name: macOS (amd64 + arm64)
     runs-on: macos-15
+    env:
+      # Keep the minimum macOS of the shipped binaries at 14.0. Without it
+      # clang targets the runner OS, so a runner upgrade raises the minimum.
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
     permissions:
       contents: read
     steps:
