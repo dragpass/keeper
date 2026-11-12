@@ -158,4 +158,16 @@ const (
 	// itself, or for a request whose window has closed. Nothing was signed or
 	// built.
 	ErrCodeChatMLSHandoverInvalid ErrorCode = "CHAT_MLS_HANDOVER_INVALID"
+
+	// ErrCodeChatMLSLeafPendingChanged — mls_leaf_abort named a pending leaf
+	// that is no longer this sign-in's pending entry: it was promoted,
+	// replaced, aborted already, or belongs to another account or device.
+	// Nothing was deleted.
+	ErrCodeChatMLSLeafPendingChanged ErrorCode = "CHAT_MLS_LEAF_PENDING_CHANGED"
+
+	// ErrCodeChatMLSLeafBindingStale — mls_leaf_abort or mls_leaf_status named
+	// an account binding that is not this Keeper's current, signed-in one
+	// (signed out, another account, or an earlier sign-in of the same
+	// account). Nothing was read or deleted.
+	ErrCodeChatMLSLeafBindingStale ErrorCode = "CHAT_MLS_LEAF_BINDING_STALE"
 )

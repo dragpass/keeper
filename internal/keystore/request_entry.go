@@ -47,7 +47,7 @@ func (a *App) HandleAppSteps(
 	defer a.requestMu.Unlock()
 	caller := chatRuntimeCaller{app: true, session: session, epoch: epoch}
 	return steps(func(msg []byte) proto.BaseResponse {
-		return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
+		return dispatch.HandleRequestGatedAfter(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller), a.chatRuntimeAfter(caller))
 	})
 }
 
@@ -59,14 +59,14 @@ func (a *App) HandleAppFencedSteps(session, epoch, generation string,
 	defer a.requestMu.Unlock()
 	caller := chatRuntimeCaller{app: true, session: session, epoch: epoch, loginGeneration: generation, chatWork: true}
 	return steps(func(msg []byte) proto.BaseResponse {
-		return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
+		return dispatch.HandleRequestGatedAfter(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller), a.chatRuntimeAfter(caller))
 	})
 }
 
 func (a *App) handleAs(caller chatRuntimeCaller, msg []byte) proto.BaseResponse {
 	a.requestMu.Lock()
 	defer a.requestMu.Unlock()
-	return dispatch.HandleRequestGated(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller))
+	return dispatch.HandleRequestGatedAfter(a.Logger, a.HandlersDeps(), msg, a.chatRuntimeGate(caller), a.chatRuntimeAfter(caller))
 }
 
 func (a *App) HandlersDeps() handlers.Deps {

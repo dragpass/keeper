@@ -233,6 +233,10 @@ type BeginCommitRequest struct {
 	// AppContext is stored with the pending Commit (PendingCommit.AppContext).
 	// A retry keeps the first build's.
 	AppContext []byte
+
+	// LoginGeneration is stored with the pending Commit
+	// (PendingCommit.LoginGeneration). A retry keeps the first build's.
+	LoginGeneration string
 }
 
 // MaxPendingAppContextBytes bounds PendingCommit.AppContext. The app's
@@ -454,6 +458,8 @@ func (s *Store) BeginCommit(
 			Welcome:        built.Welcome,
 			AppContext:     req.AppContext,
 			Name:           storedName(name),
+
+			LoginGeneration: req.LoginGeneration,
 		}
 		loaded := rec.Generation
 		rec.GroupState = state

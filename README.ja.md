@@ -773,7 +773,9 @@ Credentials:
 ルート鍵）も、タグ付きビルドだけが読みます。リリースバイナリは `KEEPER_E2E_*`、
 `DRAGPASS_KEEPER_DEV_*`、`KEEPER_ROOT_PUBLIC_KEY_*` 変数が一つでも設定されていると
 起動時に終了するため、テストがリリースバイナリを拾っても実際の Keychain には
-進まず、環境変数でリリース Keeper の信頼範囲を広げることもできません。`make check-release-no-e2e BIN=<binary>` はタグ付きでビルドされた
+進まず、環境変数でリリース Keeper の信頼範囲を広げることもできません。ルート鍵を
+埋め込んでいないビルドは `refresh_server_keys` の要求をすべて拒否し、サーバー鍵を
+検証なしで設定するのはタグ付きビルドだけです。`make check-release-no-e2e BIN=<binary>` はこのタグや `keeper_killseam` 付きでビルドされた
 バイナリを拒否し、リリースワークフローがこれを実行し、`scripts/release-probe.sh` は
 起動時の拒否を確認します。`make test-e2e-tag` はタグ付きでテストを実行します。
 

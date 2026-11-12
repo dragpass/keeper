@@ -6,22 +6,23 @@
 //  3. Root embedded: every key must have root_signature
 //  4. Root embedded: reject bad signature
 //  5. Root embedded: valid signature → updated_versions/active_version/root_verified=true
-//  6. Root missing: skip signature verification + fingerprint TOFU pin
+//  6. Root missing: a release build installs nothing; only a keeper_e2e
+//     build skips signature verification (TOFU pin)
 //  7. Verify the 4 Keychain slots are updated (versioned, active pointer,
 //     legacy mirror, fingerprint pin)
 //
 // Migrated from the keystore root's refresh_server_keys_facade_test.go. All
 // keychain helpers were updated to use deps's SecretStore directly.
-// The root-embedded cases (2-5) and their helpers live in
-// refresh_server_keys_root_e2e_test.go: they need a test root key, which only
-// a keeper_e2e build reads from the environment.
+// The root-embedded cases (2-5), the keeper_e2e root-missing case and their
+// helpers live in refresh_server_keys_root_e2e_test.go: they need a test root
+// key or the unverified mode, which only a keeper_e2e build has. The release
+// root-missing case is in refresh_server_keys_release_test.go.
 package handlers
 
 import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -112,43 +113,5 @@ func TestRefreshServerKeysRequest_Validate(t *testing.T) {
 				t.Errorf("error = %q, want substring %q", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestHandleRefreshServerKeys_RootMissing_SkipsVerification(t *testing.T) {
-	deps, _, store := newTestDeps(t)
-	resetServerKeySlots(t, store)
-
-	// Root not embedded. A release test build never reads the env var; an
-	// empty value keeps a keeper_e2e build on the same branch as a production
-	// build with no embed.
-	t.Setenv("KEEPER_ROOT_PUBLIC_KEY_BASE64", "")
-
-	pem := "-----BEGIN PUBLIC KEY-----\nFREE\n-----END PUBLIC KEY-----\n"
-	req := RefreshServerKeysRequest{
-		Keys: []SystemServerKeyEntry{
-			{
-				Version:      1,
-				PublicKeyPEM: pem,
-				IssuedAt:     time.Unix(1700000000, 0),
-				ExpiresAt:    time.Unix(1800000000, 0),
-				Status:       "active",
-				// no signature
-			},
-		},
-		RootPublicKeyFingerprint: "sha256:server-only-pin",
-	}
-
-	resp := HandleRefreshServerKeys(deps, req)
-	if !resp.Success {
-		t.Fatalf("root-missing should accept unsigned response, got error: %s", resp.Error)
-	}
-	data := resp.Data.(RefreshServerKeysResponseData)
-	if data.RootVerified {
-		t.Errorf("root_verified should be false in missing-root mode")
-	}
-	pinned, _ := keychain.GetRootPublicKeyFingerprint(store)
-	if pinned != "sha256:server-only-pin" {
-		t.Errorf("fingerprint should be TOFU-pinned, got %q", pinned)
 	}
 }

@@ -75,6 +75,13 @@ MLS_DIR := mls
 MLS_LIB := $(MLS_DIR)/target/release/libdragpass_mls.a
 MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 
+# The root public key (Base64 of its PEM) that server key sets are verified
+# with. A release build must carry it: without one, refresh_server_keys
+# installs nothing (anchor.UnverifiedServerKeysAllowed). Builds without it are
+# for local work only. check-release-no-e2e does not check for it.
+ROOT_PUBLIC_KEY_PEM_BASE64 ?=
+ROOT_GO_LDFLAGS := $(if $(ROOT_PUBLIC_KEY_PEM_BASE64),-ldflags "-X github.com/dragpass/keeper/internal/keystore/anchor.rootPublicKeyPEMBase64=$(ROOT_PUBLIC_KEY_PEM_BASE64)")
+
 ifeq ($(MLS),1)
 MLS_GO_TAGS := -tags mls
 E2E_GO_TAGS := -tags "mls keeper_e2e"
@@ -154,7 +161,7 @@ $(MAC_BIN_ARM64) $(MAC_PKG_ARM64): MAC_LABEL := arm64
 
 $(MAC_BIN_AMD64) $(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
 	@echo "Building macOS $(MAC_LABEL) binary: $@..."
-	@CGO_ENABLED=1 GOOS=darwin GOARCH=$(MAC_ARCH) go build $(MLS_GO_TAGS) -o $@ .
+	@CGO_ENABLED=1 GOOS=darwin GOARCH=$(MAC_ARCH) go build $(MLS_GO_TAGS) $(ROOT_GO_LDFLAGS) -o $@ .
 
 # ── E2E builds ──────────────────────────────────────
 # The browser E2E harness (dragpass tests/e2e-extension) needs the mock
@@ -183,9 +190,11 @@ build-e2e-localtarget: $(HOST_MLS_LIB)
 	@echo "Building E2E local-target binary: $(E2E_LOCALTARGET_BIN)..."
 	@CGO_ENABLED=1 go build $(E2E_LOCALTARGET_GO_TAGS) -o $(E2E_LOCALTARGET_BIN) .
 
-# Fails when BIN was built with the keeper_e2e tag or carries E2E-only code.
-# The strings survive a stripped binary (-s -w), unlike symbols. Besides the
-# E2E mode they cover the dev App origin opt-in and the root key override; a
+# Fails when BIN was built with a test-only tag (keeper_e2e, or the
+# keeper_killseam crash seams) or carries E2E-only code. Build tags are read
+# from the build info; the strings are read from the binary itself. The
+# strings survive a stripped binary (-s -w), unlike symbols. Besides the E2E
+# mode they cover the dev App origin opt-in and the root key override; a
 # release build refuses those variables by prefix, so their full names never
 # reach it.
 E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash \
@@ -195,15 +204,16 @@ E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_ge
 check-release-no-e2e:
 	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }
 	@if go version -m "$(BIN)" | grep -q 'keeper_e2e'; then echo "$(BIN) was built with the keeper_e2e tag" >&2; exit 1; fi
+	@if go version -m "$(BIN)" | grep -q 'keeper_killseam'; then echo "$(BIN) was built with the keeper_killseam tag" >&2; exit 1; fi
 	@for s in $(E2E_ONLY_STRINGS); do \
 		if LC_ALL=C grep -aq "$$s" "$(BIN)"; then echo "$(BIN) carries E2E-only code ($$s)" >&2; exit 1; fi; \
 	done
-	@echo "$(BIN): no keeper_e2e tag and no E2E-only code"
+	@echo "$(BIN): no test-only tag and no E2E-only code"
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
 	@echo "Building Windows binary: $(WIN_BIN)..."
-	@CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=$(WIN_CC) go build $(MLS_GO_TAGS) -o $(WIN_BIN) .
+	@CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=$(WIN_CC) go build $(MLS_GO_TAGS) $(ROOT_GO_LDFLAGS) -o $(WIN_BIN) .
 
 build-linux: build-linux-amd64 build-linux-arm64
 
@@ -231,13 +241,14 @@ $(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64): main.go go.mod
 		-e HOST_UID="$$(id -u)" -e HOST_GID="$$(id -g)" \
 		-e GO_VERSION="$(LINUX_GO_VERSION)" \
 		-e MLS="$(MLS)" \
+		-e ROOT_PUBLIC_KEY_PEM_BASE64="$(ROOT_PUBLIC_KEY_PEM_BASE64)" \
 		"$(LINUX_BASELINE_IMAGE)" \
 		scripts/linux-baseline-build.sh "$(LINUX_ARCH)" "$(VERSION)"
 .PHONY: $(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64)
 else
 $(LINUX_BIN_AMD64) $(LINUX_BIN_ARM64): main.go go.mod $(LINUX_MLS_LIB)
 	@echo "Building Linux $(LINUX_ARCH) binary: $@..."
-	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=$(LINUX_ARCH) go build $(MLS_GO_TAGS) -o $@ .
+	@CGO_ENABLED=$(LINUX_CGO) GOOS=linux GOARCH=$(LINUX_ARCH) go build $(MLS_GO_TAGS) $(ROOT_GO_LDFLAGS) -o $@ .
 endif
 
 pkg-macos: pkg-macos-amd64 pkg-macos-arm64

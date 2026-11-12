@@ -267,6 +267,12 @@ type chatRuntimeCaller struct {
 	session         string
 	epoch           string
 	chatWrite       bool
+	// onlineDecision is set only by the online decision path after it
+	// verified and consumed a decision for this exact call (lv78).
+	onlineDecision bool
+	// accountOnlineDecision is the same for the account-level MLS actions
+	// (lv78 A1b); neither decision admits an action of the other set.
+	accountOnlineDecision bool
 }
 
 func leaseRequired() proto.BaseResponse {
@@ -287,10 +293,33 @@ func appCallerRequired() proto.BaseResponse {
 	}
 }
 
+// ErrCodeChatOnlineDecisionRequired refuses a protected MLS action that did
+// not come through the online decision path; nothing ran.
+const ErrCodeChatOnlineDecisionRequired = "chat_online_decision_required"
+
+func onlineDecisionRequired() proto.BaseResponse {
+	return proto.BaseResponse{
+		Error:     "this chat action needs a current online decision",
+		ErrorCode: ErrCodeChatOnlineDecisionRequired,
+	}
+}
+
 func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 	return func(action string) (proto.BaseResponse, bool) {
 		if !caller.app && !nativeFramesDriveChat && dispatch.AppOnly(action) {
 			return appCallerRequired(), false
+		}
+		// The kill harness build drives chat over Native frames without the
+		// App or the API; every other caller needs a decision (lv78 K3).
+		if dispatch.OnlineDecisionRequired(action) && !caller.onlineDecision && (caller.app || !nativeFramesDriveChat) {
+			return onlineDecisionRequired(), false
+		}
+		// lv78 A1b: the account-level MLS actions likewise. The only Native
+		// frame exempt is an Extension E2E fixture in a keeper_e2e build
+		// (compile time; never a release).
+		if dispatch.AccountOnlineDecisionRequired(action) && !caller.accountOnlineDecision &&
+			(caller.app || !(nativeFramesDriveChat || dispatch.NativeFixtureExempt(action))) {
+			return onlineDecisionRequired(), false
 		}
 		gated, revocation := dispatch.ChatRuntimeClass(action)
 		if !gated && !caller.chatWrite {
@@ -318,7 +347,7 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 			if refusal, ok := a.chatLoginAdmission(caller.loginGeneration); !ok {
 				return refusal, false
 			}
-			if revokes {
+			if revokes && !dispatch.ChatRuntimeRevocationDeferred(action) {
 				a.revokeLocked(revocation)
 			}
 			return proto.BaseResponse{}, true
@@ -328,8 +357,10 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		// action is App-only and was refused above. The rest is the kill
 		// harness build (nativeFramesDriveChat).
 		if revokes {
-			a.revokeLocked(revocation)
-			l.extensionAt = now
+			if !dispatch.ChatRuntimeRevocationDeferred(action) {
+				a.revokeLocked(revocation)
+				l.extensionAt = now
+			}
 			return proto.BaseResponse{}, true
 		}
 		if live {
@@ -341,5 +372,24 @@ func (a *App) chatRuntimeGate(caller chatRuntimeCaller) dispatch.Gate {
 		}
 		l.extensionAt = now
 		return proto.BaseResponse{}, true
+	}
+}
+
+// chatRuntimeAfter applies a revocation deferred to the handler's answer
+// (dispatch.RevocationAfter): a purge revokes the runtime only once it erased
+// the state of the sign-in it named.
+func (a *App) chatRuntimeAfter(caller chatRuntimeCaller) dispatch.After {
+	return func(action string, resp proto.BaseResponse) {
+		reason := dispatch.RevocationAfter(action, resp)
+		if reason == "" {
+			return
+		}
+		l := &a.chatRuntime
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		a.revokeLocked(reason)
+		if !caller.app {
+			l.extensionAt = a.Clock()
+		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -150,10 +151,24 @@ func (f *chatStateFixture) seedConversation(t *testing.T, ownerAccountID string)
 	}
 }
 
+// purge erases the account's state as a legitimate current-sign-in logout
+// does: it names the current chat state generation, binding the account first
+// when the fixture never did.
 func (f *chatStateFixture) purge(t *testing.T, ownerAccountID string) proto.BaseResponse {
 	t.Helper()
-	return HandleChatStatePurge(f.deps, chatMarshal(t, proto.ChatStatePurgeRequest{
-		OwnerAccountID: ownerAccountID,
+	generation, err := keychain.GetChatStateGeneration(f.deps.Store, ownerAccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation == "" {
+		binding, _, err := keychain.SetAccountBinding(f.deps.Store, ownerAccountID, "alice", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		generation = binding.ChatStateGeneration
+	}
+	return HandleChatStatePurge(f.deps, chatMarshal(t, map[string]any{
+		"owner_account_id": ownerAccountID, "expected_generation": generation,
 	}))
 }
 
@@ -411,9 +426,22 @@ func TestChatState_PurgeRemovesTheStateAndNeedsNoPermit(t *testing.T) {
 	assertChatStateFailure(t, f.readOutbox(t, f.permit(t)), string(errs.ErrCodeChatStateNotFound))
 }
 
+// The request carries a well-formed generation, so the only thing wrong with
+// it is the owner: the refusal must come from owner validation, not from the
+// generation check that runs first.
 func TestChatState_PurgeRejectsAMalformedOwner(t *testing.T) {
 	f := newChatStateFixture(t)
-	assertChatStateFailure(t, f.purge(t, "not-a-uuid"), string(errs.ErrCodeChatStateInvalidInput))
+	binding, _, err := keychain.SetAccountBinding(f.deps.Store, chatAccountID, "alice", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := HandleChatStatePurge(f.deps, chatMarshal(t, map[string]any{
+		"owner_account_id": "not-a-uuid", "expected_generation": binding.ChatStateGeneration,
+	}))
+	assertChatStateFailure(t, resp, string(errs.ErrCodeChatStateInvalidInput))
+	if !strings.Contains(resp.Error, "owner_account_id") {
+		t.Fatalf("refused for %q, want the owner_account_id check", resp.Error)
+	}
 }
 
 // The wire spells the two ratchets and the store stores them, so a drift here

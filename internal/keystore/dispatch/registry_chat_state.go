@@ -19,7 +19,10 @@ import (
 
 func chatStateActions() map[string]action {
 	return map[string]action{
-		proto.ChatStateReadOutbox: direct(handlers.HandleChatStateReadOutbox).gated(),
-		proto.ChatStatePurge:      direct(handlers.HandleChatStatePurge).revoking(ChatRuntimeRevokedPurged),
+		proto.ChatStateReadOutbox: direct(handlers.HandleChatStateReadOutbox).gated().needsOnlineDecision(),
+		proto.ChatStatePurge:      direct(handlers.HandleChatStatePurge).revokingOnErase(ChatRuntimeRevokedPurged),
+		// lv78 A3: the App's cleanup of state an older Keeper left unversioned.
+		proto.ChatStatePurgeUnversioned: direct(handlers.HandleChatStatePurgeUnversioned).
+			revokingOnErase(ChatRuntimeRevokedPurged).appOnlyAction(),
 	}
 }

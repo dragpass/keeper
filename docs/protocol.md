@@ -123,7 +123,7 @@ and return only encrypted or public material, never RK24 text.
 |`device_key_status`|_empty_|`{ present }`|Whether a deviceKey is stored (0.0.57). Returns no key material. A stored value that is not Base64 of 32 bytes is `storage_failure`, not `present: false`.|
 |`device_key_ensure`|_empty_|`{ created }`|Generate a CSPRNG 32B deviceKey inside Keeper and store it in the deviceKey slot, only when none is stored (0.0.57). `created` is `false` when one already was; repeating the call changes nothing. The check and the write run under the keychain process lock, so concurrent callers in one or several Keeper processes store one key. A malformed stored value is refused with `storage_failure` and left in place. Returns no key material.|
 |`deletedevicekey`|_empty_|_empty_|Remove deviceKey from Keychain (account reset).|
-|`reset_device_identity`|_empty_|`{ cleared }`|Local self-recovery: wipe this device's account-scoped key material — active keypair (`keeper_private_key`/`keeper_public_key`), pending keypair (`pending_keeper_private_key`/`pending_keeper_public_key`), `session_code`, `device_key`, the MLS leaf signature key, active and pending (`mls_leaf_signature_key`, 0.0.43; `mls_leaf_signature_key_pending`, 0.0.45; both cleared under the leaf lock, so a reset never interleaves with a declare or promote in another process), the device id and the account binding (`device_id`, `account_binding`, 0.0.58) — plus every owner's chat state (the sealed files, the anchors, and the seal keys), so the user can re-enroll after a server-side account/DB reset. `cleared` = names of slots actually removed (idempotent: `[]` when nothing was present). `server_public_key` is preserved (account-independent trust anchor). Returns no key material.|
+|`reset_device_identity`|_empty_|`{ cleared }`|Local self-recovery: wipe this device's account-scoped key material — active keypair (`keeper_private_key`/`keeper_public_key`), pending keypair (`pending_keeper_private_key`/`pending_keeper_public_key`), `session_code`, `device_key`, the MLS leaf signature key, active and pending (`mls_leaf_signature_key`, 0.0.43; `mls_leaf_signature_key_pending`, 0.0.45; both cleared under the leaf lock, so a reset never interleaves with a declare or promote in another process), the device id and the account binding (`device_id`, `account_binding`, 0.0.58) — plus every owner's chat state (the sealed files, the anchors, and the seal keys), so the user can re-enroll after a server-side account/DB reset. `cleared` = names of slots actually removed (idempotent: `[]` when nothing was present). `server_public_key` is preserved (account-independent trust anchor). Returns no key material. It also clears the pending signup input, the pending recovery keypair, the pending personal key bundle, the pending signup personal DEK and the device-wrapped personal DEK. **Authority.** No input, so nothing binds it to an account, a binding generation, a pending leaf or a server decision; it needs no online decision, no lease and no pairing proof beyond the channel. It is not App-only: any Native Messaging frame runs it (the Extension, a standalone stdio host, or a frame a Native host proxies to the App-service owner), and as a revoking action it revokes the chat runtime epoch (`reset`) before the handler runs, whoever holds the lease. No App Local RPC route names it and it is not on the MCP surface. Everything `mls_leaf_abort` or `mls_leaf_status` could change or read is a subset of what it removes.|
 |`device_id_ensure`|`candidate_device_id?` (lowercase non-nil UUID)|`{ device_id, source }`|(0.0.58) This machine's device id, the `X-Device-ID` the App and the Extension both send once they adopt it. The first call chooses it, in this order, and stores it in the `device_id` slot: an id already stored (`source: "stored"`); the `device_id` of the active, else the pending, MLS leaf record (`"leaf"`), so a leaf never has to move; `candidate_device_id` (`"candidate"`), the id the caller already used; a new random UUID (`"generated"`). Every later call answers the stored id whatever it sends; no action changes it, and only `reset_device_identity` clears it. The read, the choice and the write run under the keychain process lock, so concurrent callers in one or several Keeper processes store one id. A leaf record that cannot be read, or a stored id that is not a lowercase UUID, is `storage_failure` and nothing is written. A `candidate_device_id` that is not a lowercase UUID is `validation_error`. Not secret; nothing here signs with it.|
 |`account_binding_set`|`account_id` (lowercase UUID), `alias` (3..32 of `a-z 0-9 . _ -`, starting with a letter), `renew?` (bool)|`{ changed, generation, chat_state_generation? }`|(0.0.58) App only (a Native Messaging frame is refused). Before a fenced chat login, records which account the App signed in to on this device, in the `account_binding` slot, for the Extension to sign itself in with. The App calls it after a sign-in, signup or recovery once `/account/me`'s `public_key` matches this Keeper's active key. Needs an active account key (`not_found` otherwise). A record that already holds the same account and alias and is not signed out is left alone (`changed: false`) unless `renew` is true; so is a `signed_out` record when `renew` is not set, whatever it names. Anything else is replaced with the next `generation` and `signed_out: false`. A restored session therefore never clears the mark `device_signout` or `account_binding_signout` left (a restore that read the account just before the sign-out would otherwise undo it); only a sign-in, signup or recovery does. The App sends `renew: true` when it has just opened a session (sign-in, signup, recovery) and omits it when it restores one: a recovery rotates the account key and a sign-in re-registers a revoked device without changing the account or alias, and the Extension, which retries a refused sign-in only once `generation` moves, must see either. A hint, not an identity: a sign-in is judged by the server's answer and the active account key, never by this record.|
 |`device_account_status`|_empty_|`{ device_id?, account_id?, alias?, generation, account_key_fingerprint?, device_master_present, signed_out, conditional_chat_purge, chat_state_generation? }`|(0.0.58) Read-only. `device_id` is absent until `device_id_ensure` ran; `account_id` / `alias` until the App wrote a binding. `generation` moves on every binding change, `device_signout`, `account_binding_signout` and `renew` included, so polling it sees any change. `account_key_fingerprint` is lowercase hex SHA-256 of the active account public key PEM (the formula of `account_key_fingerprint` elsewhere). `device_master_present` is true only when both the device-wrapped personal DEK and the device key that opens it are stored. Returns no key material. A malformed binding or device id is `storage_failure`.|
@@ -308,7 +308,7 @@ dependency).
 
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
-|`refresh_server_keys`|`keys`, `root_public_key_fingerprint?`|`{ updated_versions, active_version, root_verified, rejected }`|Verify server `GET /api/v1/system/server-keys` response under embedded Root and update Keychain multi-version slots. `keys` is an array of `{ version, public_key_pem, issued_at, expires_at, status, root_signature? }`. `rejected` is reserved (currently always `[]`).|
+|`refresh_server_keys`|`keys`, `root_public_key_fingerprint?`|`{ updated_versions, active_version, root_verified, rejected }`|Verify server `GET /api/v1/system/server-keys` response under embedded Root and update Keychain multi-version slots. A build with no embedded Root key installs nothing and answers `crypto_failure` (the keys it pins stay); only a `keeper_e2e` build accepts keys unverified (`root_verified: false`). `keys` is an array of `{ version, public_key_pem, issued_at, expires_at, status, root_signature? }`. `rejected` is reserved (currently always `[]`).|
 
 ### User keypair rotation (Phase 13e + 14a)
 
@@ -358,7 +358,7 @@ the server may already hold. The server posts back an acceptance
 (`acceptance_token`, its `signature`, `server_key_version`, from a successful
 `POST /account/mls-leaves`), which `mls_leaf_promote` takes as
 `acceptance_token`, `server_signature`, `server_key_version`. Only an explicit
-`mls_leaf_abort` discards a pending entry. ariadne stops accepting a retried
+`mls_leaf_abort` that names the entry discards a pending entry. ariadne stops accepting a retried
 declaration once its `not_before` is more than 24 hours old or its `not_after`
 has passed; `mls_leaf_status` reports the pending window so the caller can see
 that, and the Keeper never aborts on its own.
@@ -502,9 +502,9 @@ pool with the rest of the chat state; so does `chat_state_purge` (below).
 |---|---|---|---|
 |`mls_leaf_declare`|`challenge_token`, `server_signature`, `server_key_version?`, `account_id`, `device_id`, `not_before`, `not_after`, `reason`|`{ account_id, device_id, signature_key, signature_key_fingerprint, not_before, not_after, reason, signature }`|Mint this device's leaf key — the first (`enroll`) or a replacement (`rotate`) — and sign a declaration for it with the account identity key, RSA-PSS SHA-256 over the v2 canonical above. Key and declaration go to the **pending** slot; the active slot does not change until `mls_leaf_promote`. **Gated by a purpose-bound challenge.** The server signature over `challenge_token` must verify, and then the token must be exactly `dragpass.mls.leaf.challenge\|1\|<account_id>\|<device_id>\|<nonce>\|<expires_at_unix>` as issued by `POST /account/mls-leaves/challenge` — six fields, that domain, version `1`, `nonce` 64 lowercase hex, `expires_at` a canonical decimal. Its `account_id` and `device_id` must equal the request's. It is refused at `expires_at` with no grace (as the chat permits are), and also when `expires_at` lies more than 300 + 5 seconds ahead: the issuer sets it to issue time + 300, so that is a token issued in the future beyond the 5s skew the chat permits allow on `issued_at`. A signed token for any other purpose — a rotation challenge, or the KeyPackage challenge — is refused. All of it is checked before the lock is taken and the slots are read, and every refusal is `validation_error`. Single use is the server's: it consumes the nonce with the declaration write, and the Keeper keeps no nonce list. `not_before` more than 300s ahead of the Keeper clock, a window that breaks the rule above, and a `not_after` already passed are `validation_error`. **With a pending entry present the call returns it unchanged, byte for byte, and mints nothing**, whatever its challenge, reason or window (see above). Otherwise: `enroll` needs no usable active key (a 0.0.43/0.0.44 record does not count) and is `validation_error` over one — rotate instead. `rotate` is accepted with or without one (0.0.51): without one it is a **takeover** (design M4.4) — a new machine, a reinstall, or a device after `reset_device_identity` taking over the account from whichever device holds its live declaration — and it mints into pending exactly as a normal rotate does, with the same acceptance and promote. This widens nothing: every declaration is signed with the account identity key, which a device must already hold to sign one, and whether the new declaration supersedes another device's is the server's to accept and every peer's §5.3 freshness check to enforce. (0.0.55) A takeover declaration alone moves no seat: no member builds, and no receiver applies, the replace that seats the new device without the old device's `mls_leaf_handover_sign` approval ("Device succession" below). (Before 0.0.51 a rotate without an active key was `not_found`.) `signature_key` is the raw 32-byte public key in Base64; `signature_key_fingerprint` is lowercase `hex(sha256(those 32 bytes))` — **not** the account key formula, which hashes PEM bytes, and computed by a different function that refuses anything but a raw key. `device_id` is the caller's `X-Device-ID`; the Keeper does not check it against its own `device_id` slot (0.0.58, `device_id_ensure`), which adopts this record's id when it chooses one. A stored key, active or pending, for a different `(account_id, device_id)` is refused for both reasons — the way out is `reset_device_identity`. There is no revoke: a `rotate` declaration supersedes the previous one. Not on the MCP surface.|
 |`mls_leaf_promote`|`acceptance_token`, `server_signature`, `server_key_version?`|`{ promoted, signature_key_fingerprint }`|Make the pending entry active. The server signature over `acceptance_token` must verify, and the token must parse strictly as the acceptance above — seven fields, that domain, version `1`, canonical decimals, a valid window — else `validation_error`. It must then name **exactly** the pending entry: account, device, fingerprint, `not_before`, `not_after`. Pending is copied over active in one keyring write and the pending slot is emptied; `promoted: true`. **Before that write** (0.0.50), every KeyPackage pool entry not minted under the promoted leaf is deleted: the previous leaf's entries, and any entry a Keeper before 0.0.50 wrote without recording its leaf, which is treated as belonging to no leaf. The server stops serving the previous leaf's unconsumed KeyPackages once the new declaration supersedes it, so both sides drop them together; a Welcome already on its way to one of them fails with `CHAT_MLS_WELCOME_UNUSABLE`. The pool goes first and the keyring second, under the same lock: if the pool write fails the call is `storage_failure` with pending still pending and the active slot untouched, and a retry of the same acceptance runs the whole promote again. A crash between the two leaves the old leaf active with its entries already gone, which the server agrees with; the other order could leave the new leaf active beside the old leaf's entries. An account with no chat state seal key has no pool, and none is created. A token naming the **current active** entry is a duplicate promote (a retry after a lost response) and succeeds with `promoted: false` and no write, even while a newer rotation is pending. Anything else is `validation_error` and changes nothing. Not on the MCP surface.|
-|`mls_leaf_abort`|_empty_|`{ aborted }`|Discard the pending entry. The active entry is never touched. `aborted=false` when there was none (idempotent). Not on the MCP surface.|
-|`mls_leaf_status`|_empty_|`{ has_active, active_signature_key_fingerprint, active_not_after, has_pending, pending_signature_key_fingerprint, pending_not_before, pending_not_after }`|App only (a Native Messaging frame is refused). Which entries exist, by fingerprint and window; no key, no declaration. `has_active` is false for a 0.0.43/0.0.44 record. The pending window is what tells the caller the server will no longer take a retry. Not on the MCP surface.|
-|`mls_leaf_handover_sign`|`account_id`, `new_declaration` (a declaration as `mls_leaf_declare` returns it), `expires_at`|`{ handover: { account_id, old_device_id, old_signature_key_fingerprint, new_device_id, new_signature_key_fingerprint, issued_at, expires_at, signature } }`|App only (a Native Messaging frame is refused). (0.0.55, design Q1) **The old device's approval of a takeover.** This device holds the seat — its active leaf is the one every group tree holds for the account — and a person on it approved the takeover request the app shows. Before signing the Keeper checks, against what it holds: a usable active leaf for `account_id` (`not_found` otherwise); `new_declaration` is a `rotate` for `account_id`, for **another** device, not yet ended, whose signature verifies under **this device's** account public key; and `now < expires_at <= now + 600 + 60`. Any of those failing is `CHAT_MLS_HANDOVER_INVALID` and signs nothing. `issued_at` is now. The signature is Ed25519 with the active leaf's key over `dragpass.mls.leaf.handover\|1\|<account_id>\|<old_device_id>\|<old_signature_key_fingerprint>\|<new_device_id>\|<new_signature_key_fingerprint>\|<issued_at>\|<expires_at>` (nine items, no trailing newline), standard Base64. Not gated by a server challenge: without a declaration this account's key signed there is nothing to approve, and a server can only relay one. Not on the MCP surface.|
+|`mls_leaf_abort`|`account_id`, `binding_generation`, `pending_signature_key_fingerprint`|`{ aborted }`|App only, behind the chat runtime lease and the chat login generation like every gated action. Discard the pending entry the caller names, for the sign-in it names: `account_id` and `binding_generation` as `mls_leaf_status` reported them, and the pending entry's fingerprint as it reported it. Under the leaf lock, which is also the lock the account binding is written under, the Keeper deletes the pending entry and its staged Key Transparency event only when the account binding is present, not signed out, for `account_id`, at `binding_generation`, this device has an id, and the pending entry belongs to that account and this device and holds the key `pending_signature_key_fingerprint` names. Otherwise nothing is deleted: a binding that is signed out, for another account or at another generation is `CHAT_MLS_LEAF_BINDING_STALE` (a stale App after a sign-out or another sign-in); no pending entry, or one holding another key or of another account or device, is `CHAT_MLS_LEAF_PENDING_CHANGED` (it was promoted, replaced, aborted already, or a newer declare took its place since the caller read the status). A malformed request is `validation_error`. Success is always `aborted: true`. The active entry is never touched. No online decision: the API defines no authority for it; the binding above is local. Not on the MCP surface.|
+|`mls_leaf_status`|`account_id`|`{ account_id, binding_generation, has_active, active_signature_key_fingerprint, active_not_after, has_pending, pending_signature_key_fingerprint, pending_not_before, pending_not_after }`|App only (a Native Messaging frame is refused); on `/v1/chat/mls_leaf_status` the chat login generation header must be current. Which entries exist, by fingerprint and window; no key, no declaration. Answered only while the account binding is present, not signed out and for `account_id`, on a device with an id; otherwise `CHAT_MLS_LEAF_BINDING_STALE` with no data. A record of another account or device is not reported. `account_id` and `binding_generation` name the sign-in the answer is for; an abort decided on it carries them back. `has_active` is false for a 0.0.43/0.0.44 record. The pending window is what tells the caller the server will no longer take a retry. Not on the MCP surface.|
+|`mls_leaf_handover_sign`|`account_id`, `old_signature_key_fingerprint`, `new_declaration` (a declaration as `mls_leaf_declare` returns it), `expires_at`|`{ handover: { account_id, old_device_id, old_signature_key_fingerprint, new_device_id, new_signature_key_fingerprint, issued_at, expires_at, signature } }`|App only (a Native Messaging frame is refused). (0.0.55, design Q1) **The old device's approval of a takeover.** This device holds the seat — its active leaf is the one every group tree holds for the account — and a person on it approved the takeover request the app shows. Before signing the Keeper checks, against what it holds: a usable active leaf for `account_id` (`not_found` otherwise), which is the leaf `old_signature_key_fingerprint` names (checked under the leaf lock the signing key is read under, so a leaf replaced since the request was prepared signs nothing); `new_declaration` is a `rotate` for `account_id`, for **another** device, not yet ended, whose signature verifies under **this device's** account public key; and `now < expires_at <= now + 600 + 60`. Any of those failing is `CHAT_MLS_HANDOVER_INVALID` and signs nothing. `issued_at` is now. The signature is Ed25519 with the active leaf's key over `dragpass.mls.leaf.handover\|1\|<account_id>\|<old_device_id>\|<old_signature_key_fingerprint>\|<new_device_id>\|<new_signature_key_fingerprint>\|<issued_at>\|<expires_at>` (nine items, no trailing newline), standard Base64. Not gated by a server challenge: without a declaration this account's key signed there is nothing to approve, and a server can only relay one. Not on the MCP surface.|
 |`mls_key_package_generate`|`challenge_token`, `server_signature`, `server_key_version?`, `account_id`, `device_id`, `count` (1..32)|`{ key_packages: [{ key_package_b64, not_after }], leaf_signature_key_fingerprint }`|Produce `count` single-use KeyPackages for this device's **active** leaf, each carrying the active declaration in the `0xF0D0` LeafNode extension, for the caller to upload. **Gated by a purpose-bound challenge, like `mls_leaf_declare`** (0.0.45; it was the conversation-state permit, which a new device with no conversation cannot have, so it could never make the KeyPackages it needs to be added to its first one). The server signature over `challenge_token` must verify, and then the token must be exactly `dragpass.mls.keypackage.challenge\|1\|<account_id>\|<device_id>\|<nonce>\|<expires_at_unix>` — six fields, that domain, version `1` — for the request's account and device, refused at `expires_at` and more than 300 + 5 seconds ahead, exactly the leaf challenge's rules. A leaf challenge does not open this gate and this challenge does not open the leaf gate. ariadne consumes it with the upload (`POST /account/mls-key-packages`). Every refusal is `validation_error` (the signature itself `crypto_failure`). The active leaf must have been declared for the same account and device (`validation_error` otherwise); no active leaf — none, only a pending one, or a 0.0.43/0.0.44 record — is `not_found`; an active declaration whose `not_after` has passed is `validation_error` (rotate first). Each KeyPackage ends at the declaration's `not_after` when that comes before 89 days, and `not_after` in the response is the real value, which is what the upload declares. The private keys are sealed into the owner's KeyPackage pool before the response is built; if that write fails the call fails and nothing is returned. Each pool entry records the signature key fingerprint of the leaf it was minted under (0.0.50), strictly decoded (absent, or exactly 64 lowercase hex digits), so `mls_leaf_promote` can drop exactly the previous leaf's entries. `leaf_signature_key_fingerprint` (0.0.47) is the lowercase hex SHA-256 of the raw Ed25519 key every returned KeyPackage was built for, which is the active declaration's `signature_key_fingerprint`. The caller passes it to `POST /account/mls-key-packages`, and the server refuses the upload unless it is the fingerprint of the account's live declaration: the server cannot parse a KeyPackage, and without it a batch built for one leaf would be filed under whichever declaration is live when the upload arrives. The active slot is read once, and everything from that read to the pool write runs under the personal key bundle lock that `mls_leaf_declare` and `mls_leaf_promote` take, so a promote in another process lands before the read or after the pool write, never in between (0.0.47). A build without the MLS library is `CHAT_MLS_CAPABILITY_REQUIRED`. A KeyPackage over 8192 bytes fails the call rather than being dropped. Not on the MCP surface.|
 
 |Code|Trigger|
@@ -1204,7 +1204,7 @@ the mirror reason: a redelivery must advance the state once, not twice.
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`chat_state_read_outbox`|`permit`, `org_id`, `conversation_id`, `client_message_id`|`{ epoch, chain_index, iv_b64, ciphertext_b64, leaf_index, content_type? }`|Returns the bytes a retransmission must send. Everything it returns is public material the transport already carries; the permit is required because the set of conversations this device holds state for is not. (0.0.55) An `mls_encrypt` entry also reports `leaf_index` and `content_type`, so `(epoch, leaf_index, content_type, chain_index)` is the whole position `POST /:id/messages` declares: an app whose process died after `mls_encrypt` wrote its entry and before it posted, and which keeps no plaintext, reposts the same bytes from here. It answers before the pending-Commit and latch checks, like a retransmission through `mls_encrypt`.|
-|`chat_state_purge`|`owner_account_id`, `expected_generation?`|`{ removed_conversations, purged }`|Erases one account's chat state: the sealed files, the anchors, and the seal key. Logout calls it, because a logout knows whose state is going away; a device reset does not name an account, so `reset_device_identity` erases every owner's state in-process rather than through this action. Unlike `peer_key_pin`, which survives a logout so a human's out-of-band check is not thrown away, chat state must not — what is left behind is an entrance for a rewound chain later. The seal key goes **last**, and its removal is what makes the erasure final: a state file restored from a backup afterwards cannot be opened under the key that replaces it, so a purge cannot be used to clear a latched rekey requirement and then bring the rewound file back. **The one action here with no permit**: it only deletes, any local process can already delete these files with the filesystem, and requiring a server round trip would make erasure fail exactly when the user is logging out of a server they cannot reach. **It removes the KeyPackage pool** (0.0.45): the pool is sealed under the seal key this purge deletes, so it could not be opened afterwards anyway, and keeping the private keys of an account's outstanding KeyPackages on a device that has logged out of that account is the kind of leftover a logout exists to remove. The cost: KeyPackages already uploaded for this device become unjoinable, so after the next login the extension should replace its server-side pool rather than top it up. **It leaves the MLS leaf signature key alone** (0.0.43): that key is this device's identity, like the account keypair a logout also keeps, not conversation state; it signs and decrypts nothing on its own once the group state it would sign for is gone, and keeping it spares a re-login a rotation. `reset_device_identity` removes it.|
+|`chat_state_purge`|`owner_account_id`, `expected_generation`|`{ removed_conversations, purged }`; a failure after the erase steps ran carries `{ removed_conversations, purged: false, erase_incomplete: true }`|Erases one account's chat state only when `expected_generation` (the `chat_state_generation` from `account_binding_set` or `device_account_status`) is still that account's current chat state generation; otherwise it erases nothing and answers `purged: false`. A request without `expected_generation` is refused (`CHAT_STATE_INVALID_INPUT`) and erases nothing, so a late or misdirected logout cannot erase a newer sign-in's state. The chat runtime epoch moves (`chat_runtime_revoked`, reason `purged`) after a purge that erased (`purged: true`) and after a purge whose erase steps ran but one failed: that answer is a failure (`CHAT_STATE_STORAGE_FAILURE`) carrying `erase_incomplete: true` and `purged: false`, because part of the state may already be gone. A purge that erased nothing leaves the current runtime alone. It erases: the sealed files, the anchors, and the seal key. Logout calls it, because a logout knows whose state is going away; a device reset does not name an account, so `reset_device_identity` erases every owner's state in-process rather than through this action. Unlike `peer_key_pin`, which survives a logout so a human's out-of-band check is not thrown away, chat state must not: what is left behind is an entrance for a rewound chain later. The seal key goes **last**, and its removal is what makes the erasure final: a state file restored from a backup afterwards cannot be opened under the key that replaces it, so a purge cannot be used to clear a latched rekey requirement and then bring the rewound file back. **The one action here with no permit**: it only deletes, any local process can already delete these files with the filesystem, and requiring a server round trip would make erasure fail exactly when the user is logging out of a server they cannot reach. **It removes the KeyPackage pool** (0.0.45): the pool is sealed under the seal key this purge deletes, so it could not be opened afterwards anyway, and keeping the private keys of an account's outstanding KeyPackages on a device that has logged out of that account is the kind of leftover a logout exists to remove. The cost: KeyPackages already uploaded for this device become unjoinable, so after the next login the extension should replace its server-side pool rather than top it up. **It leaves the MLS leaf signature key alone** (0.0.43): that key is this device's identity, like the account keypair a logout also keeps, not conversation state; it signs and decrypts nothing on its own once the group state it would sign for is gone, and keeping it spares a re-login a rotation. `reset_device_identity` removes it.|
 
 ### Conditional account chat purge (unreleased)
 
@@ -1218,19 +1218,30 @@ unchanged binding preserves it. Binding deletion and recreation do not
 reuse it. It is not authentication and never replaces the paired caller,
 lease, epoch or account permit.
 
-A purge carrying `expected_generation` compares it to the named account's
-incarnation and erases under the same keychain process lock that serializes
-binding changes. Equality returns `purged: true` after successful erasure;
-inequality returns `purged: false`, zero removed conversations, and erases
-nothing. Missing or unreadable incarnation never authorizes a conditional
-erasure. Explicit null, empty or malformed conditions are refused, never
-interpreted as omission. Omission retains legacy unconditional erasure for
-old clients. An uncertain response confirms neither erasure nor a no-op.
+`chat_state_purge` requires `expected_generation`. The Keeper compares it
+to the named account's incarnation and erases under the same keychain
+process lock that serializes binding changes. Equality returns
+`purged: true` after successful erasure; inequality returns
+`purged: false`, zero removed conversations, and erases nothing. When the
+generation matched and an erase step failed, the remaining steps still run
+(the seal key last) and the answer is a failure carrying
+`erase_incomplete: true`: the state is no longer intact, but it is not
+confirmed erased either, so a retry with the same generation is expected. Missing or
+unreadable incarnation never authorizes an erasure. A request without
+`expected_generation` is refused with `CHAT_STATE_INVALID_INPUT` and erases
+nothing; explicit null, empty or malformed values are refused the same way.
+There is no unconditional erasure through this action: an old client that
+omits the generation gets the refusal, not a purge. An uncertain response
+confirms neither erasure nor a no-op.
 
-Runtime admission still revokes the epoch before the purge handler runs.
-A conditional mismatch can revoke a live lease even while preserving the
-account state. A continuing client must claim a fresh epoch and must not
-clear the account records merely because a conditional request succeeded.
+The chat runtime epoch moves (`chat_runtime_revoked`, reason `purged`) only
+after the handler reports `purged: true` or a failure with
+`erase_incomplete: true`. Admission does not revoke for this action, so a
+purge that erased nothing (a generation mismatch, a refusal, or a failure
+before any erase step ran) leaves the current runtime and its lease alone. A
+partial erase fails closed: the runtime that was working on that state is
+revoked, and the purge is still reported as failed. A client must not
+clear its account records merely because a request answered `purged: false`.
 
 The incarnation guarantee covers successful binding writes, not arbitrary
 App logins: the App currently allows login after an unanswered or failed
@@ -1241,6 +1252,35 @@ recovery remain unresolved. Older Keeper processes cannot rotate these
 slots; login and cleanup across a downgrade are outside this guarantee.
 An old Keeper has no atomic conditional erasure. A client must never fall
 back to unconditional erasure after an uncertain conditional request.
+
+### Erasing chat state with no generation (unreleased)
+
+A Keeper before the generation slot (0.0.58) wrote chat state that no
+generation names, and a client that signed out on it never learned one, so
+`chat_state_purge` cannot erase that state. `chat_state_purge_unversioned`
+is the separate, App-only action for it (a Native Messaging frame is refused
+with `chat_app_caller_required` before the handler runs; it is gated by the
+chat runtime lease like `chat_state_purge`).
+
+|Action|Request fields|Response fields|Description|
+|---|---|---|---|
+|`chat_state_purge_unversioned`|`owner_account_id`, `require_no_generation: true`, `require_not_signed_in: true`|`{ removed_conversations, purged, kept? }`; a failure after the erase steps ran carries `{ removed_conversations, purged: false, erase_incomplete: true }`|Erases one account's chat state only when, read under the keychain process lock in the same hold as the erase, the account has no chat state generation slot **and** the binding is not that account signed in (another account, signed out, or no binding). Otherwise it erases nothing and answers `purged: false` with `kept: "generation_present"` or `kept: "account_signed_in"`, a definite answer that does not change on retry until the evidence does. A request that does not set both conditions to `true`, names no account, or carries any other field is refused (`CHAT_STATE_INVALID_INPUT`) and erases nothing. While a chat login is committing it is refused and erases nothing. The chat runtime epoch moves as for `chat_state_purge`: after `purged: true` or `erase_incomplete: true` only.|
+
+Both conditions are needed. "No slot" alone also holds for a 0.0.58 binding
+restored without `renew`, which never rotates the generation, so a live
+session may be running on that state; the binding check keeps it. "Not
+signed in" alone also holds for a newer sign-in's state after a sign-out,
+which only `chat_state_purge` with that sign-in's generation may erase; the
+slot check keeps it.
+
+This is not a generation-less `chat_state_purge`. That action still refuses
+a request without `expected_generation`, and a client must never retry an
+uncertain conditional purge through this action. This action never erases
+state that has a generation, whatever the request says, and it erases only
+on evidence the Keeper reads itself under the lock that orders sign-ins, not
+on the caller's word. A same-account sign-in on an updated Keeper gives the
+account a slot, after which this action keeps that state and only a device
+reset (`reset_device_identity`) removes it.
 
 
 **No new plaintext carve-out.** Nothing in this group returns plaintext:
@@ -1296,9 +1336,147 @@ the server and the Extension:
 |`CHAT_MLS_STATEMENT_UNVERIFIED`|(0.0.55) A signed statement in `mls_commit_build` (`org_removal_statements`, `leave_statements`, `device_revocations`) does not verify: bad signature, another organization or conversation, a changed admin key, or a revocation older than the leaf it names. Nothing was built.|
 |`CHAT_MLS_ROLES_UNSUPPORTED`|(0.0.55) A member's leaf or KeyPackage does not advertise the room roles extension, which a group carrying roles requires of every leaf. That member's Keeper must update. Nothing was built.|
 |`CHAT_MLS_REJOIN_UNVERIFIED`|(0.0.55) A `rejoin` in `mls_commit_build` carries a request that is not the account's own signed request for that KeyPackage's leaf and this conversation, or one outside its 30-day window; nothing was built.|
-|`CHAT_MLS_HANDOVER_INVALID`|(0.0.55) A leaf handover does not verify or does not fit: at `mls_leaf_handover_sign`, a declaration this account's key did not sign, one for this device or another account, an enroll, or a closed window; at `mls_commit_build`, a `replace` handover not signed by the leaf the replace removes or naming another new leaf than the KeyPackage's. Nothing was signed or built.|
+|`CHAT_MLS_HANDOVER_INVALID`|(0.0.55) A leaf handover does not verify or does not fit: at `mls_leaf_handover_sign`, an active leaf other than the one `old_signature_key_fingerprint` names, a declaration this account's key did not sign, one for this device or another account, an enroll, or a closed window; at `mls_commit_build`, a `replace` handover not signed by the leaf the replace removes or naming another new leaf than the KeyPackage's. Nothing was signed or built.|
+|`CHAT_MLS_LEAF_PENDING_CHANGED`|`mls_leaf_abort` named a pending leaf that is not this sign-in's pending entry: none is there, or it holds another key, or it belongs to another account or device. Nothing was deleted; read `mls_leaf_status` again.|
+|`CHAT_MLS_LEAF_BINDING_STALE`|`mls_leaf_abort` or `mls_leaf_status` named a sign-in that is not this Keeper's current one: no account binding, a signed-out one, another account, or (abort) another binding generation. Nothing was read or deleted.|
 |`CHAT_MLS_PEER_UNVERIFIED`|(0.0.55) This device's strict policy (`require_verified_peers`) is on and the operation would bring in, or send to, another account whose pin is not `verified` (no pin counts): a local Add (`mls_group_create`, `mls_commit_build` add / replace / rejoin), a Join, or a send in a conversation that holds one. **Carries `data: { unverified_account_ids }`**. Nothing was built, joined, consumed or written. Reading is never refused, and neither is a received Commit (see "Strict policy in chat").|
 |`CHAT_STATE_STORAGE_FAILURE`|The state directory or the keyring could not be read or written. Nothing was committed.|
+
+### Online decision for protected App MLS actions (unreleased, lv78)
+
+Capability `online_decision.v1` in `chat_capabilities`. These 15 actions run
+only with an API-signed decision issued for that exact call:
+`chat_state_read_outbox`, `mls_commit_build`, `mls_commit_confirm`,
+`mls_conversation_status`, `mls_decrypt_batch_for_app_display`,
+`mls_encrypt`, `mls_epoch_comparison`, `mls_group_create`, `mls_join`,
+`mls_leave_request_sign`, `mls_mark_sent`, `mls_process`,
+`mls_rejoin_request_sign`, `mls_room_name_open`, `mls_room_name_seal`
+(`dispatch.OnlineDecisionActions`, pinned against the API issuer's set). On
+their own `/v1/chat/<action>` route, and from any other caller, they are
+refused before the handler with `chat_online_decision_required`. Cleanup
+(`chat_state_purge`, `mls_group_discard_unaccepted`,
+`mls_commit_discard_refused`, `mls_conversation_forget_removed`,
+`mls_leaf_abort`) needs no decision; `mls_leaf_abort` is still bound locally
+to the current sign-in and the pending leaf it names (see its row). The
+account-level MLS actions take their own decision (next section).
+
+The App runs a protected action in three steps; the chat runtime epoch and
+login generation headers apply to all of them as to every chat route.
+
+1. `POST /v1/chat/online/prepare` with `{action, request, token_id,
+   session_issued_at_nanos}`. `request` is the exact JSON the action takes
+   (its own cap and strict decode apply). Keeper requires its account binding
+   (signed in, naming the permit's account) and its device id, draws a
+   32-byte challenge and a 32-byte commitment key, and keeps them in process
+   memory for 10 seconds (monotonic; at most 128 pending; a restart forgets
+   all). Answer: `{challenge, request_commitment}` with
+   `request_commitment = hex(HMAC-SHA256(key, "dragpass.chat.online.request|1|len:action|len:request"))`.
+   The key never leaves Keeper.
+2. The App sends `{action, challenge, request_commitment}` to
+   `POST /api/v1/conversations/:id/keeper-online-decision` with its App session
+   and receives the decision.
+3. `POST /v1/chat/online/execute` with `{action, request, decision}`; `request`
+   must be byte for byte the prepared one.
+
+Decision: domain `dragpass.chat.online|1`, canonical
+`domain|len:field|...` over `challenge`, `account_id`, `device_id`,
+`token_id`, `session_issued_at_nanos` (decimal; a JSON string), `action`,
+`org_id`, `conversation_id`, `request_commitment`, `issued_at`,
+`expires_at`, `server_key_version`; RSA-PSS SHA-256 by the pinned server key
+of the named version (0 is refused); `expires_at - issued_at == 10`.
+
+Execute, under the request lock: (a) the decision's shape; its wall-clock
+window (`issued_at <= now + 5`, `now < expires_at`); the challenge exists and
+is before its deadline; the commitment recomputed over the request equals the
+stored one and the decision's; action, account, device, token id, session
+start, organization, conversation and login generation equal what the
+challenge was minted for; the signature verifies; the binding and device id
+are unchanged. Only then is the challenge consumed, so a refused decision
+leaves it for the right one and two racing executions admit at most one.
+(b) The action runs through the ordinary chat gate (lease, epoch, login
+generation). (c) The challenge deadline and the decision expiry are checked
+again; if either passed, the answer is replaced by
+`chat_online_output_withheld` with no data. The action ran and state it wrote
+stays written, so the App reads that state again (an unknown outcome, not a
+refusal). Every refusal in (a) is `chat_online_decision_refused` without
+saying which check failed, and means the action did not run.
+
+A decision does not replace the chat state permit, which the action still
+requires. It gates new Keeper work only: plaintext and signatures already
+returned, and a response whose check (c) passed before a revocation, are not
+recalled.
+
+### Online decision for account-level MLS actions (unreleased, lv78 A1b)
+
+Capability `account_online_decision.v1` in `chat_capabilities`. These six
+actions use this device's leaf or account signing key, or create KeyPackage
+private keys, and run only with an API-signed account decision issued for
+that exact call: `mls_leaf_declare`, `mls_leaf_promote`,
+`mls_key_package_generate`, `mls_leaf_handover_sign`,
+`mls_device_revoke_sign`, `org_member_removal_sign`
+(`dispatch.AccountOnlineDecisionActions`, pinned against the API issuer's
+authority set). On their own `/v1/chat/<action>` route, and from any other
+caller, they are refused before the handler with
+`chat_online_decision_required`. A Native Messaging frame never runs them in a
+release build. The one exception is compile time: a `keeper_e2e` build keeps
+serving `org_member_removal_sign` to the Extension's E2E member fixture over
+Native Messaging. `mls_leaf_abort` and `mls_leaf_status` need no decision: the
+API defines no authority for them; abort only drops a pending leaf and status
+only reads. Being outside the decision does not exempt them from the local
+binding: both answer only for the caller's current, signed-in account binding,
+and abort deletes only the pending leaf it names (see their rows).
+
+The three steps are those of the chat decision, on their own routes and with
+their own challenges (a chat challenge is never executed here, nor an account
+challenge on the chat path):
+
+1. `POST /v1/chat/account-online/prepare` with `{action, request, token_id,
+   session_issued_at_nanos, takeover_request_id?}`. Keeper requires its
+   account binding and device id, and derives the target from the request:
+   `device:<this device>` for `mls_leaf_declare` and
+   `mls_key_package_generate` (whose request must name this account and this
+   device) and `mls_leaf_promote`; `device:<device_id>` for
+   `mls_device_revoke_sign` (request `account_id` must be this account);
+   `org:<org_id>/account:<removed_account_id>` for `org_member_removal_sign`
+   (`admin_account_id` must be this account); and
+   `takeover:<takeover_request_id>/old_fp:<old_signature_key_fingerprint>/new_device:<device_id>/new_fp:<signature_key_fingerprint>/expires_at:<expires_at>`
+   for `mls_leaf_handover_sign`, with the old fingerprint of this device's
+   active leaf for this account (read under the leaf lock; the request's
+   `old_signature_key_fingerprint` must equal it, else the prepare is
+   refused), the new device and fingerprint from the request's
+   `new_declaration` (whose `account_id` must be this account) and the
+   request's `expires_at`. The request does not name the takeover
+   request, so the App names it here (only for this action). Answer: `{challenge, request_commitment, target}` with
+   `request_commitment = hex(HMAC-SHA256(key, "dragpass.mls.account_online.request|1|len:action|len:target|len:request"))`.
+2. The App sends `{action, challenge, request_commitment, target}` to
+   `POST /api/v1/account/mls-online-decision` with its App session; `target`
+   is the object form the API takes (`device_id`, `takeover_request_id`, or
+   `org_id` and `removed_account_id`).
+3. `POST /v1/chat/account-online/execute` with `{action, request, decision}`.
+
+Decision: domain `dragpass.mls.account_online|1`, canonical
+`domain|len:field|...` over `challenge`, `account_id`, `device_id`,
+`token_id`, `session_issued_at_nanos`, `action`, `target`,
+`request_commitment`, `issued_at`, `expires_at`, `server_key_version`; the
+same signature, key version and lifetime rules as the chat decision. Execute
+runs the same phases (a) to (c), with `target` compared in place of
+organization and conversation, the same refusal and
+`chat_online_output_withheld` answers, and the same limits: it gates new
+Keeper work only. For a handover the API checks this device holds the live
+declaration of that pending takeover request and derives the new device,
+fingerprint and expiry of the target from the request it stores, so a
+decision admits only a handover naming that request's new device, new key
+and expiry, the fields the API's approve endpoint compares. The API also
+takes `old_fp` from the stored request's old leaf fingerprint, the one approve
+compares, and Keeper binds the active leaf it read at prepare: phase (a)
+reads the active leaf again and refuses before the consume when it is not the
+bound one, and the handler signs only with the leaf the request names. So a
+leaf replaced on this device within the same sign-in, between prepare and
+execute, signs nothing with a held decision. A different sign-in, a sign-out
+or a device reset is refused by the binding re-read as for every account
+action. Peers still do not check a handover's `expires_at` against the clock
+(see the succession rule); this binding does not change that. A decision
+target is at most 320 bytes.
 
 ### MLS chat (chat v2 MLS actions)
 
@@ -1720,6 +1898,7 @@ batch with `CHAT_MLS_FAILED`, so nothing after it in the room ever showed.
 |---|---|---|---|
 |`mls_group_create`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID), `members` (1..32 × `{ account_id, device_id, key_package_b64 (≤8192B) }`, one entry per device, not the caller), `rotation_statements?`, `room_name_plaintext_b64?` (1..256B, UTF-8; rooms only, 0.0.52), `app_context_b64?` (1..65536B; 0.0.55), `roles` (`{ kind: "room"\|"dm", entries: [{ account_id, role }] }`; a room names this account owner; 0.0.55, required 0.0.58)|`{ client_commit_id, expected_epoch (0), commit_b64, welcome_b64, welcome_releasable (false), created, generation, name_epoch?, name_iv_b64?, name_ciphertext_b64?, leaf_trust? }`|(0.0.55) `roles` is written into the group context at create (see "Room roles"); (0.0.58) it is required, and a request without it is `CHAT_STATE_INVALID_INPUT`. Creates the conversation's group at epoch 0, verifies every member (§5.3 plus the credential match), and builds the Add, pending, in one transaction. Idempotent on `client_commit_id`: a retry answers from the stored Commit with `created: false`. A conversation that already holds a group or a pending Commit is `CHAT_STATE_CONFLICT`. (0.0.52) With `room_name_plaintext_b64` the name is resealed for epoch 1 from the pending create and returned as `name_*` (see "Room names" below); a retry reseals it again under a fresh IV. (0.0.55) `app_context_b64` is the app's own description of the Commit, opaque to the Keeper and never a secret by contract; it is stored with the pending Commit and returned by `mls_conversation_status` as `pending_app_context_b64` until the verdict, and a retry under the same `client_commit_id` keeps the first one. The name the first build sealed is stored with the pending Commit too (ciphertext only) and reported by `mls_conversation_status` as `pending_name_epoch` / `pending_name_iv_b64` / `pending_name_ciphertext_b64`; a retried build still answers with a name only when it carries one. (0.0.55) `leaf_trust` lists how the leaf verifier judged each account this call let in (see "Trust state in MLS responses" below); absent when it let none in. A retry answered from the stored Commit judges nothing and carries none.|
 |`mls_group_discard_unaccepted`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID)|`{ discarded, generation }`|(0.0.52) Drops this device's own group create that was never accepted, so `mls_join` can take the winning create's Welcome. Succeeds **only** when the pending Commit is the one named, was built against epoch 0 (the create), and the record was never confirmed past epoch 0; then the group state and the pending Commit are removed and nothing else changes. Every other state — another `client_commit_id`, a confirmed group, a joined group, a pending Commit that is not a create — is `CHAT_STATE_CONFLICT` and writes nothing. Idempotent: with no group and no pending Commit left it answers `discarded: false`. See "A lost create" below.|
+|`mls_commit_discard_refused`|`permit`, `org_id`, `conversation_id`, `client_commit_id` (UUID), `expected_epoch` (>= 1), `refusal_code`|`{ discarded, generation }`|Drops this device's own pending Commit that the server definitively refused. `refusal_code` must be one of `CHAT_ACCESS_DENIED`, `CHAT_MLS_MEMBER_SET_STALE`, `CHAT_MLS_REMOVAL_PENDING`, `CHAT_ROOM_MEMBER_LIMIT`, `CHAT_ROOM_OWNER_LEAVING`, `CHAT_ROOM_ROLE_REQUIRED`, `CHAT_SELF_REMOVE_REFUSED` (`CHAT_STATE_INVALID_INPUT` otherwise). `CHAT_MLS_EPOCH_STALE` and `CHAT_MLS_REMOVAL_IN_PROGRESS` are refused before that list is read: each means the server holds or may take the Commit. Succeeds **only** when the pending Commit is the one named, was built on `expected_epoch`, the group's confirmed epoch is still that epoch, and the Commit was built under the chat login generation current now (read under the keychain process lock); then the pending Commit is dropped and the confirmed state is written back unchanged. Every other state, including nothing pending, is `CHAT_STATE_CONFLICT` and writes nothing. Not idempotent. See "A refused Commit" below.|
 |`mls_epoch_comparison`|`permit`, `org_id`, `conversation_id`|`{ epoch, digest_b64 }`|(0.0.56) App only (a Native Messaging frame is refused). Returns a room- and confirmed-epoch-bound SHA-256 digest derived inside the Rust MLS boundary from the MLS epoch authenticator. The raw authenticator never crosses the C ABI or Go. Refuses when a Commit is pending, no group exists, or the loaded MLS epoch disagrees with the sealed record. This is an App-only manual comparison aid: matching values observed and compared through an independent channel provide evidence that the participants hold the same MLS state at that epoch. It is not a server-independent identity proof, is not persisted as a verified status, and does not automatically detect a split view. The typed App Local RPC route exposes it to the App; no Extension caller is added, and the action stays off the MCP surface.|
 |`mls_conversation_forget_removed`|`permit`, `org_id`, `conversation_id`|`{ forgotten, generation }`|(0.0.53) Drops the group state of a conversation this device was removed from, so a later `mls_join` lands in a clean record. Succeeds **only** when the last Commit applied to the confirmed state removed this device's leaf (`mls_process` or `mls_commit_confirm` answered `removed: true`, and no join or create has replaced the group since); then the group state, the pending Commit, the removal latch and the leaf-replacement latch are removed. The sealed local history, the received marks, the outbox and the confirmed epoch stay, so a re-read keeps working and the rollback anchor is judged as before. Every other state is `CHAT_STATE_CONFLICT` and writes nothing, and a record latched `NeedsRekey` is `CHAT_STATE_REKEY_REQUIRED`. Idempotent: with no group and no pending Commit left it answers `forgotten: false`. Call it **before** `mls_join`. See "Switching back after a takeover" below.|
 |`mls_commit_build`|`permit`, `org_id`, `conversation_id`, `client_commit_id`, `expected_epoch` (≥1), exactly one of `add` (1..32 members), `remove_account_ids` (1..64 UUIDs; every leaf of each account), `replace` (1..32 × `{ account_id, key_package_b64 (≤8192B), handover? }`, one entry per account; 0.0.51, `handover` 0.0.55), `rejoin` (1..32 × `{ account_id, device_id, key_package_b64 (≤8192B), request }`, one entry per account, `request` as `mls_rejoin_request_sign` returns it; 0.0.55), `revoke_devices` (1..64 × `{ account_id, device_id }`; 0.0.55), `update_self: true`, or `set_roles` alone; `set_roles?` (the complete new role list; alone, or with `add`, `remove_account_ids` or `revoke_devices`; 0.0.55); `org_removal_statements?`, `leave_statements?`, `device_revocations?` (each ≤64; 0.0.55); `user_initiated?` (`add`, `remove_account_ids`, `set_roles`, `replace`; 0.0.55); `rotation_statements?`; `app_context_b64?` (1..65536B; 0.0.55); `room_name_plaintext_b64?` (1..256B, UTF-8; rooms only, 0.0.52)|as `mls_group_create`; `welcome_b64` empty unless the Commit adds; `leaf_trust` only for `add` and `replace` (0.0.55)|One pending Commit of one kind. A plan that mixes kinds is refused (validation, and `chatstate.CommitPlan` below it). `expected_epoch` is checked against the confirmed epoch before anything is built (`CHAT_MLS_EPOCH_STALE`). A Remove never refuses on the S-1 latch: it is the way out of it. A Remove naming an account with no leaf in the group is `CHAT_MLS_FAILED` rather than a smaller Commit. **`replace`** (design M4.4) is the way out of the leaf-replacement latch: for each entry, one Commit removes every leaf of the account whose signature key fingerprint is not the replacement's and adds the given KeyPackage. Every account must be one this permit lists in `pending_leaf_replacements` (`CHAT_STATE_INVALID_INPUT` otherwise, before anything is opened). The KeyPackage's credential must name that account, and its leaf's signature key fingerprint must equal the `new_signature_key_fp` the **current permit** lists for it: any other key — the old device's, or one substituted — is `CHAT_MLS_LEAF_UNTRUSTED`. It then passes the full §5.3 verification as an entering leaf, freshness included. An account with no leaf under another key is `CHAT_MLS_FAILED`: there is nothing it replaces. (0.0.55) Each entry needs the old device's `handover` ("Device succession" above): it must be signed by the leaf the replace removes and name the KeyPackage's leaf (`CHAT_MLS_HANDOVER_INVALID` otherwise), and it rides in the Commit's authenticated data ("Commit evidence" above). An entry without one is an account recovery ("Account recovery seats a new identity" above): it needs `user_initiated: true` and a leaf carrying another account key than the one it replaces, and is `CHAT_MLS_COMMIT_UNAUTHORIZED` otherwise. Several accounts in one `replace` are fine. A refusal builds and writes nothing. A device the replace removes still processes the Commit (the leaf it adds is verified like any entering leaf) and sees `removed: true`. (0.0.52) With `room_name_plaintext_b64` — the name as this device last opened it — the name is resealed for `expected_epoch + 1` from the pending Commit, before the CAS, and returned as `name_epoch` / `name_iv_b64` / `name_ciphertext_b64` for `POST /:id/mls/commit` to store atomically with the Commit. A reseal that fails refuses the build and persists no Commit. (0.0.55) `app_context_b64` and the stored first name as for `mls_group_create`: an app that lost its own note of a pending Commit reads the description and the name back from `mls_conversation_status` and rebuilds the same request, which answers with the stored Commit and Welcome, so it can post the Commit again rather than leave the conversation `commit_pending` for good. (0.0.55) Every kind is held to the Commit authority rules above before anything is built, over the change it would make: the group's roles, the signed statements handed in (verified first: `CHAT_MLS_STATEMENT_UNVERIFIED`, and carried in the Commit together with any handovers as one evidence document), and `user_initiated` as the app's intent; a refusal is `CHAT_MLS_COMMIT_UNAUTHORIZED`. **`revoke_devices`** removes exactly the leaf of each `(account_id, device_id)`, on a matching signed `device_revocations` entry; a device with no leaf is `CHAT_MLS_FAILED`. **`set_roles`** writes the new roles into the group context (a GroupContextExtensions proposal the rules judge); a member whose leaf lacks `0xF0D1` makes it `CHAT_MLS_ROLES_UNSUPPORTED`. **`rejoin`** re-seats each account in one Commit (every leaf it holds out, the KeyPackage in) after verifying its signed request (see "Signed rejoin" above; `CHAT_MLS_REJOIN_UNVERIFIED` otherwise); an account with no leaf in the group is `CHAT_MLS_COMMIT_UNAUTHORIZED`. The Removes a build makes are exactly the ones approved to the library's rules for that build.|
@@ -1734,7 +1913,7 @@ batch with `CHAT_MLS_FAILED`, so nothing after it in the room ever showed.
 |`mls_conversation_status`|`permit`, `org_id`, `conversation_id`|`{ epoch, has_group_state, commit_pending, pending_client_commit_id, pending_app_context_b64?, pending_name_epoch?, pending_name_iv_b64?, pending_name_ciphertext_b64?, removal_latch_account_ids, leaf_replacement_latch: [{ account_id, new_signature_key_fp }], device_revoke_latch: [{ account_id, device_id }], authority, roles: [{ account_id, role }], needs_rekey, sync_blocked, rekey_cause?, rekey_epoch?, rekey_committer_account_id?, rekey_committer_device_id?, removed_from_group, member_trust?, require_verified_peers, unverified_account_ids }`|(0.0.55) App only (a Native Messaging frame is refused). `rekey_cause` is present only with `needs_rekey: true` and says which check latched it: `rollback_detected` (the state file is behind the keyring anchor: a restored or copied file), `state_missing` (the file is gone while the anchor says it was used), `watermark_ahead` (the server says this device's own leaf sent further than the file knows), `anchor_unreadable`, `unauthorized_commit` (a received Commit the authority rules refused; `rekey_epoch` and `rekey_committer_*` name it), `fork` (another Commit served for an epoch already confirmed; `rekey_epoch` names it), or `unknown` for a latch set before the cause was recorded. The first cause is kept. The recovery is the same for all of them. Read-only. The confirmed epoch, the pending Commit's id, the accounts a send would be refused for right now (the stored S-1 latch plus this permit's list, judged on the confirmed roster and not written), the same for the leaf-replacement latch (0.0.51; empty, never null), whether the record is latched `NeedsRekey` (then every other field is zero, and the conversation's history is still readable through `mls_decrypt_batch_for_app_display`), whether a group exists, and `removed_from_group` (0.0.53): the last Commit applied here removed this device, so `mls_conversation_forget_removed` has to run before `mls_join`. It is the record's own mark, reported and never changed by this read, so an app that restarted and no longer holds the `removed: true` it saw on `mls_process` / `mls_commit_confirm` can still keep that order; it goes false once the forget, a join or a create replaces the group. Lets the app show "참여자 변경 반영 중" before it tries to send. It passes through the same rollback judgement as every read, so a rewind it finds is latched by it. Returns no secret and nothing derived from one. (0.0.55) `pending_app_context_b64` is the `app_context_b64` the pending Commit was built with, and `pending_name_*` the room name its first build sealed (the `name_*` that build answered with); each is absent when no Commit is pending or it was built without one (every Commit built before 0.0.55). (0.0.55) `member_trust` is every other account in the confirmed tree held against its pin as it now stands (see "Trust state in MLS responses" below). Absent with `needs_rekey`, without a group, and when the pins could not be read; it is a display hint, so that read never fails the status. (0.0.55) `device_revoke_latch` is the device revocation latch as `removal_latch_account_ids` is S-1's. `authority` names the rules the group is judged by — `roles`, `dm`, `roleless` (0.0.58: a group without roles, which takes no Commit), or `""` without a group, with `needs_rekey`, or when the group context could not be read — and `roles` is a room's owner and admins from its group context (`[]` otherwise). (0.0.58) `roles_migratable` is gone: nothing migrates a group without roles any more. (0.0.55) `require_verified_peers` is this device's strict policy and `unverified_account_ids`, under it, every other account in the confirmed tree whose pin is not `verified` (a missing pin included): what a send would be refused for now with `CHAT_MLS_PEER_UNVERIFIED`. Empty, never null, when the policy is off, when every member is verified, and without a group. Unlike `member_trust` it is a gate, so a policy record or pins that cannot be read fail the status (`storage_failure`). `sync_blocked` (N3) is the received Commit this conversation is stopped at, or null: `{ epoch, cause, committer_account_id?, committer_device_id?, commit_sha256 }`. It is not a latch, and the rest of the status is read as usual.|
 |`mls_rejoin_request_sign`|`permit`, `org_id`, `conversation_id`|`{ request: { conversation_id, account_id, device_id, signature_key_fp, requested_at, signature } }`|(0.0.55) App only (a Native Messaging frame is refused). This device's signed request to be re-seated (see "Signed rejoin" above): the permit's account, the active leaf's device and key, now, signed with the account key. Writes nothing.|
 |`mls_leave_request_sign`|`permit`, `org_id`, `conversation_id`|`{ statement: { conversation_id, account_id, requested_at, signature } }`|(0.0.55) App only (a Native Messaging frame is refused). This account's signed request to leave the conversation (see "Signed statements"): the permit's account, now, signed with the account key. Any remaining member's Keeper accepts a Remove of this account that carries it. Writes nothing.|
-|`org_member_removal_sign`|`org_id`, `removed_account_id`, `admin_account_id` (this device's account)|`{ statement: { org_id, removed_account_id, admin_account_id, removed_at, signature } }`|(0.0.55) An org admin's signed statement that an account was removed from the organization. `admin_account_id` must be the account of this device's active leaf; signing for another account is `CHAT_STATE_INVALID_INPUT`-class validation. The server stores it and serves it, with the admin's public key, alongside the pending removals. Writes nothing.|
+|`org_member_removal_sign`|`org_id`, `removed_account_id`, `admin_account_id` (this device's account)|`{ statement: { org_id, removed_account_id, admin_account_id, removed_at, signature } }`|(0.0.55) An org admin's signed statement that an account was removed from the organization. `admin_account_id` must be the account of this device's active leaf; signing for another account is `CHAT_STATE_INVALID_INPUT`-class validation. The server stores it and serves it, with the admin's public key, alongside the pending removals. Writes nothing. App-only (lv78): a Native Messaging frame is refused with `chat_app_caller_required` before the handler reads any key; only a `keeper_e2e` build serves it to the Extension's E2E member fixture.|
 |`mls_device_revoke_sign`|`account_id` (this device's account), `device_id`|`{ statement: { account_id, device_id, revoked_at, signature } }`|(0.0.55) App only (a Native Messaging frame is refused). This account's signed revocation of one of its devices' leaves. Writes nothing.|
 
 `rotation_statements` is the flat list of `KeyRotationStatement`s (the shape
@@ -1855,6 +2034,46 @@ nothing is encrypted while a Commit is pending, and epoch 0 has no other
 member. What the Keeper cannot check is the server's verdict: an accepted create
 whose answer was lost looks the same locally, so call it only after the server
 gave the epoch to another create (ask by `client_commit_id` when unsure).
+
+**A refused Commit (lv78).** The server can refuse a Commit for good and store
+nothing: a member removal is pending in the conversation
+(`CHAT_MLS_REMOVAL_PENDING`, when the pending removal is not this caller's own
+Remove Commit), the caller is no longer a member or lacks the room role
+(`CHAT_ACCESS_DENIED`, `CHAT_ROOM_ROLE_REQUIRED`), the Commit names a leaving
+member as owner (`CHAT_ROOM_OWNER_LEAVING`), the room's member set moved
+(`CHAT_MLS_MEMBER_SET_STALE`), or the Commit is malformed for the room
+(`CHAT_ROOM_MEMBER_LIMIT`, `CHAT_SELF_REMOVE_REFUSED`). Not every one of
+these answers proves that the server holds no Commit under that
+`client_commit_id`: ariadne checks conversation access before its replay
+lookup, so `CHAT_ACCESS_DENIED` also answers a Commit that was accepted before
+the caller lost access. The handshake log check below is what settles it. The
+remover's own Remove Commit that is still waiting is answered with
+`CHAT_MLS_REMOVAL_IN_PROGRESS`, not `CHAT_MLS_REMOVAL_PENDING`: the server
+holds that Commit and applies it when the wait ends unless a recheck cancels
+it, so it is never a discard reason and the Keeper refuses it as a
+`refusal_code`. Left pending, such a Commit would be posted again by whatever
+the person does next and could land once the reason went away, so a change the
+person was told was refused would be applied later without a new request.
+After one of these answers the App reads the handshake log: a row at
+`expected_epoch + 1` settles the Commit as accepted or superseded as usual;
+with no row it calls `mls_commit_discard_refused`, may rebuild from the same
+intent at the latest epoch within the same user action, and otherwise reports
+the change as not applied. A lost or unreadable answer, a 5xx, a 429, a
+timeout, `CHAT_MLS_EPOCH_STALE` and `CHAT_MLS_REMOVAL_IN_PROGRESS` are never
+a reason to discard; the Commit stays pending for the check-log-then-resend path.
+
+The Keeper cannot see the log. What it enforces is the binding: the named id
+and epoch, a confirmed epoch nothing has moved, and the login generation the
+Commit was built under (`mls_commit_build` records it), so a discard decided in
+one sign-in never reaches a Commit of the next. An accepted Commit is
+confirmed and no longer pending, so a discard after the confirm is refused.
+The action takes no online decision: it releases nothing and uses no key
+outward, and the refusals it follows include the loss of the authority a
+decision would require, which would leave the refused Commit pending.
+Accepted limit: an earlier post of the same Commit still in flight when the
+log was read could land after the discard; the device then holds no secrets
+for that epoch and the next sync stops on the Commit it cannot apply, failing
+closed rather than applying anything.
 
 **Switching back after a takeover (0.0.53).** A takeover undone, Bob → Bob2 →
 Bob, leaves the old device a record that blocks the new group. The replace
@@ -2627,9 +2846,9 @@ message. Codes are stable enums; messages are not.
 |`TOKEN_ACCOUNT_UNBOUND`|(0.0.60) A personal bound action on a device with no signed-in `account_binding`.|Sign in with the App on this device.|
 |`TOKEN_DECRYPT_FAILED`|(0.0.60) GCM tag failure under the bound AAD: the metadata was changed, stripped or moved from another token, or the key is not this token's.|Hard fail.|
 |`chat_runtime_busy`|A gated chat action (or a lease claim) met the chat runtime held elsewhere: `data.holder` is `app` (an App lease is live) or `extension` (an Extension `chat_state_purge` or `reset_device_identity` ran in the last 120 s; from 0.0.58 no other Extension chat action runs). Nothing ran.|Stop driving chat here; the other surface owns it. An older Extension treats it as an unknown failure and fails closed.|
-|`chat_app_caller_required`|(0.0.58) A Native Messaging frame (the Extension, stdio or proxied, or a standalone host) asked for an App-only action: a chat action (see "Chat runtime lease"), account entry (`auth_signup_*`, `auth_recovery_*`, `auth_login_pending_sign_*`), `org_emergency_seed_derive`, `message_seal`, the Secure Message display (`message_display_prepare`, `group_decrypt_with_aad_for_app_display`), `sign_app_session_refresh`, or (0.0.59) an action only App routes call: the account binding (`account_binding_set`, `account_binding_signout`), `rotate_user_keypair_prepare` and `_promote`, `dek_rotate_to_device_key`, `dek_rotate_to_new_password`, `savesessioncode`, `recovery_session_close`, `dek_rewrap_with_old_key_to_self`, every archive key, break-glass and quorum action except `archive_key_generate`, the ungated chat actions except `org_member_removal_sign` (`mls_leaf_status`, `mls_leaf_handover_sign`, `mls_room_name_seal`, `mls_conversation_status`, `mls_epoch_comparison`, `mls_rejoin_request_sign`, `mls_leave_request_sign`, `mls_device_revoke_sign`), and `peer_key_pin_list`, `peer_key_pin_verify`, `peer_key_safety_number`, `peer_key_chain_evaluate`, and the Group DEK wrap actions `group_dek_generate_and_open`, `dek_rewrap_for_member`, `dek_unwrap_and_rewrap_for_many`. Nothing ran, and no Extension activity was recorded.|Run it in the App. The Extension does not retry; it sends none of these.|
+|`chat_app_caller_required`|(0.0.58) A Native Messaging frame (the Extension, stdio or proxied, or a standalone host) asked for an App-only action: a chat action (see "Chat runtime lease"), account entry (`auth_signup_*`, `auth_recovery_*`, `auth_login_pending_sign_*`), `org_emergency_seed_derive`, `message_seal`, the Secure Message display (`message_display_prepare`, `group_decrypt_with_aad_for_app_display`), `sign_app_session_refresh`, or (0.0.59) an action only App routes call: the account binding (`account_binding_set`, `account_binding_signout`), `rotate_user_keypair_prepare` and `_promote`, `dek_rotate_to_device_key`, `dek_rotate_to_new_password`, `savesessioncode`, `recovery_session_close`, `dek_rewrap_with_old_key_to_self`, every archive key, break-glass and quorum action except `archive_key_generate`, the ungated chat actions (`org_member_removal_sign` since lv78, `mls_leaf_status`, `mls_leaf_handover_sign`, `mls_room_name_seal`, `mls_conversation_status`, `mls_epoch_comparison`, `mls_rejoin_request_sign`, `mls_leave_request_sign`, `mls_device_revoke_sign`), and `peer_key_pin_list`, `peer_key_pin_verify`, `peer_key_safety_number`, `peer_key_chain_evaluate`, and the Group DEK wrap actions `group_dek_generate_and_open`, `dek_rewrap_for_member`, `dek_unwrap_and_rewrap_for_many`. Nothing ran, and no Extension activity was recorded.|Run it in the App. The Extension does not retry; it sends none of these.|
 |`chat_runtime_lease_required`|An App route ran a gated chat action (or asked for a chat write signature) without its session holding the chat runtime lease, or without presenting an epoch. Nothing ran.|Claim `/v1/chat/runtime/claim` (sending the epoch the runtime holds), then retry.|
-|`chat_runtime_revoked`|(0.0.56) An App call presented a chat runtime epoch that a revocation replaced: `chat_state_purge` (Extension logout, or the App's own) or `reset_device_identity` ran since the epoch was granted. `data: { reason: "purged" \| "reset" }`. Nothing ran.|Stop that chat runtime, drop every operation it has in flight without retrying it, clear the App's chat records and tell the user chat was reset on this device. Never reclaim with the old epoch: that is refused the same way. A new runtime claims without an epoch.|
+|`chat_runtime_revoked`|(0.0.56) An App call presented a chat runtime epoch that a revocation replaced: `chat_state_purge` that erased the current sign-in's state, fully or in part (Extension logout, or the App's own) or `reset_device_identity` ran since the epoch was granted. `data: { reason: "purged" \| "reset" }`. Nothing ran.|Stop that chat runtime, drop every operation it has in flight without retrying it, clear the App's chat records and tell the user chat was reset on this device. Never reclaim with the old epoch: that is refused the same way. A new runtime claims without an epoch.|
 |`credential_nonce_invalid`|`credential_http_request` / `credential_exec_request`: this Keeper's nonce map does not hold the policy's execution nonce: never minted there, already consumed, or expired (including a restart of the serving Keeper). Nothing was opened or sent.|Call `credential_execution_prepare` and resolve again. A once approval is already spent.|
 |`credential_confirmation_invalid`|`credential_http_request` / `credential_exec_request` with a personal key source: the server's execution confirmation is missing, expired, too long-lived, not signed by the server, or names another nonce or entry. Nothing was opened or sent; the nonce is unspent.|Ask the server for a new confirmation; a refusal there (revoked token or approval) is final.|
 |`credential_outcome_unknown`|`credential_http_request`: the request headers were written and then the transport failed or the response could not be used. Either sink, through a Native Messaging proxy host: the owner took the request and no valid answer came back. The target may have acted on the request, or the command may have run. The nonce is spent.|Report the outcome as unknown. Do not retry automatically.|
@@ -2968,7 +3187,8 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
   `app rotate-secret` (which drops every session).
 - Gated actions (every action that writes chat state, MLS group state, leaf
   slots or the KeyPackage pool, and the display decrypt): `mls_group_create`,
-  `mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+  `mls_group_discard_unaccepted`, `mls_commit_discard_refused`,
+  `mls_conversation_forget_removed`,
   `mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
   `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
   both `chat_state_*`, `mls_leaf_declare`, `mls_leaf_promote`,
@@ -2991,8 +3211,9 @@ process-local and lives in `keystore.App`; it is gone when the owner exits.
 - (0.0.58) **App-only.** A Native Messaging frame (stdio, proxied by another
   host, or a standalone host) running a gated action, or `mls_room_name_open`,
   is refused with `chat_app_caller_required` before its handler runs, with or
-  without a live App lease. (0.0.59) So are the ungated chat actions except
-  `org_member_removal_sign`: `mls_leaf_status`, `mls_leaf_handover_sign`,
+  without a live App lease. (0.0.59) So are the ungated chat actions
+  (`org_member_removal_sign` since lv78, outside a `keeper_e2e` build):
+  `mls_leaf_status`, `mls_leaf_handover_sign`,
   `mls_room_name_seal`, `mls_conversation_status`, `mls_epoch_comparison`,
   `mls_rejoin_request_sign`, `mls_leave_request_sign` and
   `mls_device_revoke_sign`. Keeper knows the caller from the transport, never
@@ -3034,7 +3255,8 @@ missing keys. The cap is the one the handler enforces: 1 MiB for
 `mls_group_create`, `mls_commit_build`, `mls_commit_confirm`, `mls_process`,
 `mls_join`; 3 MiB for `mls_decrypt_batch_for_app_display`; 32 KiB for the
 rest. The action list is exactly: `mls_group_create`,
-`mls_group_discard_unaccepted`, `mls_conversation_forget_removed`,
+`mls_group_discard_unaccepted`, `mls_commit_discard_refused`,
+`mls_conversation_forget_removed`,
 `mls_commit_build`, `mls_commit_confirm`, `mls_process`, `mls_join`,
 `mls_encrypt`, `mls_mark_sent`, `mls_decrypt_batch_for_app_display`,
 `mls_room_name_seal`, `mls_room_name_open`, `mls_conversation_status`,

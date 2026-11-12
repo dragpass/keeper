@@ -50,7 +50,12 @@ const (
 	// a server round trip would buy nothing and would make erasure fail exactly
 	// when the user is logging out of a server they cannot reach.
 	//
-	//   Inputs: owner_account_id
-	//   Output: { removed_conversations }
+	// It must carry expected_generation, the account's chat state generation
+	// from account_binding_set or device_account_status. It erases only when
+	// that is still the current generation, so a stale request cannot erase a
+	// newer sign-in's state; without it the request is refused.
+	//
+	//   Inputs: owner_account_id, expected_generation
+	//   Output: { purged, removed_conversations }
 	ChatStatePurge = "chat_state_purge"
 )

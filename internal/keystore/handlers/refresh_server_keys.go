@@ -82,6 +82,11 @@ func HandleRefreshServerKeys(d Deps, req RefreshServerKeysRequest) proto.BaseRes
 		return errs.CodeResponse(errs.ErrCodeInternal, "load embedded root: "+err.Error())
 	}
 	rootEmbedded := rootPEM != ""
+	if !rootEmbedded && !anchor.UnverifiedServerKeysAllowed() {
+		// Nothing could tell this key set from one any local caller made
+		// up, and every server-signed decision is verified with these keys.
+		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "no root public key is built in; server keys cannot be verified")
+	}
 
 	// If the Root is embedded, require fingerprint match + signature verify on every entry.
 	rootVerified := false

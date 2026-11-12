@@ -298,39 +298,97 @@ func promoteLocked(d Deps, accepted proto.MLSLeafAccepted) proto.BaseResponse {
 	return errs.CodeResponse(errs.ErrCodeValidation, "acceptance_token names neither the pending nor the active mls leaf")
 }
 
-// HandleMLSLeafAbort discards the pending entry. Idempotent. The active entry
-// is never touched.
+// HandleMLSLeafAbort discards the pending entry the caller names, for the
+// sign-in it names. The active entry is never touched.
+//
+// Not being behind the account online decision does not free it from the
+// local binding (lv78): under the leaf lock it deletes only when the account
+// binding is the caller's account, signed in, at the generation the caller
+// saw, and the pending entry still holds the named key and belongs to that
+// account and this device. Otherwise nothing is deleted: a stale App after a
+// sign-out or another sign-in, an abort decided on an older status that would
+// drop a newer pending leaf, or one landing after the named leaf was
+// promoted. The chat login generation is the gate's to check
+// (chatLoginAdmission).
 func HandleMLSLeafAbort(d Deps, req proto.MLSLeafAbortRequest) proto.BaseResponse {
 	d.Logger.Println("mls leaf abort request processing...")
-	var (
-		aborted bool
-		failed  bool
-	)
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	var resp proto.BaseResponse
 	lockErr := keychain.WithMLSLeafLock(d.Store, func() error {
-		pending, found, err := keychain.GetMLSLeafPending(d.Store)
-		if err != nil {
-			failed = true
+		binding, device, refusal, ok := currentLeafBinding(d, req.AccountID)
+		if !ok {
+			resp = refusal
 			return nil
 		}
-		if found {
-			pendingEventID, idErr := pendingMLSLeafTransparencyID(pending)
-			if idErr != nil || keychain.DeletePendingKeyTransparencyEvent(d.Store, pendingEventID) != nil {
-				failed = true
-				return nil
-			}
+		if binding.Generation != req.BindingGeneration {
+			resp = leafBindingRefused()
+			return nil
 		}
-		aborted, err = keychain.DeleteMLSLeafPending(d.Store)
-		failed = err != nil
+		active, pending, failure, ok := loadMLSLeafSlots(d)
+		if !ok {
+			resp = failure
+			return nil
+		}
+		defer wipeMLSLeafSlots(active, pending)
+		if pending == nil || pending.AccountID != binding.AccountID || pending.DeviceID != device {
+			resp = pendingChanged()
+			return nil
+		}
+		if fp, err := crypto.MLSLeafSignatureKeyFingerprint(pending.PublicKey); err != nil || fp != req.PendingSignatureKeyFingerprint {
+			resp = pendingChanged()
+			return nil
+		}
+		pendingEventID, idErr := pendingMLSLeafTransparencyID(*pending)
+		if idErr != nil || keychain.DeletePendingKeyTransparencyEvent(d.Store, pendingEventID) != nil {
+			resp = errs.CodeResponse(errs.ErrCodeStorageFailure, "pending mls leaf key could not be removed")
+			return nil
+		}
+		if _, err := keychain.DeleteMLSLeafPending(d.Store); err != nil {
+			resp = errs.CodeResponse(errs.ErrCodeStorageFailure, "pending mls leaf key could not be removed")
+			return nil
+		}
+		resp = proto.BaseResponse{Success: true, Data: proto.MLSLeafAbortResponseData{Aborted: true}}
 		return nil
 	})
 	if lockErr != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "mls leaf lock could not be acquired")
 	}
-	if failed {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "pending mls leaf key could not be removed")
+	if resp.Success {
+		d.Logger.Println("mls leaf abort successful")
 	}
-	d.Logger.Printf("mls leaf abort successful (aborted=%t)", aborted)
-	return proto.BaseResponse{Success: true, Data: proto.MLSLeafAbortResponseData{Aborted: aborted}}
+	return resp
+}
+
+func pendingChanged() proto.BaseResponse {
+	return errs.CodeResponse(errs.ErrCodeChatMLSLeafPendingChanged, "the named pending mls leaf is not this sign-in's pending entry")
+}
+
+func leafBindingRefused() proto.BaseResponse {
+	return errs.CodeResponse(errs.ErrCodeChatMLSLeafBindingStale, "the account binding is not the caller's current sign-in")
+}
+
+// currentLeafBinding is the account binding a leaf call may act under: present,
+// signed in, for account, with a generation, on a device with an id. The
+// caller holds the leaf lock, which is also the lock the binding is written
+// under, so it cannot change before the caller's write.
+func currentLeafBinding(d Deps, account string) (keychain.AccountBinding, string, proto.BaseResponse, bool) {
+	binding, found, err := keychain.GetAccountBinding(d.Store)
+	if err != nil {
+		return keychain.AccountBinding{}, "", errs.CodeResponse(errs.ErrCodeStorageFailure, "account binding is unreadable"), false
+	}
+	if !found || binding.SignedOut || binding.Generation == 0 || binding.AccountID != account {
+		return keychain.AccountBinding{}, "", leafBindingRefused(), false
+	}
+	device, found, err := keychain.GetDeviceID(d.Store)
+	if err != nil {
+		return keychain.AccountBinding{}, "", errs.CodeResponse(errs.ErrCodeStorageFailure, "device id is unreadable"), false
+	}
+	if !found || device == "" {
+		return keychain.AccountBinding{}, "", leafBindingRefused(), false
+	}
+	return binding, device, proto.BaseResponse{}, true
 }
 
 func pendingMLSLeafTransparencyID(pending keychain.MLSLeafKey) (string, error) {
@@ -345,16 +403,34 @@ func pendingMLSLeafTransparencyID(pending keychain.MLSLeafKey) (string, error) {
 // fingerprint and validity window. No secret, and no declaration, leaves
 // through it. A pending entry the server will no longer accept is reported
 // like any other; whether to abort it is the caller's decision.
+//
+// It answers only for the caller's account while that account's binding is
+// signed in, names the binding's generation for a later abort, and reports
+// only records of that account and this device (lv78).
 func HandleMLSLeafStatus(d Deps, req proto.MLSLeafStatusRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
 	var resp proto.BaseResponse
 	lockErr := keychain.WithMLSLeafLock(d.Store, func() error {
+		binding, device, refusal, ok := currentLeafBinding(d, req.AccountID)
+		if !ok {
+			resp = refusal
+			return nil
+		}
 		active, pending, failure, ok := loadMLSLeafSlots(d)
 		if !ok {
 			resp = failure
 			return nil
 		}
 		defer wipeMLSLeafSlots(active, pending)
-		var data proto.MLSLeafStatusResponseData
+		data := proto.MLSLeafStatusResponseData{AccountID: binding.AccountID, BindingGeneration: binding.Generation}
+		if active != nil && (active.AccountID != binding.AccountID || active.DeviceID != device) {
+			active = nil
+		}
+		if pending != nil && (pending.AccountID != binding.AccountID || pending.DeviceID != device) {
+			pending = nil
+		}
 		if active != nil {
 			decl, err := storedMLSLeafDeclaration(*active)
 			if err != nil {

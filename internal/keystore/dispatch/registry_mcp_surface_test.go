@@ -115,6 +115,7 @@ func TestMCPCallableActions_ExcludeMLSKeyPackageGenerate(t *testing.T) {
 var mlsChatActionNames = []string{
 	proto.MLSGroupCreate,
 	proto.MLSGroupDiscardUnaccepted,
+	proto.MLSCommitDiscardRefused,
 	proto.MLSConversationForgetRemoved,
 	proto.MLSCommitBuild,
 	proto.MLSCommitConfirm,
@@ -168,13 +169,14 @@ func TestMLSChatActions_AreExactlyTheRegistered(t *testing.T) {
 	}
 }
 
-// TestChatStateActions_AreExactlyTheTwoRegistered keeps the set this guard
-// checks honest: a third conversation-state action added without a thought
+// TestChatStateActions_AreExactlyTheThreeRegistered keeps the set this guard
+// checks honest: a fourth conversation-state action added without a thought
 // about the boundary fails here rather than passing unnoticed.
-func TestChatStateActions_AreExactlyTheTwoRegistered(t *testing.T) {
+func TestChatStateActions_AreExactlyTheThreeRegistered(t *testing.T) {
 	want := map[string]bool{
-		proto.ChatStateReadOutbox: true,
-		proto.ChatStatePurge:      true,
+		proto.ChatStateReadOutbox:       true,
+		proto.ChatStatePurge:            true,
+		proto.ChatStatePurgeUnversioned: true,
 	}
 	got := chatStateActionNames(t)
 	if len(got) != len(want) {

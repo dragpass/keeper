@@ -38,11 +38,30 @@ func takeoverRoom(t *testing.T) (*room, *keeper, proto.MLSLeafDeclaration, proto
 	return r, bob2, decl, bob2.keyPackage()
 }
 
+// activeLeafFP is the fingerprint of k's active leaf, the one a handover
+// request names as the signer; zeros when k has none.
+func (k *keeper) activeLeafFP() string {
+	k.t.Helper()
+	active, found, err := keychain.GetMLSLeafKey(k.store)
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	if !found {
+		return strings.Repeat("0", 64)
+	}
+	fp, err := crypto.MLSLeafSignatureKeyFingerprint(active.PublicKey)
+	if err != nil {
+		k.t.Fatal(err)
+	}
+	return fp
+}
+
 // handoverFor is k, the device whose leaf holds the seat, approving decl.
 func (k *keeper) handoverFor(decl proto.MLSLeafDeclaration) proto.MLSLeafHandover {
 	k.t.Helper()
 	return k.must(proto.ActionMLSLeafHandoverSign, proto.MLSLeafHandoverSignRequest{
-		AccountID: k.id, NewDeclaration: decl, ExpiresAt: time.Now().Unix() + proto.MLSLeafHandoverMaxSeconds,
+		AccountID: k.id, OldSignatureKeyFingerprint: k.activeLeafFP(), NewDeclaration: decl,
+		ExpiresAt: time.Now().Unix() + proto.MLSLeafHandoverMaxSeconds,
 	}).Data.(proto.MLSLeafHandoverSignResponseData).Handover
 }
 
@@ -125,7 +144,7 @@ func TestMLSHandover_TheOldDeviceRefusesWhatItCannotVouchFor(t *testing.T) {
 	now := time.Now().Unix()
 	sign := func(d proto.MLSLeafDeclaration, expires int64) proto.BaseResponse {
 		return r.bob.call(proto.ActionMLSLeafHandoverSign, proto.MLSLeafHandoverSignRequest{
-			AccountID: r.bob.id, NewDeclaration: d, ExpiresAt: expires,
+			AccountID: r.bob.id, OldSignatureKeyFingerprint: r.bob.activeLeafFP(), NewDeclaration: d, ExpiresAt: expires,
 		})
 	}
 	expect := func(name string, resp proto.BaseResponse) {
@@ -158,7 +177,7 @@ func TestMLSHandover_TheOldDeviceRefusesWhatItCannotVouchFor(t *testing.T) {
 
 	// A device with no active leaf has nothing to approve with.
 	resp := bob2.call(proto.ActionMLSLeafHandoverSign, proto.MLSLeafHandoverSignRequest{
-		AccountID: bob2.id, NewDeclaration: decl, ExpiresAt: now + 300,
+		AccountID: bob2.id, OldSignatureKeyFingerprint: bob2.activeLeafFP(), NewDeclaration: decl, ExpiresAt: now + 300,
 	})
 	if resp.Success {
 		t.Fatalf("the new device approved its own takeover: %+v", resp)
