@@ -56,7 +56,10 @@ jobs:
   goreleaser:
     name: GoReleaser darwin build (snapshot)
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
+    env:
+      # Same minimum macOS as release-build.yml and the brew job in release.yml.
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
