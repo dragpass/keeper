@@ -79,15 +79,25 @@ func HandleArchiveKeyGenerate(d Deps, req proto.ArchiveKeyGenerateRequest) proto
 	}}
 }
 
+// archiveSlotProcessLock and archiveKeyPairGenerator are the keychain
+// process lock and the RSA generator the org generate uses; tests replace
+// them to observe the order.
+var (
+	archiveSlotProcessLock  = keychain.WithKeychainProcessLock
+	archiveKeyPairGenerator = crypto.GenerateRSAKeyPair
+)
+
 // generateOrgArchiveKey is the org_id form of archive_key_generate (lv96). It
 // reads and writes only the org's own slots; another org's slot and the
 // device-wide slot are never read or written.
 //
 // The whole call runs under archiveSplitPreparationMu, the mutex the split,
-// finalize and rotation writers of the org archive slots hold, and inside
-// the keychain process lock (lock order: the mutex, then the process lock;
-// no holder of the process lock takes the mutex). Two generates for one org
-// therefore cannot interleave their writes or roll back each other's key.
+// finalize and rotation writers of the org archive slots hold; the re-check
+// and the writes also run inside the keychain process lock (lock order: the
+// mutex, then the process lock; no holder of the process lock takes the
+// mutex), which is not held while the RSA pair is generated. Two generates
+// for one org therefore cannot interleave their writes or roll back each
+// other's key, in one process or across processes.
 //
 // Slot states:
 //   - public and private present: the org's key, returned unchanged;
@@ -101,9 +111,39 @@ func HandleArchiveKeyGenerate(d Deps, req proto.ArchiveKeyGenerateRequest) proto
 func generateOrgArchiveKey(d Deps, orgID string) proto.BaseResponse {
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
+
+	// The keychain process lock is not held across RSA generation: another
+	// Keeper process waits for it at most five seconds
+	// (keychain.withPersonalKeyBundleLock). The state is read first, the pair
+	// generated outside the lock, and the lock covers only the re-check and
+	// the writes.
+	if resp, decided, err := orgArchiveSlotDecision(d, orgID); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+	} else if decided {
+		return resp
+	}
+	keyPair, err := archiveKeyPairGenerator()
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeInternal, "archive key keygen failed")
+	}
+	privKeyBuf := memguard.NewBufferFromBytes([]byte(keyPair.PrivateKey))
+	secure.WipeString(&keyPair.PrivateKey)
+	defer privKeyBuf.Destroy()
+
 	var resp proto.BaseResponse
-	if err := keychain.WithKeychainProcessLock(d.Store, func() error {
-		resp = generateOrgArchiveKeyLocked(d, orgID)
+	if err := archiveSlotProcessLock(d.Store, func() error {
+		decision, decided, err := orgArchiveSlotDecision(d, orgID)
+		if err != nil {
+			resp = errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+			return nil
+		}
+		if decided {
+			// Another process wrote or staged the org's key meanwhile; the
+			// new pair is dropped.
+			resp = decision
+			return nil
+		}
+		resp = writeOrgArchiveKey(d, keychain.OrgArchiveActiveSlot(orgID), privKeyBuf.Bytes(), keyPair.PublicKey)
 		return nil
 	}); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive key lock unavailable")
@@ -127,43 +167,42 @@ func slotHalves(store keychain.SecretStore, slot keychain.ArchiveKeySlot) (strin
 	return pub, hasPriv, nil
 }
 
-func generateOrgArchiveKeyLocked(d Deps, orgID string) proto.BaseResponse {
+// orgArchiveSlotDecision reads the org's slots. decided is true when the
+// state already answers the call: the existing key, or a refusal.
+func orgArchiveSlotDecision(d Deps, orgID string) (proto.BaseResponse, bool, error) {
 	slot := keychain.OrgArchiveActiveSlot(orgID)
 	stagedPub, stagedPriv, err := slotHalves(d.Store, keychain.OrgArchiveStagingSlot(orgID))
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+		return proto.BaseResponse{}, false, err
 	}
 	if stagedPub != "" || stagedPriv {
-		return errs.CodeResponse(errs.ErrCodeArchiveKeyRotationPending, "an archive key rotation is staged for this org")
+		return errs.CodeResponse(errs.ErrCodeArchiveKeyRotationPending, "an archive key rotation is staged for this org"), true, nil
 	}
 	existing, hasPriv, err := slotHalves(d.Store, slot)
 	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+		return proto.BaseResponse{}, false, err
 	}
 	switch {
 	case existing != "" && hasPriv:
 		d.Logger.Println("archive key generate: org key already present, returning meta")
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyGenerateResponseData{
 			PublicKey: existing, Fingerprint: fingerprintBase64Public(existing), Scope: slot.Scope,
-		}}
+		}}, true, nil
 	case existing == "" && hasPriv:
-		return errs.CodeResponse(errs.ErrCodeArchiveKeySlotIncomplete, "the org archive key slot holds a private key without its public key")
+		return errs.CodeResponse(errs.ErrCodeArchiveKeySlotIncomplete, "the org archive key slot holds a private key without its public key"), true, nil
 	case existing != "" && !hasPriv:
-		return errs.CodeResponse(errs.ErrCodeArchiveKeyPrivateAbsent, "the org archive key has no private key on this device")
+		return errs.CodeResponse(errs.ErrCodeArchiveKeyPrivateAbsent, "the org archive key has no private key on this device"), true, nil
 	}
+	return proto.BaseResponse{}, false, nil
+}
 
-	keyPair, err := crypto.GenerateRSAKeyPair()
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeInternal, "archive key keygen failed")
-	}
-	privKeyBuf := memguard.NewBufferFromBytes([]byte(keyPair.PrivateKey))
-	secure.WipeString(&keyPair.PrivateKey)
-	defer privKeyBuf.Destroy()
-
-	if err := slot.SavePrivate(d.Store, string(privKeyBuf.Bytes())); err != nil {
+// writeOrgArchiveKey writes a new pair, private first; a failed public write
+// removes the private half again.
+func writeOrgArchiveKey(d Deps, slot keychain.ArchiveKeySlot, privatePEM []byte, publicPEM string) proto.BaseResponse {
+	if err := slot.SavePrivate(d.Store, string(privatePEM)); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive private key failed")
 	}
-	if err := slot.SavePublic(d.Store, keyPair.PublicKey); err != nil {
+	if err := slot.SavePublic(d.Store, publicPEM); err != nil {
 		if delErr := slot.DeletePrivate(d.Store); delErr != nil && !errors.Is(delErr, keychain.ErrSecretNotFound) {
 			d.Logger.Println("archive key generate: removing the unpublished org private key failed")
 		}
@@ -171,7 +210,7 @@ func generateOrgArchiveKeyLocked(d Deps, orgID string) proto.BaseResponse {
 	}
 	d.Logger.Println("archive key generate: new org rsa keypair saved")
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyGenerateResponseData{
-		PublicKey: keyPair.PublicKey, Fingerprint: fingerprintBase64Public(keyPair.PublicKey), Scope: slot.Scope,
+		PublicKey: publicPEM, Fingerprint: fingerprintBase64Public(publicPEM), Scope: slot.Scope,
 	}}
 }
 

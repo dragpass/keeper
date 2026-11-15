@@ -273,3 +273,51 @@ func TestArchiveKeyGenerate_ReportsPublicOnlyOrgKey(t *testing.T) {
 		t.Fatal("a refused generate changed the keychain")
 	}
 }
+
+// RSA key generation must not run while the keychain process lock is held:
+// another Keeper process waits for that lock at most five seconds
+// (keychain.withPersonalKeyBundleLock). The pair is generated first; the
+// lock covers only the re-check and the writes.
+func TestArchiveKeyGenerate_GeneratesOutsideTheProcessLock(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	locked := false
+	keygenUnderLock := false
+	restoreLock := archiveSlotProcessLock
+	restoreKeygen := archiveKeyPairGenerator
+	t.Cleanup(func() { archiveSlotProcessLock, archiveKeyPairGenerator = restoreLock, restoreKeygen })
+	archiveSlotProcessLock = func(store keychain.SecretStore, fn func() error) error {
+		locked = true
+		defer func() { locked = false }()
+		return fn()
+	}
+	archiveKeyPairGenerator = func() (*crypto.KeyPair, error) {
+		keygenUnderLock = keygenUnderLock || locked
+		return crypto.GenerateRSAKeyPair()
+	}
+	generateFor(t, deps, testOrgA)
+	if keygenUnderLock {
+		t.Fatal("the archive key pair was generated under the keychain process lock")
+	}
+}
+
+// Another process may write the org's key between the generation and the
+// lock. The re-check under the lock keeps that key and drops the new pair.
+func TestArchiveKeyGenerate_RechecksTheSlotUnderTheLock(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	other, _ := crypto.GenerateRSAKeyPair()
+	restoreLock := archiveSlotProcessLock
+	t.Cleanup(func() { archiveSlotProcessLock = restoreLock })
+	archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
+		slot := keychain.OrgArchiveActiveSlot(testOrgA)
+		_ = slot.SavePrivate(store, other.PrivateKey)
+		_ = slot.SavePublic(store, other.PublicKey)
+		return fn()
+	}
+	got := generateFor(t, deps, testOrgA)
+	if got.PublicKey != other.PublicKey {
+		t.Fatal("the key another process wrote meanwhile was replaced")
+	}
+	if priv, _ := keychain.OrgArchiveActiveSlot(testOrgA).GetPrivate(store); priv != other.PrivateKey {
+		t.Fatal("the private half another process wrote was replaced")
+	}
+}
