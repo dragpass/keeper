@@ -14,13 +14,21 @@
 
 package proto
 
-type ArchiveKeyGenerateRequest struct{}
+// ArchiveKeyGenerateRequest generates (or returns) the org's own archive key
+// in org_archive_*:<org_id> when org_id is set (lv96). Without org_id it is
+// the device-wide key, as before.
+type ArchiveKeyGenerateRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveKeyGenerateRequest) Validate() error { return nil }
+func (r ArchiveKeyGenerateRequest) Validate() error { return validateArchiveOrgID(r.OrgID) }
 
 type ArchiveKeyGenerateResponseData struct {
 	PublicKey   string `json:"publickey"`   // RSA public key PEM
 	Fingerprint string `json:"fingerprint"` // hex(sha256(public key PEM))
+	// Scope is "org" for an org_id request; absent for the device-wide key,
+	// so a client can tell a Keeper that ignored org_id.
+	Scope string `json:"scope,omitempty"`
 }
 
 // ArchiveKeyStatusRequest reports the org's archive key when org_id is set:

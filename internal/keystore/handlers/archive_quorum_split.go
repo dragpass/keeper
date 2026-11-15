@@ -34,7 +34,10 @@ import (
 )
 
 // The serving Keeper owner serializes journal read/create so concurrent App
-// retries cannot return two different sets of shares for one operation.
+// retries cannot return two different sets of shares for one operation. The
+// org archive key generate and the rotation actions hold it too (lv96), so
+// every writer of the org archive slots runs alone. A holder never takes it
+// again and never takes it while holding the keychain process lock.
 var archiveSplitPreparationMu sync.Mutex
 
 type archiveSplitJournal struct {

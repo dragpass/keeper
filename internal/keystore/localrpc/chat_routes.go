@@ -453,7 +453,7 @@ func runKeyTransparencyMonitor(s *Server, _ appRequest, input any) (proto.BaseRe
 // rewrap to the ephemeral key of a recovery session. The one target Keeper
 // knows itself, the staged key of a rotation, is bound here.
 var archiveRoutes = map[string]appRoute{
-	"/v1/archive/archive_key_generate":         archiveEmptyRoute(proto.ActionArchiveKeyGenerate),
+	"/v1/archive/archive_key_generate":         {action: proto.ActionArchiveKeyGenerate, input: func() any { return &proto.ArchiveKeyGenerateRequest{} }},
 	"/v1/archive/archive_key_status":           {action: proto.ActionArchiveKeyStatus, input: func() any { return &proto.ArchiveKeyStatusRequest{} }},
 	"/v1/archive/account_archive_key_generate": archiveEmptyRoute(proto.ActionAccountArchiveKeyGenerate),
 	"/v1/archive/archive_key_rotate_begin":     {action: proto.ActionArchiveKeyRotateBegin, input: func() any { return &proto.ArchiveKeyRotateBeginRequest{} }},

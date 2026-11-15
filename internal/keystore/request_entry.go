@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"encoding/json"
 	"io"
 
 	"github.com/dragpass/keeper/internal/keystore/dispatch"
@@ -18,7 +19,31 @@ import (
 // its local RPC session. The chat runtime lease (chat_runtime.go) tells them
 // apart; the lease check runs inside requestMu, next to the handler it admits.
 func (a *App) HandleRequest(msg []byte) proto.BaseResponse {
+	if refused, ok := nativeOrgArchiveGenerate(msg); ok {
+		return refused
+	}
 	return a.handleAs(chatRuntimeCaller{}, msg)
+}
+
+// nativeOrgArchiveGenerate refuses an archive_key_generate frame that names an
+// org on Native Messaging (lv96). The org-scoped form belongs to the App's
+// organization console; the Extension's device-wide call (its E2E org
+// fixture) sends no org_id and is unchanged. A Keeper before lv96 ignored the
+// field on this path and generated the device-wide key.
+func nativeOrgArchiveGenerate(msg []byte) (proto.BaseResponse, bool) {
+	var frame proto.BaseRequest
+	if json.Unmarshal(msg, &frame) != nil || frame.Action != proto.ActionArchiveKeyGenerate || len(frame.Payload) == 0 {
+		return proto.BaseResponse{}, false
+	}
+	var payload struct {
+		OrgID *string `json:"org_id"`
+	}
+	if json.Unmarshal(frame.Payload, &payload) != nil || payload.OrgID == nil {
+		return proto.BaseResponse{}, false
+	}
+	refused := appCallerRequired()
+	refused.RequestID = frame.RequestID
+	return refused, true
 }
 
 // HandleAppRequest runs one App request; epoch is the chat runtime epoch the
