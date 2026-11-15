@@ -40,7 +40,7 @@ func credSharedFixturePolicy() proto.CredentialPolicy {
 }
 
 // TestCanonicalCredentialPolicy_SharedFixture — the body (the part after the
-// version 2 binding fields) of the shared fixture. ariadne asserts the same
+// version 3 binding fields) of the shared fixture. ariadne asserts the same
 // literal; a one-byte difference breaks every resolve signature.
 func TestCanonicalCredentialPolicy_SharedFixture(t *testing.T) {
 	got := canonicalCredentialPolicyBody(credSharedFixturePolicy())

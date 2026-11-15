@@ -159,12 +159,14 @@ func validateCredentialPolicyBinding(aad []byte, p proto.CredentialPolicy) error
 }
 
 func verifyCredentialPolicy(d Deps, aad []byte, p proto.CredentialPolicy) (bool, proto.BaseResponse) {
-	// Only version 2 binds the execution nonce, the query and the body. A policy
-	// in any other format is refused here, before its signature is checked, so
-	// there is no path on which an older format is accepted instead.
+	// Only proto.CredentialPolicyVersion binds the execution nonce, the query,
+	// the body and the sealed payload. A policy in any other format is refused
+	// here, before its signature is checked, so there is no path on which an
+	// older format is accepted instead.
 	if p.PolicyVersion != proto.CredentialPolicyVersion {
 		return false, errs.CodeResponse(errs.ErrCodeValidation,
-			"credential policy version is not supported; only policy_version 2 is accepted")
+			"credential policy version is not supported; only policy_version "+
+				strconv.Itoa(proto.CredentialPolicyVersion)+" is accepted")
 	}
 	if len(p.ExecutionNonce) != proto.CredentialExecutionNonceChars {
 		return false, errs.CodeResponse(errs.ErrCodeValidation,
