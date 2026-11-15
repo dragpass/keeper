@@ -37,7 +37,7 @@ func HandleArchiveKeyGenerate(d Deps, req proto.ArchiveKeyGenerateRequest) proto
 		return errs.Response(err)
 	}
 	if req.OrgID != "" {
-		return generateOrgArchiveKey(d, keychain.OrgArchiveActiveSlot(req.OrgID))
+		return generateOrgArchiveKey(d, req.OrgID)
 	}
 
 	// If an active archive key already exists, return only its meta.
@@ -79,22 +79,77 @@ func HandleArchiveKeyGenerate(d Deps, req proto.ArchiveKeyGenerateRequest) proto
 	}}
 }
 
-// generateOrgArchiveKey is the org_id form of archive_key_generate (lv96): it
-// reads and writes only slot, the org's own. An existing key there is returned
-// as it is, never replaced; another org's slot and the device-wide slot are
-// never read or written. A failure after the private half was saved removes
-// it again, so no half-written key is left that a later call could mistake
-// for the org's key.
-func generateOrgArchiveKey(d Deps, slot keychain.ArchiveKeySlot) proto.BaseResponse {
-	existing, err := slot.GetPublic(d.Store)
+// generateOrgArchiveKey is the org_id form of archive_key_generate (lv96). It
+// reads and writes only the org's own slots; another org's slot and the
+// device-wide slot are never read or written.
+//
+// The whole call runs under archiveSplitPreparationMu, the mutex the split,
+// finalize and rotation writers of the org archive slots hold, and inside
+// the keychain process lock (lock order: the mutex, then the process lock;
+// no holder of the process lock takes the mutex). Two generates for one org
+// therefore cannot interleave their writes or roll back each other's key.
+//
+// Slot states:
+//   - public and private present: the org's key, returned unchanged;
+//   - a staged rotation for the org: refused (archive_key_rotation_pending);
+//   - private without public (an interrupted write): refused
+//     (archive_key_slot_incomplete), never overwritten;
+//   - public without private (a quorum split finalized): refused
+//     (archive_key_private_absent), not reported as a usable key;
+//   - neither: a new pair is written, private first; a failed public write
+//     removes the private half again.
+func generateOrgArchiveKey(d Deps, orgID string) proto.BaseResponse {
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
+	var resp proto.BaseResponse
+	if err := keychain.WithKeychainProcessLock(d.Store, func() error {
+		resp = generateOrgArchiveKeyLocked(d, orgID)
+		return nil
+	}); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive key lock unavailable")
+	}
+	return resp
+}
+
+// slotHalves reports a slot's public key and whether its private key is
+// present. The private PEM is wiped as soon as its presence is known.
+func slotHalves(store keychain.SecretStore, slot keychain.ArchiveKeySlot) (string, bool, error) {
+	pub, err := slot.GetPublic(store)
 	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return "", false, err
+	}
+	priv, err := slot.GetPrivate(store)
+	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return "", false, err
+	}
+	hasPriv := priv != ""
+	secure.WipeString(&priv)
+	return pub, hasPriv, nil
+}
+
+func generateOrgArchiveKeyLocked(d Deps, orgID string) proto.BaseResponse {
+	slot := keychain.OrgArchiveActiveSlot(orgID)
+	stagedPub, stagedPriv, err := slotHalves(d.Store, keychain.OrgArchiveStagingSlot(orgID))
+	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
 	}
-	if existing != "" {
+	if stagedPub != "" || stagedPriv {
+		return errs.CodeResponse(errs.ErrCodeArchiveKeyRotationPending, "an archive key rotation is staged for this org")
+	}
+	existing, hasPriv, err := slotHalves(d.Store, slot)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+	}
+	switch {
+	case existing != "" && hasPriv:
 		d.Logger.Println("archive key generate: org key already present, returning meta")
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveKeyGenerateResponseData{
 			PublicKey: existing, Fingerprint: fingerprintBase64Public(existing), Scope: slot.Scope,
 		}}
+	case existing == "" && hasPriv:
+		return errs.CodeResponse(errs.ErrCodeArchiveKeySlotIncomplete, "the org archive key slot holds a private key without its public key")
+	case existing != "" && !hasPriv:
+		return errs.CodeResponse(errs.ErrCodeArchiveKeyPrivateAbsent, "the org archive key has no private key on this device")
 	}
 
 	keyPair, err := crypto.GenerateRSAKeyPair()

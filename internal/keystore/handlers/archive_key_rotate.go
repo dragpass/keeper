@@ -44,6 +44,10 @@ import (
 // the org (rotation, not first-time enable). The org's own stage is wiped and
 // replaced; no other stage is touched.
 func HandleArchiveKeyRotateBegin(d Deps, req proto.ArchiveKeyRotateBeginRequest) proto.BaseResponse {
+	// The org archive slot writers (generate, split, finalize, rotation)
+	// hold one mutex so their writes never interleave (lv96).
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
 	d.Logger.Println("archive key rotate begin processing...")
 
 	if err := req.Validate(); err != nil {
@@ -105,6 +109,10 @@ func HandleArchiveKeyRotateBegin(d Deps, req proto.ArchiveKeyRotateBeginRequest)
 // at rest. Requires a stage to be present, and when expected_fingerprint is
 // set, a stage with that fingerprint.
 func HandleArchiveKeyRotateCommit(d Deps, req proto.ArchiveKeyRotateCommitRequest) proto.BaseResponse {
+	// The org archive slot writers (generate, split, finalize, rotation)
+	// hold one mutex so their writes never interleave (lv96).
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
 	d.Logger.Println("archive key rotate commit processing...")
 
 	if err := req.Validate(); err != nil {
@@ -163,6 +171,10 @@ func HandleArchiveKeyRotateCommit(d Deps, req proto.ArchiveKeyRotateCommitReques
 // it has none. An org-scoped abort leaves the device-wide stage alone: which
 // org it belongs to is unknown.
 func HandleArchiveKeyRotateAbort(d Deps, req proto.ArchiveKeyRotateAbortRequest) proto.BaseResponse {
+	// The org archive slot writers (generate, split, finalize, rotation)
+	// hold one mutex so their writes never interleave (lv96).
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
 	d.Logger.Println("archive key rotate abort processing...")
 
 	if err := req.Validate(); err != nil {

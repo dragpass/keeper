@@ -12,7 +12,11 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -148,5 +152,124 @@ func TestArchiveKeyGenerate_DeviceWideKeyIsSharedByOrgsWithoutTheirOwn(t *testin
 		if st.Scope != keychain.ArchiveScopeDevice || st.Fingerprint != first.Fingerprint {
 			t.Fatalf("org %s status: %+v", org, st)
 		}
+	}
+}
+
+// pausingStore holds the first write to account until release is closed, so a
+// second generate can run while the first is between its two writes.
+type pausingStore struct {
+	*testdouble.MemorySecretStore
+	account string
+	once    sync.Once
+	paused  chan struct{}
+	release chan struct{}
+}
+
+func (s *pausingStore) Set(service, account, value string) error {
+	if account == s.account {
+		first := false
+		s.once.Do(func() { first = true })
+		if first {
+			close(s.paused)
+			<-s.release
+		}
+	}
+	return s.MemorySecretStore.Set(service, account, value)
+}
+
+// Two generates for one org interleave at either write. They must leave one
+// key pair whose halves match, and both callers must get its public key.
+func TestArchiveKeyGenerate_ConcurrentCallsForOneOrgLeaveOneMatchingPair(t *testing.T) {
+	slot := keychain.OrgArchiveActiveSlot(testOrgA)
+	for name, account := range map[string]string{"pause at private write": slot.PrivateAccount, "pause at public write": slot.PublicAccount} {
+		t.Run(name, func(t *testing.T) {
+			deps, _, mem := newTestDeps(t)
+			store := &pausingStore{MemorySecretStore: mem, account: account, paused: make(chan struct{}), release: make(chan struct{})}
+			deps.Store = store
+			results := make(chan proto.BaseResponse, 2)
+			go func() { results <- HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA}) }()
+			<-store.paused
+			go func() { results <- HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA}) }()
+			// Give the second caller every chance to interleave before the
+			// first one finishes its write.
+			select {
+			case r := <-results:
+				close(store.release)
+				results <- r
+			case <-time.After(300 * time.Millisecond):
+				close(store.release)
+			}
+			a, b := <-results, <-results
+			if !a.Success || !b.Success {
+				t.Fatalf("generate: %+v / %+v", a, b)
+			}
+			pa := a.Data.(proto.ArchiveKeyGenerateResponseData).PublicKey
+			pb := b.Data.(proto.ArchiveKeyGenerateResponseData).PublicKey
+			if pa != pb {
+				t.Fatal("the two callers got different public keys")
+			}
+			priv, _ := slot.GetPrivate(mem)
+			pub, _ := slot.GetPublic(mem)
+			parsed, err := crypto.ParsePrivateKey(priv)
+			if err != nil {
+				t.Fatalf("stored private key: %v", err)
+			}
+			derived, _ := crypto.PublicKeyToPEM(&parsed.PublicKey)
+			if derived != pub || pub != pa {
+				t.Fatal("the stored private and public halves do not match the answered key")
+			}
+		})
+	}
+}
+
+// A slot left half-written (a private key without its public key, as an
+// interrupted commit or generate can leave) is refused, not overwritten.
+func TestArchiveKeyGenerate_RefusesPrivateWithoutPublic(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	slot := keychain.OrgArchiveActiveSlot(testOrgA)
+	if err := slot.SavePrivate(store, "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+	resp := HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA})
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveKeySlotIncomplete) {
+		t.Fatalf("private-only org slot: %+v", resp)
+	}
+	if !reflect.DeepEqual(before, store.Snapshot()) {
+		t.Fatal("a refused generate changed the keychain")
+	}
+}
+
+// An org rotation in progress owns the org's slots until it commits or
+// aborts; a generate must not replace the key it is re-wrapping from.
+func TestArchiveKeyGenerate_RefusesWhileOrgRotationIsStaged(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	generateFor(t, deps, testOrgA)
+	beginOrg(t, deps, testOrgA)
+	before := store.Snapshot()
+	resp := HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA})
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveKeyRotationPending) {
+		t.Fatalf("generate during a staged rotation: %+v", resp)
+	}
+	if !reflect.DeepEqual(before, store.Snapshot()) {
+		t.Fatal("a refused generate changed the keychain")
+	}
+}
+
+// After a split finalized, the org keeps only the public half. That is not a
+// usable key: generate reports the state and creates nothing.
+func TestArchiveKeyGenerate_ReportsPublicOnlyOrgKey(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	generateFor(t, deps, testOrgA)
+	if err := keychain.OrgArchiveActiveSlot(testOrgA).DeletePrivate(store); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+	resp := HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA})
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveKeyPrivateAbsent) || resp.Data != nil {
+		t.Fatalf("public-only org slot: %+v", resp)
+	}
+	if !reflect.DeepEqual(before, store.Snapshot()) {
+		t.Fatal("a refused generate changed the keychain")
 	}
 }

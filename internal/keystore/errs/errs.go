@@ -55,6 +55,21 @@ const (
 	// same receipt repeats the deletion. Never a completed finalization.
 	ErrCodeArchiveSplitCleanupPending ErrorCode = "archive_split_cleanup_pending"
 
+	// ErrCodeArchiveKeySlotIncomplete: archive_key_generate found the org's
+	// archive private key without its public key (an interrupted write).
+	// Nothing was generated or changed; the slot needs inspection.
+	ErrCodeArchiveKeySlotIncomplete ErrorCode = "archive_key_slot_incomplete"
+
+	// ErrCodeArchiveKeyRotationPending: archive_key_generate found a staged
+	// rotation for the org. Nothing was generated or changed; the rotation
+	// is committed or aborted first.
+	ErrCodeArchiveKeyRotationPending ErrorCode = "archive_key_rotation_pending"
+
+	// ErrCodeArchiveKeyPrivateAbsent: archive_key_generate found only the
+	// org's archive public key (a quorum split finalized and removed the
+	// private key). There is no usable key here and none was generated.
+	ErrCodeArchiveKeyPrivateAbsent ErrorCode = "archive_key_private_absent"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"
