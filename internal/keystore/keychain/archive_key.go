@@ -141,6 +141,12 @@ func OrgArchiveStagingSlot(orgID string) ArchiveKeySlot {
 	return ArchiveKeySlot{config.OrgArchivePrivateKeyStagingPrefix + orgID, config.OrgArchivePublicKeyStagingPrefix + orgID, ArchiveScopeOrg}
 }
 
+// OrgArchiveReconfigurationSlot is where a legacy quorum reconfiguration of
+// orgID stages its new key. It is always org scoped.
+func OrgArchiveReconfigurationSlot(orgID string) ArchiveKeySlot {
+	return ArchiveKeySlot{config.OrgArchivePrivateKeyReconfigurationPrefix + orgID, config.OrgArchivePublicKeyReconfigurationPrefix + orgID, ArchiveScopeOrg}
+}
+
 // OrgArchiveActiveCandidates lists the slots that may hold orgID's active
 // key, most specific first: the org slot, then the device-wide slot an org
 // that never rotated on 0.0.58 still uses.

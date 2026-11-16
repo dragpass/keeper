@@ -39,4 +39,7 @@ const (
 	ActionArchiveSessionBegin           = "archive_session_begin"
 	ActionArchiveSessionEnd             = "archive_session_end"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
+	// ArchiveReconfigureStage: stage a new org archive key for a legacy
+	// quorum reconfiguration (lv90) in its own slot.
+	ActionArchiveReconfigureStage = "archive_reconfigure_stage"
 )

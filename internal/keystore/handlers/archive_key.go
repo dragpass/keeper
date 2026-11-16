@@ -102,6 +102,8 @@ var (
 // Slot states:
 //   - public and private present: the org's key, returned unchanged;
 //   - a staged rotation for the org: refused (archive_key_rotation_pending);
+//   - a reconfiguration journal or staged key for the org: refused
+//     (archive_reconfiguration_pending);
 //   - private without public (an interrupted write): refused
 //     (archive_key_slot_incomplete), never overwritten;
 //   - public without private (a quorum split finalized): refused
@@ -177,6 +179,11 @@ func orgArchiveSlotDecision(d Deps, orgID string) (proto.BaseResponse, bool, err
 	}
 	if stagedPub != "" || stagedPriv {
 		return errs.CodeResponse(errs.ErrCodeArchiveKeyRotationPending, "an archive key rotation is staged for this org"), true, nil
+	}
+	if pending, err := orgArchiveReconfigurationPending(d.Store, orgID); err != nil {
+		return proto.BaseResponse{}, false, err
+	} else if pending {
+		return errs.CodeResponse(errs.ErrCodeArchiveReconfigurationPending, "an archive key reconfiguration is staged for this org"), true, nil
 	}
 	existing, hasPriv, err := slotHalves(d.Store, slot)
 	if err != nil {

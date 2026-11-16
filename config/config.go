@@ -92,6 +92,17 @@ const (
 	OrgArchivePrivateKeyStagingPrefix = OrgArchivePrivateKeyStaging + ":"
 	OrgArchivePublicKeyStagingPrefix  = OrgArchivePublicKeyStaging + ":"
 
+	// The key a legacy quorum reconfiguration (lv90) stages for an org,
+	// beside the active key and the rotation stage, which it never touches.
+	// Only the reconfiguration split reads the private half.
+	OrgArchivePrivateKeyReconfigurationPrefix = "org_archive_private_key_reconfiguration:"
+	OrgArchivePublicKeyReconfigurationPrefix  = "org_archive_public_key_reconfiguration:"
+
+	// The org's reconfiguration journal (lv90): the operation kind, the
+	// operation ID and the staged key's fingerprint. One per org, so a stage
+	// for another operation is refused instead of replacing this one.
+	OrgArchiveReconfigurationJournalPrefix = "archive_quorum_reconfiguration_pending:"
+
 	// Per-account Archive / Recovery receiving keypair (RSA-2048).
 	//
 	// The key whose PUBLIC half this account publishes to the server-side

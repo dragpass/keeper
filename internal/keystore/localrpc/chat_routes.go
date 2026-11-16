@@ -508,6 +508,12 @@ var archiveRoutes = map[string]appRoute{
 		input:      func() any { return &proto.ArchiveShareRewrapRequest{} },
 		plainLimit: proto.ChatStateMaxRequestBytes,
 	},
+	// Legacy quorum reconfiguration (lv90): stages the new key in the org's
+	// reconfiguration slot and returns only public material.
+	"/v1/archive/archive_reconfigure_stage": {
+		action: proto.ActionArchiveReconfigureStage,
+		input:  func() any { return &proto.ArchiveReconfigureStageRequest{} },
+	},
 	"/v1/archive/archive_quorum_combine_and_rewrap": {
 		action:     proto.ActionArchiveQuorumCombineAndRewrap,
 		input:      func() any { return &appQuorumCombine{} },

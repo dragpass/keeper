@@ -70,6 +70,11 @@ const (
 	// private key). There is no usable key here and none was generated.
 	ErrCodeArchiveKeyPrivateAbsent ErrorCode = "archive_key_private_absent"
 
+	// ErrCodeArchiveReconfigurationPending: the org has a staged legacy
+	// quorum reconfiguration (lv90), or a reconfiguration journal of another
+	// operation. Nothing was generated or changed.
+	ErrCodeArchiveReconfigurationPending ErrorCode = "archive_reconfiguration_pending"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"
