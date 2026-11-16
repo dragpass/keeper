@@ -47,7 +47,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	if err != nil {
 		return deny()
 	}
-	response := archiveQuorumCombineAndRewrap(d, req)
+	response := archiveQuorumCombineAndRewrap(d, req.GrantContext.OrgID, req)
 	now := d.Now()
 	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
 		return deny()
@@ -55,7 +55,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	return response
 }
 
-func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
+func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive quorum combine and rewrap processing...")
 
 	if err := req.Validate(); err != nil {
@@ -91,7 +91,9 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_old_dek_b64: "+err.Error())
 	}
 
-	sessionBuf, err := GetArchiveSessionPrivateKeySecure(d.Store)
+	// Only orgID's own session slot is read; a session of another
+	// organization on this device, or the legacy device-wide slot, never is.
+	sessionBuf, err := GetArchiveSessionPrivateKeySecure(d.Store, orgID)
 	if err != nil {
 		return errs.Response(err) // not_found if no session is open
 	}

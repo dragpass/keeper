@@ -77,9 +77,9 @@ func GetAccountArchivePrivateKeySecure(store keychain.SecretStore) (*memguard.Lo
 
 // GetArchiveSessionPrivateKeySecure is the same as getArchiveSlotPrivateKeySecure
 // but for the archive quorum recovery-session ephemeral slot. Returns
-// keychain.ErrSecretNotFound (→ not_found) when no session is open.
-func GetArchiveSessionPrivateKeySecure(store keychain.SecretStore) (*memguard.LockedBuffer, error) {
-	pemStr, err := keychain.GetArchiveSessionPrivateKey(store)
+// keychain.ErrSecretNotFound (→ not_found) when orgID has no open session.
+func GetArchiveSessionPrivateKeySecure(store keychain.SecretStore, orgID string) (*memguard.LockedBuffer, error) {
+	pemStr, err := keychain.GetArchiveSessionPrivateKey(store, orgID)
 	if err != nil {
 		return nil, err
 	}

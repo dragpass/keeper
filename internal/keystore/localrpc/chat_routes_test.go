@@ -727,13 +727,25 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	session, csrf := openTestSession(t, server)
 	for _, path := range []string{
 		"/v1/archive/archive_key_status", "/v1/archive/account_archive_key_generate",
-		"/v1/archive/archive_key_generate", "/v1/archive/archive_key_rotate_abort", "/v1/archive/archive_session_begin",
-		"/v1/archive/archive_session_end",
+		"/v1/archive/archive_key_generate", "/v1/archive/archive_key_rotate_abort",
 	} {
 		if code, result, body := callRoute(t, server, session, csrf, path, map[string]any{}); code != http.StatusOK || !result.Success {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
 		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"public_key": "x"}); code != http.StatusBadRequest {
+			t.Fatalf("%s took an unknown field: %d", path, code)
+		}
+	}
+	// The recovery-session slot is per organization (lv90 K0): the session
+	// routes pass org_id and refuse a body without it.
+	for _, path := range []string{"/v1/archive/archive_session_begin", "/v1/archive/archive_session_end"} {
+		if code, result, body := callRoute(t, server, session, csrf, path, map[string]any{"org_id": routeOnlyOrg}); code != http.StatusOK || !result.Success {
+			t.Fatalf("%s: %d %s", path, code, body)
+		}
+		if code, result, _ := callRoute(t, server, session, csrf, path, map[string]any{}); code == http.StatusOK && result.Success {
+			t.Fatalf("%s ran without org_id", path)
+		}
+		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
 	}

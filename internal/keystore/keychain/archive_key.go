@@ -63,31 +63,44 @@ func GetAccountArchivePublicKey(store SecretStore) (string, error) {
 	return store.Get(config.Service, config.AccountArchivePublicKey)
 }
 
-// Archive quorum recovery-session ephemeral keypair.
+// Archive quorum recovery-session ephemeral keypair, one slot per
+// organization. orgID must be a validated, non-empty organization ID.
 
-// SaveArchiveSessionPrivateKey stores the recovery-session private key PEM.
-func SaveArchiveSessionPrivateKey(store SecretStore, privatePEM string) error {
-	return store.Set(config.Service, config.OrgArchiveSessionPrivateKey, privatePEM)
+// SaveArchiveSessionPrivateKey stores orgID's recovery-session private key PEM.
+func SaveArchiveSessionPrivateKey(store SecretStore, orgID, privatePEM string) error {
+	return store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID, privatePEM)
 }
 
-// GetArchiveSessionPrivateKey returns the recovery-session private key PEM.
-func GetArchiveSessionPrivateKey(store SecretStore) (string, error) {
-	return store.Get(config.Service, config.OrgArchiveSessionPrivateKey)
+// GetArchiveSessionPrivateKey returns orgID's recovery-session private key PEM.
+func GetArchiveSessionPrivateKey(store SecretStore, orgID string) (string, error) {
+	return store.Get(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID)
 }
 
-// DeleteArchiveSessionPrivateKey removes the recovery-session private key PEM.
-func DeleteArchiveSessionPrivateKey(store SecretStore) error {
-	return store.Delete(config.Service, config.OrgArchiveSessionPrivateKey)
+// DeleteArchiveSessionPrivateKey removes orgID's recovery-session private key PEM.
+func DeleteArchiveSessionPrivateKey(store SecretStore, orgID string) error {
+	return store.Delete(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID)
 }
 
-// SaveArchiveSessionPublicKey stores the recovery-session public key PEM.
-func SaveArchiveSessionPublicKey(store SecretStore, publicPEM string) error {
-	return store.Set(config.Service, config.OrgArchiveSessionPublicKey, publicPEM)
+// SaveArchiveSessionPublicKey stores orgID's recovery-session public key PEM.
+func SaveArchiveSessionPublicKey(store SecretStore, orgID, publicPEM string) error {
+	return store.Set(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID, publicPEM)
 }
 
-// DeleteArchiveSessionPublicKey removes the recovery-session public key PEM.
-func DeleteArchiveSessionPublicKey(store SecretStore) error {
-	return store.Delete(config.Service, config.OrgArchiveSessionPublicKey)
+// DeleteArchiveSessionPublicKey removes orgID's recovery-session public key PEM.
+func DeleteArchiveSessionPublicKey(store SecretStore, orgID string) error {
+	return store.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
+}
+
+// DeleteLegacyArchiveSessionKeys removes the device-wide session slot a
+// Keeper before lv90 used. Its organization is not recorded, so it is never
+// read or moved into an organization's slot. Absence is not an error.
+func DeleteLegacyArchiveSessionKeys(store SecretStore) error {
+	for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
+		if err := store.Delete(config.Service, account); err != nil && !errors.Is(err, ErrSecretNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ArchiveKeySlot names the keyring accounts of one archive keypair: the

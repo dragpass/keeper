@@ -173,7 +173,8 @@ const (
 	ChatStateSealKeyPrefix = "chat-state-seal:"
 	ChatStateAnchorPrefix  = "chat-state-anchor:"
 
-	// Archive quorum recovery-session ephemeral keypair (RSA-2048).
+	// Archive quorum recovery-session ephemeral keypair (RSA-2048), one per
+	// organization: OrgArchiveSessionPrivateKeyPrefix + org_id.
 	//
 	// Created by archive_session_begin when the org owner (coordinator) opens a
 	// break-glass recovery session, and deleted by archive_session_end. Quorum
@@ -181,8 +182,19 @@ const (
 	// coordinator's Keeper uses this private key to unwrap them in
 	// archive_quorum_combine_and_rewrap. A short-lived slot scoped to a single
 	// recovery session — never the archive key itself.
-	OrgArchiveSessionPrivateKey = "org_archive_session_private_key"
-	OrgArchiveSessionPublicKey  = "org_archive_session_public_key"
+	//
+	// The server allows one open session per organization, so one device can
+	// hold sessions for several organizations at once; a device-wide slot let
+	// the second begin replace the first organization's key.
+	OrgArchiveSessionPrivateKeyPrefix = LegacyOrgArchiveSessionPrivateKey + ":"
+	OrgArchiveSessionPublicKeyPrefix  = LegacyOrgArchiveSessionPublicKey + ":"
+
+	// The device-wide session slot of Keepers before lv90. Its organization
+	// is not recorded, so it is never read: a session opened under it fails
+	// closed and the owner opens a new one. archive_session_begin and
+	// archive_session_end remove a leftover entry.
+	LegacyOrgArchiveSessionPrivateKey = "org_archive_session_private_key"
+	LegacyOrgArchiveSessionPublicKey  = "org_archive_session_public_key"
 
 	// This machine's device id (lowercase UUID), the X-Device-ID the App and
 	// the Extension both send once they adopt it. Written once by

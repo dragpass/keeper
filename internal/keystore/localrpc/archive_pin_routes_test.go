@@ -25,7 +25,7 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
 	// archive_key_split refuses without a signed split decision, so the test
 	// builds the session-wrapped shares directly from the archive key.
-	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin"}`))
+	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin","payload":{"org_id":"`+routeOnlyOrg+`"}}`))
 	var sessionData proto.ArchiveSessionBeginResponseData
 	_ = remarshal(begun.Data, &sessionData)
 	sessionPub, _ := crypto.ParsePublicKey(sessionData.SessionPublicKey)

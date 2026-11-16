@@ -121,9 +121,12 @@ type ArchiveShareRewrapResponseData struct {
 
 // ArchiveSessionBeginRequest — generate the coordinator's ephemeral
 // recovery-session keypair and return its public key.
-type ArchiveSessionBeginRequest struct{}
+type ArchiveSessionBeginRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveSessionBeginRequest) Validate() error { return nil }
+// The session slot is per organization, so org_id is required.
+func (r ArchiveSessionBeginRequest) Validate() error { return requireMessageUUID(r.OrgID, "org_id") }
 
 type ArchiveSessionBeginResponseData struct {
 	SessionPublicKey string `json:"session_public_key"`
@@ -131,9 +134,11 @@ type ArchiveSessionBeginResponseData struct {
 }
 
 // ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
-type ArchiveSessionEndRequest struct{}
+type ArchiveSessionEndRequest struct {
+	OrgID string `json:"org_id,omitempty"`
+}
 
-func (r ArchiveSessionEndRequest) Validate() error { return nil }
+func (r ArchiveSessionEndRequest) Validate() error { return requireMessageUUID(r.OrgID, "org_id") }
 
 type ArchiveSessionEndResponseData struct {
 	Ended bool `json:"ended"`

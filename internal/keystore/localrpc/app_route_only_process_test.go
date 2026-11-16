@@ -49,8 +49,8 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveSplitFinalize, "/v1/archive/archive_split_finalize", map[string]any{}},
 	{proto.ActionArchiveSplitAbandon, "/v1/archive/archive_split_abandon", map[string]any{}},
 	{proto.ActionArchiveShareRewrap, "/v1/archive/archive_share_rewrap", map[string]any{}},
-	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{}},
-	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{}},
+	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{"org_id": routeOnlyOrg}},
+	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}},
 	{proto.ActionArchiveQuorumCombineAndRewrap, "/v1/archive/archive_quorum_combine_and_rewrap", map[string]any{
 		"rewrapped_shares": []any{}, "wrapped_old_dek_b64": "AAAA", "owner_account_id": routeOnlyOwner,
 		"recipients": []any{map[string]any{"account_id": routeOnlyPeer, "public_key": "x"}},

@@ -6,6 +6,7 @@ import (
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -51,7 +52,7 @@ func authorizedCombineFixture(t *testing.T) (*auditFixture, proto.ArchiveQuorumC
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{})
+	session := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{OrgID: f.v.OrgID})
 	if !session.Success {
 		t.Fatal("session setup failed")
 	}
@@ -158,7 +159,7 @@ type combinePrivateReadProbe struct {
 }
 
 func (p *combinePrivateReadProbe) Get(service, account string) (string, error) {
-	if account == config.OrgArchiveSessionPrivateKey {
+	if strings.HasPrefix(account, config.OrgArchiveSessionPrivateKeyPrefix) {
 		p.reads++
 		if p.beforeRead != nil {
 			p.beforeRead()
