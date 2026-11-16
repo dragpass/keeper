@@ -128,15 +128,30 @@ func (r ArchiveSessionBeginRequest) Validate() error { return nil }
 type ArchiveSessionBeginResponseData struct {
 	SessionPublicKey string `json:"session_public_key"`
 	Fingerprint      string `json:"fingerprint"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
 }
 
 // ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
-type ArchiveSessionEndRequest struct{}
+type ArchiveSessionEndRequest struct {
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
 
 func (r ArchiveSessionEndRequest) Validate() error { return nil }
 
+type ArchiveSessionSetExpiryRequest struct {
+	Fingerprint string `json:"fingerprint"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+func (r ArchiveSessionSetExpiryRequest) Validate() error { return nil }
+
+type ArchiveSessionSetExpiryResponseData struct {
+	ExpiresAt string `json:"expires_at"`
+}
+
 type ArchiveSessionEndResponseData struct {
-	Ended bool `json:"ended"`
+	Ended                 bool `json:"ended"`
+	SlotWithoutExpiryKept bool `json:"slot_without_expiry_kept,omitempty"`
 }
 
 // RewrappedShareInput — one share re-wrapped to the session public key, as

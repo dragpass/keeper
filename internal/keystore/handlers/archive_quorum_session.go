@@ -14,6 +14,8 @@
 package handlers
 
 import (
+	"time"
+
 	"github.com/awnumar/memguard"
 
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -65,3 +67,11 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: ended}}
 }
+
+const archiveSessionMaxTTL = 35 * time.Minute
+
+func HandleArchiveSessionSetExpiry(d Deps, req proto.ArchiveSessionSetExpiryRequest) proto.BaseResponse {
+	return errs.CodeResponse(errs.ErrCodeUnsupported, "not implemented")
+}
+
+func SweepExpiredArchiveSession(d Deps) {}
