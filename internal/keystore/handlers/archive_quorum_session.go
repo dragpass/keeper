@@ -9,9 +9,14 @@
 //
 // The keypair lives in the organization's own slot
 // (config.OrgArchiveSessionPrivateKeyPrefix + org_id): one device can hold an
-// open session for each of several organizations. The device-wide slot of
-// Keepers before lv90 names no organization; begin and end remove a leftover
-// entry and nothing reads it, so a session opened under it fails closed.
+// open session for each of several organizations.
+//
+// The device-wide slot (config.LegacyOrgArchiveSessionPrivateKey) that Keepers
+// before lv90 used names no organization and may hold the key of an
+// in-flight recovery session. No action reads it as a session key or moves
+// it. begin refuses with archive_session_legacy_slot_present while it exists;
+// end leaves it alone; only archive_session_legacy_discard, which the App
+// calls after the user confirms, deletes it.
 //
 // Key-material discipline: the session private key is held in a memguard buffer
 // and the plaintext keypair string is wiped (secure.WipeString) once persisted;
@@ -39,12 +44,20 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 		return errs.Response(err)
 	}
 
+	// The device-wide slot of a Keeper before lv90 may hold the key of an
+	// in-flight recovery session of an organization this Keeper cannot name.
+	// It is never deleted, moved or used here; the App asks the user, then
+	// calls archive_session_legacy_discard.
+	if present, err := keychain.LegacyArchiveSessionPresent(d.Store); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
+	} else if present {
+		return errs.CodeResponse(errs.ErrCodeArchiveSessionLegacySlotPresent, "a device-wide archive recovery session key from an earlier Keeper is present")
+	}
+
 	keyPair, err := crypto.GenerateRSAKeyPair()
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeInternal, "archive session keygen failed: "+err.Error())
 	}
-
-	removeLegacyArchiveSession(d)
 
 	privBuf := memguard.NewBufferFromBytes([]byte(keyPair.PrivateKey))
 	secure.WipeString(&keyPair.PrivateKey)
@@ -72,7 +85,6 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 		return errs.Response(err)
 	}
 
-	removeLegacyArchiveSession(d)
 	existing, _ := keychain.GetArchiveSessionPrivateKey(d.Store, req.OrgID)
 	ended := existing != ""
 	secure.WipeString(&existing)
@@ -83,11 +95,26 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: ended}}
 }
 
-// removeLegacyArchiveSession drops a device-wide session entry left by a Keeper
-// before lv90. A failure is logged and does not block the call: the entry is
-// never read, so leaving it costs nothing but the stale key at rest.
-func removeLegacyArchiveSession(d Deps) {
-	if err := keychain.DeleteLegacyArchiveSessionKeys(d.Store); err != nil {
-		d.Logger.Println("archive session: removing the device-wide session slot failed")
+// HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide
+// session slot a Keeper before lv90 used. The App calls it only after the
+// user confirmed: if that key belongs to a recovery session still open on
+// the server, the approvals already given to it can no longer be combined,
+// and the owner cancels that session and opens a new one. Organization
+// session slots and every other slot are untouched. Idempotent:
+// discarded=false when nothing was there.
+func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDiscardRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
 	}
+	present, err := keychain.LegacyArchiveSessionPresent(d.Store)
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
+	}
+	if err := keychain.DeleteLegacyArchiveSessionKeys(d.Store); err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "delete device-wide archive session slot failed")
+	}
+	if present {
+		d.Logger.Println("archive session legacy discard: device-wide session slot deleted on confirmed request")
+	}
+	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionLegacyDiscardResponseData{Discarded: present}}
 }

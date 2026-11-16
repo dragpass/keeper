@@ -51,6 +51,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveShareRewrap, "/v1/archive/archive_share_rewrap", map[string]any{}},
 	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{"org_id": routeOnlyOrg}},
 	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}},
+	{proto.ActionArchiveSessionLegacyDiscard, "/v1/archive/archive_session_legacy_discard", map[string]any{"confirm_discard": true}},
 	{proto.ActionArchiveReconfigureStage, "/v1/archive/archive_reconfigure_stage", map[string]any{}},
 	{proto.ActionArchiveQuorumCombineAndRewrap, "/v1/archive/archive_quorum_combine_and_rewrap", map[string]any{
 		"rewrapped_shares": []any{}, "wrapped_old_dek_b64": "AAAA", "owner_account_id": routeOnlyOwner,

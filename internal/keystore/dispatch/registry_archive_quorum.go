@@ -25,6 +25,7 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveSplitAbandon:           wrap(handlers.HandleArchiveSplitAbandon).appOnlyAction(),
 		proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin).appOnlyAction(),
 		proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd).appOnlyAction(),
+		proto.ActionArchiveSessionLegacyDiscard:   wrap(handlers.HandleArchiveSessionLegacyDiscard).appOnlyAction(),
 		proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
 		proto.ActionArchiveReconfigureStage:       wrap(handlers.HandleArchiveReconfigureStage).appOnlyAction(),
 	}

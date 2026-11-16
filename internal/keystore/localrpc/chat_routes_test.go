@@ -114,6 +114,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_reconfigure_stage",
 	"/v1/archive/archive_session_begin",
 	"/v1/archive/archive_session_end",
+	"/v1/archive/archive_session_legacy_discard",
 	"/v1/archive/archive_share_open_proof",
 	"/v1/archive/archive_share_prepare",
 	"/v1/archive/archive_share_proof_prepare",

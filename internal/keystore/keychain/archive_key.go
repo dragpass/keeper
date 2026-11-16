@@ -12,6 +12,7 @@ import (
 	"errors"
 
 	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // SaveArchivePrivateKey stores the RSA archive private key PEM.
@@ -91,9 +92,30 @@ func DeleteArchiveSessionPublicKey(store SecretStore, orgID string) error {
 	return store.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
 }
 
+// LegacyArchiveSessionPresent reports whether either half of the device-wide
+// session slot of a Keeper before lv90 exists. It checks presence only: the
+// value is never returned, parsed or used.
+func LegacyArchiveSessionPresent(store SecretStore) (bool, error) {
+	for _, account := range []string{config.LegacyOrgArchiveSessionPublicKey, config.LegacyOrgArchiveSessionPrivateKey} {
+		value, err := store.Get(config.Service, account)
+		present := value != ""
+		secure.WipeString(&value)
+		if errors.Is(err, ErrSecretNotFound) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if present {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // DeleteLegacyArchiveSessionKeys removes the device-wide session slot a
-// Keeper before lv90 used. Its organization is not recorded, so it is never
-// read or moved into an organization's slot. Absence is not an error.
+// Keeper before lv90 used. Only archive_session_legacy_discard calls it, after
+// the user confirmed in the App. Absence is not an error.
 func DeleteLegacyArchiveSessionKeys(store SecretStore) error {
 	for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
 		if err := store.Delete(config.Service, account); err != nil && !errors.Is(err, ErrSecretNotFound) {

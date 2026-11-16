@@ -461,6 +461,9 @@ var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_rotate_abort":     {action: proto.ActionArchiveKeyRotateAbort, input: func() any { return &proto.ArchiveKeyRotateAbortRequest{} }},
 	"/v1/archive/archive_session_begin":        {action: proto.ActionArchiveSessionBegin, input: func() any { return &proto.ArchiveSessionBeginRequest{} }},
 	"/v1/archive/archive_session_end":          {action: proto.ActionArchiveSessionEnd, input: func() any { return &proto.ArchiveSessionEndRequest{} }},
+	// Only after the user confirmed discarding a pre-lv90 device-wide
+	// session key; the body must carry confirm_discard: true.
+	"/v1/archive/archive_session_legacy_discard": {action: proto.ActionArchiveSessionLegacyDiscard, input: func() any { return &proto.ArchiveSessionLegacyDiscardRequest{} }},
 	"/v1/archive/archive_unwrap_and_rewrap": {
 		action:     proto.ActionArchiveUnwrapAndRewrap,
 		input:      func() any { return &appArchiveRewrap{} },

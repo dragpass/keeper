@@ -27,17 +27,20 @@ const (
 	//   unwraps the OLD Group DEK, and re-wraps it to the target members. All
 	//   reconstructed key material is wiped before returning; only the new
 	//   per-recipient wraps are in the response.
-	ActionArchiveKeySplit               = "archive_key_split"
-	ActionArchiveSplitPrepare           = "archive_split_prepare"
-	ActionArchiveShareProofPrepare      = "archive_share_proof_prepare"
-	ActionArchiveShareOpenProof         = "archive_share_open_proof"
-	ActionArchiveSplitStatus            = "archive_split_status"
-	ActionArchiveSplitFinalize          = "archive_split_finalize"
-	ActionArchiveSplitAbandon           = "archive_split_abandon"
-	ActionArchiveSharePrepare           = "archive_share_prepare"
-	ActionArchiveShareRewrap            = "archive_share_rewrap"
-	ActionArchiveSessionBegin           = "archive_session_begin"
-	ActionArchiveSessionEnd             = "archive_session_end"
+	ActionArchiveKeySplit          = "archive_key_split"
+	ActionArchiveSplitPrepare      = "archive_split_prepare"
+	ActionArchiveShareProofPrepare = "archive_share_proof_prepare"
+	ActionArchiveShareOpenProof    = "archive_share_open_proof"
+	ActionArchiveSplitStatus       = "archive_split_status"
+	ActionArchiveSplitFinalize     = "archive_split_finalize"
+	ActionArchiveSplitAbandon      = "archive_split_abandon"
+	ActionArchiveSharePrepare      = "archive_share_prepare"
+	ActionArchiveShareRewrap       = "archive_share_rewrap"
+	ActionArchiveSessionBegin      = "archive_session_begin"
+	ActionArchiveSessionEnd        = "archive_session_end"
+	// ArchiveSessionLegacyDiscard: delete the device-wide session slot of a
+	// Keeper before lv90, after the user confirmed in the App (lv90).
+	ActionArchiveSessionLegacyDiscard   = "archive_session_legacy_discard"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
 	// ArchiveReconfigureStage: stage a new org archive key for a legacy
 	// quorum reconfiguration (lv90) in its own slot.

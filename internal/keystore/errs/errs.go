@@ -75,6 +75,12 @@ const (
 	// operation. Nothing was generated or changed.
 	ErrCodeArchiveReconfigurationPending ErrorCode = "archive_reconfiguration_pending"
 
+	// ErrCodeArchiveSessionLegacySlotPresent: archive_session_begin found the
+	// device-wide recovery-session slot of a Keeper before lv90. It may hold
+	// the session key of an in-flight recovery of an unknown organization, so
+	// nothing was generated, deleted or moved.
+	ErrCodeArchiveSessionLegacySlotPresent ErrorCode = "archive_session_legacy_slot_present"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"

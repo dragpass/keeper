@@ -210,32 +210,83 @@ func TestArchiveSession_EndRemovesOnlyItsOwnOrgSession(t *testing.T) {
 	assertMemberGrantOpens(t, resp, member, sessionGrantContext(testOrgB), sessionTestDEK())
 }
 
-// A leftover device-wide session entry is removed by begin and by end; it is
-// never moved into an organization's slot, since its organization is unknown.
-func TestArchiveSession_BeginAndEndRemoveTheDeviceWideEntry(t *testing.T) {
-	for _, step := range []string{"begin", "end"} {
-		t.Run(step, func(t *testing.T) {
+// The device-wide slot of a Keeper before lv90 may hold the session key of an
+// in-flight recovery of some organization on this device; its organization is
+// not recorded. While it exists, begin for any organization stops with
+// archive_session_legacy_slot_present and changes nothing: no deletion, no
+// move into an organization slot, no fallback.
+func TestArchiveSession_BeginRefusesWhileTheDeviceWideSlotExists(t *testing.T) {
+	for _, half := range []string{"both", "private", "public"} {
+		t.Run(half, func(t *testing.T) {
 			deps, _, store := newTestDeps(t)
 			saveLegacyDeviceSession(t, store)
-			var resp proto.BaseResponse
-			if step == "begin" {
-				resp = HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
-			} else {
-				resp = HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+			if half == "private" {
+				_ = store.Delete(config.Service, config.LegacyOrgArchiveSessionPublicKey)
+			} else if half == "public" {
+				_ = store.Delete(config.Service, config.LegacyOrgArchiveSessionPrivateKey)
 			}
-			if !resp.Success {
-				t.Fatalf("%s: %+v", step, resp)
+			before := store.Snapshot()
+			resp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
+			if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveSessionLegacySlotPresent) || resp.Data != nil {
+				t.Fatalf("begin with a device-wide session slot (%s): %+v", half, resp)
 			}
-			for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
-				if _, err := store.Get(config.Service, account); err != keychain.ErrSecretNotFound {
-					t.Fatalf("%s kept the device-wide entry %s", step, account)
-				}
-			}
-			if step == "end" {
-				if _, err := keychain.GetArchiveSessionPrivateKey(store, testOrgA); err != keychain.ErrSecretNotFound {
-					t.Fatal("end moved the device-wide entry into the organization slot")
-				}
+			if !reflect.DeepEqual(before, store.Snapshot()) {
+				t.Fatal("a refused begin changed the keychain")
 			}
 		})
 	}
+}
+
+// archive_session_end ends only its organization's session. The device-wide
+// slot is left exactly as it was.
+func TestArchiveSession_EndLeavesTheDeviceWideSlot(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	saveLegacyDeviceSession(t, store)
+	priv, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPrivateKey)
+	pub, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPublicKey)
+	resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+	if !resp.Success || resp.Data.(proto.ArchiveSessionEndResponseData).Ended {
+		t.Fatalf("end: %+v", resp)
+	}
+	gotPriv, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPrivateKey)
+	gotPub, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPublicKey)
+	if gotPriv != priv || gotPub != pub {
+		t.Fatal("end changed the device-wide session slot")
+	}
+}
+
+// archive_session_legacy_discard is the explicit, user-confirmed way to clear
+// the device-wide slot. Without confirm_discard nothing changes. With it both
+// halves are deleted, organization session slots are untouched, and begin
+// works again.
+func TestArchiveSession_LegacyDiscardDeletesOnlyTheDeviceWideSlotOnConfirm(t *testing.T) {
+	deps, _, store := newTestDeps(t)
+	beginSessionFor(t, deps, testOrgB)
+	saveLegacyDeviceSession(t, store)
+	before := store.Snapshot()
+	refused := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{})
+	if refused.Success || refused.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("discard without confirmation: %+v", refused)
+	}
+	if !reflect.DeepEqual(before, store.Snapshot()) {
+		t.Fatal("an unconfirmed discard changed the keychain")
+	}
+	orgB, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgB)
+	resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
+	if !resp.Success || !resp.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
+		t.Fatalf("confirmed discard: %+v", resp)
+	}
+	for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
+		if _, err := store.Get(config.Service, account); err != keychain.ErrSecretNotFound {
+			t.Fatalf("discard kept %s", account)
+		}
+	}
+	if got, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgB); got != orgB || got == "" {
+		t.Fatal("discard changed another organization's session")
+	}
+	again := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
+	if !again.Success || again.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
+		t.Fatalf("second discard: %+v", again)
+	}
+	beginSessionFor(t, deps, testOrgA)
 }

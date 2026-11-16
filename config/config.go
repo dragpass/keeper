@@ -200,10 +200,13 @@ const (
 	OrgArchiveSessionPrivateKeyPrefix = LegacyOrgArchiveSessionPrivateKey + ":"
 	OrgArchiveSessionPublicKeyPrefix  = LegacyOrgArchiveSessionPublicKey + ":"
 
-	// The device-wide session slot of Keepers before lv90. Its organization
-	// is not recorded, so it is never read: a session opened under it fails
-	// closed and the owner opens a new one. archive_session_begin and
-	// archive_session_end remove a leftover entry.
+	// The device-wide session slot of Keepers before lv90: an ephemeral
+	// RSA-2048 pair from archive_session_begin, which the App removes with
+	// archive_session_end after a re-grant or a cancel. Its organization is
+	// not recorded, so it is never read as a session key or moved into an
+	// organization slot. While it exists archive_session_begin refuses
+	// (archive_session_legacy_slot_present); only the user-confirmed
+	// archive_session_legacy_discard deletes it.
 	LegacyOrgArchiveSessionPrivateKey = "org_archive_session_private_key"
 	LegacyOrgArchiveSessionPublicKey  = "org_archive_session_public_key"
 

@@ -144,6 +144,26 @@ type ArchiveSessionEndResponseData struct {
 	Ended bool `json:"ended"`
 }
 
+// ArchiveSessionLegacyDiscardRequest deletes the device-wide recovery-session
+// slot a Keeper before lv90 used. The App sends it only after the user
+// confirmed losing whatever recovery session that key belongs to;
+// confirm_discard must be true so an empty body never deletes anything.
+type ArchiveSessionLegacyDiscardRequest struct {
+	ConfirmDiscard bool `json:"confirm_discard"`
+}
+
+func (r ArchiveSessionLegacyDiscardRequest) Validate() error {
+	if !r.ConfirmDiscard {
+		return newValidationError("confirm_discard", "must be true")
+	}
+	return nil
+}
+
+type ArchiveSessionLegacyDiscardResponseData struct {
+	// Discarded is true when either half of the slot existed and is now gone.
+	Discarded bool `json:"discarded"`
+}
+
 // RewrappedShareInput — one share re-wrapped to the session public key, as
 // submitted by an approving admin. The x-coordinate is inside the ciphertext.
 type RewrappedShareInput struct {

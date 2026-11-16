@@ -23,6 +23,7 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeArchiveKeyRotationPending, "archive_key_rotation_pending"},
 		{ErrCodeArchiveKeyPrivateAbsent, "archive_key_private_absent"},
 		{ErrCodeArchiveReconfigurationPending, "archive_reconfiguration_pending"},
+		{ErrCodeArchiveSessionLegacySlotPresent, "archive_session_legacy_slot_present"},
 		{ErrCodePasswordInvalid, "password_invalid"},
 		{ErrCodeSignupPending, "signup_pending"},
 		{ErrCodeAccountKeyStaged, "account_key_staged"},
