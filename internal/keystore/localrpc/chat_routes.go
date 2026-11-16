@@ -460,7 +460,8 @@ var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_rotate_commit":    {action: proto.ActionArchiveKeyRotateCommit, input: func() any { return &proto.ArchiveKeyRotateCommitRequest{} }},
 	"/v1/archive/archive_key_rotate_abort":     {action: proto.ActionArchiveKeyRotateAbort, input: func() any { return &proto.ArchiveKeyRotateAbortRequest{} }},
 	"/v1/archive/archive_session_begin":        archiveEmptyRoute(proto.ActionArchiveSessionBegin),
-	"/v1/archive/archive_session_end":          archiveEmptyRoute(proto.ActionArchiveSessionEnd),
+	"/v1/archive/archive_session_end":          {action: proto.ActionArchiveSessionEnd, input: func() any { return &proto.ArchiveSessionEndRequest{} }},
+	"/v1/archive/archive_session_set_expiry":   {action: proto.ActionArchiveSessionSetExpiry, input: func() any { return &proto.ArchiveSessionSetExpiryRequest{} }},
 	"/v1/archive/archive_unwrap_and_rewrap": {
 		action:     proto.ActionArchiveUnwrapAndRewrap,
 		input:      func() any { return &appArchiveRewrap{} },

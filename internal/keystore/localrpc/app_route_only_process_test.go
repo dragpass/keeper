@@ -51,6 +51,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveShareRewrap, "/v1/archive/archive_share_rewrap", map[string]any{}},
 	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{}},
 	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{}},
+	{proto.ActionArchiveSessionSetExpiry, "/v1/archive/archive_session_set_expiry", map[string]any{}},
 	{proto.ActionArchiveQuorumCombineAndRewrap, "/v1/archive/archive_quorum_combine_and_rewrap", map[string]any{
 		"rewrapped_shares": []any{}, "wrapped_old_dek_b64": "AAAA", "owner_account_id": routeOnlyOwner,
 		"recipients": []any{map[string]any{"account_id": routeOnlyPeer, "public_key": "x"}},

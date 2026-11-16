@@ -19,6 +19,8 @@ func TestErrorCodeWireValues(t *testing.T) {
 		{ErrCodeInternal, "internal_error"},
 		{ErrCodeArchiveSplitAuthorityRequired, "archive_split_authority_required"},
 		{ErrCodeArchiveSplitCleanupPending, "archive_split_cleanup_pending"},
+		{ErrCodeArchiveSessionExpired, "archive_session_expired"},
+		{ErrCodeArchiveSessionExpiryUnknown, "archive_session_expiry_unknown"},
 		{ErrCodeArchiveKeySlotIncomplete, "archive_key_slot_incomplete"},
 		{ErrCodeArchiveKeyRotationPending, "archive_key_rotation_pending"},
 		{ErrCodeArchiveKeyPrivateAbsent, "archive_key_private_absent"},

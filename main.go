@@ -81,6 +81,7 @@ func newProcessApp() *keystore.App {
 	if err := keychain.EnsureServerPublicKey(app.Store, app.Logger); err != nil {
 		log.Fatalf("Critical: Failed to ensure server public key: %v", err)
 	}
+	app.SweepExpiredArchiveSession()
 	return app
 }
 

@@ -91,9 +91,11 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_old_dek_b64: "+err.Error())
 	}
 
-	sessionBuf, err := GetArchiveSessionPrivateKeySecure(d.Store)
+	// Reading the session key is its use: an expired slot is refused and
+	// deleted here, one without a trusted expiry is refused and kept.
+	sessionBuf, sessionExpiresAt, err := openArchiveSessionSlot(d)
 	if err != nil {
-		return errs.Response(err) // not_found if no session is open
+		return archiveSessionSlotResponse(err)
 	}
 	defer sessionBuf.Destroy()
 
@@ -160,6 +162,12 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 			RecipientFingerprint: fingerprintBase64Public(recipients[i].PublicKey),
 			EncryptedGroupDEKB64: base64.StdEncoding.EncodeToString(enc),
 		}
+	}
+
+	// The slot may expire while the combine runs; no output leaves after it.
+	if !d.Now().Before(sessionExpiresAt) {
+		deleteArchiveSessionSlot(d)
+		return archiveSessionSlotResponse(errArchiveSessionExpired)
 	}
 
 	d.Logger.Printf("archive quorum combine and rewrap successful: %d grants (raw key material wiped)", len(grants))

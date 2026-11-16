@@ -22,6 +22,8 @@ const (
 	//   32B DEKs, so this is distinct from archive_unwrap_and_rewrap.
 	// ArchiveSessionBegin / ArchiveSessionEnd: create / destroy the
 	//   coordinator's ephemeral recovery-session keypair (its own slot).
+	// ArchiveSessionSetExpiry: apply the server session's expires_at to that
+	//   slot; the slot's expiry only moves earlier.
 	// ArchiveQuorumCombineAndRewrap: coordinator unwraps N re-wrapped shares
 	//   with the session private key, reconstructs the archive private key,
 	//   unwraps the OLD Group DEK, and re-wraps it to the target members. All
@@ -37,6 +39,7 @@ const (
 	ActionArchiveSharePrepare           = "archive_share_prepare"
 	ActionArchiveShareRewrap            = "archive_share_rewrap"
 	ActionArchiveSessionBegin           = "archive_session_begin"
+	ActionArchiveSessionSetExpiry       = "archive_session_set_expiry"
 	ActionArchiveSessionEnd             = "archive_session_end"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
 )
