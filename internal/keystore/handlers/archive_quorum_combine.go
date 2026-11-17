@@ -72,8 +72,12 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 				fmt.Sprintf("failed to parse recipient public key [%d]: %v", i, err))
 		}
 		pubs[i] = pk
+		pinAccount, resp, ok := archiveRegrantPinAccount(d, req.OwnerAccountID, recipient.AccountID, pk)
+		if !ok {
+			return resp
+		}
 		checks[i] = peerKeyPinCheck{
-			accountID:          recipient.AccountID,
+			accountID:          pinAccount,
 			observed:           crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
 			publicKey:          recipient.PublicKey,
 			statements:         recipient.RotationStatements,
