@@ -20,15 +20,24 @@
 // has no known expiry. It is refused for use (archive_session_expiry_unknown)
 // and never deleted by a use, by the startup sweep or by
 // archive_session_end: lv90 (keeper #206) leaves its deletion to the user's
-// confirmed discard. Until that action exists, a new archive_session_begin
-// still replaces it as before. A header Keeper cannot parse, or an expiry
+// confirmed discard. By user decision (2026-11-17), until #206 merges a new
+// archive_session_begin keeps replacing it as before; after #206 begin is
+// refused while it exists, until the confirmed discard. A header Keeper cannot parse, or an expiry
 // further ahead than any session this Keeper starts (a clock moved back), is
 // refused the same way: its expiry is not trusted, so it is not deleted by
 // an expiry rule either.
+//
+// Every read-check-delete and every write of the slot runs under the
+// keychain process lock (in-process mutex plus a cross-process file lock on
+// the platform keyring), so a Keeper process that starts while the App
+// service begins a session cannot delete the new session on the strength of
+// an earlier read. RSA key generation stays outside the lock.
 
 package handlers
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"strconv"
 	"strings"
@@ -44,8 +53,11 @@ import (
 
 // archiveSessionMaxTTL bounds every session slot from its begin. The server
 // session lives 30 minutes from its open (ariadne archiveQuorumSessionTTL),
-// which follows begin; the 5 extra minutes cover the time between the two.
-const archiveSessionMaxTTL = 35 * time.Minute
+// and the open follows begin, so the same 30 minutes counted from begin ends
+// the slot no later than the server session even when the App never reports
+// the server's expires_at. The cost is that the slot may end up to the
+// begin-to-open gap before the server session does.
+const archiveSessionMaxTTL = 30 * time.Minute
 
 const archiveSessionSlotHeader = "dragpass-archive-session-v1 expires_at="
 
@@ -82,36 +94,81 @@ func decodeArchiveSessionSlot(value string) (expiresAt time.Time, pem string, ok
 	return time.Unix(unix, 0), pem, true
 }
 
-// openArchiveSessionSlot reads the session private key for a use. It returns
-// keychain.ErrSecretNotFound when no session is open,
-// errArchiveSessionExpired after deleting an expired slot, and
-// errArchiveSessionExpiryUnknown (slot kept) when the expiry cannot be
-// trusted. On success the caller destroys the buffer.
-func openArchiveSessionSlot(d Deps) (*memguard.LockedBuffer, time.Time, error) {
+// withArchiveSessionSlotLock runs fn under the keychain process lock. fn
+// must not take the lock again.
+func withArchiveSessionSlotLock(d Deps, fn func() error) error {
+	return keychain.WithKeychainProcessLock(d.Store, fn)
+}
+
+// archiveSessionSlot is one read of the slot, taken under the lock.
+type archiveSessionSlot struct {
+	expiresAt time.Time
+	digest    [sha256.Size]byte
+}
+
+// readArchiveSessionSlotLocked reads the slot for a use and hands its PEM to
+// use. Under the caller's lock it returns keychain.ErrSecretNotFound when no
+// session is open, errArchiveSessionExpired after deleting an expired slot,
+// and errArchiveSessionExpiryUnknown (slot kept) when the expiry cannot be
+// trusted. The PEM string is wiped when use returns.
+func readArchiveSessionSlotLocked(d Deps, use func(slot archiveSessionSlot, pem string) error) error {
 	value, err := keychain.GetArchiveSessionPrivateKey(d.Store)
 	if err != nil {
-		return nil, time.Time{}, err
+		return err
 	}
 	defer secure.WipeString(&value)
 	if value == "" {
-		return nil, time.Time{}, keychain.ErrSecretNotFound
+		return keychain.ErrSecretNotFound
 	}
 	expiresAt, pem, ok := decodeArchiveSessionSlot(value)
 	now := d.Now()
 	if !ok || expiresAt.After(now.Add(archiveSessionMaxTTL)) {
-		return nil, time.Time{}, errArchiveSessionExpiryUnknown
+		return errArchiveSessionExpiryUnknown
 	}
 	if !now.Before(expiresAt) {
 		deleteArchiveSessionSlot(d)
-		return nil, time.Time{}, errArchiveSessionExpired
+		return errArchiveSessionExpired
 	}
-	return memguard.NewBufferFromBytes([]byte(pem)), expiresAt, nil
+	return use(archiveSessionSlot{expiresAt: expiresAt, digest: sha256.Sum256([]byte(value))}, pem)
 }
 
-// deleteArchiveSessionSlot removes both halves of the session keypair.
-// Failures are ignored as in archive_session_end: the private half is
-// deleted first, and an expired slot left behind by a failed delete is
-// refused again at its next use.
+// openArchiveSessionSlot reads the session private key for a use (see
+// readArchiveSessionSlotLocked for the errors). On success the caller
+// destroys the buffer.
+func openArchiveSessionSlot(d Deps) (*memguard.LockedBuffer, archiveSessionSlot, error) {
+	var buf *memguard.LockedBuffer
+	var read archiveSessionSlot
+	err := withArchiveSessionSlotLock(d, func() error {
+		return readArchiveSessionSlotLocked(d, func(slot archiveSessionSlot, pem string) error {
+			buf = memguard.NewBufferFromBytes([]byte(pem))
+			read = slot
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, archiveSessionSlot{}, err
+	}
+	return buf, read, nil
+}
+
+// deleteArchiveSessionSlotIfUnchanged deletes the slot only while it still
+// holds the value read earlier, so a session begun since then is kept.
+func deleteArchiveSessionSlotIfUnchanged(d Deps, read archiveSessionSlot) {
+	_ = withArchiveSessionSlotLock(d, func() error {
+		value, err := keychain.GetArchiveSessionPrivateKey(d.Store)
+		current := sha256.Sum256([]byte(value))
+		secure.WipeString(&value)
+		if err == nil && subtle.ConstantTimeCompare(current[:], read.digest[:]) == 1 {
+			deleteArchiveSessionSlot(d)
+		}
+		return nil
+	})
+}
+
+// deleteArchiveSessionSlot removes both halves of the session keypair. The
+// caller holds the lock. Failures are ignored as in archive_session_end: the
+// private half is deleted first, and an expired slot left behind by a failed
+// delete is refused again at its next use.
 func deleteArchiveSessionSlot(d Deps) {
 	_ = keychain.DeleteArchiveSessionPrivateKey(d.Store)
 	_ = keychain.DeleteArchiveSessionPublicKey(d.Store)

@@ -93,7 +93,7 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 
 	// Reading the session key is its use: an expired slot is refused and
 	// deleted here, one without a trusted expiry is refused and kept.
-	sessionBuf, sessionExpiresAt, err := openArchiveSessionSlot(d)
+	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d)
 	if err != nil {
 		return archiveSessionSlotResponse(err)
 	}
@@ -165,8 +165,8 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 	}
 
 	// The slot may expire while the combine runs; no output leaves after it.
-	if !d.Now().Before(sessionExpiresAt) {
-		deleteArchiveSessionSlot(d)
+	if !d.Now().Before(sessionSlot.expiresAt) {
+		deleteArchiveSessionSlotIfUnchanged(d, sessionSlot)
 		return archiveSessionSlotResponse(errArchiveSessionExpired)
 	}
 

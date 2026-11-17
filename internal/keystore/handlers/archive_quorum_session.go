@@ -47,11 +47,19 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 	record := encodeArchiveSessionSlot(expiresAt, privBuf.Bytes())
 	defer record.Destroy()
 
-	if err := keychain.SaveArchiveSessionPrivateKey(d.Store, string(record.Bytes())); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive session priv key failed: "+err.Error())
-	}
-	if err := keychain.SaveArchiveSessionPublicKey(d.Store, keyPair.PublicKey); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive session pub key failed: "+err.Error())
+	// Both halves are written under the lock, so a startup sweep or an end
+	// in another process never acts on a read taken before this write.
+	err = withArchiveSessionSlotLock(d, func() error {
+		if err := keychain.SaveArchiveSessionPrivateKey(d.Store, string(record.Bytes())); err != nil {
+			return errors.New("save archive session priv key failed: " + err.Error())
+		}
+		if err := keychain.SaveArchiveSessionPublicKey(d.Store, keyPair.PublicKey); err != nil {
+			return errors.New("save archive session pub key failed: " + err.Error())
+		}
+		return nil
+	})
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
 	}
 
 	d.Logger.Println("archive session begin: ephemeral keypair created")
@@ -73,29 +81,38 @@ func HandleArchiveSessionSetExpiry(d Deps, req proto.ArchiveSessionSetExpiryRequ
 	}
 	serverExpiry, _ := time.Parse(time.RFC3339, req.ExpiresAt) // validated
 
-	pemBuf, current, err := openArchiveSessionSlot(d)
+	var expiresAt time.Time
+	var refusal proto.BaseResponse
+	err := withArchiveSessionSlotLock(d, func() error {
+		return readArchiveSessionSlotLocked(d, func(slot archiveSessionSlot, pem string) error {
+			if !archiveSessionFingerprintMatches(d, req.Fingerprint) {
+				refusal = errs.CodeResponse(errs.ErrCodeNotFound, "no archive session with this fingerprint")
+				return nil
+			}
+			expiresAt = slot.expiresAt
+			if serverExpiry.Before(expiresAt) {
+				expiresAt = serverExpiry
+			}
+			if !d.Now().Before(expiresAt) {
+				deleteArchiveSessionSlot(d)
+				return errArchiveSessionExpired
+			}
+			if !expiresAt.Before(slot.expiresAt) {
+				return nil
+			}
+			record := encodeArchiveSessionSlot(expiresAt, []byte(pem))
+			defer record.Destroy()
+			if err := keychain.SaveArchiveSessionPrivateKey(d.Store, string(record.Bytes())); err != nil {
+				refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive session expiry failed")
+			}
+			return nil
+		})
+	})
 	if err != nil {
 		return archiveSessionSlotResponse(err)
 	}
-	defer pemBuf.Destroy()
-	if !archiveSessionFingerprintMatches(d, req.Fingerprint) {
-		return errs.CodeResponse(errs.ErrCodeNotFound, "no archive session with this fingerprint")
-	}
-
-	expiresAt := current
-	if serverExpiry.Before(expiresAt) {
-		expiresAt = serverExpiry
-	}
-	if !d.Now().Before(expiresAt) {
-		deleteArchiveSessionSlot(d)
-		return archiveSessionSlotResponse(errArchiveSessionExpired)
-	}
-	if expiresAt.Before(current) {
-		record := encodeArchiveSessionSlot(expiresAt, pemBuf.Bytes())
-		defer record.Destroy()
-		if err := keychain.SaveArchiveSessionPrivateKey(d.Store, string(record.Bytes())); err != nil {
-			return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive session expiry failed")
-		}
+	if refusal.ErrorCode != "" {
+		return refusal
 	}
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionSetExpiryResponseData{
 		ExpiresAt: formatArchiveSessionExpiry(expiresAt),
@@ -116,6 +133,15 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 		return errs.Response(err)
 	}
 
+	var response proto.BaseResponse
+	_ = withArchiveSessionSlotLock(d, func() error {
+		response = endArchiveSessionLocked(d, req)
+		return nil
+	})
+	return response
+}
+
+func endArchiveSessionLocked(d Deps, req proto.ArchiveSessionEndRequest) proto.BaseResponse {
 	existing, err := keychain.GetArchiveSessionPrivateKey(d.Store)
 	present := err == nil && existing != ""
 	_, _, carriesExpiry := decodeArchiveSessionSlot(existing)
@@ -141,16 +167,19 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 // uses or ends it. It deletes only a slot carrying an expiry this Keeper
 // wrote; a slot without one is left for the confirmed discard.
 func SweepExpiredArchiveSession(d Deps) {
-	value, err := keychain.GetArchiveSessionPrivateKey(d.Store)
-	if err != nil || value == "" {
-		return
-	}
-	expiresAt, _, ok := decodeArchiveSessionSlot(value)
-	secure.WipeString(&value)
-	if ok && !d.Now().Before(expiresAt) {
-		deleteArchiveSessionSlot(d)
-		d.Logger.Println("archive session: expired session key destroyed at startup")
-	}
+	_ = withArchiveSessionSlotLock(d, func() error {
+		value, err := keychain.GetArchiveSessionPrivateKey(d.Store)
+		if err != nil || value == "" {
+			return nil
+		}
+		expiresAt, _, ok := decodeArchiveSessionSlot(value)
+		secure.WipeString(&value)
+		if ok && !d.Now().Before(expiresAt) {
+			deleteArchiveSessionSlot(d)
+			d.Logger.Println("archive session: expired session key destroyed at startup")
+		}
+		return nil
+	})
 }
 
 func formatArchiveSessionExpiry(t time.Time) string {

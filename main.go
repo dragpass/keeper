@@ -81,8 +81,7 @@ func newProcessApp() *keystore.App {
 	if err := keychain.EnsureServerPublicKey(app.Store, app.Logger); err != nil {
 		log.Fatalf("Critical: Failed to ensure server public key: %v", err)
 	}
-	app.SweepExpiredArchiveSession()
-	return app
+	return prepareProcessApp(app)
 }
 
 func main() {
@@ -294,4 +293,11 @@ func runMessageLoop(app *keystore.App) {
 	}
 }
 
-func prepareProcessApp(app *keystore.App) *keystore.App { return app }
+// prepareProcessApp finishes the process App before main hands it to the App
+// RPC service or the message loop: nothing is served until it returns. A
+// recovery-session key whose expiry passed while no Keeper ran (a crash, a
+// lost App) is destroyed here (lv100 F1).
+func prepareProcessApp(app *keystore.App) *keystore.App {
+	app.SweepExpiredArchiveSession()
+	return app
+}
