@@ -28,16 +28,8 @@ import (
 // PEM line wrapping cannot make the same key look foreign or a foreign key
 // look like ours.
 func isOwnAccountKey(d Deps, target *rsa.PublicKey) (bool, error) {
-	activePEM, err := keychain.GetPublicKey(d.Store)
-	if err != nil {
-		return false, err
-	}
-	active, err := crypto.ParsePublicKey(activePEM)
-	if err != nil {
-		return false, err
-	}
-	if active.Equal(target) {
-		return true, nil
+	if active, err := isActiveAccountKey(d, target); err != nil || active {
+		return active, err
 	}
 	stagedPEM, err := keychain.GetPendingPublicKey(d.Store)
 	if errors.Is(err, keychain.ErrSecretNotFound) {
@@ -51,6 +43,41 @@ func isOwnAccountKey(d Deps, target *rsa.PublicKey) (bool, error) {
 		return false, err
 	}
 	return staged.Equal(target), nil
+}
+
+// isActiveAccountKey reports whether target is this Keeper's active account
+// key, compared parsed.
+func isActiveAccountKey(d Deps, target *rsa.PublicKey) (bool, error) {
+	activePEM, err := keychain.GetPublicKey(d.Store)
+	if err != nil {
+		return false, err
+	}
+	active, err := crypto.ParsePublicKey(activePEM)
+	if err != nil {
+		return false, err
+	}
+	return active.Equal(target), nil
+}
+
+// archiveRegrantPinAccount is the account an archive re-grant recipient is
+// pinned under. The coordinator re-granting to itself names its own account;
+// when that recipient's key is also this Keeper's active key there is no peer
+// to pin or prove, so it is judged as self (no account). Any other key under
+// the owner account, the staged one included, stays a peer key the server
+// chose and keeps the pin and log proof checks.
+func archiveRegrantPinAccount(d Deps, ownerAccountID, accountID string, target *rsa.PublicKey) (string, proto.BaseResponse, bool) {
+	if accountID == "" || accountID != ownerAccountID {
+		return accountID, proto.BaseResponse{}, true
+	}
+	active, err := isActiveAccountKey(d, target)
+	if err != nil {
+		d.Logger.Printf("archive re-grant self check error: failed to read own key: %v", err)
+		return "", errs.Response(err), false
+	}
+	if active {
+		return "", proto.BaseResponse{}, true
+	}
+	return accountID, proto.BaseResponse{}, true
 }
 
 // requireOwnTargetWithoutAccount refuses an account-less wrap to any key that
