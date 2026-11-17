@@ -249,3 +249,10 @@ func NewApp(deps Deps) *App {
 	}
 	return app
 }
+
+// SweepExpiredArchiveSession destroys a recovery-session key whose expiry
+// has passed. The process calls it once at startup, before serving any
+// action, so a key left by a crash does not wait for its next use.
+func (a *App) SweepExpiredArchiveSession() {
+	handlers.SweepExpiredArchiveSession(a.HandlersDeps())
+}

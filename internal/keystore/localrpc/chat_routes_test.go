@@ -113,6 +113,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_quorum_combine_and_rewrap",
 	"/v1/archive/archive_session_begin",
 	"/v1/archive/archive_session_end",
+	"/v1/archive/archive_session_set_expiry",
 	"/v1/archive/archive_share_open_proof",
 	"/v1/archive/archive_share_prepare",
 	"/v1/archive/archive_share_proof_prepare",
@@ -719,6 +720,38 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 	}
 	if code, _, _ := rewrap(map[string]any{"wrapped_for_archive_b64": wrapped, "to_staged_archive_key": true, "owner_account_id": routeOwner}); code != http.StatusBadRequest {
 		t.Fatalf("rotation rewrap after commit: %d", code)
+	}
+}
+
+// The App applies the server's session expiry and ends its own session by
+// the fingerprint begin returned (lv100 F1).
+func TestArchiveSessionExpiryRoutesRoundTrip(t *testing.T) {
+	server, _ := newChatTestServer(t)
+	session, csrf := openTestSession(t, server)
+	code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_begin", map[string]any{})
+	if code != http.StatusOK || !begun.Success {
+		t.Fatalf("begin: %d %s", code, body)
+	}
+	var data proto.ArchiveSessionBeginResponseData
+	if err := remarshal(begun.Data, &data); err != nil || data.ExpiresAt == "" {
+		t.Fatalf("begin data: %s", body)
+	}
+	bound, err := time.Parse(time.RFC3339, data.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := bound.Add(-time.Minute).UTC().Format(time.RFC3339)
+	code, set, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"fingerprint": data.Fingerprint, "expires_at": expires})
+	if code != http.StatusOK || !set.Success {
+		t.Fatalf("set expiry: %d %s", code, body)
+	}
+	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"fingerprint": data.Fingerprint, "expires_at": expires, "org_id": "x"}); code != http.StatusBadRequest {
+		t.Fatalf("set expiry took an unknown field: %d", code)
+	}
+	code, ended, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"fingerprint": data.Fingerprint})
+	var end proto.ArchiveSessionEndResponseData
+	if code != http.StatusOK || !ended.Success || remarshal(ended.Data, &end) != nil || !end.Ended {
+		t.Fatalf("end by fingerprint: %d %s", code, body)
 	}
 }
 

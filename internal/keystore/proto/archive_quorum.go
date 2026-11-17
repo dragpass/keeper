@@ -21,7 +21,11 @@
 
 package proto
 
-import "fmt"
+import (
+	"encoding/hex"
+	"fmt"
+	"time"
+)
 
 // WrappedShare is one hybrid-wrapped Shamir share in the split output. The
 // share's x-coordinate is embedded (authenticated) inside the ciphertext;
@@ -128,15 +132,59 @@ func (r ArchiveSessionBeginRequest) Validate() error { return nil }
 type ArchiveSessionBeginResponseData struct {
 	SessionPublicKey string `json:"session_public_key"`
 	Fingerprint      string `json:"fingerprint"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
 }
 
 // ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
-type ArchiveSessionEndRequest struct{}
+// Fingerprint (optional, as begin returned it) limits the end to that
+// session's keypair.
+type ArchiveSessionEndRequest struct {
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
 
-func (r ArchiveSessionEndRequest) Validate() error { return nil }
+func (r ArchiveSessionEndRequest) Validate() error {
+	if r.Fingerprint == "" {
+		return nil
+	}
+	return validateArchiveSessionFingerprint(r.Fingerprint)
+}
+
+// ArchiveSessionSetExpiryRequest — apply the server's session expires_at
+// (RFC 3339) to the slot of the session begin returned Fingerprint for. The
+// slot's expiry can only move earlier.
+type ArchiveSessionSetExpiryRequest struct {
+	Fingerprint string `json:"fingerprint"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+func (r ArchiveSessionSetExpiryRequest) Validate() error {
+	if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
+		return err
+	}
+	if _, err := time.Parse(time.RFC3339, r.ExpiresAt); err != nil {
+		return newValidationError("expires_at", "must be an RFC 3339 time")
+	}
+	return nil
+}
+
+type ArchiveSessionSetExpiryResponseData struct {
+	ExpiresAt string `json:"expires_at"`
+}
+
+// The session fingerprint is hex(sha256(public key PEM)).
+func validateArchiveSessionFingerprint(fingerprint string) error {
+	if len(fingerprint) != 64 {
+		return newValidationError("fingerprint", "must be 64 hex characters")
+	}
+	if _, err := hex.DecodeString(fingerprint); err != nil {
+		return newValidationError("fingerprint", "must be 64 hex characters")
+	}
+	return nil
+}
 
 type ArchiveSessionEndResponseData struct {
-	Ended bool `json:"ended"`
+	Ended                 bool `json:"ended"`
+	SlotWithoutExpiryKept bool `json:"slot_without_expiry_kept,omitempty"`
 }
 
 // RewrappedShareInput — one share re-wrapped to the session public key, as
