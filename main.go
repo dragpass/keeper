@@ -293,3 +293,5 @@ func runMessageLoop(app *keystore.App) {
 		}
 	}
 }
+
+func prepareProcessApp(app *keystore.App) *keystore.App { return app }

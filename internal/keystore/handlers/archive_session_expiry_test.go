@@ -119,10 +119,93 @@ func TestArchiveSessionBeginBoundsTheSlotLifetime(t *testing.T) {
 	requireSessionSlotDeleted(t, f.store)
 }
 
-func TestArchiveSessionUpperBoundIsAboveTheServerSessionLifetime(t *testing.T) {
-	// ariadne archiveQuorumSessionTTL is 30 minutes and starts after begin.
-	if archiveSessionMaxTTL <= 30*time.Minute || archiveSessionMaxTTL > time.Hour {
+// The slot never outlives the server session when the App never reports the
+// server expiry: ariadne's session lives 30 minutes from its open, which
+// follows begin, so a 30-minute bound from begin ends no later.
+func TestArchiveSessionUpperBoundIsNoLaterThanTheServerSessionLifetime(t *testing.T) {
+	if archiveSessionMaxTTL > 30*time.Minute || archiveSessionMaxTTL < 10*time.Minute {
 		t.Fatalf("archiveSessionMaxTTL = %s", archiveSessionMaxTTL)
+	}
+}
+
+// The reconstruction can outlast the slot: output is withheld and the slot
+// deleted when its expiry passes before the combine returns.
+func TestArchiveCombineWithholdsOutputWhenTheSlotExpiresDuringIt(t *testing.T) {
+	f, req := authorizedCombineFixture(t)
+	begun := f.clock.now()
+	read := false
+	f.deps.Store = &combinePrivateReadProbe{SecretStore: f.store, beforeRead: func() { read = true }}
+	calls := 0
+	f.deps.Clock = func() time.Time {
+		if read {
+			calls++
+			if calls > 1 {
+				return begun.Add(archiveSessionMaxTTL)
+			}
+		}
+		return begun
+	}
+
+	response := archiveQuorumCombineAndRewrap(f.deps, req)
+	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_expired" {
+		t.Fatalf("output after the slot expired: success=%v code=%s", response.Success, response.ErrorCode)
+	}
+	if calls < 2 {
+		t.Fatal("the expiry was not checked again after the reconstruction")
+	}
+	requireSessionSlotDeleted(t, f.store)
+}
+
+// slotReadHook runs hook the first time the session private key is read.
+type slotReadHook struct {
+	keychain.SecretStore
+	hook func()
+}
+
+func (s *slotReadHook) Get(service, account string) (string, error) {
+	value, err := s.SecretStore.Get(service, account)
+	if account == config.OrgArchiveSessionPrivateKey && s.hook != nil {
+		hook := s.hook
+		s.hook = nil
+		hook()
+	}
+	return value, err
+}
+
+// A begin in another process can write a new session between the sweep's
+// read of an expired slot and its delete. The sweep must not delete the new
+// session: begin's write and the sweep's read-check-delete are serialized.
+func TestArchiveSessionStartupSweepKeepsASessionBegunDuringIt(t *testing.T) {
+	f := newAuditFixture(t)
+	beginForExpiry(t, f)
+	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix())
+
+	probe := &slotReadHook{SecretStore: f.store}
+	deps := f.deps
+	deps.Store = probe
+	var fresh proto.ArchiveSessionBeginResponseData
+	done := make(chan struct{})
+	probe.hook = func() {
+		go func() {
+			defer close(done)
+			begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{})
+			if begun.Success {
+				fresh = begun.Data.(proto.ArchiveSessionBeginResponseData)
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
+	}
+
+	SweepExpiredArchiveSession(deps)
+	<-done
+	if fresh.Fingerprint == "" {
+		t.Fatal("concurrent begin failed")
+	}
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) == "" || !archiveSessionFingerprintMatches(f.deps, fresh.Fingerprint) {
+		t.Fatal("the startup sweep deleted a session begun while it ran")
 	}
 }
 
