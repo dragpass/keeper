@@ -43,7 +43,10 @@ const (
 	ActionArchiveSessionEnd        = "archive_session_end"
 	// ArchiveSessionLegacyDiscard: delete the device-wide session slot of a
 	// Keeper before lv90, after the user confirmed in the App (lv90).
-	ActionArchiveSessionLegacyDiscard   = "archive_session_legacy_discard"
+	ActionArchiveSessionLegacyDiscard = "archive_session_legacy_discard"
+	// ArchiveSessionDiscard: delete the organization's session key the
+	// request names by fingerprint, after the user confirmed in the App.
+	ActionArchiveSessionDiscard         = "archive_session_discard"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
 	// ArchiveReconfigureStage: stage a new org archive key for a legacy
 	// quorum reconfiguration (lv90) in its own slot.

@@ -241,6 +241,36 @@ type ArchiveSessionEndResponseData struct {
 	SlotWithoutExpiryKept bool `json:"slot_without_expiry_kept,omitempty"`
 }
 
+// ArchiveSessionDiscardRequest deletes the key of OrgID's slot whose
+// fingerprint is Fingerprint, after the user confirmed losing whatever
+// recovery attempt it belongs to: an orphan key, or a slot whose expiry or
+// record Keeper cannot trust. confirm_discard must be true; the App sets it
+// only after the user's confirmation, which Keeper cannot verify.
+type ArchiveSessionDiscardRequest struct {
+	OrgID          string `json:"org_id,omitempty"`
+	Fingerprint    string `json:"fingerprint"`
+	ConfirmDiscard bool   `json:"confirm_discard"`
+}
+
+func (r ArchiveSessionDiscardRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
+		return err
+	}
+	if !r.ConfirmDiscard {
+		return newValidationError("confirm_discard", "must be true")
+	}
+	return nil
+}
+
+type ArchiveSessionDiscardResponseData struct {
+	// Discarded is true when the named key was there and is now gone;
+	// false when the slot was already empty.
+	Discarded bool `json:"discarded"`
+}
+
 // ArchiveSessionLegacyDiscardRequest deletes the device-wide recovery-session
 // slot a Keeper before lv90 used. The App sends it only after the user
 // confirmed losing whatever recovery session that key belongs to;

@@ -97,6 +97,11 @@ const (
 	// generated, replaced or deleted; data says what the slot holds.
 	ErrCodeArchiveSessionActive ErrorCode = "archive_session_active"
 
+	// ErrCodeArchiveSessionChanged: archive_session_discard named a key the
+	// organization's slot no longer holds (another key took its place after
+	// the user confirmed). Nothing was deleted.
+	ErrCodeArchiveSessionChanged ErrorCode = "archive_session_changed"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"

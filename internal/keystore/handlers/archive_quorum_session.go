@@ -355,6 +355,45 @@ func endArchiveSessionLocked(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: true}}
 }
 
+// HandleArchiveSessionDiscard deletes req.OrgID's session keypair when, read
+// under the lock at the moment of the delete, the slot's key has
+// req.Fingerprint: a live, expired, expiry-unknown or unowned slot alike.
+// The App calls it only after the user confirmed losing whatever recovery
+// attempt the key belongs to. When the slot holds another key (one begun
+// after the confirmation) it is refused with archive_session_changed and
+// nothing is deleted; an empty slot is discarded=false. Other
+// organizations' slots and the device-wide slot are untouched.
+func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	var response proto.BaseResponse
+	_ = withArchiveSessionSlotLock(d, func() error {
+		slot, err := inspectArchiveSessionSlotLocked(d, req.OrgID, nil)
+		if err != nil {
+			response = errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive session slot failed")
+			return nil
+		}
+		if refusal, refused := archiveSessionOwnerRefusal(d, req.OrgID, slot); refused {
+			response = refusal
+			return nil
+		}
+		if slot.state == archiveSessionSlotAbsent {
+			response = proto.BaseResponse{Success: true, Data: proto.ArchiveSessionDiscardResponseData{Discarded: false}}
+			return nil
+		}
+		if slot.fingerprint == "" || slot.fingerprint != req.Fingerprint {
+			response = errs.CodeResponse(errs.ErrCodeArchiveSessionChanged, "the organization's archive session slot holds another key")
+			return nil
+		}
+		deleteArchiveSessionSlot(d, req.OrgID)
+		d.Logger.Println("archive session discard: session key deleted on confirmed request")
+		response = proto.BaseResponse{Success: true, Data: proto.ArchiveSessionDiscardResponseData{Discarded: true}}
+		return nil
+	})
+	return response
+}
+
 // HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide
 // session slot a Keeper before lv90 used. The App calls it only after the
 // user confirmed: if that key belongs to a recovery session still open on

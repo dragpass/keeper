@@ -113,6 +113,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_quorum_combine_and_rewrap",
 	"/v1/archive/archive_reconfigure_stage",
 	"/v1/archive/archive_session_begin",
+	"/v1/archive/archive_session_discard",
 	"/v1/archive/archive_session_end",
 	"/v1/archive/archive_session_legacy_discard",
 	"/v1/archive/archive_session_set_expiry",
@@ -795,6 +796,19 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	}
 	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
 		t.Fatalf("org_id-only end: %d %q", code, result.ErrorCode)
+	}
+	// The confirmed discard names the key and carries confirm_discard.
+	discard := map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp, "confirm_discard": true}
+	// The begin above left a session whose key is not fp: refused, sealed.
+	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", discard); code != http.StatusOK || result.ErrorCode != "archive_session_changed" {
+		t.Fatalf("discard of a key the slot does not hold: %d %s", code, raw)
+	}
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || result.ErrorCode != "validation_error" {
+		t.Fatalf("discard without confirm_discard: %d %q", code, result.ErrorCode)
+	}
+	discard["public_key"] = "x"
+	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", discard); code != http.StatusBadRequest {
+		t.Fatalf("discard took an unknown field: %d", code)
 	}
 	admins := []string{routeKeypair(t).PublicKey, routeKeypair(t).PublicKey, routeKeypair(t).PublicKey}
 	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{
