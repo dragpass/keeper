@@ -29,6 +29,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -485,12 +486,14 @@ func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDis
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionLegacyDiscardResponseData{Discarded: present}}
 }
 
-// SweepExpiredArchiveSession runs once when the Keeper process starts,
-// before it serves any action, so a session key left by a crash or a lost
-// App is destroyed as soon as its expiry has passed even if nothing ever
-// uses or ends it. It deletes only an organization slot whose record and
-// expiry Keeper trusts; an expiry-unknown or unowned slot, and the
-// device-wide slot of a Keeper before lv90, are left in place.
+// SweepExpiredArchiveSession runs when the Keeper process starts, before it
+// serves any action, and then periodically (RunArchiveSessionSweeper), so a
+// session key left by a crash or a lost App is destroyed once its expiry
+// has passed even if nothing ever uses or ends it. It deletes only an
+// organization slot whose record and expiry Keeper trusts; an
+// expiry-unknown or unowned slot, and the device-wide slot of a Keeper
+// before lv90, are left in place. Uses keep checking the expiry on their
+// own; the sweep is not what the refusal depends on.
 func SweepExpiredArchiveSession(d Deps) {
 	_ = withArchiveSessionSlotLock(d, func() error {
 		orgs, err := keychain.ListArchiveSessionOrgs(d.Store)
@@ -519,7 +522,21 @@ func sweepArchiveSessionSlotLocked(d Deps, orgID string) {
 		deleteArchiveSessionSlot(d, orgID)
 	case archiveSessionSlotExpired:
 		deleteArchiveSessionSlot(d, orgID)
-		d.Logger.Println("archive session: expired session key destroyed at startup")
+		d.Logger.Println("archive session: expired session key destroyed by the sweep")
+	}
+}
+
+// RunArchiveSessionSweeper runs SweepExpiredArchiveSession on every tick
+// until ctx is done. Each sweep holds the keychain process lock like every
+// other session slot access.
+func RunArchiveSessionSweeper(ctx context.Context, d Deps, ticks <-chan time.Time) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			SweepExpiredArchiveSession(d)
+		}
 	}
 }
 

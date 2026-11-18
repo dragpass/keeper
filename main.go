@@ -198,6 +198,10 @@ func main() {
 	app.RecoverySessions.StartReaper(sessions.RecoverySessionReaperInterval)
 	app.RecoveryKeySessions.StartReaper(sessions.RecoveryKeySessionReaperInterval)
 
+	// Recovery-session keys whose trusted expiry passed while this process
+	// runs (lv100 F1, D1); stops with ctx.
+	app.StartArchiveSessionSweeper(ctx, keystore.ArchiveSessionSweepInterval)
+
 	logger.Println("DragPass Keeper started")
 	logMLSLibrary(app)
 	defer func() {
