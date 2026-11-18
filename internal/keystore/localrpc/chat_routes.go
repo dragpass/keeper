@@ -468,6 +468,7 @@ var archiveRoutes = map[string]appRoute{
 	// Only after the user confirmed discarding the named key; the body must
 	// carry confirm_discard: true.
 	"/v1/archive/archive_session_discard": {action: proto.ActionArchiveSessionDiscard, input: func() any { return &proto.ArchiveSessionDiscardRequest{} }},
+	"/v1/archive/archive_session_status":  {action: proto.ActionArchiveSessionStatus, input: func() any { return &proto.ArchiveSessionStatusRequest{} }},
 	"/v1/archive/archive_unwrap_and_rewrap": {
 		action:     proto.ActionArchiveUnwrapAndRewrap,
 		input:      func() any { return &appArchiveRewrap{} },

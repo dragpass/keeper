@@ -394,6 +394,61 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 	return response
 }
 
+// HandleArchiveSessionStatus reports req.OrgID's session slot. It only
+// reads: no slot, index entry or expiry is written or deleted, an expired
+// slot included. The state can change right after the read; every action
+// that uses, ends or discards the slot reads and judges it again.
+func HandleArchiveSessionStatus(d Deps, req proto.ArchiveSessionStatusRequest) proto.BaseResponse {
+	if err := req.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	var response proto.BaseResponse
+	_ = withArchiveSessionSlotLock(d, func() error {
+		legacy, err := keychain.LegacyArchiveSessionPresent(d.Store)
+		if err != nil {
+			response = errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
+			return nil
+		}
+		slot, err := inspectArchiveSessionSlotLocked(d, req.OrgID, nil)
+		if err != nil {
+			response = errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive session slot failed")
+			return nil
+		}
+		if refusal, refused := archiveSessionOwnerRefusal(d, req.OrgID, slot); refused {
+			response = refusal
+			return nil
+		}
+		response = proto.BaseResponse{Success: true, Data: archiveSessionStatusData(slot, req.Fingerprint, legacy)}
+		return nil
+	})
+	return response
+}
+
+func archiveSessionStatusData(slot archiveSessionSlot, fingerprint string, legacy bool) proto.ArchiveSessionStatusResponseData {
+	data := proto.ArchiveSessionStatusResponseData{Fingerprint: slot.fingerprint, LegacySlotPresent: legacy}
+	switch slot.state {
+	case archiveSessionSlotAbsent:
+		data.State = proto.ArchiveSessionStateAbsent
+		data.Fingerprint = ""
+	case archiveSessionSlotLive, archiveSessionSlotExpired:
+		data.State = proto.ArchiveSessionStateLive
+		if slot.state == archiveSessionSlotExpired {
+			data.State = proto.ArchiveSessionStateExpired
+		}
+		data.ExpiresAt = formatArchiveSessionExpiry(slot.record.expiresAt)
+		data.BegunAt = formatArchiveSessionExpiry(slot.record.begunAt)
+	case archiveSessionSlotExpiryUnknown:
+		data.State = proto.ArchiveSessionStateExpiryUnknown
+	default:
+		data.State = proto.ArchiveSessionStateUnowned
+	}
+	if fingerprint != "" {
+		matches := data.Fingerprint != "" && data.Fingerprint == fingerprint
+		data.FingerprintMatches = &matches
+	}
+	return data
+}
+
 // HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide
 // session slot a Keeper before lv90 used. The App calls it only after the
 // user confirmed: if that key belongs to a recovery session still open on

@@ -117,6 +117,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_session_end",
 	"/v1/archive/archive_session_legacy_discard",
 	"/v1/archive/archive_session_set_expiry",
+	"/v1/archive/archive_session_status",
 	"/v1/archive/archive_share_open_proof",
 	"/v1/archive/archive_share_prepare",
 	"/v1/archive/archive_share_proof_prepare",
@@ -805,6 +806,12 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	}
 	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || result.ErrorCode != "validation_error" {
 		t.Fatalf("discard without confirm_discard: %d %q", code, result.ErrorCode)
+	}
+	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || !result.Success || !strings.Contains(raw, `"state":"live"`) || !strings.Contains(raw, `"fingerprint_matches":false`) {
+		t.Fatalf("status: %d %s", code, raw)
+	}
+	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
+		t.Fatalf("status took an unknown field: %d", code)
 	}
 	discard["public_key"] = "x"
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", discard); code != http.StatusBadRequest {

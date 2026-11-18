@@ -46,7 +46,10 @@ const (
 	ActionArchiveSessionLegacyDiscard = "archive_session_legacy_discard"
 	// ArchiveSessionDiscard: delete the organization's session key the
 	// request names by fingerprint, after the user confirmed in the App.
-	ActionArchiveSessionDiscard         = "archive_session_discard"
+	ActionArchiveSessionDiscard = "archive_session_discard"
+	// ArchiveSessionStatus: read the organization's session slot; writes
+	// nothing.
+	ActionArchiveSessionStatus          = "archive_session_status"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
 	// ArchiveReconfigureStage: stage a new org archive key for a legacy
 	// quorum reconfiguration (lv90) in its own slot.

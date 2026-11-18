@@ -28,6 +28,7 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd).appOnlyAction(),
 		proto.ActionArchiveSessionLegacyDiscard:   wrap(handlers.HandleArchiveSessionLegacyDiscard).appOnlyAction(),
 		proto.ActionArchiveSessionDiscard:         wrap(handlers.HandleArchiveSessionDiscard).appOnlyAction(),
+		proto.ActionArchiveSessionStatus:          wrap(handlers.HandleArchiveSessionStatus).appOnlyAction(),
 		proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
 		proto.ActionArchiveReconfigureStage:       wrap(handlers.HandleArchiveReconfigureStage).appOnlyAction(),
 	}

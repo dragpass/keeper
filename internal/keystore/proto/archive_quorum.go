@@ -171,7 +171,47 @@ const (
 	// ArchiveSessionStateUnowned: a record this Keeper cannot vouch for (a
 	// development-build format, no header, or halves that disagree).
 	ArchiveSessionStateUnowned = "unowned"
+	// ArchiveSessionStateAbsent and ArchiveSessionStateExpired are reported
+	// by archive_session_status only: no slot, and a trusted slot whose
+	// expiry has passed (not deleted by the status read).
+	ArchiveSessionStateAbsent  = "absent"
+	ArchiveSessionStateExpired = "expired"
+	// ArchiveSessionStateOtherAccount is reserved for the account boundary
+	// change and is not reported by this version.
+	ArchiveSessionStateOtherAccount = "other_account"
 )
+
+// ArchiveSessionStatusRequest — read OrgID's session slot. Fingerprint
+// (optional) asks whether the slot holds that key.
+type ArchiveSessionStatusRequest struct {
+	OrgID       string `json:"org_id,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+func (r ArchiveSessionStatusRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if r.Fingerprint == "" {
+		return nil
+	}
+	return validateArchiveSessionFingerprint(r.Fingerprint)
+}
+
+// ArchiveSessionStatusResponseData — State is one of absent, live, expired,
+// expiry_unknown, unowned (other_account is reserved). Fingerprint is the
+// slot key's public key fingerprint, omitted when there is none. ExpiresAt
+// and BegunAt are reported for live and expired slots only.
+// FingerprintMatches answers the request's fingerprint, when it had one.
+// LegacySlotPresent reports the device-wide slot of a Keeper before lv90.
+type ArchiveSessionStatusResponseData struct {
+	State              string `json:"state"`
+	Fingerprint        string `json:"fingerprint,omitempty"`
+	ExpiresAt          string `json:"expires_at,omitempty"`
+	BegunAt            string `json:"begun_at,omitempty"`
+	FingerprintMatches *bool  `json:"fingerprint_matches,omitempty"`
+	LegacySlotPresent  bool   `json:"legacy_slot_present"`
+}
 
 // ArchiveSessionActiveData is the data of an archive_session_active
 // refusal. Fingerprint is a public key fingerprint and is omitted when the

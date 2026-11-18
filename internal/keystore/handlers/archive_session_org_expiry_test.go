@@ -462,6 +462,12 @@ func TestArchiveSessionOrgSlot_EverySessionAccessHoldsTheProcessLock(t *testing.
 			HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgB, Fingerprint: b.Fingerprint})
 		},
 		func() { SweepExpiredArchiveSession(deps) },
+		func() {
+			HandleArchiveSessionStatus(deps, proto.ArchiveSessionStatusRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint})
+		},
+		func() {
+			HandleArchiveSessionDiscard(deps, proto.ArchiveSessionDiscardRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint, ConfirmDiscard: true})
+		},
 		func() { saveLegacyDeviceSession(t, mem) },
 		func() { HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgC}) },
 		func() {
