@@ -45,10 +45,9 @@ var errArchiveSessionLegacySlotPresent = errors.New("device-wide archive session
 
 // HandleArchiveSessionBegin generates the coordinator's ephemeral
 // recovery-session keypair for req.OrgID and returns its public key and the
-// slot's expiry (begin + archiveSessionMaxTTL). It replaces a session key of
-// that organization Keeper trusts; a slot whose expiry or record it cannot
-// trust is refused with archive_session_active and kept. Other
-// organizations' sessions are untouched.
+// slot's expiry (begin + archiveSessionMaxTTL). See
+// decideArchiveSessionBeginLocked for when it writes, replays or refuses.
+// Other organizations' sessions are untouched.
 func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) proto.BaseResponse {
 	d.Logger.Println("archive session begin processing...")
 	if err := req.Validate(); err != nil {
@@ -69,33 +68,20 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 		expiresAt:   now.Add(archiveSessionMaxTTL),
 		begunAt:     now,
 		fingerprint: fingerprintBase64Public(keyPair.PublicKey),
+		beginID:     req.BeginID,
 	}
 	record := encodeArchiveSessionSlot(rec, privBuf.Bytes())
 	defer record.Destroy()
 
-	// The device-wide check, the slot judgement and every write run under
-	// the lock, so a startup sweep, an end or a discard in another process
-	// never acts on a read taken before this write.
-	var refusal proto.BaseResponse
+	// The decision and every write run under the lock, so a startup sweep,
+	// an end or a discard in another process never acts on a read taken
+	// before this write.
+	var decision archiveSessionBeginDecision
 	err = withArchiveSessionSlotLock(d, func() error {
-		// The device-wide slot of a Keeper before lv90 may hold the key of an
-		// in-flight recovery session of an organization this Keeper cannot
-		// name. It is never deleted, moved or used here; the App asks the
-		// user, then calls archive_session_legacy_discard.
-		present, err := keychain.LegacyArchiveSessionPresent(d.Store)
-		if err != nil {
-			return errors.New("read device-wide archive session slot failed")
-		}
-		if present {
-			return errArchiveSessionLegacySlotPresent
-		}
-		slot, err := inspectArchiveSessionSlotLocked(d, req.OrgID, nil)
-		if err != nil {
-			return errors.New("read archive session slot failed")
-		}
-		if !slot.state.trusted() && slot.state != archiveSessionSlotAbsent {
-			refusal = archiveSessionActiveResponse(slot)
-			return nil
+		var err error
+		decision, err = decideArchiveSessionBeginLocked(d, req)
+		if err != nil || decision.step != archiveSessionBeginWrite {
+			return err
 		}
 		return writeArchiveSessionSlotLocked(d, req.OrgID, keyPair.PublicKey, record.Bytes())
 	})
@@ -105,16 +91,88 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
 	}
-	if refusal.ErrorCode != "" {
-		return refusal
+	switch decision.step {
+	case archiveSessionBeginRefuse:
+		return decision.refusal
+	case archiveSessionBeginReplay:
+		d.Logger.Println("archive session begin: resend answered with the live session")
+		return archiveSessionBeginResponse(decision.slot.publicKey, decision.slot.record, true)
 	}
 
 	d.Logger.Println("archive session begin: ephemeral keypair created")
+	return archiveSessionBeginResponse(keyPair.PublicKey, rec, false)
+}
+
+func archiveSessionBeginResponse(publicKey string, rec archiveSessionRecord, replayed bool) proto.BaseResponse {
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionBeginResponseData{
-		SessionPublicKey: keyPair.PublicKey,
+		SessionPublicKey: publicKey,
 		Fingerprint:      rec.fingerprint,
 		ExpiresAt:        formatArchiveSessionExpiry(rec.expiresAt),
+		BegunAt:          formatArchiveSessionExpiry(rec.begunAt),
+		Replayed:         replayed,
 	}}
+}
+
+type archiveSessionBeginStep int
+
+const (
+	archiveSessionBeginWrite archiveSessionBeginStep = iota
+	archiveSessionBeginReplay
+	archiveSessionBeginRefuse
+)
+
+type archiveSessionBeginDecision struct {
+	step    archiveSessionBeginStep
+	slot    archiveSessionSlot
+	refusal proto.BaseResponse
+}
+
+// archiveSessionOwnerRefusal is the step that will judge whether the caller
+// may act on a slot it has read: the account boundary. It runs on every slot
+// before any branch that reuses or reports it. This version has no owner to
+// compare and admits every slot, so a begin_id resend is matched on the
+// organization and begin_id alone; that is interim, and the account
+// condition is added here. A variable so tests can pin the order.
+var archiveSessionOwnerRefusal = func(Deps, string, archiveSessionSlot) (proto.BaseResponse, bool) {
+	return proto.BaseResponse{}, false
+}
+
+// decideArchiveSessionBeginLocked decides what a begin does with req.OrgID's
+// slot. In order: the device-wide slot of a Keeper before lv90 refuses
+// (errArchiveSessionLegacySlotPresent); the owner step may refuse; an absent
+// slot, or a trusted one whose expiry has passed, is written; a live slot
+// whose begin_id equals the request's non-empty begin_id is replayed; any
+// other slot (a live session of another or no begin_id, an expiry-unknown or
+// unowned slot) is refused with archive_session_active and kept. The caller
+// holds the lock; nothing here writes.
+func decideArchiveSessionBeginLocked(d Deps, req proto.ArchiveSessionBeginRequest) (archiveSessionBeginDecision, error) {
+	// The device-wide slot of a Keeper before lv90 may hold the key of an
+	// in-flight recovery session of an organization this Keeper cannot name.
+	// It is never deleted, moved or used here; the App asks the user, then
+	// calls archive_session_legacy_discard.
+	present, err := keychain.LegacyArchiveSessionPresent(d.Store)
+	if err != nil {
+		return archiveSessionBeginDecision{}, errors.New("read device-wide archive session slot failed")
+	}
+	if present {
+		return archiveSessionBeginDecision{}, errArchiveSessionLegacySlotPresent
+	}
+	slot, err := inspectArchiveSessionSlotLocked(d, req.OrgID, nil)
+	if err != nil {
+		return archiveSessionBeginDecision{}, errors.New("read archive session slot failed")
+	}
+	if refusal, refused := archiveSessionOwnerRefusal(d, req.OrgID, slot); refused {
+		return archiveSessionBeginDecision{step: archiveSessionBeginRefuse, refusal: refusal}, nil
+	}
+	switch slot.state {
+	case archiveSessionSlotAbsent, archiveSessionSlotExpired:
+		return archiveSessionBeginDecision{step: archiveSessionBeginWrite, slot: slot}, nil
+	case archiveSessionSlotLive:
+		if req.BeginID != "" && req.BeginID == slot.record.beginID {
+			return archiveSessionBeginDecision{step: archiveSessionBeginReplay, slot: slot}, nil
+		}
+	}
+	return archiveSessionBeginDecision{step: archiveSessionBeginRefuse, refusal: archiveSessionActiveResponse(slot)}, nil
 }
 
 // writeArchiveSessionSlotLocked stores a new session keypair in orgID's slot.
@@ -148,6 +206,7 @@ func archiveSessionActiveResponse(slot archiveSessionSlot) proto.BaseResponse {
 	case archiveSessionSlotLive:
 		data.State = proto.ArchiveSessionStateLive
 		data.ExpiresAt = formatArchiveSessionExpiry(slot.record.expiresAt)
+		data.BegunAt = formatArchiveSessionExpiry(slot.record.begunAt)
 	case archiveSessionSlotExpiryUnknown:
 		data.State = proto.ArchiveSessionStateExpiryUnknown
 	default:

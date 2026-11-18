@@ -268,7 +268,9 @@ func TestArchiveSessionOrgSlot_SweepDropsAnEntryWithoutASlot(t *testing.T) {
 func TestArchiveSessionOrgSlot_BeginIndexesItsOrg(t *testing.T) {
 	deps, store, _ := newOrgSessionDeps(t)
 	beginOrgSession(t, deps, testOrgA)
-	beginOrgSession(t, deps, testOrgA)
+	if resp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}); resp.ErrorCode != string(errs.ErrCodeArchiveSessionActive) {
+		t.Fatalf("second begin of A: success=%v code=%q", resp.Success, resp.ErrorCode)
+	}
 	beginOrgSession(t, deps, testOrgB)
 	if got := sessionIndexOrgs(t, store); !reflect.DeepEqual(got, []string{testOrgA, testOrgB}) {
 		t.Fatalf("index: %v", got)
@@ -529,11 +531,13 @@ func TestArchiveSessionOrgSlot_SweepNeverDeletesASessionBegunConcurrently(t *tes
 }
 
 // A late end of the earlier session (its fingerprint) races a new begin of
-// the same organization: the new session always survives.
+// the same organization once the earlier one has expired (a begin over a
+// live session is refused): the new session always survives.
 func TestArchiveSessionOrgSlot_LateEndNeverDeletesANewSession(t *testing.T) {
 	for round := range sessionRaceRounds {
-		deps, store, _ := newOrgSessionDeps(t)
+		deps, store, clock := newOrgSessionDeps(t)
 		old := beginOrgSession(t, deps, testOrgA)
+		writeOrgSlotExpiry(t, store, testOrgA, clock.Now())
 		var fresh proto.BaseResponse
 		raceActors(t,
 			func() {
@@ -541,6 +545,9 @@ func TestArchiveSessionOrgSlot_LateEndNeverDeletesANewSession(t *testing.T) {
 			},
 			func() { fresh = HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}) },
 		)
+		if !fresh.Success {
+			t.Fatalf("round %d: begin after the old session expired: %q", round, fresh.ErrorCode)
+		}
 		fp := fresh.Data.(proto.ArchiveSessionBeginResponseData).Fingerprint
 		if !archiveSessionFingerprintMatches(deps, testOrgA, fp) || orgSlotValue(store, testOrgA) == "" {
 			t.Fatalf("round %d: a late end deleted the new session", round)

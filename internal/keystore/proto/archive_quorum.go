@@ -125,17 +125,38 @@ type ArchiveShareRewrapResponseData struct {
 
 // ArchiveSessionBeginRequest — generate the coordinator's ephemeral
 // recovery-session keypair and return its public key.
+//
+// BeginID (optional, lowercase UUID) is the caller's idempotency value for
+// one begin attempt, sent again unchanged when the answer was lost. It is
+// not a secret and proves nothing. In this version a resend is matched on
+// the organization and begin_id only; the account condition comes with the
+// account boundary change.
 type ArchiveSessionBeginRequest struct {
-	OrgID string `json:"org_id,omitempty"`
+	OrgID   string `json:"org_id,omitempty"`
+	BeginID string `json:"begin_id,omitempty"`
 }
 
 // The session slot is per organization, so org_id is required.
-func (r ArchiveSessionBeginRequest) Validate() error { return requireMessageUUID(r.OrgID, "org_id") }
+func (r ArchiveSessionBeginRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if r.BeginID == "" {
+		return nil
+	}
+	return requireMessageUUID(r.BeginID, "begin_id")
+}
 
+// ArchiveSessionBeginResponseData — Replayed is true when a resend found the
+// session its begin_id began still live: the same public key, fingerprint
+// and begin time, and the slot's current (possibly shortened) expiry.
+// Nothing was generated or written then.
 type ArchiveSessionBeginResponseData struct {
 	SessionPublicKey string `json:"session_public_key"`
 	Fingerprint      string `json:"fingerprint"`
 	ExpiresAt        string `json:"expires_at,omitempty"`
+	BegunAt          string `json:"begun_at,omitempty"`
+	Replayed         bool   `json:"replayed"`
 }
 
 // Slot states archive_session_begin's archive_session_active refusal
@@ -154,11 +175,12 @@ const (
 
 // ArchiveSessionActiveData is the data of an archive_session_active
 // refusal. Fingerprint is a public key fingerprint and is omitted when the
-// slot has none; ExpiresAt only for a live slot.
+// slot has none; ExpiresAt and BegunAt only for a live slot.
 type ArchiveSessionActiveData struct {
 	State       string `json:"state"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 	ExpiresAt   string `json:"expires_at,omitempty"`
+	BegunAt     string `json:"begun_at,omitempty"`
 }
 
 // ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
