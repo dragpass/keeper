@@ -202,10 +202,15 @@ func (r ArchiveSessionStatusRequest) Validate() error {
 // slot key's public key fingerprint, omitted when there is none. ExpiresAt
 // and BegunAt are reported for live and expired slots only.
 // FingerprintMatches answers the request's fingerprint, when it had one.
+// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
+// is reported only for an unowned slot with no fingerprint: a private
+// record that is not a parsable key, with no public half and no v2 record;
+// archive_session_discard accepts it for that shape only.
 // LegacySlotPresent reports the device-wide slot of a Keeper before lv90.
 type ArchiveSessionStatusResponseData struct {
 	State              string `json:"state"`
 	Fingerprint        string `json:"fingerprint,omitempty"`
+	StoredDigest       string `json:"stored_digest,omitempty"`
 	ExpiresAt          string `json:"expires_at,omitempty"`
 	BegunAt            string `json:"begun_at,omitempty"`
 	FingerprintMatches *bool  `json:"fingerprint_matches,omitempty"`
@@ -216,10 +221,11 @@ type ArchiveSessionStatusResponseData struct {
 // refusal. Fingerprint is a public key fingerprint and is omitted when the
 // slot has none; ExpiresAt and BegunAt only for a live slot.
 type ArchiveSessionActiveData struct {
-	State       string `json:"state"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	BegunAt     string `json:"begun_at,omitempty"`
+	State        string `json:"state"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	StoredDigest string `json:"stored_digest,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	BegunAt      string `json:"begun_at,omitempty"`
 }
 
 // ArchiveSessionEndRequest — destroy one recovery-session keypair.
@@ -290,9 +296,16 @@ type ArchiveSessionEndResponseData struct {
 // recovery attempt it belongs to: an orphan key, or a slot whose expiry or
 // record Keeper cannot trust. confirm_discard must be true; the App sets it
 // only after the user's confirmation, which Keeper cannot verify.
+//
+// Exactly one of Fingerprint and StoredDigest names what is discarded.
+// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
+// is for the one slot shape that has no fingerprint: a private record that
+// is not a parsable key, with no public half and no v2 record, as
+// archive_session_status reports it.
 type ArchiveSessionDiscardRequest struct {
 	OrgID          string `json:"org_id,omitempty"`
-	Fingerprint    string `json:"fingerprint"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
+	StoredDigest   string `json:"stored_digest,omitempty"`
 	ConfirmDiscard bool   `json:"confirm_discard"`
 }
 
@@ -300,8 +313,17 @@ func (r ArchiveSessionDiscardRequest) Validate() error {
 	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
 		return err
 	}
-	if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
-		return err
+	switch {
+	case r.Fingerprint != "" && r.StoredDigest != "":
+		return newValidationError("stored_digest", "must not be sent with fingerprint")
+	case r.StoredDigest != "":
+		if err := validateArchiveSessionFingerprint(r.StoredDigest); err != nil {
+			return newValidationError("stored_digest", "must be 64 lowercase hex characters")
+		}
+	default:
+		if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
+			return err
+		}
 	}
 	if !r.ConfirmDiscard {
 		return newValidationError("confirm_discard", "must be true")

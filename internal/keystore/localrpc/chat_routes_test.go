@@ -813,6 +813,10 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
 		t.Fatalf("status took an unknown field: %d", code)
 	}
+	// stored_digest names only a slot with no fingerprint; this one has one.
+	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"org_id": routeOnlyOrg, "stored_digest": fp, "confirm_discard": true}); code != http.StatusOK || result.ErrorCode != "archive_session_changed" {
+		t.Fatalf("discard by stored_digest: %d %s", code, raw)
+	}
 	discard["public_key"] = "x"
 	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", discard); code != http.StatusBadRequest {
 		t.Fatalf("discard took an unknown field: %d", code)

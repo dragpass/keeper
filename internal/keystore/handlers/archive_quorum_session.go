@@ -229,7 +229,7 @@ func writeArchiveSessionSlotLocked(d Deps, orgID, publicKey string, record []byt
 // archiveSessionActiveResponse refuses a begin over slot. A fingerprint is a
 // public key fingerprint; an expiry is reported only for a live slot.
 func archiveSessionActiveResponse(slot archiveSessionSlot) proto.BaseResponse {
-	data := proto.ArchiveSessionActiveData{Fingerprint: slot.fingerprint}
+	data := proto.ArchiveSessionActiveData{Fingerprint: slot.fingerprint, StoredDigest: slot.storedDigest}
 	switch slot.state {
 	case archiveSessionSlotLive:
 		data.State = proto.ArchiveSessionStateLive
@@ -368,7 +368,9 @@ func endArchiveSessionLocked(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 
 // HandleArchiveSessionDiscard deletes req.OrgID's session keypair when, read
 // under the lock at the moment of the delete, the slot's key has
-// req.Fingerprint: a live, expired, expiry-unknown or unowned slot alike.
+// req.Fingerprint (or, for the one slot shape without a fingerprint, its
+// stored bytes have req.StoredDigest): a live, expired, expiry-unknown or
+// unowned slot alike.
 // The App calls it only after the user confirmed losing whatever recovery
 // attempt the key belongs to. When the slot holds another key (one begun
 // after the confirmation) it is refused with archive_session_changed and
@@ -393,7 +395,7 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 			response = proto.BaseResponse{Success: true, Data: proto.ArchiveSessionDiscardResponseData{Discarded: false}}
 			return nil
 		}
-		if slot.fingerprint == "" || slot.fingerprint != req.Fingerprint {
+		if !archiveSessionDiscardNames(slot, req) {
 			response = errs.CodeResponse(errs.ErrCodeArchiveSessionChanged, "the organization's archive session slot holds another key")
 			return nil
 		}
@@ -408,6 +410,16 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 		return archiveSessionLockFailure()
 	}
 	return response
+}
+
+// archiveSessionDiscardNames reports whether req names the key slot holds:
+// by its fingerprint, or, for the one shape without a fingerprint, by the
+// digest of its stored bytes.
+func archiveSessionDiscardNames(slot archiveSessionSlot, req proto.ArchiveSessionDiscardRequest) bool {
+	if req.StoredDigest != "" {
+		return slot.fingerprint == "" && slot.storedDigest != "" && slot.storedDigest == req.StoredDigest
+	}
+	return slot.fingerprint != "" && slot.fingerprint == req.Fingerprint
 }
 
 // HandleArchiveSessionStatus reports req.OrgID's session slot. It only
@@ -443,7 +455,7 @@ func HandleArchiveSessionStatus(d Deps, req proto.ArchiveSessionStatusRequest) p
 }
 
 func archiveSessionStatusData(slot archiveSessionSlot, fingerprint string, legacy bool) proto.ArchiveSessionStatusResponseData {
-	data := proto.ArchiveSessionStatusResponseData{Fingerprint: slot.fingerprint, LegacySlotPresent: legacy}
+	data := proto.ArchiveSessionStatusResponseData{Fingerprint: slot.fingerprint, StoredDigest: slot.storedDigest, LegacySlotPresent: legacy}
 	switch slot.state {
 	case archiveSessionSlotAbsent:
 		data.State = proto.ArchiveSessionStateAbsent

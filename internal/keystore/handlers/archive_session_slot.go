@@ -54,7 +54,9 @@ package handlers
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"strconv"
 	"strings"
@@ -62,6 +64,7 @@ import (
 
 	"github.com/awnumar/memguard"
 
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -230,8 +233,14 @@ type archiveSessionSlot struct {
 	// record is set for live, expired and expiry-unknown slots.
 	record archiveSessionRecord
 	// fingerprint is the slot's key fingerprint: the public half's when it
-	// is there, else the v2 record's; "" when neither exists.
+	// is there, else the v2 record's, else the one derived from a parsable
+	// private key; "" when none exists.
 	fingerprint string
+	// storedDigest is hex(sha256(private record)), set only when the slot
+	// has no fingerprint at all (a private record that is not a parsable
+	// key, with no public half and no v2 record). It is not a key
+	// fingerprint; it lets the confirmed discard name that slot.
+	storedDigest string
 	// publicKey is the public half ("" when missing).
 	publicKey string
 	// digest is sha256 of the private record as read.
@@ -261,6 +270,9 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 	}
 	rec, recordPEM, ok := decodeArchiveSessionSlot(value)
 	if !ok {
+		if public == "" {
+			deriveArchiveSessionFingerprint(&slot, value)
+		}
 		return slot, nil
 	}
 	if public == "" {
@@ -284,6 +296,31 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 		}
 	}
 	return slot, nil
+}
+
+// deriveArchiveSessionFingerprint names an unowned slot that has neither a
+// public half nor a v2 record: the fingerprint of the private key's public
+// key in begin's encoding (PKIX "PUBLIC KEY" PEM), or, when the record is
+// not a parsable key, the digest of the stored bytes. Only this shape has
+// its private key parsed outside a combine; the PEM is held in a locked
+// buffer as the combine holds it, never logged or returned, and nothing is
+// written.
+func deriveArchiveSessionFingerprint(slot *archiveSessionSlot, value string) {
+	start := strings.Index(value, "-----BEGIN")
+	if start >= 0 {
+		buf := memguard.NewBufferFromBytes([]byte(value[start:]))
+		priv, err := crypto.ParsePrivateKey(string(buf.Bytes()))
+		buf.Destroy()
+		if err == nil {
+			if der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey); err == nil {
+				public := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+				slot.fingerprint = fingerprintBase64Public(string(public))
+				return
+			}
+		}
+	}
+	digest := sha256.Sum256([]byte(value))
+	slot.storedDigest = hex.EncodeToString(digest[:])
 }
 
 // archiveSessionRecordConsistent reports whether rec's times are ones this

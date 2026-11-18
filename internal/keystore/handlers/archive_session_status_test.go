@@ -61,8 +61,9 @@ func TestArchiveSessionStatus_WritesNothingInAnyState(t *testing.T) {
 			restore()
 			tc.setup()
 			if name == "unowned without public half" {
+				// The fingerprint is derived from the private key, in
+				// begin's encoding; nothing is written.
 				_ = mem.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+testOrgA)
-				tc.want.fp, tc.want.matches = "", false
 			}
 			before := mem.Snapshot()
 			counting := &writeCountingStore{SecretStore: mem}
