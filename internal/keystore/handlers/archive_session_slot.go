@@ -81,6 +81,9 @@ const archiveSessionSlotHeader = "dragpass-archive-session-v2 "
 var (
 	errArchiveSessionExpired       = errors.New("archive session key expired")
 	errArchiveSessionExpiryUnknown = errors.New("archive session key has no usable expiry")
+	// errArchiveSessionDeleteFailed: a slot could not be deleted completely.
+	// It answers storage_failure.
+	errArchiveSessionDeleteFailed = errors.New("archive session slot delete failed")
 )
 
 // archiveSessionRecord is the header of a v2 slot record.
@@ -306,7 +309,9 @@ func useArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSlot, 
 	case archiveSessionSlotAbsent:
 		return keychain.ErrSecretNotFound
 	case archiveSessionSlotExpired:
-		deleteArchiveSessionSlot(d, orgID)
+		if err := deleteArchiveSessionSlot(d, orgID); err != nil {
+			return err
+		}
 		return errArchiveSessionExpired
 	case archiveSessionSlotLive:
 		live()
@@ -317,27 +322,47 @@ func useArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSlot, 
 }
 
 // deleteArchiveSessionSlotIfUnchanged deletes the slot only while it still
-// holds the value read earlier, so a session begun since then is kept.
-func deleteArchiveSessionSlotIfUnchanged(d Deps, orgID string, read archiveSessionSlot) {
-	_ = withArchiveSessionSlotLock(d, func() error {
+// holds the value read earlier, so a session begun since then is kept. It
+// reports a delete that did not complete (errArchiveSessionDeleteFailed) or
+// a lock that could not be taken.
+func deleteArchiveSessionSlotIfUnchanged(d Deps, orgID string, read archiveSessionSlot) error {
+	return withArchiveSessionSlotLock(d, func() error {
 		value, err := keychain.GetArchiveSessionPrivateKey(d.Store, orgID)
 		current := sha256.Sum256([]byte(value))
 		secure.WipeString(&value)
 		if err == nil && subtle.ConstantTimeCompare(current[:], read.digest[:]) == 1 {
-			deleteArchiveSessionSlot(d, orgID)
+			return deleteArchiveSessionSlot(d, orgID)
 		}
 		return nil
 	})
 }
 
-// deleteArchiveSessionSlot removes both halves of orgID's session keypair,
-// then its index entry. The caller holds the lock. Failures are ignored: the
-// private half is deleted first, and a slot left behind by a failed delete is
-// judged again at its next read.
-func deleteArchiveSessionSlot(d Deps, orgID string) {
-	_ = keychain.DeleteArchiveSessionPrivateKey(d.Store, orgID)
-	_ = keychain.DeleteArchiveSessionPublicKey(d.Store, orgID)
+// deleteArchiveSessionSlot removes orgID's session keypair and its index
+// entry. The caller holds the lock. The key halves are deleted all or
+// reported: the private half goes first and a failure of either half stops
+// it (errArchiveSessionDeleteFailed):
+//
+//   - the private half fails: nothing was touched, the slot keeps its
+//     classification (a trusted slot stays usable, endable and sweepable)
+//     and the next attempt deletes it;
+//   - the public half fails: no private key is left, only a public half and
+//     the index entry, which read as an absent slot and are removed by the
+//     next sweep.
+//
+// No single failure leaves a private key that nothing will remove. An
+// already missing half counts as deleted. The index entry is removed last
+// and a failure there is not reported: the key is gone, an index Keeper
+// cannot read is never rewritten here, and a sweep drops an entry whose
+// slot holds no private record.
+func deleteArchiveSessionSlot(d Deps, orgID string) error {
+	if err := keychain.DeleteArchiveSessionPrivateKey(d.Store, orgID); err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return errArchiveSessionDeleteFailed
+	}
+	if err := keychain.DeleteArchiveSessionPublicKey(d.Store, orgID); err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return errArchiveSessionDeleteFailed
+	}
 	_ = keychain.RemoveArchiveSessionOrg(d.Store, orgID)
+	return nil
 }
 
 // archiveSessionSlotResponse maps openArchiveSessionSlot errors to the wire.
@@ -347,6 +372,8 @@ func archiveSessionSlotResponse(err error) proto.BaseResponse {
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionExpired, "archive session key expired")
 	case errors.Is(err, errArchiveSessionExpiryUnknown):
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionExpiryUnknown, "archive session key has no usable expiry")
+	case errors.Is(err, errArchiveSessionDeleteFailed):
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "delete archive session slot failed")
 	case errors.Is(err, keychain.ErrSecretNotFound):
 		return errs.Response(err) // not_found
 	default:

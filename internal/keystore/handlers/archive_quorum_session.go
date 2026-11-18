@@ -301,7 +301,9 @@ func shortenArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSl
 		rec.expiresAt = serverExpiry
 	}
 	if !d.Now().Before(rec.expiresAt) {
-		deleteArchiveSessionSlot(d, orgID)
+		if err := deleteArchiveSessionSlot(d, orgID); err != nil {
+			return archiveSessionSlotResponse(err)
+		}
 		return archiveSessionSlotResponse(errArchiveSessionExpired)
 	}
 	*effective = rec.expiresAt
@@ -358,7 +360,9 @@ func endArchiveSessionLocked(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 	if !slot.state.trusted() {
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{SlotWithoutExpiryKept: true}}
 	}
-	deleteArchiveSessionSlot(d, req.OrgID)
+	if err := deleteArchiveSessionSlot(d, req.OrgID); err != nil {
+		return archiveSessionSlotResponse(err)
+	}
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: true}}
 }
 
@@ -393,7 +397,10 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 			response = errs.CodeResponse(errs.ErrCodeArchiveSessionChanged, "the organization's archive session slot holds another key")
 			return nil
 		}
-		deleteArchiveSessionSlot(d, req.OrgID)
+		if err := deleteArchiveSessionSlot(d, req.OrgID); err != nil {
+			response = archiveSessionSlotResponse(err)
+			return nil
+		}
 		d.Logger.Println("archive session discard: session key deleted on confirmed request")
 		response = proto.BaseResponse{Success: true, Data: proto.ArchiveSessionDiscardResponseData{Discarded: true}}
 		return nil
@@ -537,9 +544,14 @@ func sweepArchiveSessionSlotLocked(d Deps, orgID string) {
 	}
 	switch slot.state {
 	case archiveSessionSlotAbsent:
-		deleteArchiveSessionSlot(d, orgID)
+		if deleteArchiveSessionSlot(d, orgID) != nil {
+			d.Logger.Println("archive session: sweep could not remove a leftover public half or index entry; retrying at the next sweep")
+		}
 	case archiveSessionSlotExpired:
-		deleteArchiveSessionSlot(d, orgID)
+		if deleteArchiveSessionSlot(d, orgID) != nil {
+			d.Logger.Println("archive session: sweep could not delete an expired session key; retrying at the next sweep")
+			return
+		}
 		d.Logger.Println("archive session: expired session key destroyed by the sweep")
 	}
 }

@@ -172,7 +172,9 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 
 	// The slot may expire while the combine runs; no output leaves after it.
 	if !d.Now().Before(sessionSlot.record.expiresAt) {
-		deleteArchiveSessionSlotIfUnchanged(d, orgID, sessionSlot)
+		if err := deleteArchiveSessionSlotIfUnchanged(d, orgID, sessionSlot); err != nil {
+			return archiveSessionSlotResponse(err)
+		}
 		return archiveSessionSlotResponse(errArchiveSessionExpired)
 	}
 
