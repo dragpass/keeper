@@ -192,3 +192,41 @@ func TestArchiveSessionBegin_OwnerStepRunsBeforeReplayAndConflict(t *testing.T) 
 		t.Fatalf("owner step judged %v", judged)
 	}
 }
+
+// set_expiry, end, discard and status run the owner step on the slot they
+// read before anything else: with a stub that refuses, each answers the
+// stub's refusal, reveals no fingerprint or time, and writes nothing, not
+// even the delete of an expired slot that the expiry rule would make.
+func TestArchiveSession_OwnerStepRunsFirstInEverySlotAction(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		deps, mem, clock := newOrgSessionDeps(t)
+		a := beginWithID(deps, testOrgA, testBeginID1).Data.(proto.ArchiveSessionBeginResponseData)
+		if expired {
+			clock.Set(clock.Now().Add(archiveSessionMaxTTL))
+		}
+		restore := archiveSessionOwnerRefusal
+		stub := proto.BaseResponse{Error: "stub owner refusal", ErrorCode: "stub_owner_refusal"}
+		judged := 0
+		archiveSessionOwnerRefusal = func(Deps, string, archiveSessionSlot) (proto.BaseResponse, bool) {
+			judged++
+			return stub, true
+		}
+		counting := &writeCountingStore{SecretStore: mem}
+		d := deps
+		d.Store = counting
+		for name, resp := range map[string]proto.BaseResponse{
+			"set_expiry": setExpiry(d, testOrgA, a.Fingerprint, clock.Now().Add(-time.Minute)),
+			"end":        HandleArchiveSessionEnd(d, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint}),
+			"discard":    discardSession(d, testOrgA, a.Fingerprint),
+			"status":     HandleArchiveSessionStatus(d, proto.ArchiveSessionStatusRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint}),
+		} {
+			if !reflect.DeepEqual(resp, stub) {
+				t.Errorf("expired=%v %s answered %q with data %v, not the owner step's refusal", expired, name, resp.ErrorCode, resp.Data != nil)
+			}
+		}
+		archiveSessionOwnerRefusal = restore
+		if judged != 4 || counting.writes.Load() != 0 || orgSlotValue(mem, testOrgA) == "" {
+			t.Fatalf("expired=%v: owner step ran %d times, %d writes", expired, judged, counting.writes.Load())
+		}
+	}
+}
