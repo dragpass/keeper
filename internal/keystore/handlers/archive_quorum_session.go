@@ -54,7 +54,23 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 		return errs.Response(err)
 	}
 
-	keyPair, err := crypto.GenerateRSAKeyPair()
+	// A begin the slot already refuses or replays generates no key.
+	var decision archiveSessionBeginDecision
+	err := withArchiveSessionSlotLock(d, func() error {
+		var err error
+		decision, err = decideArchiveSessionBeginLocked(d, req)
+		return err
+	})
+	if err != nil || decision.step != archiveSessionBeginWrite {
+		return archiveSessionBeginAnswer(d, decision, err)
+	}
+
+	// RSA generation runs outside the lock (it can take long enough to hold
+	// up every other keychain lock user), so the decision is taken again
+	// under the lock right before the write, on a fresh read: a begin, end or
+	// sweep that ran meanwhile is seen, and a key that lost the race is not
+	// stored.
+	keyPair, err := archiveSessionKeygen()
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeInternal, "archive session keygen failed: "+err.Error())
 	}
@@ -73,10 +89,6 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 	record := encodeArchiveSessionSlot(rec, privBuf.Bytes())
 	defer record.Destroy()
 
-	// The decision and every write run under the lock, so a startup sweep,
-	// an end or a discard in another process never acts on a read taken
-	// before this write.
-	var decision archiveSessionBeginDecision
 	err = withArchiveSessionSlotLock(d, func() error {
 		var err error
 		decision, err = decideArchiveSessionBeginLocked(d, req)
@@ -85,23 +97,33 @@ func HandleArchiveSessionBegin(d Deps, req proto.ArchiveSessionBeginRequest) pro
 		}
 		return writeArchiveSessionSlotLocked(d, req.OrgID, keyPair.PublicKey, record.Bytes())
 	})
+	if err != nil || decision.step != archiveSessionBeginWrite {
+		return archiveSessionBeginAnswer(d, decision, err)
+	}
+
+	d.Logger.Println("archive session begin: ephemeral keypair created")
+	return archiveSessionBeginResponse(keyPair.PublicKey, rec, false)
+}
+
+// archiveSessionBeginAnswer answers a begin that did not write: an error, a
+// refusal or a replay.
+func archiveSessionBeginAnswer(d Deps, decision archiveSessionBeginDecision, err error) proto.BaseResponse {
 	if errors.Is(err, errArchiveSessionLegacySlotPresent) {
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionLegacySlotPresent, "a device-wide archive recovery session key from an earlier Keeper is present")
 	}
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, err.Error())
 	}
-	switch decision.step {
-	case archiveSessionBeginRefuse:
-		return decision.refusal
-	case archiveSessionBeginReplay:
+	if decision.step == archiveSessionBeginReplay {
 		d.Logger.Println("archive session begin: resend answered with the live session")
 		return archiveSessionBeginResponse(decision.slot.publicKey, decision.slot.record, true)
 	}
-
-	d.Logger.Println("archive session begin: ephemeral keypair created")
-	return archiveSessionBeginResponse(keyPair.PublicKey, rec, false)
+	return decision.refusal
 }
+
+// archiveSessionKeygen generates the session keypair. A variable only so
+// tests can pin what happens while a begin generates its key.
+var archiveSessionKeygen = crypto.GenerateRSAKeyPair
 
 func archiveSessionBeginResponse(publicKey string, rec archiveSessionRecord, replayed bool) proto.BaseResponse {
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionBeginResponseData{
