@@ -91,6 +91,12 @@ const (
 	// nothing was generated, deleted or moved.
 	ErrCodeArchiveSessionLegacySlotPresent ErrorCode = "archive_session_legacy_slot_present"
 
+	// ErrCodeArchiveSessionActive: archive_session_begin found the
+	// organization's slot holding a key it must not replace: a live session,
+	// or a slot whose expiry or record Keeper cannot trust. Nothing was
+	// generated, replaced or deleted; data says what the slot holds.
+	ErrCodeArchiveSessionActive ErrorCode = "archive_session_active"
+
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.
 	ErrCodeInternal ErrorCode = "internal_error"

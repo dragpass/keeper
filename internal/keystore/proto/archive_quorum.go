@@ -138,6 +138,29 @@ type ArchiveSessionBeginResponseData struct {
 	ExpiresAt        string `json:"expires_at,omitempty"`
 }
 
+// Slot states archive_session_begin's archive_session_active refusal
+// reports in ArchiveSessionActiveData.State.
+const (
+	// ArchiveSessionStateLive: a session key with a trusted, unexpired
+	// expiry.
+	ArchiveSessionStateLive = "live"
+	// ArchiveSessionStateExpiryUnknown: a record this Keeper wrote whose
+	// expiry lies beyond any session it starts (a clock moved back).
+	ArchiveSessionStateExpiryUnknown = "expiry_unknown"
+	// ArchiveSessionStateUnowned: a record this Keeper cannot vouch for (a
+	// development-build format, no header, or halves that disagree).
+	ArchiveSessionStateUnowned = "unowned"
+)
+
+// ArchiveSessionActiveData is the data of an archive_session_active
+// refusal. Fingerprint is a public key fingerprint and is omitted when the
+// slot has none; ExpiresAt only for a live slot.
+type ArchiveSessionActiveData struct {
+	State       string `json:"state"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
+}
+
 // ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
 // OrgID names the organization whose session slot is ended; Fingerprint
 // (optional, as begin returned it) limits the end to that session's keypair.

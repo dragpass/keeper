@@ -1,8 +1,9 @@
 // archive_session_slot.go — the per-organization recovery-session private
-// key slot and its expiry.
+// key slot, its record format and how far Keeper trusts what it holds.
 //
 // Each organization's slot (config.OrgArchiveSessionPrivateKeyPrefix +
-// org_id) carries its own expiry so that a session the App never ends (a
+// org_id, with the public half under config.OrgArchiveSessionPublicKeyPrefix
+// + org_id) carries its own expiry so that a session the App never ends (a
 // crash, a closed tab, a lost network) cannot leave a usable session key
 // behind: every use reads the expiry first, refuses an expired slot and
 // deletes it. Nothing here depends on the App or the server telling Keeper
@@ -11,18 +12,31 @@
 //
 // Record format (one keyring value, written in one Set):
 //
-//	dragpass-archive-session-v1 expires_at=<unix seconds>\n<private key PEM>
+//	dragpass-archive-session-v2 expires_at=<unix> begun_at=<unix> fp=<hex> begin_id=<uuid or ->\n<private key PEM>
 //
-// The expiry is the earlier of begin time + archiveSessionMaxTTL and the
-// server's expires_at the App reports through archive_session_set_expiry,
-// which can only move it earlier. A missing or forged server value therefore
-// never keeps the key past the Keeper-side bound.
+// fp is the session public key's fingerprint (hex(sha256(public key PEM))),
+// the value begin returned; begin_id is the caller's idempotency value, "-"
+// when the begin carried none. Neither is secret. The expiry is the earlier
+// of begin time + archiveSessionMaxTTL and the server's expires_at the App
+// reports through archive_session_set_expiry, which can only move it
+// earlier.
 //
-// A value without the header, a header Keeper cannot parse, or an expiry
-// further ahead than any session this Keeper starts (a clock moved back) has
-// no trusted expiry. It is refused for use (archive_session_expiry_unknown)
-// and not deleted by a use, by the startup sweep or by archive_session_end;
-// the next archive_session_begin for the organization replaces it.
+// Trust. A slot is judged as one of:
+//
+//   - absent: no private record (a public half left alone by an interrupted
+//     write or delete is no key);
+//   - live / expired: a v2 record this Keeper can read whose fp matches the
+//     public half and whose expiry is no further ahead than any session this
+//     Keeper starts; only these are ever deleted for being expired;
+//   - expiry unknown: a v2 record whose expiry lies beyond that bound (a
+//     clock moved back);
+//   - unowned: anything else, among them the per-organization records of
+//     development builds before this format (the v1 header, no header) and
+//     a v2 record whose halves disagree.
+//
+// An expiry-unknown or unowned slot is never used, replaced or deleted by
+// begin, set_expiry, end, a combine or a sweep. Only the confirmed
+// archive_session_discard naming its fingerprint removes it.
 //
 // The device-wide slot of Keepers before lv90 is not a session slot here: it
 // is never read, indexed, swept or ended, whatever it holds. Only the
@@ -40,6 +54,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"strconv"
 	"strings"
@@ -61,39 +76,110 @@ import (
 // begin-to-open gap before the server session does.
 const archiveSessionMaxTTL = 30 * time.Minute
 
-const archiveSessionSlotHeader = "dragpass-archive-session-v1 expires_at="
+const archiveSessionSlotHeader = "dragpass-archive-session-v2 "
 
 var (
 	errArchiveSessionExpired       = errors.New("archive session key expired")
 	errArchiveSessionExpiryUnknown = errors.New("archive session key has no usable expiry")
 )
 
-// encodeArchiveSessionSlot returns the record for pem with expiresAt in a
-// locked buffer. The caller destroys it after the Set.
-func encodeArchiveSessionSlot(expiresAt time.Time, pem []byte) *memguard.LockedBuffer {
-	header := archiveSessionSlotHeader + strconv.FormatInt(expiresAt.Unix(), 10) + "\n"
+// archiveSessionRecord is the header of a v2 slot record.
+type archiveSessionRecord struct {
+	expiresAt   time.Time
+	begunAt     time.Time
+	fingerprint string
+	beginID     string // "" when the begin carried none
+}
+
+// encodeArchiveSessionSlot returns the record for pem in a locked buffer.
+// The caller destroys it after the Set.
+func encodeArchiveSessionSlot(rec archiveSessionRecord, pem []byte) *memguard.LockedBuffer {
+	beginID := rec.beginID
+	if beginID == "" {
+		beginID = "-"
+	}
+	header := archiveSessionSlotHeader +
+		"expires_at=" + strconv.FormatInt(rec.expiresAt.Unix(), 10) +
+		" begun_at=" + strconv.FormatInt(rec.begunAt.Unix(), 10) +
+		" fp=" + rec.fingerprint +
+		" begin_id=" + beginID + "\n"
 	value := make([]byte, 0, len(header)+len(pem))
 	value = append(value, header...)
 	value = append(value, pem...)
 	return memguard.NewBufferFromBytes(value)
 }
 
-// decodeArchiveSessionSlot splits a record. ok is false for a value without
-// a well-formed header.
-func decodeArchiveSessionSlot(value string) (expiresAt time.Time, pem string, ok bool) {
+// decodeArchiveSessionSlot splits a v2 record. ok is false for anything
+// else, including the v1 header of development builds.
+func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem string, ok bool) {
 	rest, found := strings.CutPrefix(value, archiveSessionSlotHeader)
 	if !found {
-		return time.Time{}, "", false
+		return archiveSessionRecord{}, "", false
 	}
-	digits, pem, found := strings.Cut(rest, "\n")
+	line, pem, found := strings.Cut(rest, "\n")
 	if !found || pem == "" {
-		return time.Time{}, "", false
+		return archiveSessionRecord{}, "", false
 	}
-	unix, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil || unix <= 0 {
-		return time.Time{}, "", false
+	fields := strings.Split(line, " ")
+	if len(fields) != 4 {
+		return archiveSessionRecord{}, "", false
 	}
-	return time.Unix(unix, 0), pem, true
+	values := make([]string, 4)
+	for i, name := range []string{"expires_at=", "begun_at=", "fp=", "begin_id="} {
+		v, found := strings.CutPrefix(fields[i], name)
+		if !found {
+			return archiveSessionRecord{}, "", false
+		}
+		values[i] = v
+	}
+	expires, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil || expires <= 0 {
+		return archiveSessionRecord{}, "", false
+	}
+	begun, err := strconv.ParseInt(values[1], 10, 64)
+	if err != nil || begun <= 0 {
+		return archiveSessionRecord{}, "", false
+	}
+	if !isLowerHex64(values[2]) {
+		return archiveSessionRecord{}, "", false
+	}
+	beginID := values[3]
+	if beginID == "-" {
+		beginID = ""
+	} else if !isLowerUUID(beginID) {
+		return archiveSessionRecord{}, "", false
+	}
+	return archiveSessionRecord{
+		expiresAt: time.Unix(expires, 0), begunAt: time.Unix(begun, 0),
+		fingerprint: values[2], beginID: beginID,
+	}, pem, true
+}
+
+func isLowerHex64(s string) bool {
+	if len(s) != 64 || strings.ToLower(s) != s {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+func isLowerUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // archiveSessionProcessLock is the keychain process lock every session slot,
@@ -107,55 +193,127 @@ func withArchiveSessionSlotLock(d Deps, fn func() error) error {
 	return archiveSessionProcessLock(d.Store, fn)
 }
 
-// archiveSessionSlot is one read of the slot, taken under the lock.
-type archiveSessionSlot struct {
-	expiresAt time.Time
-	digest    [sha256.Size]byte
+type archiveSessionSlotState int
+
+const (
+	archiveSessionSlotAbsent archiveSessionSlotState = iota
+	archiveSessionSlotLive
+	archiveSessionSlotExpired
+	archiveSessionSlotExpiryUnknown
+	archiveSessionSlotUnowned
+)
+
+// trusted reports whether the slot's record and expiry are Keeper's own: only
+// such a slot is ever used or deleted for being expired.
+func (s archiveSessionSlotState) trusted() bool {
+	return s == archiveSessionSlotLive || s == archiveSessionSlotExpired
 }
 
-// readArchiveSessionSlotLocked reads the slot for a use and hands its PEM to
-// use. Under the caller's lock it returns keychain.ErrSecretNotFound when no
-// session is open, errArchiveSessionExpired after deleting an expired slot,
-// and errArchiveSessionExpiryUnknown (slot kept) when the expiry cannot be
-// trusted. The PEM string is wiped when use returns.
-func readArchiveSessionSlotLocked(d Deps, orgID string, use func(slot archiveSessionSlot, pem string) error) error {
+// archiveSessionSlot is one read of an organization's slot, taken under the
+// lock. It carries no private key material.
+type archiveSessionSlot struct {
+	state archiveSessionSlotState
+	// record is set for live, expired and expiry-unknown slots.
+	record archiveSessionRecord
+	// fingerprint is the slot's key fingerprint: the public half's when it
+	// is there, else the v2 record's; "" when neither exists.
+	fingerprint string
+	// publicKey is the public half ("" when missing).
+	publicKey string
+	// digest is sha256 of the private record as read.
+	digest [sha256.Size]byte
+}
+
+// inspectArchiveSessionSlotLocked reads orgID's slot and judges it. It
+// writes nothing. The caller holds the lock. When pem is not nil and the
+// slot is live, the private key PEM is handed to it before the read value
+// is wiped.
+func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (archiveSessionSlot, error) {
 	value, err := keychain.GetArchiveSessionPrivateKey(d.Store, orgID)
-	if err != nil {
-		return err
+	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return archiveSessionSlot{}, err
 	}
 	defer secure.WipeString(&value)
 	if value == "" {
-		return keychain.ErrSecretNotFound
+		return archiveSessionSlot{state: archiveSessionSlotAbsent}, nil
 	}
-	expiresAt, pem, ok := decodeArchiveSessionSlot(value)
+	public, err := keychain.GetArchiveSessionPublicKey(d.Store, orgID)
+	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return archiveSessionSlot{}, err
+	}
+	slot := archiveSessionSlot{state: archiveSessionSlotUnowned, publicKey: public, digest: sha256.Sum256([]byte(value))}
+	if public != "" {
+		slot.fingerprint = fingerprintBase64Public(public)
+	}
+	rec, recordPEM, ok := decodeArchiveSessionSlot(value)
+	if !ok {
+		return slot, nil
+	}
+	if public == "" {
+		slot.fingerprint = rec.fingerprint
+		return slot, nil
+	}
+	if subtle.ConstantTimeCompare([]byte(slot.fingerprint), []byte(rec.fingerprint)) != 1 {
+		return slot, nil
+	}
+	slot.record = rec
 	now := d.Now()
-	if !ok || expiresAt.After(now.Add(archiveSessionMaxTTL)) {
-		return errArchiveSessionExpiryUnknown
+	switch {
+	case rec.expiresAt.After(now.Add(archiveSessionMaxTTL)) || rec.expiresAt.After(rec.begunAt.Add(archiveSessionMaxTTL)):
+		slot.state = archiveSessionSlotExpiryUnknown
+	case !now.Before(rec.expiresAt):
+		slot.state = archiveSessionSlotExpired
+	default:
+		slot.state = archiveSessionSlotLive
+		if pem != nil {
+			pem(recordPEM)
+		}
 	}
-	if !now.Before(expiresAt) {
-		deleteArchiveSessionSlot(d, orgID)
-		return errArchiveSessionExpired
-	}
-	return use(archiveSessionSlot{expiresAt: expiresAt, digest: sha256.Sum256([]byte(value))}, pem)
+	return slot, nil
 }
 
-// openArchiveSessionSlot reads the session private key for a use (see
-// readArchiveSessionSlotLocked for the errors). On success the caller
-// destroys the buffer.
+// openArchiveSessionSlot reads the session private key for a use. Under the
+// lock it returns keychain.ErrSecretNotFound when no session is open,
+// errArchiveSessionExpired after deleting an expired slot, and
+// errArchiveSessionExpiryUnknown (slot kept) for an expiry-unknown or
+// unowned slot. On success the caller destroys the buffer.
 func openArchiveSessionSlot(d Deps, orgID string) (*memguard.LockedBuffer, archiveSessionSlot, error) {
 	var buf *memguard.LockedBuffer
 	var read archiveSessionSlot
 	err := withArchiveSessionSlotLock(d, func() error {
-		return readArchiveSessionSlotLocked(d, orgID, func(slot archiveSessionSlot, pem string) error {
+		slot, err := inspectArchiveSessionSlotLocked(d, orgID, func(pem string) {
 			buf = memguard.NewBufferFromBytes([]byte(pem))
-			read = slot
-			return nil
 		})
+		if err != nil {
+			return err
+		}
+		return useArchiveSessionSlotLocked(d, orgID, slot, func() { read = slot })
 	})
 	if err != nil {
+		if buf != nil {
+			buf.Destroy()
+		}
 		return nil, archiveSessionSlot{}, err
 	}
 	return buf, read, nil
+}
+
+// useArchiveSessionSlotLocked applies the use rule to a slot just read: no
+// session is not_found, an expired one is deleted, an untrusted one is
+// refused and kept. live runs for a live slot. The caller holds the lock.
+func useArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSlot, live func()) error {
+	switch slot.state {
+	case archiveSessionSlotAbsent:
+		return keychain.ErrSecretNotFound
+	case archiveSessionSlotExpired:
+		deleteArchiveSessionSlot(d, orgID)
+		return errArchiveSessionExpired
+	case archiveSessionSlotLive:
+		live()
+		return nil
+	default:
+		return errArchiveSessionExpiryUnknown
+	}
 }
 
 // deleteArchiveSessionSlotIfUnchanged deletes the slot only while it still
@@ -173,9 +331,9 @@ func deleteArchiveSessionSlotIfUnchanged(d Deps, orgID string, read archiveSessi
 }
 
 // deleteArchiveSessionSlot removes both halves of orgID's session keypair,
-// then its index entry. The caller holds the lock. Failures are ignored as in archive_session_end: the
-// private half is deleted first, and an expired slot left behind by a failed
-// delete is refused again at its next use.
+// then its index entry. The caller holds the lock. Failures are ignored: the
+// private half is deleted first, and a slot left behind by a failed delete is
+// judged again at its next read.
 func deleteArchiveSessionSlot(d Deps, orgID string) {
 	_ = keychain.DeleteArchiveSessionPrivateKey(d.Store, orgID)
 	_ = keychain.DeleteArchiveSessionPublicKey(d.Store, orgID)
@@ -189,13 +347,15 @@ func archiveSessionSlotResponse(err error) proto.BaseResponse {
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionExpired, "archive session key expired")
 	case errors.Is(err, errArchiveSessionExpiryUnknown):
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionExpiryUnknown, "archive session key has no usable expiry")
+	case errors.Is(err, keychain.ErrSecretNotFound):
+		return errs.Response(err) // not_found
 	default:
-		return errs.Response(err) // not_found if no session is open
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive session slot failed")
 	}
 }
 
-// archiveSessionFingerprintMatches reports whether the stored session public
-// key has fingerprint, as archive_session_begin returned it.
+// archiveSessionFingerprintMatches reports whether orgID's slot holds the
+// key whose fingerprint begin returned.
 func archiveSessionFingerprintMatches(d Deps, orgID, fingerprint string) bool {
 	public, err := keychain.GetArchiveSessionPublicKey(d.Store, orgID)
 	if err != nil || public == "" {

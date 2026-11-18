@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +10,34 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-// The session slot record as this Keeper writes it: one header line carrying
-// the expiry, then the private key PEM. Tests write it literally so they also
-// pin the on-disk format.
+// The per-organization record header development builds of lv90 K0 and
+// lv100 F1 wrote, and the device-wide record of a main build of lv100 F1.
+// This Keeper reads such a record as unowned. Tests write it literally so
+// they pin that it is never trusted.
 const sessionSlotHeaderForTest = "dragpass-archive-session-v1 expires_at="
+
+// rewriteSessionSlotExpiry rewrites the expiry of the v2 record in account,
+// keeping every other field, the way set_expiry would store it, and returns
+// the new value.
+func rewriteSessionSlotExpiry(t *testing.T, store keychain.SecretStore, account string, expiresAt time.Time) string {
+	t.Helper()
+	value, err := store.Get(config.Service, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, pem, ok := decodeArchiveSessionSlot(value)
+	if !ok {
+		t.Fatal("the slot does not hold a v2 record")
+	}
+	rec.expiresAt = expiresAt
+	buf := encodeArchiveSessionSlot(rec, []byte(pem))
+	defer buf.Destroy()
+	next := string(buf.Bytes())
+	if err := store.Set(config.Service, account, next); err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
 
 // sessionExpiryOrg is the organization whose session slot the lv100 F1 tests
 // exercise. authorizedCombineFixture and newAuditFixture begin their session
@@ -47,11 +70,7 @@ func writeSessionSlotWithoutExpiry(t *testing.T, store keychain.SecretStore) str
 
 func writeSessionSlotExpiry(t *testing.T, store keychain.SecretStore, expiresAt int64) string {
 	t.Helper()
-	value := sessionSlotHeaderForTest + strconv.FormatInt(expiresAt, 10) + "\n" + sessionSlotPEM(t, store)
-	if err := store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, value); err != nil {
-		t.Fatal(err)
-	}
-	return value
+	return rewriteSessionSlotExpiry(t, store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, time.Unix(expiresAt, 0))
 }
 
 func sessionSlotValue(store keychain.SecretStore, account string) string {
@@ -357,8 +376,8 @@ func TestArchiveSessionEndWithItsFingerprintIsIdempotent(t *testing.T) {
 }
 
 // A slot whose expiry Keeper cannot trust is not deleted by an expiry rule
-// or by an end, even an explicit one; the next begin for the organization
-// replaces it. (The device-wide slot of Keepers before lv90 is never touched
+// or by an end, even an explicit one, and a begin does not replace it; only
+// the confirmed discard removes it. (The device-wide slot of Keepers before lv90 is never touched
 // by end at all: TestArchiveSession_EndLeavesTheDeviceWideSlot.)
 func TestArchiveSessionEndKeepsASlotWithoutExpiry(t *testing.T) {
 	f := newAuditFixture(t)
@@ -389,6 +408,7 @@ func TestArchiveSessionStartupSweepDestroysOnlyExpiredSlotsWithExpiry(t *testing
 		t.Fatal("sweep deleted a live session")
 	}
 
+	record := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg)
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 	f.clock.unix += int64(24 * time.Hour / time.Second)
 	SweepExpiredArchiveSession(f.deps)
@@ -396,7 +416,10 @@ func TestArchiveSessionStartupSweepDestroysOnlyExpiredSlotsWithExpiry(t *testing
 		t.Fatal("sweep deleted a slot without expiry")
 	}
 
-	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix())
+	// The begin's own record, whose expiry passed during the 24 hours.
+	if err := f.store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, record); err != nil {
+		t.Fatal(err)
+	}
 	SweepExpiredArchiveSession(f.deps)
 	requireSessionSlotDeleted(t, f.store)
 }

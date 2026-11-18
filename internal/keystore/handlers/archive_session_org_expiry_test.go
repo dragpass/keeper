@@ -93,9 +93,7 @@ func writeOrgSlot(t *testing.T, store keychain.SecretStore, orgID, value string)
 
 func writeOrgSlotExpiry(t *testing.T, store keychain.SecretStore, orgID string, expiresAt time.Time) string {
 	t.Helper()
-	value := sessionSlotHeaderForTest + strconv.FormatInt(expiresAt.Unix(), 10) + "\n" + orgSlotPEM(t, store, orgID)
-	writeOrgSlot(t, store, orgID, value)
-	return value
+	return rewriteSessionSlotExpiry(t, store, config.OrgArchiveSessionPrivateKeyPrefix+orgID, expiresAt)
 }
 
 func sessionIndexOrgs(t *testing.T, store keychain.SecretStore) []string {
