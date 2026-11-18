@@ -5,8 +5,9 @@
 // ephemeral session keypair whose public key admins re-wrap their shares to
 // (HandleArchiveShareRewrap), and whose private key reconstructs the archive
 // key (HandleArchiveQuorumCombineAndRewrap). This file owns that keypair's
-// begin/expiry/end lifecycle; archive_session_slot.go owns the slot record
-// and its expiry rules.
+// begin/expiry/end/discard/status lifecycle and the sweeps;
+// archive_session_slot.go owns the slot record and its trust and expiry
+// rules.
 //
 // The keypair lives in the organization's own slot
 // (config.OrgArchiveSessionPrivateKeyPrefix + org_id): one device can hold an
@@ -18,9 +19,9 @@
 // in-flight recovery session. No action reads it as a session key or moves
 // it, whatever its content (with or without an expiry header). begin refuses
 // with archive_session_legacy_slot_present while it exists; end, set_expiry,
-// combine and the startup sweep leave it alone; only
-// archive_session_legacy_discard, which the App calls after the user
-// confirms, deletes it.
+// discard, status (which reports its presence), combine and the sweeps leave
+// it alone; only archive_session_legacy_discard, which the App calls after
+// the user confirms, deletes it.
 //
 // Key-material discipline: the session private key is held in a memguard buffer
 // and the plaintext keypair string is wiped (secure.WipeString) once persisted;
@@ -151,12 +152,15 @@ type archiveSessionBeginDecision struct {
 }
 
 // archiveSessionOwnerRefusal is the step that will judge whether the caller
-// may act on a slot it has read: the account boundary. Every session action
-// runs it on the slot it read, under the lock, before any branch that
-// reuses, reports, changes or deletes the slot, the expiry delete included. This version has no owner to
-// compare and admits every slot, so a begin_id resend is matched on the
-// organization and begin_id alone; that is interim, and the account
-// condition is added here. A variable so tests can pin the order.
+// may act on a slot it has read: the account boundary. begin, set_expiry,
+// end, discard and status run it on the slot they read, under the lock,
+// before any branch that reuses, reports, changes or deletes the slot, the
+// expiry delete included. The combine does not yet: its comparison of the
+// slot with the server decision's account comes with the account boundary
+// change. This version has no owner to compare and admits every slot, so a
+// begin_id resend is matched on the organization and begin_id alone; that
+// is interim, and the account condition is added here. A variable so tests
+// can pin the order.
 var archiveSessionOwnerRefusal = func(Deps, string, archiveSessionSlot) (proto.BaseResponse, bool) {
 	return proto.BaseResponse{}, false
 }
