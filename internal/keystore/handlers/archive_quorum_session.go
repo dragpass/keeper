@@ -335,10 +335,12 @@ func HandleArchiveSessionEnd(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 	}
 
 	var response proto.BaseResponse
-	_ = withArchiveSessionSlotLock(d, func() error {
+	if err := withArchiveSessionSlotLock(d, func() error {
 		response = endArchiveSessionLocked(d, req)
 		return nil
-	})
+	}); err != nil {
+		return archiveSessionLockFailure()
+	}
 	return response
 }
 
@@ -373,7 +375,7 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 		return errs.Response(err)
 	}
 	var response proto.BaseResponse
-	_ = withArchiveSessionSlotLock(d, func() error {
+	if err := withArchiveSessionSlotLock(d, func() error {
 		slot, err := inspectArchiveSessionSlotLocked(d, req.OrgID, nil)
 		if err != nil {
 			response = errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive session slot failed")
@@ -395,7 +397,9 @@ func HandleArchiveSessionDiscard(d Deps, req proto.ArchiveSessionDiscardRequest)
 		d.Logger.Println("archive session discard: session key deleted on confirmed request")
 		response = proto.BaseResponse{Success: true, Data: proto.ArchiveSessionDiscardResponseData{Discarded: true}}
 		return nil
-	})
+	}); err != nil {
+		return archiveSessionLockFailure()
+	}
 	return response
 }
 
@@ -408,7 +412,7 @@ func HandleArchiveSessionStatus(d Deps, req proto.ArchiveSessionStatusRequest) p
 		return errs.Response(err)
 	}
 	var response proto.BaseResponse
-	_ = withArchiveSessionSlotLock(d, func() error {
+	if err := withArchiveSessionSlotLock(d, func() error {
 		legacy, err := keychain.LegacyArchiveSessionPresent(d.Store)
 		if err != nil {
 			response = errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
@@ -425,7 +429,9 @@ func HandleArchiveSessionStatus(d Deps, req proto.ArchiveSessionStatusRequest) p
 		}
 		response = proto.BaseResponse{Success: true, Data: archiveSessionStatusData(slot, req.Fingerprint, legacy)}
 		return nil
-	})
+	}); err != nil {
+		return archiveSessionLockFailure()
+	}
 	return response
 }
 
@@ -454,6 +460,12 @@ func archiveSessionStatusData(slot archiveSessionSlot, fingerprint string, legac
 	return data
 }
 
+// archiveSessionLockFailure answers an action that could not take the
+// keychain process lock: it read and wrote nothing.
+func archiveSessionLockFailure() proto.BaseResponse {
+	return errs.CodeResponse(errs.ErrCodeStorageFailure, "keychain process lock unavailable")
+}
+
 // HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide
 // session slot a Keeper before lv90 used. The App calls it only after the
 // user confirmed: if that key belongs to a recovery session still open on
@@ -469,7 +481,7 @@ func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDis
 	// present or gone, never half deleted.
 	var present bool
 	var refusal proto.BaseResponse
-	_ = withArchiveSessionSlotLock(d, func() error {
+	if err := withArchiveSessionSlotLock(d, func() error {
 		var err error
 		present, err = keychain.LegacyArchiveSessionPresent(d.Store)
 		if err != nil {
@@ -480,7 +492,9 @@ func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDis
 			refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "delete device-wide archive session slot failed")
 		}
 		return nil
-	})
+	}); err != nil {
+		return archiveSessionLockFailure()
+	}
 	if refusal.ErrorCode != "" {
 		return refusal
 	}
