@@ -52,6 +52,7 @@
 package handlers
 
 import (
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/x509"
@@ -64,7 +65,6 @@ import (
 
 	"github.com/awnumar/memguard"
 
-	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
@@ -301,17 +301,24 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 // deriveArchiveSessionFingerprint names an unowned slot that has neither a
 // public half nor a v2 record: the fingerprint of the private key's public
 // key in begin's encoding (PKIX "PUBLIC KEY" PEM), or, when the record is
-// not a parsable key, the digest of the stored bytes. Only this shape has
-// its private key parsed outside a combine; the PEM is held in a locked
-// buffer as the combine holds it, never logged or returned, and nothing is
-// written.
+// not a parsable RSA PKCS#8 key, the digest of the stored bytes. Only this
+// shape has its private key parsed outside a combine. The PEM is copied into
+// a locked buffer and decoded from it without a Go string copy, and the
+// decoded DER is zeroed once parsed; temporaries inside the PEM decoder and
+// the parser, and the parsed rsa.PrivateKey value, are not zeroed (Go offers
+// no reliable way to). Nothing is logged, returned or written.
 func deriveArchiveSessionFingerprint(slot *archiveSessionSlot, value string) {
-	start := strings.Index(value, "-----BEGIN")
-	if start >= 0 {
+	if start := strings.Index(value, "-----BEGIN"); start >= 0 {
 		buf := memguard.NewBufferFromBytes([]byte(value[start:]))
-		priv, err := crypto.ParsePrivateKey(string(buf.Bytes()))
+		block, _ := pem.Decode(buf.Bytes())
+		var parsed any
+		var err error
+		if block != nil {
+			parsed, err = x509.ParsePKCS8PrivateKey(block.Bytes)
+			secure.Zeroize(block.Bytes)
+		}
 		buf.Destroy()
-		if err == nil {
+		if priv, ok := parsed.(*rsa.PrivateKey); block != nil && err == nil && ok {
 			if der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey); err == nil {
 				public := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
 				slot.fingerprint = fingerprintBase64Public(string(public))

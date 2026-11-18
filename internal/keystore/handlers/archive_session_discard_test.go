@@ -9,8 +9,11 @@
 package handlers
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"reflect"
 	"slices"
 	"strconv"
@@ -19,6 +22,7 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -251,4 +255,51 @@ func boolWord(b bool) string {
 		return "ok"
 	}
 	return "refused"
+}
+
+// The derived fingerprint is begin's fingerprint of the same key, for a bare
+// PEM and one behind a header; a PKCS#8 key that is not RSA, and bytes that
+// are not a key, get the stored digest instead; the value read is left as
+// it was.
+func TestDeriveArchiveSessionFingerprint(t *testing.T) {
+	pair, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fingerprintBase64Public(pair.PublicKey)
+	_, edKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edDER, err := x509.MarshalPKCS8PrivateKey(edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edDER}))
+	for name, tc := range map[string]struct {
+		value  string
+		wantFP string
+	}{
+		"bare RSA key":       {pair.PrivateKey, want},
+		"RSA behind v1":      {sessionSlotHeaderForTest + "1789000000\n" + pair.PrivateKey, want},
+		"Ed25519 PKCS#8 key": {edPEM, ""},
+		"not a key":          {"-----BEGIN PRIVATE KEY-----\nbm90IGEga2V5\n-----END PRIVATE KEY-----\n", ""},
+		"no PEM at all":      {"garbage", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := strings.Clone(tc.value)
+			var slot archiveSessionSlot
+			deriveArchiveSessionFingerprint(&slot, value)
+			if slot.fingerprint != tc.wantFP {
+				t.Fatalf("fingerprint %q, want %q", slot.fingerprint, tc.wantFP)
+			}
+			digest := sha256.Sum256([]byte(tc.value))
+			if (tc.wantFP == "") != (slot.storedDigest == hex.EncodeToString(digest[:])) {
+				t.Fatalf("stored digest %q", slot.storedDigest)
+			}
+			if value != tc.value {
+				t.Fatal("the value read was changed")
+			}
+		})
+	}
 }
