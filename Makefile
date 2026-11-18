@@ -413,7 +413,7 @@ KEEPER_KEYCHAIN_ACCOUNTS := \
 	mls_leaf_signature_key mls_leaf_signature_key_pending \
 	org_archive_private_key org_archive_public_key \
 	org_archive_private_key_staging org_archive_public_key_staging \
-	org_archive_session_private_key org_archive_session_public_key \
+	org_archive_session_private_key org_archive_session_public_key org_archive_session_index \
 	account_archive_private_key account_archive_public_key \
 	key-transparency-checkpoint-anchor peer-key-policy peer-key-owner \
 	chat-runtime-epoch

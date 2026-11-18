@@ -55,6 +55,16 @@ const (
 	// same receipt repeats the deletion. Never a completed finalization.
 	ErrCodeArchiveSplitCleanupPending ErrorCode = "archive_split_cleanup_pending"
 
+	// ErrCodeArchiveSessionExpired: the recovery-session key slot's expiry
+	// has passed. The slot was deleted; the session cannot be combined and a
+	// new session needs a new archive_session_begin.
+	ErrCodeArchiveSessionExpired ErrorCode = "archive_session_expired"
+
+	// ErrCodeArchiveSessionExpiryUnknown: the recovery-session key slot has
+	// no expiry this Keeper can trust (no header, an unparsable one, or an
+	// expiry beyond the Keeper-side bound). It was not used and not deleted.
+	ErrCodeArchiveSessionExpiryUnknown ErrorCode = "archive_session_expiry_unknown"
+
 	// ErrCodeArchiveKeySlotIncomplete: archive_key_generate found the org's
 	// archive private key without its public key (an interrupted write).
 	// Nothing was generated or changed; the slot needs inspection.

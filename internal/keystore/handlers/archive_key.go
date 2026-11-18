@@ -350,8 +350,14 @@ func archiveUnwrapAndRewrap(d Deps, req proto.ArchiveUnwrapAndRewrapRequest) pro
 	// A re-grant naming the member's account is judged by that member's pin
 	// before the archive key is touched, as dek_rewrap_for_member is.
 	if req.RecipientAccountID != "" {
+		// The owner's own active key is judged as self; the owner binding
+		// is still checked (archiveRegrantPinAccount).
+		pinAccount, selfResp, ok := archiveRegrantPinAccount(d, req.OwnerAccountID, req.RecipientAccountID, recipientPubKey)
+		if !ok {
+			return selfResp
+		}
 		if _, pinResp, ok := enforcePeerKeyPins(d, req.OwnerAccountID, []peerKeyPinCheck{{
-			accountID:          req.RecipientAccountID,
+			accountID:          pinAccount,
 			observed:           crypto.AccountKeyFingerprint([]byte(req.RecipientPublicKey)),
 			publicKey:          req.RecipientPublicKey,
 			statements:         req.RotationStatements,

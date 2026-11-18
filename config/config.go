@@ -210,6 +210,10 @@ const (
 	LegacyOrgArchiveSessionPrivateKey = "org_archive_session_private_key"
 	LegacyOrgArchiveSessionPublicKey  = "org_archive_session_public_key"
 
+	// The organizations that may hold a session slot, so the startup sweep
+	// can reach every slot without a keyring listing. Organization IDs only.
+	OrgArchiveSessionIndex = "org_archive_session_index"
+
 	// This machine's device id (lowercase UUID), the X-Device-ID the App and
 	// the Extension both send once they adopt it. Written once by
 	// device_id_ensure; only reset_device_identity removes it. Not a secret.

@@ -72,8 +72,12 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 				fmt.Sprintf("failed to parse recipient public key [%d]: %v", i, err))
 		}
 		pubs[i] = pk
+		pinAccount, resp, ok := archiveRegrantPinAccount(d, req.OwnerAccountID, recipient.AccountID, pk)
+		if !ok {
+			return resp
+		}
 		checks[i] = peerKeyPinCheck{
-			accountID:          recipient.AccountID,
+			accountID:          pinAccount,
 			observed:           crypto.AccountKeyFingerprint([]byte(recipient.PublicKey)),
 			publicKey:          recipient.PublicKey,
 			statements:         recipient.RotationStatements,
@@ -93,9 +97,11 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 
 	// Only orgID's own session slot is read; a session of another
 	// organization on this device, or the legacy device-wide slot, never is.
-	sessionBuf, err := GetArchiveSessionPrivateKeySecure(d.Store, orgID)
+	// Reading it is its use: an expired slot is refused and deleted here, one
+	// without a trusted expiry is refused and kept.
+	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d, orgID)
 	if err != nil {
-		return errs.Response(err) // not_found if no session is open
+		return archiveSessionSlotResponse(err)
 	}
 	defer sessionBuf.Destroy()
 
@@ -162,6 +168,12 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 			RecipientFingerprint: fingerprintBase64Public(recipients[i].PublicKey),
 			EncryptedGroupDEKB64: base64.StdEncoding.EncodeToString(enc),
 		}
+	}
+
+	// The slot may expire while the combine runs; no output leaves after it.
+	if !d.Now().Before(sessionSlot.expiresAt) {
+		deleteArchiveSessionSlotIfUnchanged(d, orgID, sessionSlot)
+		return archiveSessionSlotResponse(errArchiveSessionExpired)
 	}
 
 	d.Logger.Printf("archive quorum combine and rewrap successful: %d grants (raw key material wiped)", len(grants))

@@ -464,6 +464,7 @@ var archiveRoutes = map[string]appRoute{
 	// Only after the user confirmed discarding a pre-lv90 device-wide
 	// session key; the body must carry confirm_discard: true.
 	"/v1/archive/archive_session_legacy_discard": {action: proto.ActionArchiveSessionLegacyDiscard, input: func() any { return &proto.ArchiveSessionLegacyDiscardRequest{} }},
+	"/v1/archive/archive_session_set_expiry":     {action: proto.ActionArchiveSessionSetExpiry, input: func() any { return &proto.ArchiveSessionSetExpiryRequest{} }},
 	"/v1/archive/archive_unwrap_and_rewrap": {
 		action:     proto.ActionArchiveUnwrapAndRewrap,
 		input:      func() any { return &appArchiveRewrap{} },

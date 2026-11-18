@@ -53,6 +53,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}},
 	{proto.ActionArchiveSessionLegacyDiscard, "/v1/archive/archive_session_legacy_discard", map[string]any{"confirm_discard": true}},
 	{proto.ActionArchiveReconfigureStage, "/v1/archive/archive_reconfigure_stage", map[string]any{}},
+	{proto.ActionArchiveSessionSetExpiry, "/v1/archive/archive_session_set_expiry", map[string]any{"org_id": routeOnlyOrg}},
 	{proto.ActionArchiveQuorumCombineAndRewrap, "/v1/archive/archive_quorum_combine_and_rewrap", map[string]any{
 		"rewrapped_shares": []any{}, "wrapped_old_dek_b64": "AAAA", "owner_account_id": routeOnlyOwner,
 		"recipients": []any{map[string]any{"account_id": routeOnlyPeer, "public_key": "x"}},

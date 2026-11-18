@@ -87,6 +87,11 @@ func SaveArchiveSessionPublicKey(store SecretStore, orgID, publicPEM string) err
 	return store.Set(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID, publicPEM)
 }
 
+// GetArchiveSessionPublicKey returns orgID's recovery-session public key PEM.
+func GetArchiveSessionPublicKey(store SecretStore, orgID string) (string, error) {
+	return store.Get(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
+}
+
 // DeleteArchiveSessionPublicKey removes orgID's recovery-session public key PEM.
 func DeleteArchiveSessionPublicKey(store SecretStore, orgID string) error {
 	return store.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
