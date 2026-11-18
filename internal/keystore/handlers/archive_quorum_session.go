@@ -150,8 +150,9 @@ type archiveSessionBeginDecision struct {
 }
 
 // archiveSessionOwnerRefusal is the step that will judge whether the caller
-// may act on a slot it has read: the account boundary. It runs on every slot
-// before any branch that reuses or reports it. This version has no owner to
+// may act on a slot it has read: the account boundary. Every session action
+// runs it on the slot it read, under the lock, before any branch that
+// reuses, reports, changes or deletes the slot, the expiry delete included. This version has no owner to
 // compare and admits every slot, so a begin_id resend is matched on the
 // organization and begin_id alone; that is interim, and the account
 // condition is added here. A variable so tests can pin the order.
@@ -243,9 +244,11 @@ func archiveSessionActiveResponse(slot archiveSessionSlot) proto.BaseResponse {
 
 // HandleArchiveSessionSetExpiry applies the server's session expires_at to
 // req.OrgID's slot when it holds the session whose public key has
-// req.Fingerprint. The slot's expiry only moves earlier: a later or forged
-// value leaves the Keeper-side bound in place. Reading the slot is a use, so
-// an expired slot is deleted and an untrusted one is refused and kept.
+// req.Fingerprint. The fingerprint is compared first: a request naming
+// another key is not_found and changes nothing, even on an expired slot.
+// Then the slot is judged as at every use: an untrusted slot is refused and
+// kept, an expired one deleted. The slot's expiry only moves earlier: a
+// later or forged value leaves the Keeper-side bound in place.
 func HandleArchiveSessionSetExpiry(d Deps, req proto.ArchiveSessionSetExpiryRequest) proto.BaseResponse {
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
@@ -261,11 +264,15 @@ func HandleArchiveSessionSetExpiry(d Deps, req proto.ArchiveSessionSetExpiryRequ
 		if err != nil {
 			return err
 		}
+		if r, refused := archiveSessionOwnerRefusal(d, req.OrgID, slot); refused {
+			refusal = r
+			return nil
+		}
+		if slot.state == archiveSessionSlotAbsent || slot.fingerprint != req.Fingerprint {
+			refusal = errs.CodeResponse(errs.ErrCodeNotFound, "no archive session with this fingerprint")
+			return nil
+		}
 		return useArchiveSessionSlotLocked(d, req.OrgID, slot, func() {
-			if slot.fingerprint != req.Fingerprint {
-				refusal = errs.CodeResponse(errs.ErrCodeNotFound, "no archive session with this fingerprint")
-				return
-			}
 			refusal = shortenArchiveSessionSlotLocked(d, req.OrgID, slot, pem, serverExpiry, &expiresAt)
 		})
 	})

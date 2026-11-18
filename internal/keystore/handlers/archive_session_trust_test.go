@@ -110,9 +110,16 @@ func TestArchiveSessionUntrustedSlot_NeverReplacedUsedOrDeleted(t *testing.T) {
 			if state := begin.Data.(proto.ArchiveSessionActiveData).State; state == proto.ArchiveSessionStateLive {
 				t.Fatalf("an untrusted slot reported as %q", state)
 			}
+			// set_expiry names the slot's own key (the public half's
+			// fingerprint, or the record's without one), so it meets the
+			// use rule rather than the fingerprint check.
+			slotFP := a.Fingerprint
+			if pub := orgSlotPublic(store, testOrgA); pub != "" {
+				slotFP = fingerprintBase64Public(pub)
+			}
 			for use, resp := range map[string]proto.BaseResponse{
 				"combine":    archiveQuorumCombineAndRewrap(deps, testOrgA, req),
-				"set_expiry": setExpiry(deps, testOrgA, a.Fingerprint, start.Add(time.Minute)),
+				"set_expiry": setExpiry(deps, testOrgA, slotFP, start.Add(time.Minute)),
 			} {
 				if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
 					t.Fatalf("%s with an untrusted slot: success=%v code=%q", use, resp.Success, resp.ErrorCode)
@@ -166,5 +173,37 @@ func TestArchiveSessionBegin_InterruptedReplaceLeavesNoMixedHalves(t *testing.T)
 	deps.Store = mem
 	if resp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}); !resp.Success {
 		t.Fatalf("begin after the interrupted one: code=%q", resp.ErrorCode)
+	}
+}
+
+// set_expiry compares the fingerprint before anything else: a request
+// naming another key is not_found and changes nothing, even when the slot
+// has expired or is untrusted.
+func TestArchiveSessionSetExpiry_ForeignFingerprintNeverCleansUp(t *testing.T) {
+	foreign := strings.Repeat("0", 64)
+	deps, store, clock := newOrgSessionDeps(t)
+	a := beginOrgSession(t, deps, testOrgA)
+	beginOrgSession(t, deps, testOrgB)
+
+	writeOrgSlotExpiry(t, store, testOrgA, clock.Now())
+	before := sessionSlotKeys(store)
+	if resp := setExpiry(deps, testOrgA, foreign, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeNotFound) {
+		t.Fatalf("foreign fingerprint on an expired slot: success=%v code=%q", resp.Success, resp.ErrorCode)
+	}
+	if !reflect.DeepEqual(before, sessionSlotKeys(store)) {
+		t.Fatal("a foreign fingerprint deleted an expired slot")
+	}
+
+	writeOrgSlot(t, store, testOrgA, orgSlotPEM(t, store, testOrgA))
+	before = sessionSlotKeys(store)
+	if resp := setExpiry(deps, testOrgA, foreign, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeNotFound) {
+		t.Fatalf("foreign fingerprint on an untrusted slot: success=%v code=%q", resp.Success, resp.ErrorCode)
+	}
+	if !reflect.DeepEqual(before, sessionSlotKeys(store)) {
+		t.Fatal("a foreign fingerprint changed an untrusted slot")
+	}
+	// Its own fingerprint still meets the use rule.
+	if resp := setExpiry(deps, testOrgA, a.Fingerprint, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
+		t.Fatalf("own fingerprint on an untrusted slot: %q", resp.ErrorCode)
 	}
 }
