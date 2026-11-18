@@ -22,7 +22,6 @@
 package proto
 
 import (
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -265,13 +264,18 @@ type ArchiveSessionSetExpiryResponseData struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// The session fingerprint is hex(sha256(public key PEM)).
+// The session fingerprint is hex(sha256(public key PEM)) in lowercase, as
+// begin returns it and Keeper compares it; any other spelling is refused
+// rather than read as a fingerprint that never matches.
 func validateArchiveSessionFingerprint(fingerprint string) error {
 	if len(fingerprint) != 64 {
-		return newValidationError("fingerprint", "must be 64 hex characters")
+		return newValidationError("fingerprint", "must be 64 lowercase hex characters")
 	}
-	if _, err := hex.DecodeString(fingerprint); err != nil {
-		return newValidationError("fingerprint", "must be 64 hex characters")
+	for i := 0; i < len(fingerprint); i++ {
+		c := fingerprint[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return newValidationError("fingerprint", "must be 64 lowercase hex characters")
+		}
 	}
 	return nil
 }
