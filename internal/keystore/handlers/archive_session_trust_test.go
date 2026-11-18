@@ -229,3 +229,76 @@ func TestArchiveSessionEnd_RequiresTheFingerprintOfTheKeyItEnds(t *testing.T) {
 		t.Fatal("a late end of the earlier key removed the newer session")
 	}
 }
+
+// v2 records whose fields contradict each other or are not written the way
+// Keeper writes them are not trusted, so no rule ever deletes them for being
+// expired: an expiry before the begin, a begin later than Keeper's clock,
+// numbers that are not canonical decimal.
+func TestArchiveSessionSlot_InconsistentRecordsAreUntrusted(t *testing.T) {
+	deps, store, clock := newOrgSessionDeps(t)
+	a := beginOrgSession(t, deps, testOrgA)
+	v2 := orgSlotValue(store, testOrgA)
+	now := clock.Now()
+	pem := orgSlotPEM(t, store, testOrgA)
+	record := func(expires, begun string) string {
+		return "dragpass-archive-session-v2 expires_at=" + expires + " begun_at=" + begun + " fp=" + a.Fingerprint + " begin_id=-\n" + pem
+	}
+	unix := func(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+	// sweepAt is when the sweep runs. A begin later than the clock is a
+	// clock that moved back: once the clock passes the begin the record is
+	// consistent again and its expiry is trusted, as with the expiry bound,
+	// so that case is swept while the clock is still behind.
+	for name, tc := range map[string]struct {
+		value   string
+		state   string
+		sweepAt time.Time
+	}{
+		"expiry before begin":        {record(unix(now.Add(-2*time.Hour)), unix(now.Add(-time.Hour))), proto.ArchiveSessionStateExpiryUnknown, now.Add(24 * time.Hour)},
+		"begin later than the clock": {record(unix(now.Add(10*time.Minute)), unix(now.Add(time.Minute))), proto.ArchiveSessionStateExpiryUnknown, now},
+		"leading plus":               {record("+"+unix(now.Add(-time.Hour)), unix(now.Add(-time.Hour-time.Minute))), proto.ArchiveSessionStateUnowned, now.Add(24 * time.Hour)},
+		"leading zero":               {record("0"+unix(now.Add(-time.Hour)), unix(now.Add(-time.Hour-time.Minute))), proto.ArchiveSessionStateUnowned, now.Add(24 * time.Hour)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clock.Set(now)
+			writeOrgSlot(t, store, testOrgA, tc.value)
+			if got := sessionStatus(t, deps, testOrgA, ""); got.State != tc.state {
+				t.Fatalf("state %q, want %q", got.State, tc.state)
+			}
+			before := sessionSlotKeys(store)
+			if resp := setExpiry(deps, testOrgA, a.Fingerprint, now.Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
+				t.Fatalf("set_expiry: %q", resp.ErrorCode)
+			}
+			if resp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}); resp.ErrorCode != string(errs.ErrCodeArchiveSessionActive) {
+				t.Fatalf("begin: %q", resp.ErrorCode)
+			}
+			clock.Set(tc.sweepAt)
+			SweepExpiredArchiveSession(deps)
+			if !reflect.DeepEqual(before, sessionSlotKeys(store)) {
+				t.Fatal("an inconsistent record was changed or deleted")
+			}
+		})
+	}
+	clock.Set(now)
+	writeOrgSlot(t, store, testOrgA, v2)
+}
+
+// The header fingerprint matches the public half but the private PEM is
+// another key (only possible by editing the keychain). Keeper does not
+// parse the private key to classify the slot, so it reads as live; the
+// combine still fails closed: the shares do not open, nothing is output.
+func TestArchiveSessionCombine_PrivateKeyNotMatchingThePublicHalfFailsClosed(t *testing.T) {
+	deps, store, _ := newOrgSessionDeps(t)
+	a := beginOrgSession(t, deps, testOrgA)
+	other, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := orgSlotValue(store, testOrgA)
+	header := value[:strings.Index(value, "\n")+1]
+	writeOrgSlot(t, store, testOrgA, header+other.PrivateKey)
+	req, _ := sessionCombineRequest(t, testOrgA, a.SessionPublicKey, sessionTestDEK())
+	resp := archiveQuorumCombineAndRewrap(deps, testOrgA, req)
+	if resp.Success || resp.Data != nil || resp.ErrorCode != string(errs.ErrCodeCryptoFailure) {
+		t.Fatalf("combine with a swapped private key: success=%v code=%q", resp.Success, resp.ErrorCode)
+	}
+}

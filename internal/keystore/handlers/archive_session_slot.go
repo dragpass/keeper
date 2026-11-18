@@ -135,12 +135,12 @@ func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem strin
 		}
 		values[i] = v
 	}
-	expires, err := strconv.ParseInt(values[0], 10, 64)
-	if err != nil || expires <= 0 {
+	expires, ok := parseCanonicalUnix(values[0])
+	if !ok {
 		return archiveSessionRecord{}, "", false
 	}
-	begun, err := strconv.ParseInt(values[1], 10, 64)
-	if err != nil || begun <= 0 {
+	begun, ok := parseCanonicalUnix(values[1])
+	if !ok {
 		return archiveSessionRecord{}, "", false
 	}
 	if !isLowerHex64(values[2]) {
@@ -156,6 +156,17 @@ func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem strin
 		expiresAt: time.Unix(expires, 0), begunAt: time.Unix(begun, 0),
 		fingerprint: values[2], beginID: beginID,
 	}, pem, true
+}
+
+// parseCanonicalUnix reads a positive decimal number exactly as
+// strconv.FormatInt writes it (no sign, no leading zero), the only way
+// Keeper writes one.
+func parseCanonicalUnix(s string) (int64, bool) {
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || v <= 0 || strconv.FormatInt(v, 10) != s {
+		return 0, false
+	}
+	return v, true
 }
 
 func isLowerHex64(s string) bool {
@@ -262,7 +273,7 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 	slot.record = rec
 	now := d.Now()
 	switch {
-	case rec.expiresAt.After(now.Add(archiveSessionMaxTTL)) || rec.expiresAt.After(rec.begunAt.Add(archiveSessionMaxTTL)):
+	case !archiveSessionRecordConsistent(rec, now):
 		slot.state = archiveSessionSlotExpiryUnknown
 	case !now.Before(rec.expiresAt):
 		slot.state = archiveSessionSlotExpired
@@ -273,6 +284,21 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 		}
 	}
 	return slot, nil
+}
+
+// archiveSessionRecordConsistent reports whether rec's times are ones this
+// Keeper could have written and kept: begin no later than now, an expiry no
+// earlier than the begin (set_expiry deletes rather than store a passed
+// time) and within archiveSessionMaxTTL of the begin and of now. Keeper
+// writes begun_at from its own clock, so a later begin means the clock moved
+// back; there is no skew allowance, the same as the expiry bound, which
+// already refuses any backward step past begin + 30 minutes. A record
+// failing any of these is never used or deleted for being expired.
+func archiveSessionRecordConsistent(rec archiveSessionRecord, now time.Time) bool {
+	return !rec.begunAt.After(now) &&
+		!rec.expiresAt.Before(rec.begunAt) &&
+		!rec.expiresAt.After(rec.begunAt.Add(archiveSessionMaxTTL)) &&
+		!rec.expiresAt.After(now.Add(archiveSessionMaxTTL))
 }
 
 // openArchiveSessionSlot reads the session private key for a use. Under the

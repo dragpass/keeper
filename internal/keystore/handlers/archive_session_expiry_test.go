@@ -364,7 +364,7 @@ func TestArchiveSessionEndWithAnotherSessionsFingerprintKeepsTheSlot(t *testing.
 func TestArchiveSessionEndWithItsFingerprintIsIdempotent(t *testing.T) {
 	f := newAuditFixture(t)
 	data := beginForExpiry(t, f)
-	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix()-1)
+	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix())
 
 	for i, want := range []bool{true, false} {
 		end := HandleArchiveSessionEnd(f.deps, proto.ArchiveSessionEndRequest{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint})
