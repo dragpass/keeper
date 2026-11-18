@@ -338,8 +338,8 @@ func archiveSessionRecordConsistent(rec archiveSessionRecord, now time.Time) boo
 		!rec.expiresAt.After(now.Add(archiveSessionMaxTTL))
 }
 
-// openArchiveSessionSlot reads the session private key for a use. Under the
-// lock it returns keychain.ErrSecretNotFound when no session is open,
+// openArchiveSessionSlot reads the session private key for a combine. Under
+// the lock it returns keychain.ErrSecretNotFound when no session is open,
 // errArchiveSessionExpired after deleting an expired slot, and
 // errArchiveSessionExpiryUnknown (slot kept) for an expiry-unknown or
 // unowned slot. On success the caller destroys the buffer.
@@ -353,7 +353,7 @@ func openArchiveSessionSlot(d Deps, orgID string) (*memguard.LockedBuffer, archi
 		if err != nil {
 			return err
 		}
-		return useArchiveSessionSlotLocked(d, orgID, slot, func() { read = slot })
+		return useArchiveSessionSlotForCombineLocked(d, orgID, slot, func() { read = slot })
 	})
 	if err != nil {
 		if buf != nil {
@@ -362,6 +362,36 @@ func openArchiveSessionSlot(d Deps, orgID string) (*memguard.LockedBuffer, archi
 		return nil, archiveSessionSlot{}, err
 	}
 	return buf, read, nil
+}
+
+// recheckArchiveSessionSlotForOutput judges orgID's slot again, under the
+// lock, right before a combine that read it as read lets its output out.
+// The same record (same digest), still trusted and not expired now, passes.
+// Otherwise: no slot, or another key in it (a discard and a new begin), is
+// keychain.ErrSecretNotFound and the slot is not touched; the same record
+// is judged by the use rule (expired: deleted, errArchiveSessionExpired, or
+// errArchiveSessionDeleteFailed; untrusted now: kept,
+// errArchiveSessionExpiryUnknown). A lock that cannot be taken is an error
+// too.
+func recheckArchiveSessionSlotForOutput(d Deps, orgID string, read archiveSessionSlot) error {
+	return withArchiveSessionSlotLock(d, func() error {
+		slot, err := inspectArchiveSessionSlotLocked(d, orgID, nil)
+		if err != nil {
+			return err
+		}
+		if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.digest[:], read.digest[:]) != 1 {
+			return keychain.ErrSecretNotFound
+		}
+		return useArchiveSessionSlotForCombineLocked(d, orgID, slot, func() {})
+	})
+}
+
+// useArchiveSessionSlotForCombineLocked is the combine's judgement of a slot
+// read under the lock, at its open and right before its output. It is the
+// one place the combine's slot check lives: the account boundary change adds
+// the comparison with the server decision's account here, for both reads.
+func useArchiveSessionSlotForCombineLocked(d Deps, orgID string, slot archiveSessionSlot, live func()) error {
+	return useArchiveSessionSlotLocked(d, orgID, slot, live)
 }
 
 // useArchiveSessionSlotLocked applies the use rule to a slot just read: no
@@ -382,22 +412,6 @@ func useArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSlot, 
 	default:
 		return errArchiveSessionExpiryUnknown
 	}
-}
-
-// deleteArchiveSessionSlotIfUnchanged deletes the slot only while it still
-// holds the value read earlier, so a session begun since then is kept. It
-// reports a delete that did not complete (errArchiveSessionDeleteFailed) or
-// a lock that could not be taken.
-func deleteArchiveSessionSlotIfUnchanged(d Deps, orgID string, read archiveSessionSlot) error {
-	return withArchiveSessionSlotLock(d, func() error {
-		value, err := keychain.GetArchiveSessionPrivateKey(d.Store, orgID)
-		current := sha256.Sum256([]byte(value))
-		secure.WipeString(&value)
-		if err == nil && subtle.ConstantTimeCompare(current[:], read.digest[:]) == 1 {
-			return deleteArchiveSessionSlot(d, orgID)
-		}
-		return nil
-	})
 }
 
 // deleteArchiveSessionSlot removes orgID's session keypair and its index

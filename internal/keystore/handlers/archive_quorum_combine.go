@@ -170,14 +170,21 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 		}
 	}
 
-	// The slot may expire while the combine runs; no output leaves after it.
-	if !d.Now().Before(sessionSlot.record.expiresAt) {
-		if err := deleteArchiveSessionSlotIfUnchanged(d, orgID, sessionSlot); err != nil {
-			return archiveSessionSlotResponse(err)
-		}
-		return archiveSessionSlotResponse(errArchiveSessionExpired)
+	// Refusal at the moment of use covers the output too: while the key was
+	// out of the lock the slot may have expired, been shortened, ended,
+	// discarded or replaced. Only the same record, still trusted and not
+	// expired now, lets the grants out.
+	archiveCombineBeforeOutputCheck()
+	if err := recheckArchiveSessionSlotForOutput(d, orgID, sessionSlot); err != nil {
+		clear(grants)
+		return archiveSessionSlotResponse(err)
 	}
 
 	d.Logger.Printf("archive quorum combine and rewrap successful: %d grants (raw key material wiped)", len(grants))
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveQuorumCombineAndRewrapResponseData{Grants: grants}}
 }
+
+// archiveCombineBeforeOutputCheck runs after the grants are built and
+// before the slot is checked again for output. A variable only so tests
+// can run another session action at exactly that point.
+var archiveCombineBeforeOutputCheck = func() {}

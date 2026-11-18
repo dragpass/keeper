@@ -209,7 +209,9 @@ func TestArchiveCombineWithholdsOutputIfAuthorityExpiresDuringCrypto(t *testing.
 	probe := &combinePrivateReadProbe{SecretStore: f.store, beforeRead: func() { f.clock.advance(11) }}
 	f.deps.Store = probe
 	response := HandleArchiveQuorumCombineAndRewrap(f.deps, req)
-	if probe.reads != 1 || response.Success || response.Data != nil {
+	// Two reads of the session key slot: at the open and in the check right
+	// before output.
+	if probe.reads != 2 || response.Success || response.Data != nil {
 		t.Fatal("expired combine returned output")
 	}
 }
