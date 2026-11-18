@@ -384,7 +384,7 @@ func TestArchiveSessionEndKeepsASlotWithoutExpiry(t *testing.T) {
 	data := beginForExpiry(t, f)
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 
-	for _, req := range []proto.ArchiveSessionEndRequest{{OrgID: sessionExpiryOrg}, {OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint}} {
+	for _, req := range []proto.ArchiveSessionEndRequest{{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint}} {
 		end := HandleArchiveSessionEnd(f.deps, req)
 		if !end.Success {
 			t.Fatalf("end failed: %s", end.ErrorCode)

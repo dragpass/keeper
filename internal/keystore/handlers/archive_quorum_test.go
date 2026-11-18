@@ -415,7 +415,7 @@ func TestArchiveQuorum_SessionLifecycle(t *testing.T) {
 	deps, _, store := newTestDeps(t)
 
 	// end with no session → ended=false, idempotent.
-	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: strings.Repeat("0", 64)})
 	if !end.Success || end.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatalf("end with no session should succeed with ended=false")
 	}
@@ -428,7 +428,7 @@ func TestArchiveQuorum_SessionLifecycle(t *testing.T) {
 		t.Fatal("session private key should be stored after begin")
 	}
 
-	end2 := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+	end2 := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: begin.Data.(proto.ArchiveSessionBeginResponseData).Fingerprint})
 	if !end2.Success || !end2.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatal("end after begin should report ended=true")
 	}

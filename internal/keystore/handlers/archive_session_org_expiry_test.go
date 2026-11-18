@@ -173,8 +173,8 @@ func TestArchiveSessionOrgSlot_SetExpiryEndAndExpiryDeleteActOnTheirOrgOnly(t *t
 	requireOrgSlotGone(t, store, testOrgA)
 	requireB("the expiry delete")
 
-	beginOrgSession(t, deps, testOrgA)
-	if resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA}); !resp.Success || !resp.Data.(proto.ArchiveSessionEndResponseData).Ended {
+	a = beginOrgSession(t, deps, testOrgA)
+	if resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint}); !resp.Success || !resp.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatalf("end A: %+v", resp)
 	}
 	requireOrgSlotGone(t, store, testOrgA)
@@ -641,7 +641,7 @@ func TestArchiveSessionLegacySlot_NothingButTheConfirmedDiscardRemovesIt(t *test
 				t.Fatalf("set_expiry reached the device-wide slot: %+v", resp)
 			}
 			requireLegacy("set_expiry")
-			for _, end := range []proto.ArchiveSessionEndRequest{{OrgID: testOrgB}, {OrgID: testOrgB, Fingerprint: legacyFP}, {OrgID: testOrgA, Fingerprint: a.Fingerprint}} {
+			for _, end := range []proto.ArchiveSessionEndRequest{{OrgID: testOrgB, Fingerprint: legacyFP}, {OrgID: testOrgA, Fingerprint: a.Fingerprint}} {
 				if resp := HandleArchiveSessionEnd(deps, end); !resp.Success {
 					t.Fatalf("end: %+v", resp)
 				}

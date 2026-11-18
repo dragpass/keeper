@@ -313,11 +313,11 @@ func shortenArchiveSessionSlotLocked(d Deps, orgID string, slot archiveSessionSl
 	return proto.BaseResponse{}
 }
 
-// HandleArchiveSessionEnd destroys req.OrgID's recovery-session keypair.
-// Idempotent — ended=false when that organization had no session. With
-// req.Fingerprint it ends only the session whose public key has that
-// fingerprint, so a late end for an earlier session cannot remove a newer
-// one.
+// HandleArchiveSessionEnd destroys the recovery-session keypair of
+// req.OrgID whose public key has req.Fingerprint. Idempotent: ended=false
+// when the slot is empty or holds another key, so a late end for an earlier
+// session never removes a newer one. A trusted slot with that key is
+// deleted whether or not it has expired.
 //
 // A slot whose expiry or record Keeper cannot trust is kept and reported as
 // slot_without_expiry_kept; only the confirmed archive_session_discard
@@ -342,16 +342,17 @@ func endArchiveSessionLocked(d Deps, req proto.ArchiveSessionEndRequest) proto.B
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive session slot failed")
 	}
-	present := slot.state != archiveSessionSlotAbsent
-	if present && req.Fingerprint != "" && slot.fingerprint != req.Fingerprint {
+	if refusal, refused := archiveSessionOwnerRefusal(d, req.OrgID, slot); refused {
+		return refusal
+	}
+	if slot.state == archiveSessionSlotAbsent || slot.fingerprint != req.Fingerprint {
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: false}}
 	}
-	if present && !slot.state.trusted() {
+	if !slot.state.trusted() {
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{SlotWithoutExpiryKept: true}}
 	}
-
 	deleteArchiveSessionSlot(d, req.OrgID)
-	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: present}}
+	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionEndResponseData{Ended: true}}
 }
 
 // HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide

@@ -772,17 +772,29 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 		}
 	}
 	// The recovery-session slot is per organization (lv90 K0): the session
-	// routes pass org_id and refuse a body without it.
-	for _, path := range []string{"/v1/archive/archive_session_begin", "/v1/archive/archive_session_end"} {
-		if code, result, body := callRoute(t, server, session, csrf, path, map[string]any{"org_id": routeOnlyOrg}); code != http.StatusOK || !result.Success {
-			t.Fatalf("%s: %d %s", path, code, body)
+	// routes pass org_id and refuse a body without it. An end names the key
+	// it ends; the org_id-only end is refused.
+	fp := strings.Repeat("0", 64)
+	for path, body := range map[string]map[string]any{
+		"/v1/archive/archive_session_begin": {"org_id": routeOnlyOrg},
+		"/v1/archive/archive_session_end":   {"org_id": routeOnlyOrg, "fingerprint": fp},
+	} {
+		if code, result, raw := callRoute(t, server, session, csrf, path, body); code != http.StatusOK || !result.Success {
+			t.Fatalf("%s: %d %s", path, code, raw)
 		}
 		if code, result, _ := callRoute(t, server, session, csrf, path, map[string]any{}); code == http.StatusOK && result.Success {
 			t.Fatalf("%s ran without org_id", path)
 		}
-		if code, _, _ := callRoute(t, server, session, csrf, path, map[string]any{"org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
+		withUnknown := map[string]any{"public_key": "x"}
+		for k, v := range body {
+			withUnknown[k] = v
+		}
+		if code, _, _ := callRoute(t, server, session, csrf, path, withUnknown); code != http.StatusBadRequest {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
+	}
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
+		t.Fatalf("org_id-only end: %d %q", code, result.ErrorCode)
 	}
 	admins := []string{routeKeypair(t).PublicKey, routeKeypair(t).PublicKey, routeKeypair(t).PublicKey}
 	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_key_split", map[string]any{

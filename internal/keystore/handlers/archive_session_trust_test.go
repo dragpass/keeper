@@ -207,3 +207,25 @@ func TestArchiveSessionSetExpiry_ForeignFingerprintNeverCleansUp(t *testing.T) {
 		t.Fatalf("own fingerprint on an untrusted slot: %q", resp.ErrorCode)
 	}
 }
+
+// archive_session_end names the key it ends. The org_id-only form, which
+// ended whatever the slot held, is refused with validation_error and changes
+// nothing; an end of an earlier key leaves a newer session in place.
+func TestArchiveSessionEnd_RequiresTheFingerprintOfTheKeyItEnds(t *testing.T) {
+	deps, store, clock := newOrgSessionDeps(t)
+	old := beginOrgSession(t, deps, testOrgA)
+	before := sessionSlotKeys(store)
+	if resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA}); resp.ErrorCode != string(errs.ErrCodeValidation) {
+		t.Fatalf("org_id-only end: success=%v code=%q", resp.Success, resp.ErrorCode)
+	}
+	if !reflect.DeepEqual(before, sessionSlotKeys(store)) {
+		t.Fatal("an org_id-only end changed the slot")
+	}
+
+	writeOrgSlotExpiry(t, store, testOrgA, clock.Now())
+	fresh := beginOrgSession(t, deps, testOrgA)
+	late := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: old.Fingerprint})
+	if !late.Success || late.Data.(proto.ArchiveSessionEndResponseData).Ended || !archiveSessionFingerprintMatches(deps, testOrgA, fresh.Fingerprint) {
+		t.Fatal("a late end of the earlier key removed the newer session")
+	}
+}

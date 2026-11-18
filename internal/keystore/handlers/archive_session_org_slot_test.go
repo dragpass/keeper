@@ -11,6 +11,7 @@ package handlers
 import (
 	"encoding/base64"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dragpass/keeper/config"
@@ -179,7 +180,7 @@ func TestArchiveSession_BeginAndEndRequireOrgID(t *testing.T) {
 	for name, orgID := range map[string]string{"missing": "", "malformed": "not-a-uuid"} {
 		before := store.Snapshot()
 		begin := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: orgID})
-		end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: orgID})
+		end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: orgID, Fingerprint: strings.Repeat("0", 64)})
 		if begin.Success || begin.ErrorCode != string(errs.ErrCodeValidation) || end.Success || end.ErrorCode != string(errs.ErrCodeValidation) {
 			t.Fatalf("%s org_id: begin %+v end %+v", name, begin, end)
 		}
@@ -193,9 +194,9 @@ func TestArchiveSession_BeginAndEndRequireOrgID(t *testing.T) {
 // session usable.
 func TestArchiveSession_EndRemovesOnlyItsOwnOrgSession(t *testing.T) {
 	deps, _, store := newTestDeps(t)
-	beginSessionFor(t, deps, testOrgA)
+	pubA := beginSessionFor(t, deps, testOrgA)
 	pubB := beginSessionFor(t, deps, testOrgB)
-	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: fingerprintBase64Public(pubA)})
 	if !end.Success || !end.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatalf("end for A: %+v", end)
 	}
@@ -244,7 +245,7 @@ func TestArchiveSession_EndLeavesTheDeviceWideSlot(t *testing.T) {
 	saveLegacyDeviceSession(t, store)
 	priv, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPrivateKey)
 	pub, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPublicKey)
-	resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA})
+	resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: fingerprintBase64Public(pub)})
 	if !resp.Success || resp.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatalf("end: %+v", resp)
 	}

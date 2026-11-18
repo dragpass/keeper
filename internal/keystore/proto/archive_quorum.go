@@ -183,9 +183,10 @@ type ArchiveSessionActiveData struct {
 	BegunAt     string `json:"begun_at,omitempty"`
 }
 
-// ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
-// OrgID names the organization whose session slot is ended; Fingerprint
-// (optional, as begin returned it) limits the end to that session's keypair.
+// ArchiveSessionEndRequest — destroy one recovery-session keypair.
+// Idempotent. OrgID names the organization whose slot is read; Fingerprint
+// (required, as begin returned it) names the key that is ended, so an end
+// never removes a key it does not name.
 type ArchiveSessionEndRequest struct {
 	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -194,9 +195,6 @@ type ArchiveSessionEndRequest struct {
 func (r ArchiveSessionEndRequest) Validate() error {
 	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
 		return err
-	}
-	if r.Fingerprint == "" {
-		return nil
 	}
 	return validateArchiveSessionFingerprint(r.Fingerprint)
 }
