@@ -96,10 +96,15 @@ func decodeArchiveSessionSlot(value string) (expiresAt time.Time, pem string, ok
 	return time.Unix(unix, 0), pem, true
 }
 
+// archiveSessionProcessLock is the keychain process lock every session slot,
+// index and device-wide slot access runs under. A variable only so tests can
+// observe which accesses hold it, as archiveSlotProcessLock is.
+var archiveSessionProcessLock = keychain.WithKeychainProcessLock
+
 // withArchiveSessionSlotLock runs fn under the keychain process lock. fn
 // must not take the lock again.
 func withArchiveSessionSlotLock(d Deps, fn func() error) error {
-	return keychain.WithKeychainProcessLock(d.Store, fn)
+	return archiveSessionProcessLock(d.Store, fn)
 }
 
 // archiveSessionSlot is one read of the slot, taken under the lock.

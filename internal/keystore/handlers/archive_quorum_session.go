@@ -214,12 +214,24 @@ func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDis
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	present, err := keychain.LegacyArchiveSessionPresent(d.Store)
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
-	}
-	if err := keychain.DeleteLegacyArchiveSessionKeys(d.Store); err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "delete device-wide archive session slot failed")
+	// Under the lock, so a begin in another process sees the slot either
+	// present or gone, never half deleted.
+	var present bool
+	var refusal proto.BaseResponse
+	_ = withArchiveSessionSlotLock(d, func() error {
+		var err error
+		present, err = keychain.LegacyArchiveSessionPresent(d.Store)
+		if err != nil {
+			refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
+			return nil
+		}
+		if err := keychain.DeleteLegacyArchiveSessionKeys(d.Store); err != nil {
+			refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "delete device-wide archive session slot failed")
+		}
+		return nil
+	})
+	if refusal.ErrorCode != "" {
+		return refusal
 	}
 	if present {
 		d.Logger.Println("archive session legacy discard: device-wide session slot deleted on confirmed request")
