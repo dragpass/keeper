@@ -337,10 +337,8 @@ type ArchiveSessionDiscardResponseData struct {
 	Discarded bool `json:"discarded"`
 }
 
-// ArchiveSessionLegacyDiscardRequest deletes the device-wide recovery-session
-// slot a Keeper before lv90 used. The App sends it only after the user
-// confirmed losing whatever recovery session that key belongs to;
-// confirm_discard must be true so an empty body never deletes anything.
+// ArchiveSessionLegacyDiscardRequest preserves the legacy RPC shape for
+// older callers. Confirmation does not identify the original slot owner.
 type ArchiveSessionLegacyDiscardRequest struct {
 	ConfirmDiscard bool `json:"confirm_discard"`
 }
@@ -353,7 +351,7 @@ func (r ArchiveSessionLegacyDiscardRequest) Validate() error {
 }
 
 type ArchiveSessionLegacyDiscardResponseData struct {
-	// Discarded is true when either half of the slot existed and is now gone.
+	// A successful legacy response means the slot was absent; Discarded is false.
 	Discarded bool `json:"discarded"`
 }
 

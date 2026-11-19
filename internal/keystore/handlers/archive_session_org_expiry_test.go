@@ -4,8 +4,7 @@
 // Each organization's slot carries its own expiry. Every action names the
 // organization it acts on and never reads, shortens, ends or deletes another
 // organization's slot; the startup sweep judges each slot on its own expiry;
-// the device-wide slot of a Keeper before lv90 is never touched by anything
-// but the confirmed discard.
+// the device-wide slot of a Keeper before lv90 is preserved even after confirmed discard.
 
 package handlers
 
@@ -608,9 +607,9 @@ func TestArchiveSessionOrgSlot_ConcurrentBeginsKeepEveryIndexEntry(t *testing.T)
 // automatically, whatever it holds: a bare key from a released Keeper, or a
 // record with an expiry (long passed) from a development build of lv100 F1
 // that wrote the device-wide name. Begin, end, set_expiry, combine and the
-// startup sweep all leave it byte for byte; only the confirmed discard
-// removes it.
-func TestArchiveSessionLegacySlot_NothingButTheConfirmedDiscardRemovesIt(t *testing.T) {
+// startup sweep all leave it byte for byte; even confirmed discard
+// preserves it.
+func TestArchiveSessionLegacySlot_PreservesBothFormatsAfterConfirmedDiscard(t *testing.T) {
 	for _, form := range []string{"bare key", "expired record"} {
 		t.Run(form, func(t *testing.T) {
 			deps, store, clock := newOrgSessionDeps(t)
@@ -661,13 +660,10 @@ func TestArchiveSessionLegacySlot_NothingButTheConfirmedDiscardRemovesIt(t *test
 			}
 
 			resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
-			if !resp.Success || !resp.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
-				t.Fatalf("confirmed discard: %+v", resp)
+			if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveSessionLegacySlotPresent) {
+				t.Fatalf("confirmed discard should refuse, code=%q", resp.ErrorCode)
 			}
-			if present, _ := keychain.LegacyArchiveSessionPresent(store); present {
-				t.Fatal("the confirmed discard left the device-wide slot")
-			}
-			beginOrgSession(t, deps, testOrgB)
+			requireLegacy("confirmed discard")
 		})
 	}
 }
@@ -679,7 +675,7 @@ func TestArchiveSessionLegacySlot_DiscardLeavesOrgSlotsAndIndex(t *testing.T) {
 	beginOrgSession(t, deps, testOrgA)
 	saveLegacyDeviceSession(t, store)
 	aValue, index := orgSlotValue(store, testOrgA), sessionIndexOrgs(t, store)
-	if resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true}); !resp.Success {
+	if resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true}); resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveSessionLegacySlotPresent) {
 		t.Fatalf("discard: %+v", resp)
 	}
 	if orgSlotValue(store, testOrgA) != aValue || !reflect.DeepEqual(sessionIndexOrgs(t, store), index) {

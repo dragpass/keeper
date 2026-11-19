@@ -20,8 +20,7 @@
 // it, whatever its content (with or without an expiry header). begin refuses
 // with archive_session_legacy_slot_present while it exists; end, set_expiry,
 // discard, status (which reports its presence), combine and the sweeps leave
-// it alone; only archive_session_legacy_discard, which the App calls after
-// the user confirms, deletes it.
+// it alone. Device-wide records cannot establish who created them.
 //
 // Key-material discipline: the session private key is held in a memguard buffer
 // and the plaintext keypair string is wiped (secure.WipeString) once persisted;
@@ -176,8 +175,7 @@ var archiveSessionOwnerRefusal = func(Deps, string, archiveSessionSlot) (proto.B
 func decideArchiveSessionBeginLocked(d Deps, req proto.ArchiveSessionBeginRequest) (archiveSessionBeginDecision, error) {
 	// The device-wide slot of a Keeper before lv90 may hold the key of an
 	// in-flight recovery session of an organization this Keeper cannot name.
-	// It is never deleted, moved or used here; the App asks the user, then
-	// calls archive_session_legacy_discard.
+	// It is never deleted, moved or used here.
 	present, err := keychain.LegacyArchiveSessionPresent(d.Store)
 	if err != nil {
 		return archiveSessionBeginDecision{}, errors.New("read device-wide archive session slot failed")
@@ -485,42 +483,28 @@ func archiveSessionLockFailure() proto.BaseResponse {
 	return errs.CodeResponse(errs.ErrCodeStorageFailure, "keychain process lock unavailable")
 }
 
-// HandleArchiveSessionLegacyDiscard deletes both halves of the device-wide
-// session slot a Keeper before lv90 used. The App calls it only after the
-// user confirmed: if that key belongs to a recovery session still open on
-// the server, the approvals already given to it can no longer be combined,
-// and the owner cancels that session and opens a new one. Organization
-// session slots and every other slot are untouched. Idempotent:
-// discarded=false when nothing was there.
+// HandleArchiveSessionLegacyDiscard retains the paired RPC for older callers.
+// Neither legacy record format carries owner evidence. User confirmation
+// cannot authorize deleting the session of an unidentified owner.
 func HandleArchiveSessionLegacyDiscard(d Deps, req proto.ArchiveSessionLegacyDiscardRequest) proto.BaseResponse {
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
 	}
-	// Under the lock, so a begin in another process sees the slot either
-	// present or gone, never half deleted.
 	var present bool
-	var refusal proto.BaseResponse
+	var readErr error
 	if err := withArchiveSessionSlotLock(d, func() error {
-		var err error
-		present, err = keychain.LegacyArchiveSessionPresent(d.Store)
-		if err != nil {
-			refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
-			return nil
-		}
-		if err := keychain.DeleteLegacyArchiveSessionKeys(d.Store); err != nil {
-			refusal = errs.CodeResponse(errs.ErrCodeStorageFailure, "delete device-wide archive session slot failed")
-		}
+		present, readErr = keychain.LegacyArchiveSessionPresent(d.Store)
 		return nil
 	}); err != nil {
 		return archiveSessionLockFailure()
 	}
-	if refusal.ErrorCode != "" {
-		return refusal
+	if readErr != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read device-wide archive session slot failed")
 	}
 	if present {
-		d.Logger.Println("archive session legacy discard: device-wide session slot deleted on confirmed request")
+		return errs.CodeResponse(errs.ErrCodeArchiveSessionLegacySlotPresent, "cannot verify the device-wide recovery session owner")
 	}
-	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionLegacyDiscardResponseData{Discarded: present}}
+	return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionLegacyDiscardResponseData{Discarded: false}}
 }
 
 // SweepExpiredArchiveSession runs when the Keeper process starts, before it

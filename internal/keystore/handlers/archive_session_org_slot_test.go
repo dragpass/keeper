@@ -256,12 +256,19 @@ func TestArchiveSession_EndLeavesTheDeviceWideSlot(t *testing.T) {
 	}
 }
 
-// archive_session_legacy_discard is the explicit, user-confirmed way to clear
-// the device-wide slot. Without confirm_discard nothing changes. With it both
-// halves are deleted, organization session slots are untouched, and begin
-// works again.
-func TestArchiveSession_LegacyDiscardDeletesOnlyTheDeviceWideSlotOnConfirm(t *testing.T) {
+// Device-wide slots have no owner field. Confirmation cannot establish who opened one.
+func TestArchiveSession_LegacyDiscardPreservesUnknownOwner(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	account, err := crypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keychain.SavePublicKey(store, account.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := keychain.SetAccountBinding(store, "11111111-1111-4111-8111-111111111111", "owner", true); err != nil {
+		t.Fatal(err)
+	}
 	beginSessionFor(t, deps, testOrgB)
 	saveLegacyDeviceSession(t, store)
 	before := store.Snapshot()
@@ -272,22 +279,22 @@ func TestArchiveSession_LegacyDiscardDeletesOnlyTheDeviceWideSlotOnConfirm(t *te
 	if !reflect.DeepEqual(before, store.Snapshot()) {
 		t.Fatal("an unconfirmed discard changed the keychain")
 	}
-	orgB, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgB)
 	resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
-	if !resp.Success || !resp.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
-		t.Fatalf("confirmed discard: %+v", resp)
+	if resp.Success || resp.ErrorCode != string(errs.ErrCodeArchiveSessionLegacySlotPresent) || resp.Data != nil {
+		t.Fatalf("expected refusal for ownerless slot, got success=%v code=%q", resp.Success, resp.ErrorCode)
 	}
-	for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
-		if _, err := store.Get(config.Service, account); err != keychain.ErrSecretNotFound {
-			t.Fatalf("discard kept %s", account)
-		}
+	if !reflect.DeepEqual(before, store.Snapshot()) {
+		t.Fatal("a confirmed discard changed the keychain")
 	}
-	if got, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgB); got != orgB || got == "" {
-		t.Fatal("discard changed another organization's session")
+	if resp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}); resp.ErrorCode != string(errs.ErrCodeArchiveSessionLegacySlotPresent) {
+		t.Fatal("begin did not remain blocked")
 	}
-	again := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
-	if !again.Success || again.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
-		t.Fatalf("second discard: %+v", again)
+}
+
+func TestArchiveSession_LegacyDiscardEmpty(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
+	if !resp.Success || resp.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
+		t.Fatal("expected an empty slot")
 	}
-	beginSessionFor(t, deps, testOrgA)
 }

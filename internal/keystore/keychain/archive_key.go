@@ -118,18 +118,6 @@ func LegacyArchiveSessionPresent(store SecretStore) (bool, error) {
 	return false, nil
 }
 
-// DeleteLegacyArchiveSessionKeys removes the device-wide session slot a
-// Keeper before lv90 used. Only archive_session_legacy_discard calls it, after
-// the user confirmed in the App. Absence is not an error.
-func DeleteLegacyArchiveSessionKeys(store SecretStore) error {
-	for _, account := range []string{config.LegacyOrgArchiveSessionPrivateKey, config.LegacyOrgArchiveSessionPublicKey} {
-		if err := store.Delete(config.Service, account); err != nil && !errors.Is(err, ErrSecretNotFound) {
-			return err
-		}
-	}
-	return nil
-}
-
 // ArchiveKeySlot names the keyring accounts of one archive keypair: the
 // active key or the rotation stage, of one org or of the whole device.
 type ArchiveKeySlot struct {

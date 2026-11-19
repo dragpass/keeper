@@ -39,8 +39,8 @@
 // archive_session_discard naming its fingerprint removes it.
 //
 // The device-wide slot of Keepers before lv90 is not a session slot here: it
-// is never read, indexed, swept or ended, whatever it holds. Only the
-// confirmed archive_session_legacy_discard deletes it.
+// is never read, indexed, swept or ended, whatever it holds. Its owner cannot be verified, so
+// confirmed legacy discard also preserves it.
 //
 // Every read-check-delete and every write of a slot, the session index and
 // the device-wide slot runs under the keychain process lock (in-process
