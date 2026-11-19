@@ -172,7 +172,7 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 
 	// Refusal at the moment of use covers the output too: while the key was
 	// out of the lock the slot may have expired, been shortened, ended,
-	// discarded or replaced. Only the same record, still trusted and not
+	// discarded or replaced. Only the same key, still trusted and not
 	// expired now, lets the grants out.
 	archiveCombineBeforeOutputCheck()
 	if err := recheckArchiveSessionSlotForOutput(d, orgID, sessionSlot); err != nil {

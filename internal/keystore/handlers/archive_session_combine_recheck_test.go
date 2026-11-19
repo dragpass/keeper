@@ -3,7 +3,7 @@
 //
 // The combine reads the session key and releases the lock while it
 // reassembles. Whatever another action did to the slot meanwhile decides
-// the output: only the same record, still trusted and not expired now,
+// the output: only the same key, still trusted and not expired now,
 // lets the grants out. Each test runs the other action at exactly that
 // point through archiveCombineBeforeOutputCheck, so the order is fixed
 // without timing.
@@ -139,4 +139,36 @@ func TestArchiveCombineRecheck_FailedExpiryDeleteIsReported(t *testing.T) {
 	}
 	SweepExpiredArchiveSession(deps)
 	requireOrgSlotGone(t, mem, testOrgA)
+}
+
+func TestArchiveCombineRecheck_ShortenedExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		atExpiry bool
+	}{{"still live", false}, {"at expiry", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, store, clock := newOrgSessionDeps(t)
+			a := beginOrgSession(t, deps, testOrgA)
+			req, member := sessionCombineRequest(t, testOrgA, a.SessionPublicKey, sessionTestDEK())
+			shortened := clock.Now().Add(time.Minute)
+			duringCombine(t, func() {
+				if res := setExpiry(deps, testOrgA, a.Fingerprint, shortened); !res.Success {
+					t.Fatalf("shorten expiry: %s", res.ErrorCode)
+				}
+				if tc.atExpiry {
+					clock.Set(shortened)
+				}
+			})
+			res := archiveQuorumCombineAndRewrap(deps, testOrgA, req)
+			if tc.atExpiry {
+				requireCombineRefused(t, res, errs.ErrCodeArchiveSessionExpired)
+				requireOrgSlotGone(t, store, testOrgA)
+				return
+			}
+			if !res.Success {
+				t.Fatalf("same live key refused: %s", res.ErrorCode)
+			}
+			assertMemberGrantOpens(t, res, member, sessionGrantContext(testOrgA), sessionTestDEK())
+		})
+	}
 }

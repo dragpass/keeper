@@ -243,8 +243,8 @@ type archiveSessionSlot struct {
 	storedDigest string
 	// publicKey is the public half ("" when missing).
 	publicKey string
-	// digest is sha256 of the private record as read.
-	digest [sha256.Size]byte
+	// keyDigest identifies the private key independently of its expiry header.
+	keyDigest [sha256.Size]byte
 }
 
 // inspectArchiveSessionSlotLocked reads orgID's slot and judges it. It
@@ -264,7 +264,7 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
 		return archiveSessionSlot{}, err
 	}
-	slot := archiveSessionSlot{state: archiveSessionSlotUnowned, publicKey: public, digest: sha256.Sum256([]byte(value))}
+	slot := archiveSessionSlot{state: archiveSessionSlotUnowned, publicKey: public}
 	if public != "" {
 		slot.fingerprint = fingerprintBase64Public(public)
 	}
@@ -275,6 +275,7 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 		}
 		return slot, nil
 	}
+	slot.keyDigest = sha256.Sum256([]byte(recordPEM))
 	if public == "" {
 		slot.fingerprint = rec.fingerprint
 		return slot, nil
@@ -373,9 +374,9 @@ func openArchiveSessionSlot(d Deps, orgID string) (*memguard.LockedBuffer, archi
 
 // recheckArchiveSessionSlotForOutput judges orgID's slot again, under the
 // lock, right before a combine that read it as read lets its output out.
-// The same record (same digest), still trusted and not expired now, passes.
+// The same private key, still trusted and not expired now, passes.
 // Otherwise: no slot, or another key in it (a discard and a new begin), is
-// keychain.ErrSecretNotFound and the slot is not touched; the same record
+// keychain.ErrSecretNotFound and the slot is not touched; the current record for the same key
 // is judged by the use rule (expired: deleted, errArchiveSessionExpired, or
 // errArchiveSessionDeleteFailed; untrusted now: kept,
 // errArchiveSessionExpiryUnknown). A lock that cannot be taken is an error
@@ -386,7 +387,7 @@ func recheckArchiveSessionSlotForOutput(d Deps, orgID string, read archiveSessio
 		if err != nil {
 			return err
 		}
-		if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.digest[:], read.digest[:]) != 1 {
+		if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.keyDigest[:], read.keyDigest[:]) != 1 {
 			return keychain.ErrSecretNotFound
 		}
 		return useArchiveSessionSlotForCombineLocked(d, orgID, slot, func() {})

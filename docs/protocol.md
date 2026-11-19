@@ -3804,8 +3804,9 @@ server reporting that a session ended.
   decision again under the lock on a fresh read right before it writes, so
   two begins never both store a key and a begin never overwrites a live one.
   The combine reads the slot again under the lock right before output and
-  outputs only for the same record, still trusted and not expired; it never
-  touches a slot that holds another key by then.
+  compares the private key independently of its expiry header. A shortened
+  expiry permits output until that instant. At the boundary the current
+  trusted expiry applies. A replacement key stays untouched.
 - **Use.** Every action that reads a session private key
   (`archive_quorum_combine_and_rewrap`, `archive_session_set_expiry` after its
   fingerprint matched) judges the slot against Keeper's clock first. At or
