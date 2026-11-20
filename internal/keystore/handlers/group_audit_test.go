@@ -726,6 +726,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	v := loadAuditVectors(t)
 	audit := &proto.GrantContext{Policy: proto.GrantPolicyAuditOnlyV1, OrgID: v.OrgID, GroupID: v.GroupID, DekVersion: 3}
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)
@@ -735,7 +736,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 		t.Fatalf("split: %s", split.Error)
 	}
 	shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
-	sess := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{})
+	sess := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 	sessionPub := sess.Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey
 	rewrapped := []proto.RewrappedShareInput{
 		adminRewrapShare(t, adminKPs[0], shares[0], sessionPub),
@@ -744,7 +745,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	archivePub, _ := crypto.ParsePublicKey(archiveKP.PublicKey)
 	wrapped, _ := wrapGrant(archivePub, mustHex(t, v.GroupDEKHex), audit)
 	member, _ := crypto.GenerateRSAKeyPair()
-	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrapped),
 		Recipients: archiveRecipient(member.PublicKey), GrantContext: audit,
 	})

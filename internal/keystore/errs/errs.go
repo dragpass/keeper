@@ -61,8 +61,8 @@ const (
 	ErrCodeArchiveSessionExpired ErrorCode = "archive_session_expired"
 
 	// ErrCodeArchiveSessionExpiryUnknown: the recovery-session key slot has
-	// no expiry this Keeper can trust (written before lv100 F1, or an expiry
-	// beyond the Keeper-side bound). It was not used and not deleted.
+	// no expiry this Keeper can trust (no header, an unparsable one, or an
+	// expiry beyond the Keeper-side bound). It was not used and not deleted.
 	ErrCodeArchiveSessionExpiryUnknown ErrorCode = "archive_session_expiry_unknown"
 
 	// ErrCodeArchiveKeySlotIncomplete: archive_key_generate found the org's
@@ -79,6 +79,31 @@ const (
 	// org's archive public key (a quorum split finalized and removed the
 	// private key). There is no usable key here and none was generated.
 	ErrCodeArchiveKeyPrivateAbsent ErrorCode = "archive_key_private_absent"
+
+	// ErrCodeArchiveReconfigurationPending: the org has a staged legacy
+	// quorum reconfiguration (lv90), or a reconfiguration journal of another
+	// operation. Nothing was generated or changed.
+	ErrCodeArchiveReconfigurationPending ErrorCode = "archive_reconfiguration_pending"
+
+	// ErrCodeArchiveSessionLegacySlotPresent: archive_session_begin found the
+	// device-wide recovery-session slot of a Keeper before lv90. It may hold
+	// the session key of an in-flight recovery of an unknown organization, so
+	// nothing was generated, deleted or moved.
+	ErrCodeArchiveSessionLegacySlotPresent ErrorCode = "archive_session_legacy_slot_present"
+
+	// ErrCodeArchiveSessionActive: archive_session_begin found the
+	// organization's slot holding a key it must not replace: a live session,
+	// or a slot whose expiry or record Keeper cannot trust. Nothing was
+	// generated, replaced or deleted; data says what the slot holds.
+	ErrCodeArchiveSessionOtherOwner       ErrorCode = "archive_session_other_owner"
+	ErrCodeArchiveSessionOwnerUnknown     ErrorCode = "archive_session_owner_unknown"
+	ErrCodeArchiveSessionLoginUnavailable ErrorCode = "archive_session_login_unavailable"
+	ErrCodeArchiveSessionActive           ErrorCode = "archive_session_active"
+
+	// ErrCodeArchiveSessionChanged: archive_session_discard named a key the
+	// organization's slot no longer holds (another key took its place after
+	// the user confirmed). Nothing was deleted.
+	ErrCodeArchiveSessionChanged ErrorCode = "archive_session_changed"
 
 	// ErrCodeInternal: an unexpected error that does not fall into the above
 	// categories. If reproducible, target for a bug report.

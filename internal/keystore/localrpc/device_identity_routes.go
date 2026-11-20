@@ -26,6 +26,10 @@ var deviceIdentityRoutes = map[string]appRoute{
 		action: proto.ActionDeviceSignout,
 		input:  func() any { return &proto.DeviceSignoutRequest{} },
 	},
+	"/v1/account/login/end": {
+		action: proto.ActionArchiveAppLoginEnd,
+		input:  func() any { return &proto.ArchiveAppLoginEndRequest{} },
+	},
 	"/v1/account/binding/signout": {
 		action: proto.ActionAccountBindingSignout,
 		input:  func() any { return &proto.AccountBindingSignoutRequest{} },

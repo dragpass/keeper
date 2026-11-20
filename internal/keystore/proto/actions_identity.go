@@ -91,6 +91,7 @@ const (
 	ActionAccountBindingSet     = "account_binding_set"
 	ActionDeviceAccountStatus   = "device_account_status"
 	ActionDeviceSignout         = "device_signout"
+	ActionArchiveAppLoginEnd    = "archive_app_login_end"
 	ActionAccountBindingSignout = "account_binding_signout"
 
 	// related to signup flow

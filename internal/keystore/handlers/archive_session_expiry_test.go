@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,14 +10,43 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
-// The session slot record as this Keeper writes it: one header line carrying
-// the expiry, then the private key PEM. Tests write it literally so they also
-// pin the on-disk format.
+// The per-organization record header development builds of lv90 K0 and
+// lv100 F1 wrote, and the device-wide record of a main build of lv100 F1.
+// This Keeper reads such a record as unowned. Tests write it literally so
+// they pin that it is never trusted.
 const sessionSlotHeaderForTest = "dragpass-archive-session-v1 expires_at="
+
+// rewriteSessionSlotExpiry rewrites the expiry of the v2 record in account,
+// keeping every other field, the way set_expiry would store it, and returns
+// the new value.
+func rewriteSessionSlotExpiry(t *testing.T, store keychain.SecretStore, account string, expiresAt time.Time) string {
+	t.Helper()
+	value, err := store.Get(config.Service, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, pem, ok := decodeArchiveSessionSlot(value)
+	if !ok {
+		t.Fatal("the slot does not hold a v2 record")
+	}
+	rec.expiresAt = expiresAt
+	buf := encodeArchiveSessionSlot(rec, []byte(pem))
+	defer buf.Destroy()
+	next := string(buf.Bytes())
+	if err := store.Set(config.Service, account, next); err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
+// sessionExpiryOrg is the organization whose session slot the lv100 F1 tests
+// exercise. authorizedCombineFixture and newAuditFixture begin their session
+// for the fixture organization (f.v.OrgID), the same one.
+const sessionExpiryOrg = "22222222-2222-4222-8222-222222222222"
 
 func sessionSlotPEM(t *testing.T, store keychain.SecretStore) string {
 	t.Helper()
-	value, err := store.Get(config.Service, config.OrgArchiveSessionPrivateKey)
+	value, err := store.Get(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg)
 	if err != nil || value == "" {
 		t.Fatal("no session slot")
 	}
@@ -34,7 +62,7 @@ func sessionSlotPEM(t *testing.T, store keychain.SecretStore) string {
 func writeSessionSlotWithoutExpiry(t *testing.T, store keychain.SecretStore) string {
 	t.Helper()
 	pem := sessionSlotPEM(t, store)
-	if err := store.Set(config.Service, config.OrgArchiveSessionPrivateKey, pem); err != nil {
+	if err := store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, pem); err != nil {
 		t.Fatal(err)
 	}
 	return pem
@@ -42,11 +70,7 @@ func writeSessionSlotWithoutExpiry(t *testing.T, store keychain.SecretStore) str
 
 func writeSessionSlotExpiry(t *testing.T, store keychain.SecretStore, expiresAt int64) string {
 	t.Helper()
-	value := sessionSlotHeaderForTest + strconv.FormatInt(expiresAt, 10) + "\n" + sessionSlotPEM(t, store)
-	if err := store.Set(config.Service, config.OrgArchiveSessionPrivateKey, value); err != nil {
-		t.Fatal(err)
-	}
-	return value
+	return rewriteSessionSlotExpiry(t, store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, time.Unix(expiresAt, 0))
 }
 
 func sessionSlotValue(store keychain.SecretStore, account string) string {
@@ -56,7 +80,7 @@ func sessionSlotValue(store keychain.SecretStore, account string) string {
 
 func requireSessionSlotDeleted(t *testing.T, store keychain.SecretStore) {
 	t.Helper()
-	if sessionSlotValue(store, config.OrgArchiveSessionPrivateKey) != "" || sessionSlotValue(store, config.OrgArchiveSessionPublicKey) != "" {
+	if sessionSlotValue(store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != "" || sessionSlotValue(store, config.OrgArchiveSessionPublicKeyPrefix+sessionExpiryOrg) != "" {
 		t.Fatal("expired session slot was not deleted")
 	}
 }
@@ -77,10 +101,10 @@ func TestArchiveCombineRefusesSessionSlotWithoutExpiryAndKeepsIt(t *testing.T) {
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 
 	response := HandleArchiveQuorumCombineAndRewrap(f.deps, req)
-	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_expiry_unknown" {
+	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("session slot without expiry was used: success=%v code=%s", response.Success, response.ErrorCode)
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != legacy {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
 		t.Fatal("session slot without expiry was changed or deleted by a use")
 	}
 }
@@ -95,7 +119,7 @@ func TestArchiveCombineRefusesSessionSlotBeyondUpperBound(t *testing.T) {
 	if response.Success || response.ErrorCode != "archive_session_expiry_unknown" {
 		t.Fatalf("slot beyond the upper bound was used: success=%v code=%s", response.Success, response.ErrorCode)
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != value {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != value {
 		t.Fatal("slot beyond the upper bound was changed")
 	}
 }
@@ -107,12 +131,12 @@ func TestArchiveSessionBeginBoundsTheSlotLifetime(t *testing.T) {
 	begun := f.clock.now()
 
 	f.clock.unix = begun.Add(archiveSessionMaxTTL - time.Second).Unix()
-	if live := archiveQuorumCombineAndRewrap(f.deps, req); !live.Success {
+	if live := archiveQuorumCombineAndRewrap(f.deps, sessionExpiryOrg, req); !live.Success {
 		t.Fatalf("session refused before its upper bound: %s", live.ErrorCode)
 	}
 
 	f.clock.unix = begun.Add(archiveSessionMaxTTL).Unix()
-	expired := archiveQuorumCombineAndRewrap(f.deps, req)
+	expired := archiveQuorumCombineAndRewrap(f.deps, sessionExpiryOrg, req)
 	if expired.Success || expired.ErrorCode != "archive_session_expired" {
 		t.Fatalf("session used at its upper bound: success=%v code=%s", expired.Success, expired.ErrorCode)
 	}
@@ -146,7 +170,7 @@ func TestArchiveCombineWithholdsOutputWhenTheSlotExpiresDuringIt(t *testing.T) {
 		return begun
 	}
 
-	response := archiveQuorumCombineAndRewrap(f.deps, req)
+	response := archiveQuorumCombineAndRewrap(f.deps, sessionExpiryOrg, req)
 	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_expired" {
 		t.Fatalf("output after the slot expired: success=%v code=%s", response.Success, response.ErrorCode)
 	}
@@ -164,7 +188,7 @@ type slotReadHook struct {
 
 func (s *slotReadHook) Get(service, account string) (string, error) {
 	value, err := s.SecretStore.Get(service, account)
-	if account == config.OrgArchiveSessionPrivateKey && s.hook != nil {
+	if account == config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg && s.hook != nil {
 		hook := s.hook
 		s.hook = nil
 		hook()
@@ -188,7 +212,7 @@ func TestArchiveSessionStartupSweepKeepsASessionBegunDuringIt(t *testing.T) {
 	probe.hook = func() {
 		go func() {
 			defer close(done)
-			begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{})
+			begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{OrgID: sessionExpiryOrg})
 			if begun.Success {
 				fresh = begun.Data.(proto.ArchiveSessionBeginResponseData)
 			}
@@ -204,16 +228,19 @@ func TestArchiveSessionStartupSweepKeepsASessionBegunDuringIt(t *testing.T) {
 	if fresh.Fingerprint == "" {
 		t.Fatal("concurrent begin failed")
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) == "" || !archiveSessionFingerprintMatches(f.deps, fresh.Fingerprint) {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) == "" || !archiveSessionFingerprintMatches(f.deps, sessionExpiryOrg, fresh.Fingerprint) {
 		t.Fatal("the startup sweep deleted a session begun while it ran")
 	}
 }
 
 func beginForExpiry(t *testing.T, f *auditFixture) proto.ArchiveSessionBeginResponseData {
 	t.Helper()
+	if f.v.OrgID != sessionExpiryOrg {
+		t.Fatalf("fixture organization %s, want %s", f.v.OrgID, sessionExpiryOrg)
+	}
 	// The fixture already began one session; begin again so the test holds
 	// the response.
-	begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{})
+	begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{OrgID: sessionExpiryOrg})
 	if !begun.Success {
 		t.Fatal("begin failed")
 	}
@@ -235,7 +262,7 @@ func TestArchiveSessionSetExpiryOnlyShortens(t *testing.T) {
 	now := f.clock.now()
 
 	later := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{
-		Fingerprint: data.Fingerprint, ExpiresAt: now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
+		OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
 	})
 	if !later.Success {
 		t.Fatalf("set expiry refused: %s", later.ErrorCode)
@@ -245,13 +272,13 @@ func TestArchiveSessionSetExpiryOnlyShortens(t *testing.T) {
 	}
 
 	sooner := now.Add(10 * time.Minute).UTC().Format(time.RFC3339)
-	shortened := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{Fingerprint: data.Fingerprint, ExpiresAt: sooner})
+	shortened := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: sooner})
 	if !shortened.Success || shortened.Data.(proto.ArchiveSessionSetExpiryResponseData).ExpiresAt != sooner {
 		t.Fatalf("server expiry not applied: %+v", shortened)
 	}
 
 	f.clock.unix = now.Add(10 * time.Minute).Unix()
-	again := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{Fingerprint: data.Fingerprint, ExpiresAt: sooner})
+	again := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: sooner})
 	if again.Success || again.ErrorCode != "archive_session_expired" {
 		t.Fatalf("slot used at the server expiry: success=%v code=%s", again.Success, again.ErrorCode)
 	}
@@ -261,15 +288,15 @@ func TestArchiveSessionSetExpiryOnlyShortens(t *testing.T) {
 func TestArchiveSessionSetExpiryRefusesAnotherSessionsFingerprint(t *testing.T) {
 	f := newAuditFixture(t)
 	beginForExpiry(t, f)
-	before := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey)
+	before := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg)
 
 	response := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{
-		Fingerprint: strings.Repeat("0", 64), ExpiresAt: f.clock.now().Add(time.Minute).UTC().Format(time.RFC3339),
+		OrgID: sessionExpiryOrg, Fingerprint: strings.Repeat("0", 64), ExpiresAt: f.clock.now().Add(time.Minute).UTC().Format(time.RFC3339),
 	})
 	if response.Success || response.ErrorCode != "not_found" {
 		t.Fatalf("expiry applied to another session: success=%v code=%s", response.Success, response.ErrorCode)
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != before {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != before {
 		t.Fatal("refused set expiry changed the slot")
 	}
 }
@@ -279,7 +306,7 @@ func TestArchiveSessionSetExpiryInThePastDeletesTheSlot(t *testing.T) {
 	data := beginForExpiry(t, f)
 
 	response := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{
-		Fingerprint: data.Fingerprint, ExpiresAt: f.clock.now().UTC().Format(time.RFC3339),
+		OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: f.clock.now().UTC().Format(time.RFC3339),
 	})
 	if response.Success || response.ErrorCode != "archive_session_expired" {
 		t.Fatalf("past server expiry accepted: success=%v code=%s", response.Success, response.ErrorCode)
@@ -293,38 +320,43 @@ func TestArchiveSessionSetExpiryKeepsASlotWithoutExpiry(t *testing.T) {
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 
 	response := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{
-		Fingerprint: data.Fingerprint, ExpiresAt: f.clock.now().Add(time.Minute).UTC().Format(time.RFC3339),
+		OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: f.clock.now().Add(time.Minute).UTC().Format(time.RFC3339),
 	})
-	if response.Success || response.ErrorCode != "archive_session_expiry_unknown" {
+	if response.Success || response.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("slot without expiry accepted an expiry: success=%v code=%s", response.Success, response.ErrorCode)
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != legacy {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
 		t.Fatal("slot without expiry changed")
 	}
 }
 
 func TestArchiveSessionSetExpiryValidates(t *testing.T) {
 	for name, req := range map[string]proto.ArchiveSessionSetExpiryRequest{
-		"no fingerprint": {ExpiresAt: "2026-11-16T00:00:00Z"},
-		"no expiry":      {Fingerprint: strings.Repeat("a", 64)},
-		"bad expiry":     {Fingerprint: strings.Repeat("a", 64), ExpiresAt: "tomorrow"},
+		"no fingerprint": {OrgID: sessionExpiryOrg, ExpiresAt: "2026-11-16T00:00:00Z"},
+		"no expiry":      {OrgID: sessionExpiryOrg, Fingerprint: strings.Repeat("a", 64)},
+		"bad expiry":     {OrgID: sessionExpiryOrg, Fingerprint: strings.Repeat("a", 64), ExpiresAt: "tomorrow"},
+		"no org_id":      {Fingerprint: strings.Repeat("a", 64), ExpiresAt: "2026-11-16T00:00:00Z"},
+		"bad org_id":     {OrgID: "x", Fingerprint: strings.Repeat("a", 64), ExpiresAt: "2026-11-16T00:00:00Z"},
 	} {
 		if err := req.Validate(); err == nil {
 			t.Fatalf("%s accepted", name)
 		}
+	}
+	if err := (proto.ArchiveSessionSetExpiryRequest{OrgID: sessionExpiryOrg, Fingerprint: strings.Repeat("a", 64), ExpiresAt: "2026-11-16T00:00:00Z"}).Validate(); err != nil {
+		t.Fatalf("a complete request refused: %v", err)
 	}
 }
 
 func TestArchiveSessionEndWithAnotherSessionsFingerprintKeepsTheSlot(t *testing.T) {
 	f := newAuditFixture(t)
 	beginForExpiry(t, f)
-	before := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey)
+	before := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg)
 
-	end := HandleArchiveSessionEnd(f.deps, proto.ArchiveSessionEndRequest{Fingerprint: strings.Repeat("0", 64)})
+	end := HandleArchiveSessionEnd(f.deps, proto.ArchiveSessionEndRequest{OrgID: sessionExpiryOrg, Fingerprint: strings.Repeat("0", 64)})
 	if !end.Success || end.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatal("end of another session reported ended")
 	}
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != before {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != before {
 		t.Fatal("end of another session deleted this one")
 	}
 }
@@ -332,10 +364,10 @@ func TestArchiveSessionEndWithAnotherSessionsFingerprintKeepsTheSlot(t *testing.
 func TestArchiveSessionEndWithItsFingerprintIsIdempotent(t *testing.T) {
 	f := newAuditFixture(t)
 	data := beginForExpiry(t, f)
-	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix()-1)
+	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix())
 
 	for i, want := range []bool{true, false} {
-		end := HandleArchiveSessionEnd(f.deps, proto.ArchiveSessionEndRequest{Fingerprint: data.Fingerprint})
+		end := HandleArchiveSessionEnd(f.deps, proto.ArchiveSessionEndRequest{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint})
 		if !end.Success || end.Data.(proto.ArchiveSessionEndResponseData).Ended != want {
 			t.Fatalf("end #%d: success=%v data=%+v", i, end.Success, end.Data)
 		}
@@ -343,23 +375,21 @@ func TestArchiveSessionEndWithItsFingerprintIsIdempotent(t *testing.T) {
 	}
 }
 
-// lv90 (keeper #206) forbids deleting a slot written before lv100 F1 without
-// the user's confirmed discard, so even an explicit end leaves it in place.
+// A slot whose expiry Keeper cannot trust is not deleted by an expiry rule
+// or by an end, even an explicit one, and a begin does not replace it; only
+// the confirmed discard removes it. (The device-wide slot of Keepers before lv90 is never touched
+// by end at all: TestArchiveSession_EndLeavesTheDeviceWideSlot.)
 func TestArchiveSessionEndKeepsASlotWithoutExpiry(t *testing.T) {
 	f := newAuditFixture(t)
 	data := beginForExpiry(t, f)
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 
-	for _, req := range []proto.ArchiveSessionEndRequest{{}, {Fingerprint: data.Fingerprint}} {
+	for _, req := range []proto.ArchiveSessionEndRequest{{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint}} {
 		end := HandleArchiveSessionEnd(f.deps, req)
-		if !end.Success {
-			t.Fatalf("end failed: %s", end.ErrorCode)
+		if end.Success || end.Data != nil || end.ErrorCode != "archive_session_owner_unknown" {
+			t.Fatal("unexpected end result", end.ErrorCode)
 		}
-		out := end.Data.(proto.ArchiveSessionEndResponseData)
-		if out.Ended || !out.SlotWithoutExpiryKept {
-			t.Fatalf("end of a slot without expiry reported %+v", out)
-		}
-		if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != legacy {
+		if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
 			t.Fatal("end deleted a slot without expiry")
 		}
 	}
@@ -370,18 +400,22 @@ func TestArchiveSessionStartupSweepDestroysOnlyExpiredSlotsWithExpiry(t *testing
 	beginForExpiry(t, f)
 
 	SweepExpiredArchiveSession(f.deps)
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) == "" {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) == "" {
 		t.Fatal("sweep deleted a live session")
 	}
 
+	record := sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg)
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 	f.clock.unix += int64(24 * time.Hour / time.Second)
 	SweepExpiredArchiveSession(f.deps)
-	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKey) != legacy {
+	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
 		t.Fatal("sweep deleted a slot without expiry")
 	}
 
-	writeSessionSlotExpiry(t, f.store, f.clock.now().Unix())
+	// The begin's own record, whose expiry passed during the 24 hours.
+	if err := f.store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg, record); err != nil {
+		t.Fatal(err)
+	}
 	SweepExpiredArchiveSession(f.deps)
 	requireSessionSlotDeleted(t, f.store)
 }

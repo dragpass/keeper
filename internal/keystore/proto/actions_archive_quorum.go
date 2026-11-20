@@ -29,17 +29,29 @@ const (
 	//   unwraps the OLD Group DEK, and re-wraps it to the target members. All
 	//   reconstructed key material is wiped before returning; only the new
 	//   per-recipient wraps are in the response.
-	ActionArchiveKeySplit               = "archive_key_split"
-	ActionArchiveSplitPrepare           = "archive_split_prepare"
-	ActionArchiveShareProofPrepare      = "archive_share_proof_prepare"
-	ActionArchiveShareOpenProof         = "archive_share_open_proof"
-	ActionArchiveSplitStatus            = "archive_split_status"
-	ActionArchiveSplitFinalize          = "archive_split_finalize"
-	ActionArchiveSplitAbandon           = "archive_split_abandon"
-	ActionArchiveSharePrepare           = "archive_share_prepare"
-	ActionArchiveShareRewrap            = "archive_share_rewrap"
-	ActionArchiveSessionBegin           = "archive_session_begin"
-	ActionArchiveSessionSetExpiry       = "archive_session_set_expiry"
-	ActionArchiveSessionEnd             = "archive_session_end"
+	ActionArchiveKeySplit          = "archive_key_split"
+	ActionArchiveSplitPrepare      = "archive_split_prepare"
+	ActionArchiveShareProofPrepare = "archive_share_proof_prepare"
+	ActionArchiveShareOpenProof    = "archive_share_open_proof"
+	ActionArchiveSplitStatus       = "archive_split_status"
+	ActionArchiveSplitFinalize     = "archive_split_finalize"
+	ActionArchiveSplitAbandon      = "archive_split_abandon"
+	ActionArchiveSharePrepare      = "archive_share_prepare"
+	ActionArchiveShareRewrap       = "archive_share_rewrap"
+	ActionArchiveSessionBegin      = "archive_session_begin"
+	ActionArchiveSessionSetExpiry  = "archive_session_set_expiry"
+	ActionArchiveSessionEnd        = "archive_session_end"
+	// ArchiveSessionLegacyDiscard: delete the device-wide session slot of a
+	// Keeper before lv90, after the user confirmed in the App (lv90).
+	ActionArchiveSessionLegacyDiscard = "archive_session_legacy_discard"
+	// ArchiveSessionDiscard: delete the organization's session key the
+	// request names by fingerprint, after the user confirmed in the App.
+	ActionArchiveSessionDiscard = "archive_session_discard"
+	// ArchiveSessionStatus: read the organization's session slot; writes
+	// nothing.
+	ActionArchiveSessionStatus          = "archive_session_status"
 	ActionArchiveQuorumCombineAndRewrap = "archive_quorum_combine_and_rewrap"
+	// ArchiveReconfigureStage: stage a new org archive key for a legacy
+	// quorum reconfiguration (lv90) in its own slot.
+	ActionArchiveReconfigureStage = "archive_reconfigure_stage"
 )

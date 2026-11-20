@@ -28,6 +28,7 @@ type archiveSelfFixture struct {
 func newArchiveSelfFixture(t *testing.T) archiveSelfFixture {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	own, _ := crypto.GenerateRSAKeyPair()
 	staged, _ := crypto.GenerateRSAKeyPair()
 	foreign, _ := crypto.GenerateRSAKeyPair()
@@ -46,7 +47,7 @@ func newArchiveSelfFixture(t *testing.T) archiveSelfFixture {
 		t.Fatalf("split: %s", split.Error)
 	}
 	shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
-	session := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{})
+	session := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 	sessionPub := session.Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey
 	archivePub, _ := crypto.ParsePublicKey(archiveKP.PublicKey)
 	wrapped, _ := crypto.EncryptData(archivePub, make([]byte, 32))
@@ -76,7 +77,7 @@ func (f archiveSelfFixture) withStrictPeers(t *testing.T) archiveSelfFixture {
 }
 
 func (f archiveSelfFixture) combine(publicKey string) proto.BaseResponse {
-	return archiveQuorumCombineAndRewrap(f.deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	return archiveQuorumCombineAndRewrap(f.deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: f.rewrapped, WrappedOldDEKB64: f.wrappedB64,
 		OwnerAccountID: archivePinOwner,
 		Recipients:     []proto.DEKRewrapRecipient{{AccountID: archivePinOwner, PublicKey: publicKey}},

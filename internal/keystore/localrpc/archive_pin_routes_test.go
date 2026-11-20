@@ -25,9 +25,21 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	_ = keychain.SaveArchivePublicKey(store, archive.PublicKey)
 	// archive_key_split refuses without a signed split decision, so the test
 	// builds the session-wrapped shares directly from the archive key.
-	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin"}`))
+	if err := keychain.SavePublicKey(store, archive.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	binding, _, err := keychain.SetAccountBinding(store, routeOwner, "owner", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begun := server.app.HandleAppRequest(session, "", []byte(`{"action":"archive_session_begin","payload":{"org_id":"`+routeOnlyOrg+`","app_login":{"account_id":"`+binding.AccountID+`","generation":"`+binding.ChatStateGeneration+`"}}}`))
 	var sessionData proto.ArchiveSessionBeginResponseData
-	_ = remarshal(begun.Data, &sessionData)
+	if !begun.Success {
+		t.Fatal("session begin:", begun.ErrorCode)
+	}
+	if err := remarshal(begun.Data, &sessionData); err != nil {
+		t.Fatal(err)
+	}
 	sessionPub, _ := crypto.ParsePublicKey(sessionData.SessionPublicKey)
 	split, err := crypto.SplitSecret([]byte(archive.PrivateKey), 2, 2)
 	if err != nil {
@@ -46,6 +58,7 @@ func TestArchiveQuorumCombineRouteTakesOnlyPinnedRecipients(t *testing.T) {
 	member, stranger := routeKeypair(t), routeKeypair(t)
 	combine := func(extra map[string]any) (int, routeResult, string) {
 		payload := map[string]any{
+			"app_login":           map[string]string{"account_id": binding.AccountID, "generation": binding.ChatStateGeneration},
 			"rewrapped_shares":    shares,
 			"wrapped_old_dek_b64": base64.StdEncoding.EncodeToString(wrappedOld),
 		}

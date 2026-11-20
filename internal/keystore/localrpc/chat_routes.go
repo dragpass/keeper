@@ -459,9 +459,16 @@ var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_key_rotate_begin":     {action: proto.ActionArchiveKeyRotateBegin, input: func() any { return &proto.ArchiveKeyRotateBeginRequest{} }},
 	"/v1/archive/archive_key_rotate_commit":    {action: proto.ActionArchiveKeyRotateCommit, input: func() any { return &proto.ArchiveKeyRotateCommitRequest{} }},
 	"/v1/archive/archive_key_rotate_abort":     {action: proto.ActionArchiveKeyRotateAbort, input: func() any { return &proto.ArchiveKeyRotateAbortRequest{} }},
-	"/v1/archive/archive_session_begin":        archiveEmptyRoute(proto.ActionArchiveSessionBegin),
+	"/v1/archive/archive_session_begin":        {action: proto.ActionArchiveSessionBegin, input: func() any { return &proto.ArchiveSessionBeginRequest{} }},
 	"/v1/archive/archive_session_end":          {action: proto.ActionArchiveSessionEnd, input: func() any { return &proto.ArchiveSessionEndRequest{} }},
-	"/v1/archive/archive_session_set_expiry":   {action: proto.ActionArchiveSessionSetExpiry, input: func() any { return &proto.ArchiveSessionSetExpiryRequest{} }},
+	// Only after the user confirmed discarding a pre-lv90 device-wide
+	// session key; the body must carry confirm_discard: true.
+	"/v1/archive/archive_session_legacy_discard": {action: proto.ActionArchiveSessionLegacyDiscard, input: func() any { return &proto.ArchiveSessionLegacyDiscardRequest{} }},
+	"/v1/archive/archive_session_set_expiry":     {action: proto.ActionArchiveSessionSetExpiry, input: func() any { return &proto.ArchiveSessionSetExpiryRequest{} }},
+	// Only after the user confirmed discarding the named key; the body must
+	// carry confirm_discard: true.
+	"/v1/archive/archive_session_discard": {action: proto.ActionArchiveSessionDiscard, input: func() any { return &proto.ArchiveSessionDiscardRequest{} }},
+	"/v1/archive/archive_session_status":  {action: proto.ActionArchiveSessionStatus, input: func() any { return &proto.ArchiveSessionStatusRequest{} }},
 	"/v1/archive/archive_unwrap_and_rewrap": {
 		action:     proto.ActionArchiveUnwrapAndRewrap,
 		input:      func() any { return &appArchiveRewrap{} },
@@ -508,6 +515,12 @@ var archiveRoutes = map[string]appRoute{
 		action:     proto.ActionArchiveShareRewrap,
 		input:      func() any { return &proto.ArchiveShareRewrapRequest{} },
 		plainLimit: proto.ChatStateMaxRequestBytes,
+	},
+	// Legacy quorum reconfiguration (lv90): stages the new key in the org's
+	// reconfiguration slot and returns only public material.
+	"/v1/archive/archive_reconfigure_stage": {
+		action: proto.ActionArchiveReconfigureStage,
+		input:  func() any { return &proto.ArchiveReconfigureStageRequest{} },
 	},
 	"/v1/archive/archive_quorum_combine_and_rewrap": {
 		action:     proto.ActionArchiveQuorumCombineAndRewrap,
@@ -597,6 +610,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 // appQuorumCombine is the combine with only the pin-carrying recipient list:
 // every re-grant target names its account.
 type appQuorumCombine struct {
+	proto.ArchiveLoginScope
 	RecoverySessionID string                      `json:"recovery_session_id"`
 	Decision          *proto.GroupRewrapDecision  `json:"decision,omitempty"`
 	RewrappedShares   []proto.RewrappedShareInput `json:"rewrapped_shares"`
@@ -617,6 +631,7 @@ func bindQuorumCombine(_ *Server, input any) (any, error) {
 		}
 	}
 	return proto.ArchiveQuorumCombineAndRewrapRequest{
+		ArchiveLoginScope: in.ArchiveLoginScope,
 		RecoverySessionID: in.RecoverySessionID, Decision: in.Decision,
 		RewrappedShares:  in.RewrappedShares,
 		WrappedOldDEKB64: in.WrappedOldDEKB64,

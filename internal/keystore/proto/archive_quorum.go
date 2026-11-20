@@ -22,7 +22,6 @@
 package proto
 
 import (
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -125,39 +124,143 @@ type ArchiveShareRewrapResponseData struct {
 
 // ArchiveSessionBeginRequest — generate the coordinator's ephemeral
 // recovery-session keypair and return its public key.
-type ArchiveSessionBeginRequest struct{}
+//
+// BeginID (optional, lowercase UUID) is the caller's idempotency value for
+// one begin attempt, sent again unchanged when the answer was lost. It is
+// not a secret and proves nothing. In this version a resend is matched on
+// the organization and begin_id only; the account condition comes with the
+// account boundary change.
+type ArchiveSessionBeginRequest struct {
+	ArchiveLoginScope
+	OrgID   string `json:"org_id,omitempty"`
+	BeginID string `json:"begin_id,omitempty"`
+}
 
-func (r ArchiveSessionBeginRequest) Validate() error { return nil }
+// The session slot is per organization, so org_id is required.
+func (r ArchiveSessionBeginRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	if r.BeginID == "" {
+		return nil
+	}
+	return requireMessageUUID(r.BeginID, "begin_id")
+}
 
+// ArchiveSessionBeginResponseData — Replayed is true when a resend found the
+// session its begin_id began still live: the same public key, fingerprint
+// and begin time, and the slot's current (possibly shortened) expiry.
+// Nothing was generated or written then.
 type ArchiveSessionBeginResponseData struct {
 	SessionPublicKey string `json:"session_public_key"`
 	Fingerprint      string `json:"fingerprint"`
 	ExpiresAt        string `json:"expires_at,omitempty"`
+	BegunAt          string `json:"begun_at,omitempty"`
+	Replayed         bool   `json:"replayed"`
 }
 
-// ArchiveSessionEndRequest — destroy the recovery-session keypair. Idempotent.
-// Fingerprint (optional, as begin returned it) limits the end to that
-// session's keypair.
-type ArchiveSessionEndRequest struct {
+// Slot states archive_session_begin's archive_session_active refusal
+// reports in ArchiveSessionActiveData.State.
+const (
+	// ArchiveSessionStateLive: a session key with a trusted, unexpired
+	// expiry.
+	ArchiveSessionStateLive = "live"
+	// ArchiveSessionStateExpiryUnknown: a record this Keeper wrote whose
+	// expiry lies beyond any session it starts (a clock moved back).
+	ArchiveSessionStateExpiryUnknown = "expiry_unknown"
+	// ArchiveSessionStateUnowned: a record this Keeper cannot vouch for (a
+	// development-build format, no header, or halves that disagree).
+	ArchiveSessionStateUnowned = "unowned"
+	// ArchiveSessionStateAbsent and ArchiveSessionStateExpired are reported
+	// by archive_session_status only: no slot, and a trusted slot whose
+	// expiry has passed (not deleted by the status read).
+	ArchiveSessionStateAbsent  = "absent"
+	ArchiveSessionStateExpired = "expired"
+	// ArchiveSessionStateOtherAccount is reserved for the account boundary
+	// change and is not reported by this version.
+	ArchiveSessionStateOtherAccount = "other_account"
+)
+
+// ArchiveSessionStatusRequest — read OrgID's session slot. Fingerprint
+// (optional) asks whether the slot holds that key.
+type ArchiveSessionStatusRequest struct {
+	ArchiveLoginScope
+	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
-func (r ArchiveSessionEndRequest) Validate() error {
+func (r ArchiveSessionStatusRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
 	if r.Fingerprint == "" {
 		return nil
 	}
 	return validateArchiveSessionFingerprint(r.Fingerprint)
 }
 
+// ArchiveSessionStatusResponseData — State is one of absent, live, expired,
+// expiry_unknown, unowned (other_account is reserved). Fingerprint is the
+// slot key's public key fingerprint, omitted when there is none. ExpiresAt
+// and BegunAt are reported for live and expired slots only.
+// FingerprintMatches answers the request's fingerprint, when it had one.
+// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
+// is reported only for an unowned slot with no fingerprint: a private
+// record that is not a parsable key, with no public half and no v2 record;
+// archive_session_discard accepts it for that shape only.
+// LegacySlotPresent reports the device-wide slot of a Keeper before lv90.
+type ArchiveSessionStatusResponseData struct {
+	State              string `json:"state"`
+	Fingerprint        string `json:"fingerprint,omitempty"`
+	StoredDigest       string `json:"stored_digest,omitempty"`
+	ExpiresAt          string `json:"expires_at,omitempty"`
+	BegunAt            string `json:"begun_at,omitempty"`
+	FingerprintMatches *bool  `json:"fingerprint_matches,omitempty"`
+	LegacySlotPresent  bool   `json:"legacy_slot_present"`
+}
+
+// ArchiveSessionActiveData is the data of an archive_session_active
+// refusal. Fingerprint is a public key fingerprint and is omitted when the
+// slot has none; ExpiresAt and BegunAt only for a live slot.
+type ArchiveSessionActiveData struct {
+	State        string `json:"state"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	StoredDigest string `json:"stored_digest,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	BegunAt      string `json:"begun_at,omitempty"`
+}
+
+// ArchiveSessionEndRequest — destroy one recovery-session keypair.
+// Idempotent. OrgID names the organization whose slot is read; Fingerprint
+// (required, as begin returned it) names the key that is ended, so an end
+// never removes a key it does not name.
+type ArchiveSessionEndRequest struct {
+	ArchiveLoginScope
+	OrgID       string `json:"org_id,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+func (r ArchiveSessionEndRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	return validateArchiveSessionFingerprint(r.Fingerprint)
+}
+
 // ArchiveSessionSetExpiryRequest — apply the server's session expires_at
-// (RFC 3339) to the slot of the session begin returned Fingerprint for. The
-// slot's expiry can only move earlier.
+// (RFC 3339) to OrgID's slot, when it holds the session begin returned
+// Fingerprint for. The slot's expiry can only move earlier.
 type ArchiveSessionSetExpiryRequest struct {
+	ArchiveLoginScope
+	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint"`
 	ExpiresAt   string `json:"expires_at"`
 }
 
 func (r ArchiveSessionSetExpiryRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
 	if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
 		return err
 	}
@@ -171,13 +274,18 @@ type ArchiveSessionSetExpiryResponseData struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// The session fingerprint is hex(sha256(public key PEM)).
+// The session fingerprint is hex(sha256(public key PEM)) in lowercase, as
+// begin returns it and Keeper compares it; any other spelling is refused
+// rather than read as a fingerprint that never matches.
 func validateArchiveSessionFingerprint(fingerprint string) error {
 	if len(fingerprint) != 64 {
-		return newValidationError("fingerprint", "must be 64 hex characters")
+		return newValidationError("fingerprint", "must be 64 lowercase hex characters")
 	}
-	if _, err := hex.DecodeString(fingerprint); err != nil {
-		return newValidationError("fingerprint", "must be 64 hex characters")
+	for i := 0; i < len(fingerprint); i++ {
+		c := fingerprint[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return newValidationError("fingerprint", "must be 64 lowercase hex characters")
+		}
 	}
 	return nil
 }
@@ -185,6 +293,72 @@ func validateArchiveSessionFingerprint(fingerprint string) error {
 type ArchiveSessionEndResponseData struct {
 	Ended                 bool `json:"ended"`
 	SlotWithoutExpiryKept bool `json:"slot_without_expiry_kept,omitempty"`
+}
+
+// ArchiveSessionDiscardRequest deletes the key of OrgID's slot whose
+// fingerprint is Fingerprint, after the user confirmed losing whatever
+// recovery attempt it belongs to: an orphan key, or a slot whose expiry or
+// record Keeper cannot trust. confirm_discard must be true; the App sets it
+// only after the user's confirmation, which Keeper cannot verify.
+//
+// Exactly one of Fingerprint and StoredDigest names what is discarded.
+// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
+// is for the one slot shape that has no fingerprint: a private record that
+// is not a parsable key, with no public half and no v2 record, as
+// archive_session_status reports it.
+type ArchiveSessionDiscardRequest struct {
+	ArchiveLoginScope
+	OrgID          string `json:"org_id,omitempty"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
+	StoredDigest   string `json:"stored_digest,omitempty"`
+	ConfirmDiscard bool   `json:"confirm_discard"`
+}
+
+func (r ArchiveSessionDiscardRequest) Validate() error {
+	if err := requireMessageUUID(r.OrgID, "org_id"); err != nil {
+		return err
+	}
+	switch {
+	case r.Fingerprint != "" && r.StoredDigest != "":
+		return newValidationError("stored_digest", "must not be sent with fingerprint")
+	case r.StoredDigest != "":
+		if err := validateArchiveSessionFingerprint(r.StoredDigest); err != nil {
+			return newValidationError("stored_digest", "must be 64 lowercase hex characters")
+		}
+	default:
+		if err := validateArchiveSessionFingerprint(r.Fingerprint); err != nil {
+			return err
+		}
+	}
+	if !r.ConfirmDiscard {
+		return newValidationError("confirm_discard", "must be true")
+	}
+	return nil
+}
+
+type ArchiveSessionDiscardResponseData struct {
+	// Discarded is true when the named key was there and is now gone;
+	// false when the slot was already empty.
+	Discarded bool `json:"discarded"`
+}
+
+// ArchiveSessionLegacyDiscardRequest preserves the legacy RPC shape for
+// older callers. Confirmation does not identify the original slot owner.
+type ArchiveSessionLegacyDiscardRequest struct {
+	ArchiveLoginScope
+	ConfirmDiscard bool `json:"confirm_discard"`
+}
+
+func (r ArchiveSessionLegacyDiscardRequest) Validate() error {
+	if !r.ConfirmDiscard {
+		return newValidationError("confirm_discard", "must be true")
+	}
+	return nil
+}
+
+type ArchiveSessionLegacyDiscardResponseData struct {
+	// A successful legacy response means the slot was absent; Discarded is false.
+	Discarded bool `json:"discarded"`
 }
 
 // RewrappedShareInput — one share re-wrapped to the session public key, as
@@ -204,6 +378,7 @@ type RewrappedShareInput struct {
 //	                 shape of dek_unwrap_and_rewrap_for_many. The flat
 //	                 recipient_public_keys list was removed in 0.0.58.
 type ArchiveQuorumCombineAndRewrapRequest struct {
+	ArchiveLoginScope
 	RecoverySessionID string                `json:"recovery_session_id"`
 	Decision          *GroupRewrapDecision  `json:"decision,omitempty"`
 	RewrappedShares   []RewrappedShareInput `json:"rewrapped_shares"`
@@ -251,3 +426,11 @@ type QuorumRewrapGrant struct {
 type ArchiveQuorumCombineAndRewrapResponseData struct {
 	Grants []QuorumRewrapGrant `json:"grants"`
 }
+
+// ArchiveLoginScope identifies the App login that initiated a slot operation.
+// The paired caller captures it before dispatch. Keeper compares it under lock.
+type ArchiveLoginScope struct {
+	AppLogin ArchiveLoginIdentity `json:"app_login,omitzero"`
+}
+
+func (s ArchiveLoginScope) InitiatingArchiveLogin() ArchiveLoginIdentity { return s.AppLogin }

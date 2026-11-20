@@ -17,6 +17,7 @@ import (
 var appRouteOnlyActions = []string{
 	// identity
 	proto.ActionAccountBindingSet,
+	proto.ActionArchiveAppLoginEnd,
 	proto.ActionAccountBindingSignout,
 	proto.ActionRotateUserKeypairPrepare,
 	proto.ActionRotateUserKeypairPromote,

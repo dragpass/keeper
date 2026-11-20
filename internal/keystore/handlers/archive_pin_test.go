@@ -65,6 +65,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 // Quorum combine judges every pinned recipient before it reassembles anything.
 func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)
@@ -74,7 +75,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 		t.Fatalf("split: %s", split.Error)
 	}
 	shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
-	session := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{})
+	session := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 	sessionPub := session.Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey
 	rewrapped := []proto.RewrappedShareInput{
 		adminRewrapShare(t, adminKPs[0], shares[0], sessionPub),
@@ -86,7 +87,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	stranger, _ := crypto.GenerateRSAKeyPair()
 
 	combine := func(recipients ...proto.DEKRewrapRecipient) proto.BaseResponse {
-		return archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+		return archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 			RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 			OwnerAccountID: archivePinOwner, Recipients: recipients,
 		})
@@ -102,7 +103,7 @@ func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	if refused.Success || refused.ErrorCode != string(errs.ErrCodePeerKeyChanged) {
 		t.Fatalf("combine with a changed recipient: %+v", refused)
 	}
-	none := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	none := archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares: rewrapped, WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		OwnerAccountID: archivePinOwner,
 	})

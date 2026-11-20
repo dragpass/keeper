@@ -23,6 +23,7 @@ var appRouteOnlyCalls = []struct {
 	body   any
 }{
 	{proto.ActionAccountBindingSet, "/v1/account/binding", map[string]any{"account_id": routeOnlyOwner, "alias": "alice"}},
+	{proto.ActionArchiveAppLoginEnd, "/v1/account/login/end", map[string]any{"account_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "generation": "AAAAAAAAAAAAAAAAAAAAAA"}},
 	{proto.ActionAccountBindingSignout, "/v1/account/binding/signout", map[string]any{}},
 	{proto.ActionRotateUserKeypairPrepare, "/v1/account-key/rotate/prepare", map[string]any{}},
 	{proto.ActionRotateUserKeypairPromote, "/v1/account-key/rotate/promote", map[string]any{}},
@@ -49,9 +50,11 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveSplitFinalize, "/v1/archive/archive_split_finalize", map[string]any{}},
 	{proto.ActionArchiveSplitAbandon, "/v1/archive/archive_split_abandon", map[string]any{}},
 	{proto.ActionArchiveShareRewrap, "/v1/archive/archive_share_rewrap", map[string]any{}},
-	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{}},
-	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{}},
-	{proto.ActionArchiveSessionSetExpiry, "/v1/archive/archive_session_set_expiry", map[string]any{}},
+	{proto.ActionArchiveSessionBegin, "/v1/archive/archive_session_begin", map[string]any{"org_id": routeOnlyOrg}},
+	{proto.ActionArchiveSessionEnd, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}},
+	{proto.ActionArchiveSessionLegacyDiscard, "/v1/archive/archive_session_legacy_discard", map[string]any{"confirm_discard": true}},
+	{proto.ActionArchiveReconfigureStage, "/v1/archive/archive_reconfigure_stage", map[string]any{}},
+	{proto.ActionArchiveSessionSetExpiry, "/v1/archive/archive_session_set_expiry", map[string]any{"org_id": routeOnlyOrg}},
 	{proto.ActionArchiveQuorumCombineAndRewrap, "/v1/archive/archive_quorum_combine_and_rewrap", map[string]any{
 		"rewrapped_shares": []any{}, "wrapped_old_dek_b64": "AAAA", "owner_account_id": routeOnlyOwner,
 		"recipients": []any{map[string]any{"account_id": routeOnlyPeer, "public_key": "x"}},

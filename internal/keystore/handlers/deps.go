@@ -17,6 +17,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/logger"
+	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/sessions"
 	"github.com/dragpass/keeper/internal/keystore/verifier"
 )
@@ -27,6 +28,7 @@ import (
 // Session stores are injected so App owns their lifetime and tests remain
 // isolated.
 type Deps struct {
+	ArchiveRequestLogin *proto.ArchiveLoginIdentity
 	Logger              logger.Logger
 	Store               keychain.SecretStore
 	Clock               func() time.Time

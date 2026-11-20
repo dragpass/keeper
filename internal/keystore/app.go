@@ -20,6 +20,7 @@
 package keystore
 
 import (
+	"context"
 	"crypto/rand"
 	"io"
 	"sync"
@@ -250,9 +251,26 @@ func NewApp(deps Deps) *App {
 	return app
 }
 
-// SweepExpiredArchiveSession destroys a recovery-session key whose expiry
-// has passed. The process calls it once at startup, before serving any
-// action, so a key left by a crash does not wait for its next use.
+// SweepExpiredArchiveSession destroys a recovery-session key whose trusted
+// expiry has passed. The process calls it once at startup, before serving
+// any action, so a key left by a crash does not wait for its next use.
 func (a *App) SweepExpiredArchiveSession() {
 	handlers.SweepExpiredArchiveSession(a.HandlersDeps())
+}
+
+// ArchiveSessionSweepInterval is how often a running Keeper sweeps
+// recovery-session keys whose trusted expiry has passed.
+const ArchiveSessionSweepInterval = time.Minute
+
+// StartArchiveSessionSweeper sweeps every interval until ctx is done. The
+// returned channel closes once the sweeper has stopped.
+func (a *App) StartArchiveSessionSweeper(ctx context.Context, interval time.Duration) <-chan struct{} {
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		handlers.RunArchiveSessionSweeper(ctx, a.HandlersDeps(), ticker.C)
+	}()
+	return done
 }

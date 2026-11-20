@@ -12,6 +12,7 @@ import (
 	"errors"
 
 	"github.com/dragpass/keeper/config"
+	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // SaveArchivePrivateKey stores the RSA archive private key PEM.
@@ -63,36 +64,58 @@ func GetAccountArchivePublicKey(store SecretStore) (string, error) {
 	return store.Get(config.Service, config.AccountArchivePublicKey)
 }
 
-// Archive quorum recovery-session ephemeral keypair.
+// Archive quorum recovery-session ephemeral keypair, one slot per
+// organization. orgID must be a validated, non-empty organization ID.
 
-// SaveArchiveSessionPrivateKey stores the recovery-session private key PEM.
-func SaveArchiveSessionPrivateKey(store SecretStore, privatePEM string) error {
-	return store.Set(config.Service, config.OrgArchiveSessionPrivateKey, privatePEM)
+// SaveArchiveSessionPrivateKey stores orgID's recovery-session private key PEM.
+func SaveArchiveSessionPrivateKey(store SecretStore, orgID, privatePEM string) error {
+	return store.Set(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID, privatePEM)
 }
 
-// GetArchiveSessionPrivateKey returns the recovery-session private key PEM.
-func GetArchiveSessionPrivateKey(store SecretStore) (string, error) {
-	return store.Get(config.Service, config.OrgArchiveSessionPrivateKey)
+// GetArchiveSessionPrivateKey returns orgID's recovery-session private key PEM.
+func GetArchiveSessionPrivateKey(store SecretStore, orgID string) (string, error) {
+	return store.Get(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID)
 }
 
-// DeleteArchiveSessionPrivateKey removes the recovery-session private key PEM.
-func DeleteArchiveSessionPrivateKey(store SecretStore) error {
-	return store.Delete(config.Service, config.OrgArchiveSessionPrivateKey)
+// DeleteArchiveSessionPrivateKey removes orgID's recovery-session private key PEM.
+func DeleteArchiveSessionPrivateKey(store SecretStore, orgID string) error {
+	return store.Delete(config.Service, config.OrgArchiveSessionPrivateKeyPrefix+orgID)
 }
 
-// SaveArchiveSessionPublicKey stores the recovery-session public key PEM.
-func SaveArchiveSessionPublicKey(store SecretStore, publicPEM string) error {
-	return store.Set(config.Service, config.OrgArchiveSessionPublicKey, publicPEM)
+// SaveArchiveSessionPublicKey stores orgID's recovery-session public key PEM.
+func SaveArchiveSessionPublicKey(store SecretStore, orgID, publicPEM string) error {
+	return store.Set(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID, publicPEM)
 }
 
-// GetArchiveSessionPublicKey returns the recovery-session public key PEM.
-func GetArchiveSessionPublicKey(store SecretStore) (string, error) {
-	return store.Get(config.Service, config.OrgArchiveSessionPublicKey)
+// GetArchiveSessionPublicKey returns orgID's recovery-session public key PEM.
+func GetArchiveSessionPublicKey(store SecretStore, orgID string) (string, error) {
+	return store.Get(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
 }
 
-// DeleteArchiveSessionPublicKey removes the recovery-session public key PEM.
-func DeleteArchiveSessionPublicKey(store SecretStore) error {
-	return store.Delete(config.Service, config.OrgArchiveSessionPublicKey)
+// DeleteArchiveSessionPublicKey removes orgID's recovery-session public key PEM.
+func DeleteArchiveSessionPublicKey(store SecretStore, orgID string) error {
+	return store.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+orgID)
+}
+
+// LegacyArchiveSessionPresent reports whether either half of the device-wide
+// session slot of a Keeper before lv90 exists. It checks presence only: the
+// value is never returned, parsed or used.
+func LegacyArchiveSessionPresent(store SecretStore) (bool, error) {
+	for _, account := range []string{config.LegacyOrgArchiveSessionPublicKey, config.LegacyOrgArchiveSessionPrivateKey} {
+		value, err := store.Get(config.Service, account)
+		present := value != ""
+		secure.WipeString(&value)
+		if errors.Is(err, ErrSecretNotFound) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if present {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ArchiveKeySlot names the keyring accounts of one archive keypair: the
@@ -131,6 +154,12 @@ func OrgArchiveStagingSlot(orgID string) ArchiveKeySlot {
 		return deviceArchiveStagingSlot
 	}
 	return ArchiveKeySlot{config.OrgArchivePrivateKeyStagingPrefix + orgID, config.OrgArchivePublicKeyStagingPrefix + orgID, ArchiveScopeOrg}
+}
+
+// OrgArchiveReconfigurationSlot is where a legacy quorum reconfiguration of
+// orgID stages its new key. It is always org scoped.
+func OrgArchiveReconfigurationSlot(orgID string) ArchiveKeySlot {
+	return ArchiveKeySlot{config.OrgArchivePrivateKeyReconfigurationPrefix + orgID, config.OrgArchivePublicKeyReconfigurationPrefix + orgID, ArchiveScopeOrg}
 }
 
 // OrgArchiveActiveCandidates lists the slots that may hold orgID's active

@@ -19,6 +19,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	"github.com/awnumar/memguard"
 
@@ -43,11 +44,38 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	if err != nil {
 		return deny()
 	}
-	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, context)
+	var deadline time.Time
+	var ownerErr error
+	locked := false
+	err = withArchiveSessionSlotLock(d, func() error {
+		locked = true
+		var verifyErr error
+		deadline, verifyErr = verifyGroupRewrapBeforeConsume(d, *req.Decision, context, func() error {
+			// Signature, device and live server binding checks have passed.
+			// Hold the slot lock until the verified challenge is consumed.
+			slot, err := inspectArchiveSessionSlotLocked(d, req.GrantContext.OrgID, nil)
+			if err == nil {
+				var owner archiveSessionOwner
+				owner, err = archiveSessionCaller(d, slot)
+				if err == nil && owner.account != req.Decision.AccountID {
+					err = errArchiveSessionLogin
+				}
+			}
+			ownerErr = err
+			return err
+		})
+		return verifyErr
+	})
+	if !locked {
+		return archiveSessionLockFailure()
+	}
+	if ownerErr != nil {
+		return archiveOwnerRefusal(ownerErr)
+	}
 	if err != nil {
 		return deny()
 	}
-	response := archiveQuorumCombineAndRewrap(d, req)
+	response := combineArchiveForAccount(d, req.GrantContext.OrgID, req.Decision.AccountID, req)
 	now := d.Now()
 	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
 		return deny()
@@ -55,7 +83,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	return response
 }
 
-func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
+func combineArchiveForAccount(d Deps, orgID, decisionAccount string, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive quorum combine and rewrap processing...")
 
 	if err := req.Validate(); err != nil {
@@ -95,9 +123,11 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 		return errs.CodeResponse(errs.ErrCodeValidation, "failed to decode wrapped_old_dek_b64: "+err.Error())
 	}
 
-	// Reading the session key is its use: an expired slot is refused and
-	// deleted here, one without a trusted expiry is refused and kept.
-	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d)
+	// Only orgID's own session slot is read; a session of another
+	// organization on this device, or the legacy device-wide slot, never is.
+	// Reading it is its use: an expired slot is refused and deleted here, one
+	// without a trusted expiry is refused and kept.
+	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d, orgID, decisionAccount)
 	if err != nil {
 		return archiveSessionSlotResponse(err)
 	}
@@ -168,12 +198,21 @@ func archiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineAndRewr
 		}
 	}
 
-	// The slot may expire while the combine runs; no output leaves after it.
-	if !d.Now().Before(sessionSlot.expiresAt) {
-		deleteArchiveSessionSlotIfUnchanged(d, sessionSlot)
-		return archiveSessionSlotResponse(errArchiveSessionExpired)
+	// Refusal at the moment of use covers the output too: while the key was
+	// out of the lock the slot may have expired, been shortened, ended,
+	// discarded or replaced. Only the same key, still trusted and not
+	// expired now, lets the grants out.
+	archiveCombineBeforeOutputCheck()
+	if err := recheckArchiveSessionSlotForOutput(d, orgID, sessionSlot); err != nil {
+		clear(grants)
+		return archiveSessionSlotResponse(err)
 	}
 
 	d.Logger.Printf("archive quorum combine and rewrap successful: %d grants (raw key material wiped)", len(grants))
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveQuorumCombineAndRewrapResponseData{Grants: grants}}
 }
+
+// archiveCombineBeforeOutputCheck runs after the grants are built and
+// before the slot is checked again for output. A variable only so tests
+// can run another session action at exactly that point.
+var archiveCombineBeforeOutputCheck = func() {}

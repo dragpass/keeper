@@ -36,7 +36,7 @@ package mls
 // Windows host's default cargo target is MSVC — so "target/release" there holds
 // an archive this linker cannot use. Cross-building from another host adds its
 // own -L through CGO_LDFLAGS.
-#cgo windows LDFLAGS: -L${SRCDIR}/../../../mls/target/x86_64-pc-windows-gnu/release -ldragpass_mls -lbcrypt -lntdll -luserenv -lws2_32
+#cgo windows LDFLAGS: -L${SRCDIR}/../../../mls/target/x86_64-pc-windows-gnu/release -ldragpass_mls -lbcrypt -lntdll -luserenv -lws2_32 -lsynchronization
 
 #include <stdint.h>
 #include <stdlib.h>

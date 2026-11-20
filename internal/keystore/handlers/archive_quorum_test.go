@@ -64,7 +64,8 @@ func adminRewrapShare(t *testing.T, adminKP *crypto.KeyPair, share proto.Wrapped
 }
 
 func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
-	deps, _, store := newTestDeps(t) // coordinator device
+	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount) // coordinator device
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	if err := keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey); err != nil {
@@ -96,7 +97,7 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 	}
 
 	// 2) coordinator opens a recovery session.
-	sessResp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{})
+	sessResp := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 	if !sessResp.Success {
 		t.Fatalf("session begin failed: %s", sessResp.Error)
 	}
@@ -120,7 +121,7 @@ func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
 	// 6) combine + re-grant.
-	combResp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	combResp := archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
@@ -269,6 +270,7 @@ func TestArchiveQuorum_SplitPreparationRequiresRecoverablePublicSlot(t *testing.
 
 func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
@@ -281,7 +283,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 		ThresholdN: threshold, RecipientPublicKeys: adminPems,
 	}).Data.(proto.ArchiveKeySplitResponseData)
 
-	sessionPubPEM := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{}).
+	sessionPubPEM := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}).
 		Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey
 
 	// Only threshold-1 = 2 shares (passes the >=2 protocol floor but is below
@@ -296,7 +298,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	wrappedOld, _ := crypto.EncryptData(archivePub, groupDEK)
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
-	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
@@ -311,6 +313,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 
 func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
@@ -321,7 +324,7 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	splitData := prepareUnboundArchiveKeySplit(deps, proto.ArchiveKeySplitRequest{OperationID: "44444444-4444-4444-8444-444444444444",
 		ThresholdN: threshold, RecipientPublicKeys: adminPems,
 	}).Data.(proto.ArchiveKeySplitResponseData)
-	sessionPubPEM := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{}).
+	sessionPubPEM := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA}).
 		Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey
 
 	rewrapped := []proto.RewrappedShareInput{
@@ -340,7 +343,7 @@ func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	wrappedOld, _ := crypto.EncryptData(archivePub, groupDEK)
 	memberKP, _ := crypto.GenerateRSAKeyPair()
 
-	resp := archiveQuorumCombineAndRewrap(deps, proto.ArchiveQuorumCombineAndRewrapRequest{
+	resp := archiveQuorumCombineAndRewrap(deps, testOrgA, proto.ArchiveQuorumCombineAndRewrapRequest{
 		RewrappedShares:  rewrapped,
 		WrappedOldDEKB64: base64.StdEncoding.EncodeToString(wrappedOld),
 		Recipients:       exemptRecipients(memberKP.PublicKey),
@@ -413,26 +416,27 @@ func TestArchiveQuorum_ShareRewrapHandler(t *testing.T) {
 
 func TestArchiveQuorum_SessionLifecycle(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	// end with no session → ended=false, idempotent.
-	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{})
+	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: strings.Repeat("0", 64)})
 	if !end.Success || end.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatalf("end with no session should succeed with ended=false")
 	}
 
-	begin := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{})
+	begin := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 	if !begin.Success {
 		t.Fatalf("session begin failed: %s", begin.Error)
 	}
-	if priv, _ := keychain.GetArchiveSessionPrivateKey(store); priv == "" {
+	if priv, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgA); priv == "" {
 		t.Fatal("session private key should be stored after begin")
 	}
 
-	end2 := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{})
+	end2 := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: begin.Data.(proto.ArchiveSessionBeginResponseData).Fingerprint})
 	if !end2.Success || !end2.Data.(proto.ArchiveSessionEndResponseData).Ended {
 		t.Fatal("end after begin should report ended=true")
 	}
-	if priv, _ := keychain.GetArchiveSessionPrivateKey(store); priv != "" {
+	if priv, _ := keychain.GetArchiveSessionPrivateKey(store, testOrgA); priv != "" {
 		t.Fatal("session private key should be gone after end")
 	}
 }
