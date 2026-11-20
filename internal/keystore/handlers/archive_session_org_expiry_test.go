@@ -49,6 +49,7 @@ func (c *orgSessionClock) Set(t time.Time) {
 func newOrgSessionDeps(t *testing.T) (Deps, *testdouble.MemorySecretStore, *orgSessionClock) {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	clock := &orgSessionClock{now: time.Unix(1789000000, 0)}
 	deps.Clock = clock.Now
 	return deps, store, clock
@@ -331,8 +332,9 @@ func TestArchiveSessionOrgSlot_UntrustedRecordsAreRefusedAndKept(t *testing.T) {
 				"combine":    archiveQuorumCombineAndRewrap(deps, testOrgA, req),
 				"set_expiry": setExpiry(deps, testOrgA, a.Fingerprint, now.Add(time.Minute)),
 			}
+			want := "archive_session_owner_unknown"
 			for use, resp := range uses {
-				if resp.Success || resp.Data != nil || resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
+				if resp.Success || resp.Data != nil || resp.ErrorCode != want {
 					t.Fatalf("%s with an untrusted record: %+v", use, resp)
 				}
 			}

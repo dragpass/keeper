@@ -15,6 +15,10 @@ var errGroupRewrapDenied = errors.New("group rewrap decision denied")
 // signed online decision. The caller must hold requestMu through the ensuing
 // key operation; it must finish the online API wait before taking that lock.
 func verifyAndConsumeGroupRewrapDecision(d Deps, decision proto.GroupRewrapDecision, execution groupRewrapContext) (time.Time, error) {
+	return verifyGroupRewrapBeforeConsume(d, decision, execution, nil)
+}
+
+func verifyGroupRewrapBeforeConsume(d Deps, decision proto.GroupRewrapDecision, execution groupRewrapContext, authorize func() error) (time.Time, error) {
 	if d.GroupRewrapChallenges == nil || d.ServerKeyVerifier == nil || d.Store == nil || decision.Validate() != nil {
 		return time.Time{}, errGroupRewrapDenied
 	}
@@ -52,6 +56,11 @@ func verifyAndConsumeGroupRewrapDecision(d Deps, decision proto.GroupRewrapDecis
 	deviceID, found, err := keychain.GetDeviceID(d.Store)
 	if err != nil || !found || deviceID != context.deviceID {
 		return time.Time{}, errGroupRewrapDenied
+	}
+	if authorize != nil {
+		if err := authorize(); err != nil {
+			return time.Time{}, err
+		}
 	}
 	finalNow := d.Now()
 	if finalNow.Unix() >= decision.ExpiresAt {

@@ -19,6 +19,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	"github.com/awnumar/memguard"
 
@@ -43,11 +44,38 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	if err != nil {
 		return deny()
 	}
-	deadline, err := verifyAndConsumeGroupRewrapDecision(d, *req.Decision, context)
+	var deadline time.Time
+	var ownerErr error
+	locked := false
+	err = withArchiveSessionSlotLock(d, func() error {
+		locked = true
+		var verifyErr error
+		deadline, verifyErr = verifyGroupRewrapBeforeConsume(d, *req.Decision, context, func() error {
+			// Signature, device and live server binding checks have passed.
+			// Hold the slot lock until the verified challenge is consumed.
+			slot, err := inspectArchiveSessionSlotLocked(d, req.GrantContext.OrgID, nil)
+			if err == nil {
+				var owner archiveSessionOwner
+				owner, err = archiveSessionCaller(d, slot)
+				if err == nil && owner.account != req.Decision.AccountID {
+					err = errArchiveSessionLogin
+				}
+			}
+			ownerErr = err
+			return err
+		})
+		return verifyErr
+	})
+	if !locked {
+		return archiveSessionLockFailure()
+	}
+	if ownerErr != nil {
+		return archiveOwnerRefusal(ownerErr)
+	}
 	if err != nil {
 		return deny()
 	}
-	response := archiveQuorumCombineAndRewrap(d, req.GrantContext.OrgID, req)
+	response := combineArchiveForAccount(d, req.GrantContext.OrgID, req.Decision.AccountID, req)
 	now := d.Now()
 	if response.Success && (now.Unix() >= req.Decision.ExpiresAt || !now.Before(deadline)) {
 		return deny()
@@ -55,7 +83,7 @@ func HandleArchiveQuorumCombineAndRewrap(d Deps, req proto.ArchiveQuorumCombineA
 	return response
 }
 
-func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
+func combineArchiveForAccount(d Deps, orgID, decisionAccount string, req proto.ArchiveQuorumCombineAndRewrapRequest) proto.BaseResponse {
 	d.Logger.Println("archive quorum combine and rewrap processing...")
 
 	if err := req.Validate(); err != nil {
@@ -99,7 +127,7 @@ func archiveQuorumCombineAndRewrap(d Deps, orgID string, req proto.ArchiveQuorum
 	// organization on this device, or the legacy device-wide slot, never is.
 	// Reading it is its use: an expired slot is refused and deleted here, one
 	// without a trusted expiry is refused and kept.
-	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d, orgID)
+	sessionBuf, sessionSlot, err := openArchiveSessionSlot(d, orgID, decisionAccount)
 	if err != nil {
 		return archiveSessionSlotResponse(err)
 	}

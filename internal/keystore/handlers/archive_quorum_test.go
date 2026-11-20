@@ -64,7 +64,8 @@ func adminRewrapShare(t *testing.T, adminKP *crypto.KeyPair, share proto.Wrapped
 }
 
 func TestArchiveQuorum_FullFlowRoundTrip(t *testing.T) {
-	deps, _, store := newTestDeps(t) // coordinator device
+	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount) // coordinator device
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	if err := keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey); err != nil {
@@ -269,6 +270,7 @@ func TestArchiveQuorum_SplitPreparationRequiresRecoverablePublicSlot(t *testing.
 
 func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
@@ -311,6 +313,7 @@ func TestArchiveQuorum_BelowThresholdCombineFails(t *testing.T) {
 
 func TestArchiveQuorum_CombineNoRawInResponse(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
@@ -413,6 +416,7 @@ func TestArchiveQuorum_ShareRewrapHandler(t *testing.T) {
 
 func TestArchiveQuorum_SessionLifecycle(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 
 	// end with no session → ended=false, idempotent.
 	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: strings.Repeat("0", 64)})

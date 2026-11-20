@@ -95,7 +95,10 @@ const (
 	// organization's slot holding a key it must not replace: a live session,
 	// or a slot whose expiry or record Keeper cannot trust. Nothing was
 	// generated, replaced or deleted; data says what the slot holds.
-	ErrCodeArchiveSessionActive ErrorCode = "archive_session_active"
+	ErrCodeArchiveSessionOtherOwner       ErrorCode = "archive_session_other_owner"
+	ErrCodeArchiveSessionOwnerUnknown     ErrorCode = "archive_session_owner_unknown"
+	ErrCodeArchiveSessionLoginUnavailable ErrorCode = "archive_session_login_unavailable"
+	ErrCodeArchiveSessionActive           ErrorCode = "archive_session_active"
 
 	// ErrCodeArchiveSessionChanged: archive_session_discard named a key the
 	// organization's slot no longer holds (another key took its place after

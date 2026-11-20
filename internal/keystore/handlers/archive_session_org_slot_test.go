@@ -92,6 +92,7 @@ func sessionTestDEK() []byte {
 // second begin does not replace the first organization's session key.
 func TestArchiveSession_TwoOrgsKeepTheirOwnSessionKeys(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	pubA := beginSessionFor(t, deps, testOrgA)
 	pubB := beginSessionFor(t, deps, testOrgB)
 	if pubA == pubB {
@@ -159,6 +160,7 @@ func saveLegacyDeviceSession(t *testing.T, store keychain.SecretStore) string {
 // combine for any organization fails closed instead of reading it.
 func TestArchiveSession_CombineNeverReadsTheDeviceWideSlot(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	legacyPub := saveLegacyDeviceSession(t, store)
 	probe := &sessionReadProbe{SecretStore: store, account: config.LegacyOrgArchiveSessionPrivateKey}
 	deps.Store = probe
@@ -176,6 +178,7 @@ func TestArchiveSession_CombineNeverReadsTheDeviceWideSlot(t *testing.T) {
 // written or removed.
 func TestArchiveSession_BeginAndEndRequireOrgID(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	beginSessionFor(t, deps, testOrgA)
 	for name, orgID := range map[string]string{"missing": "", "malformed": "not-a-uuid"} {
 		before := store.Snapshot()
@@ -194,6 +197,7 @@ func TestArchiveSession_BeginAndEndRequireOrgID(t *testing.T) {
 // session usable.
 func TestArchiveSession_EndRemovesOnlyItsOwnOrgSession(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	pubA := beginSessionFor(t, deps, testOrgA)
 	pubB := beginSessionFor(t, deps, testOrgB)
 	end := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: fingerprintBase64Public(pubA)})
@@ -220,6 +224,7 @@ func TestArchiveSession_BeginRefusesWhileTheDeviceWideSlotExists(t *testing.T) {
 	for _, half := range []string{"both", "private", "public"} {
 		t.Run(half, func(t *testing.T) {
 			deps, _, store := newTestDeps(t)
+			setSlotTestOwner(t, deps, slotTestAccount)
 			saveLegacyDeviceSession(t, store)
 			if half == "private" {
 				_ = store.Delete(config.Service, config.LegacyOrgArchiveSessionPublicKey)
@@ -242,6 +247,7 @@ func TestArchiveSession_BeginRefusesWhileTheDeviceWideSlotExists(t *testing.T) {
 // slot is left exactly as it was.
 func TestArchiveSession_EndLeavesTheDeviceWideSlot(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	saveLegacyDeviceSession(t, store)
 	priv, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPrivateKey)
 	pub, _ := store.Get(config.Service, config.LegacyOrgArchiveSessionPublicKey)
@@ -293,6 +299,7 @@ func TestArchiveSession_LegacyDiscardPreservesUnknownOwner(t *testing.T) {
 
 func TestArchiveSession_LegacyDiscardEmpty(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	resp := HandleArchiveSessionLegacyDiscard(deps, proto.ArchiveSessionLegacyDiscardRequest{ConfirmDiscard: true})
 	if !resp.Success || resp.Data.(proto.ArchiveSessionLegacyDiscardResponseData).Discarded {
 		t.Fatal("expected an empty slot")

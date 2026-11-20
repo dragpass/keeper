@@ -28,6 +28,7 @@ type archiveSelfFixture struct {
 func newArchiveSelfFixture(t *testing.T) archiveSelfFixture {
 	t.Helper()
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	own, _ := crypto.GenerateRSAKeyPair()
 	staged, _ := crypto.GenerateRSAKeyPair()
 	foreign, _ := crypto.GenerateRSAKeyPair()

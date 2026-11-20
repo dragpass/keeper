@@ -65,6 +65,7 @@ func TestArchiveUnwrapAndRewrapEnforcesTheMemberPin(t *testing.T) {
 // Quorum combine judges every pinned recipient before it reassembles anything.
 func TestArchiveQuorumCombineEnforcesRecipientPins(t *testing.T) {
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)

@@ -151,12 +151,13 @@ func TestArchiveSessionBegin_ExpiredSessionIsNotReplayed(t *testing.T) {
 
 func TestArchiveSessionBegin_ValidatesBeginID(t *testing.T) {
 	deps, mem, _ := newOrgSessionDeps(t)
+	before := mem.Snapshot()
 	for _, id := range []string{"x", "11111111-AAAA-4AAA-8AAA-000000000001", "00000000-0000-0000-0000-000000000000"} {
 		if resp := beginWithID(deps, testOrgA, id); resp.ErrorCode != string(errs.ErrCodeValidation) {
 			t.Fatalf("begin_id %q: success=%v code=%q", id, resp.Success, resp.ErrorCode)
 		}
 	}
-	if len(mem.Snapshot()) != 0 {
+	if !reflect.DeepEqual(before, mem.Snapshot()) {
 		t.Fatal("a refused begin wrote")
 	}
 }

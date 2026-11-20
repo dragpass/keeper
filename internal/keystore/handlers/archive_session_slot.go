@@ -10,33 +10,10 @@
 // that the session ended. Every function takes the organization it acts on
 // and touches no other organization's slot.
 //
-// Record format (one keyring value, written in one Set):
-//
-//	dragpass-archive-session-v2 expires_at=<unix> begun_at=<unix> fp=<hex> begin_id=<uuid or ->\n<private key PEM>
-//
-// fp is the session public key's fingerprint (hex(sha256(public key PEM))),
-// the value begin returned; begin_id is the caller's idempotency value, "-"
-// when the begin carried none. Neither is secret. The expiry is the earlier
-// of begin time + archiveSessionMaxTTL and the server's expires_at the App
-// reports through archive_session_set_expiry, which can only move it
-// earlier.
-//
-// Trust. A slot is judged as one of:
-//
-//   - absent: no private record (a public half left alone by an interrupted
-//     write or delete is no key);
-//   - live / expired: a v2 record this Keeper can read whose fp matches the
-//     public half and whose expiry is no further ahead than any session this
-//     Keeper starts; only these are ever deleted for being expired;
-//   - expiry unknown: a v2 record whose expiry lies beyond that bound (a
-//     clock moved back);
-//   - unowned: anything else, among them the per-organization records of
-//     development builds before this format (the v1 header, no header) and
-//     a v2 record whose halves disagree.
-//
-// An expiry-unknown or unowned slot is never used, replaced or deleted by
-// begin, set_expiry, end, a combine or a sweep. Only the confirmed
-// archive_session_discard naming its fingerprint removes it.
+// The v3 private record stores the expiry, begin time, session fingerprint,
+// begin ID and local owner in one keyring write. Only a consistent owner-bound
+// record with a matching public half has a trusted expiry. An older or
+// malformed record is kept even when a caller confirms its disposal.
 //
 // The device-wide slot of Keepers before lv90 is not a session slot here: it
 // is never read, indexed, swept or ended, whatever it holds. Its owner cannot be verified, so
@@ -52,12 +29,9 @@
 package handlers
 
 import (
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"strconv"
 	"strings"
@@ -79,7 +53,7 @@ import (
 // begin-to-open gap before the server session does.
 const archiveSessionMaxTTL = 30 * time.Minute
 
-const archiveSessionSlotHeader = "dragpass-archive-session-v2 "
+const archiveSessionSlotHeader = "dragpass-archive-session-v3 "
 
 var (
 	errArchiveSessionExpired       = errors.New("archive session key expired")
@@ -89,8 +63,9 @@ var (
 	errArchiveSessionDeleteFailed = errors.New("archive session slot delete failed")
 )
 
-// archiveSessionRecord is the header of a v2 slot record.
+// archiveSessionRecord is the header of a v3 slot record.
 type archiveSessionRecord struct {
+	owner       archiveSessionOwner
 	expiresAt   time.Time
 	begunAt     time.Time
 	fingerprint string
@@ -108,14 +83,14 @@ func encodeArchiveSessionSlot(rec archiveSessionRecord, pem []byte) *memguard.Lo
 		"expires_at=" + strconv.FormatInt(rec.expiresAt.Unix(), 10) +
 		" begun_at=" + strconv.FormatInt(rec.begunAt.Unix(), 10) +
 		" fp=" + rec.fingerprint +
-		" begin_id=" + beginID + "\n"
+		" begin_id=" + beginID + " account=" + rec.owner.account + " generation=" + strconv.FormatUint(rec.owner.generation, 10) + " account_fp=" + rec.owner.fingerprint + "\n"
 	value := make([]byte, 0, len(header)+len(pem))
 	value = append(value, header...)
 	value = append(value, pem...)
 	return memguard.NewBufferFromBytes(value)
 }
 
-// decodeArchiveSessionSlot splits a v2 record. ok is false for anything
+// decodeArchiveSessionSlot splits a v3 record. ok is false for anything
 // else, including the v1 header of development builds.
 func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem string, ok bool) {
 	rest, found := strings.CutPrefix(value, archiveSessionSlotHeader)
@@ -127,11 +102,11 @@ func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem strin
 		return archiveSessionRecord{}, "", false
 	}
 	fields := strings.Split(line, " ")
-	if len(fields) != 4 {
+	if len(fields) != 7 {
 		return archiveSessionRecord{}, "", false
 	}
-	values := make([]string, 4)
-	for i, name := range []string{"expires_at=", "begun_at=", "fp=", "begin_id="} {
+	values := make([]string, 7)
+	for i, name := range []string{"expires_at=", "begun_at=", "fp=", "begin_id=", "account=", "generation=", "account_fp="} {
 		v, found := strings.CutPrefix(fields[i], name)
 		if !found {
 			return archiveSessionRecord{}, "", false
@@ -155,9 +130,13 @@ func decodeArchiveSessionSlot(value string) (rec archiveSessionRecord, pem strin
 	} else if !isLowerUUID(beginID) {
 		return archiveSessionRecord{}, "", false
 	}
+	generation, err := strconv.ParseUint(values[5], 10, 64)
+	if err != nil || generation == 0 || strconv.FormatUint(generation, 10) != values[5] || !isLowerUUID(values[4]) || !isLowerHex64(values[6]) {
+		return archiveSessionRecord{}, "", false
+	}
 	return archiveSessionRecord{
 		expiresAt: time.Unix(expires, 0), begunAt: time.Unix(begun, 0),
-		fingerprint: values[2], beginID: beginID,
+		fingerprint: values[2], beginID: beginID, owner: archiveSessionOwner{account: values[4], generation: generation, fingerprint: values[6]},
 	}, pem, true
 }
 
@@ -229,18 +208,14 @@ func (s archiveSessionSlotState) trusted() bool {
 // archiveSessionSlot is one read of an organization's slot, taken under the
 // lock. It carries no private key material.
 type archiveSessionSlot struct {
-	state archiveSessionSlotState
+	state                archiveSessionSlotState
+	preserveUnknownOwner bool
 	// record is set for live, expired and expiry-unknown slots.
 	record archiveSessionRecord
 	// fingerprint is the slot's key fingerprint: the public half's when it
 	// is there, else the v2 record's, else the one derived from a parsable
 	// private key; "" when none exists.
 	fingerprint string
-	// storedDigest is hex(sha256(private record)), set only when the slot
-	// has no fingerprint at all (a private record that is not a parsable
-	// key, with no public half and no v2 record). It is not a key
-	// fingerprint; it lets the confirmed discard name that slot.
-	storedDigest string
 	// publicKey is the public half ("" when missing).
 	publicKey string
 	// keyDigest identifies the private key independently of its expiry header.
@@ -270,11 +245,10 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 	}
 	rec, recordPEM, ok := decodeArchiveSessionSlot(value)
 	if !ok {
-		if public == "" {
-			deriveArchiveSessionFingerprint(&slot, value)
-		}
+		slot.preserveUnknownOwner = true
 		return slot, nil
 	}
+	slot.record = rec
 	slot.keyDigest = sha256.Sum256([]byte(recordPEM))
 	if public == "" {
 		slot.fingerprint = rec.fingerprint
@@ -283,7 +257,6 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 	if subtle.ConstantTimeCompare([]byte(slot.fingerprint), []byte(rec.fingerprint)) != 1 {
 		return slot, nil
 	}
-	slot.record = rec
 	now := d.Now()
 	switch {
 	case !archiveSessionRecordConsistent(rec, now):
@@ -297,38 +270,6 @@ func inspectArchiveSessionSlotLocked(d Deps, orgID string, pem func(string)) (ar
 		}
 	}
 	return slot, nil
-}
-
-// deriveArchiveSessionFingerprint names an unowned slot that has neither a
-// public half nor a v2 record: the fingerprint of the private key's public
-// key in begin's encoding (PKIX "PUBLIC KEY" PEM), or, when the record is
-// not a parsable RSA PKCS#8 key, the digest of the stored bytes. Only this
-// shape has its private key parsed outside a combine. The PEM is copied into
-// a locked buffer and decoded from it without a Go string copy, and the
-// decoded DER is zeroed once parsed; temporaries inside the PEM decoder and
-// the parser, and the parsed rsa.PrivateKey value, are not zeroed (Go offers
-// no reliable way to). Nothing is logged, returned or written.
-func deriveArchiveSessionFingerprint(slot *archiveSessionSlot, value string) {
-	if start := strings.Index(value, "-----BEGIN"); start >= 0 {
-		buf := memguard.NewBufferFromBytes([]byte(value[start:]))
-		block, _ := pem.Decode(buf.Bytes())
-		var parsed any
-		var err error
-		if block != nil {
-			parsed, err = x509.ParsePKCS8PrivateKey(block.Bytes)
-			secure.Zeroize(block.Bytes)
-		}
-		buf.Destroy()
-		if priv, ok := parsed.(*rsa.PrivateKey); block != nil && err == nil && ok {
-			if der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey); err == nil {
-				public := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
-				slot.fingerprint = fingerprintBase64Public(string(public))
-				return
-			}
-		}
-	}
-	digest := sha256.Sum256([]byte(value))
-	slot.storedDigest = hex.EncodeToString(digest[:])
 }
 
 // archiveSessionRecordConsistent reports whether rec's times are ones this
@@ -351,17 +292,24 @@ func archiveSessionRecordConsistent(rec archiveSessionRecord, now time.Time) boo
 // errArchiveSessionExpired after deleting an expired slot, and
 // errArchiveSessionExpiryUnknown (slot kept) for an expiry-unknown or
 // unowned slot. On success the caller destroys the buffer.
-func openArchiveSessionSlot(d Deps, orgID string) (*memguard.LockedBuffer, archiveSessionSlot, error) {
+func openArchiveSessionSlot(d Deps, orgID, decisionAccount string) (*memguard.LockedBuffer, archiveSessionSlot, error) {
 	var buf *memguard.LockedBuffer
 	var read archiveSessionSlot
 	err := withArchiveSessionSlotLock(d, func() error {
-		slot, err := inspectArchiveSessionSlotLocked(d, orgID, func(pem string) {
-			buf = memguard.NewBufferFromBytes([]byte(pem))
-		})
+		var private string
+		defer secure.WipeString(&private)
+		slot, err := inspectArchiveSessionSlotLocked(d, orgID, func(pem string) { private = pem })
 		if err != nil {
 			return err
 		}
-		return useArchiveSessionSlotForCombineLocked(d, orgID, slot, func() { read = slot })
+		owner, err := archiveSessionCaller(d, slot)
+		if err != nil {
+			return err
+		}
+		if owner.account != decisionAccount {
+			return errArchiveSessionLogin
+		}
+		return useArchiveSessionSlotLocked(d, orgID, slot, func() { read = slot; buf = memguard.NewBufferFromBytes([]byte(private)) })
 	})
 	if err != nil {
 		if buf != nil {
@@ -387,19 +335,17 @@ func recheckArchiveSessionSlotForOutput(d Deps, orgID string, read archiveSessio
 		if err != nil {
 			return err
 		}
+		if _, err := archiveSessionCaller(d, slot); err != nil {
+			return err
+		}
+		if slot.record.owner != read.record.owner {
+			return keychain.ErrSecretNotFound
+		}
 		if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.keyDigest[:], read.keyDigest[:]) != 1 {
 			return keychain.ErrSecretNotFound
 		}
-		return useArchiveSessionSlotForCombineLocked(d, orgID, slot, func() {})
+		return useArchiveSessionSlotLocked(d, orgID, slot, func() {})
 	})
-}
-
-// useArchiveSessionSlotForCombineLocked is the combine's judgement of a slot
-// read under the lock, at its open and right before its output. It is the
-// one place the combine's slot check lives: the account boundary change adds
-// the comparison with the server decision's account here, for both reads.
-func useArchiveSessionSlotForCombineLocked(d Deps, orgID string, slot archiveSessionSlot, live func()) error {
-	return useArchiveSessionSlotLocked(d, orgID, slot, live)
 }
 
 // useArchiveSessionSlotLocked applies the use rule to a slot just read: no
@@ -453,6 +399,8 @@ func deleteArchiveSessionSlot(d Deps, orgID string) error {
 // archiveSessionSlotResponse maps openArchiveSessionSlot errors to the wire.
 func archiveSessionSlotResponse(err error) proto.BaseResponse {
 	switch {
+	case errors.Is(err, errArchiveSessionLogin), errors.Is(err, errArchiveSessionOtherOwner), errors.Is(err, errArchiveSessionUnknownOwner):
+		return archiveOwnerRefusal(err)
 	case errors.Is(err, errArchiveSessionExpired):
 		return errs.CodeResponse(errs.ErrCodeArchiveSessionExpired, "archive session key expired")
 	case errors.Is(err, errArchiveSessionExpiryUnknown):

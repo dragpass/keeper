@@ -9,11 +9,8 @@
 package handlers
 
 import (
-	"crypto/ed25519"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"reflect"
 	"slices"
 	"strconv"
@@ -22,7 +19,6 @@ import (
 	"time"
 
 	"github.com/dragpass/keeper/config"
-	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -89,6 +85,10 @@ func TestArchiveSessionDiscard_RemovesAnUntrustedSlotByItsFingerprint(t *testing
 				_ = store.Set(config.Service, strings.TrimPrefix(k, config.Service+"|"), v)
 			}
 			write()
+			if name == "no header" || strings.HasPrefix(name, "v1 ") {
+				assertUnknownOwnerPreserved(t, deps, store, clock, a.Fingerprint)
+				return
+			}
 			slotFP := a.Fingerprint
 			if pub := orgSlotPublic(store, testOrgA); pub != "" {
 				slotFP = fingerprintBase64Public(pub)
@@ -114,7 +114,7 @@ func TestArchiveSessionDiscard_RemovesAnUntrustedSlotByItsFingerprint(t *testing
 // uses. status reports it without writing anything, and only the confirmed
 // discard naming it removes the slot; end, set_expiry and the sweeps leave
 // it, and begin works once it is gone.
-func TestArchiveSessionDiscard_RemovesASlotWithoutPublicHalfByItsDerivedFingerprint(t *testing.T) {
+func TestArchiveSessionDiscard_PreservesOwnerlessSlotWithoutPublicHalf(t *testing.T) {
 	for _, form := range []string{"bare key", "v1 record"} {
 		t.Run(form, func(t *testing.T) {
 			deps, mem, clock := newOrgSessionDeps(t)
@@ -125,35 +125,7 @@ func TestArchiveSessionDiscard_RemovesASlotWithoutPublicHalfByItsDerivedFingerpr
 			}
 			writeOrgSlot(t, mem, testOrgA, value)
 			_ = mem.Delete(config.Service, config.OrgArchiveSessionPublicKeyPrefix+testOrgA)
-			before := mem.Snapshot()
-
-			counting := &writeCountingStore{SecretStore: mem}
-			d := deps
-			d.Store = counting
-			status := sessionStatus(t, d, testOrgA, a.Fingerprint)
-			if status.State != proto.ArchiveSessionStateUnowned || status.Fingerprint != a.Fingerprint || status.StoredDigest != "" || !*status.FingerprintMatches {
-				t.Fatalf("status: %+v", status)
-			}
-			if counting.writes.Load() != 0 {
-				t.Fatal("status wrote")
-			}
-			if resp := HandleArchiveSessionEnd(deps, proto.ArchiveSessionEndRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint}); !resp.Data.(proto.ArchiveSessionEndResponseData).SlotWithoutExpiryKept {
-				t.Fatalf("end: %+v", resp.Data)
-			}
-			if resp := setExpiry(deps, testOrgA, a.Fingerprint, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
-				t.Fatalf("set_expiry: %q", resp.ErrorCode)
-			}
-			clock.Set(clock.Now().Add(48 * time.Hour))
-			SweepExpiredArchiveSession(deps)
-			if resp := discardSession(deps, testOrgA, strings.Repeat("0", 64)); resp.ErrorCode != string(errs.ErrCodeArchiveSessionChanged) {
-				t.Fatalf("discard by another fingerprint: %q", resp.ErrorCode)
-			}
-			if !reflect.DeepEqual(before, mem.Snapshot()) {
-				t.Fatal("something other than the confirmed discard changed the slot")
-			}
-			requireDiscarded(t, discardSession(deps, testOrgA, a.Fingerprint), true)
-			requireOrgSlotGone(t, mem, testOrgA)
-			beginOrgSession(t, deps, testOrgA)
+			assertUnknownOwnerPreserved(t, deps, mem, clock, a.Fingerprint)
 		})
 	}
 }
@@ -163,8 +135,8 @@ func TestArchiveSessionDiscard_RemovesASlotWithoutPublicHalfByItsDerivedFingerpr
 // stored bytes instead (stored_digest: hex(sha256(stored private record)),
 // not a key fingerprint), and the confirmed discard naming that digest
 // removes it. The digest is accepted for that shape only.
-func TestArchiveSessionDiscard_RemovesAnUnparsableSlotByItsStoredDigest(t *testing.T) {
-	deps, mem, _ := newOrgSessionDeps(t)
+func TestArchiveSessionDiscard_PreservesAnUnparsableSlotEvenByItsStoredDigest(t *testing.T) {
+	deps, mem, clock := newOrgSessionDeps(t)
 	a := beginOrgSession(t, deps, testOrgA)
 	stored := "-----BEGIN PRIVATE KEY-----\nbm90IGEga2V5\n-----END PRIVATE KEY-----\n"
 	writeOrgSlot(t, mem, testOrgA, stored)
@@ -172,24 +144,13 @@ func TestArchiveSessionDiscard_RemovesAnUnparsableSlotByItsStoredDigest(t *testi
 	digest := sha256.Sum256([]byte(stored))
 	want := hex.EncodeToString(digest[:])
 
-	status := sessionStatus(t, deps, testOrgA, "")
-	if status.State != proto.ArchiveSessionStateUnowned || status.Fingerprint != "" || status.StoredDigest != want {
-		t.Fatalf("status: %+v", status)
-	}
+	assertUnknownOwnerPreserved(t, deps, mem, clock, a.Fingerprint)
 	before := mem.Snapshot()
-	for _, req := range []proto.ArchiveSessionDiscardRequest{
-		{OrgID: testOrgA, Fingerprint: a.Fingerprint, ConfirmDiscard: true},
-		{OrgID: testOrgA, StoredDigest: strings.Repeat("0", 64), ConfirmDiscard: true},
-	} {
-		if resp := HandleArchiveSessionDiscard(deps, req); resp.ErrorCode != string(errs.ErrCodeArchiveSessionChanged) {
-			t.Fatalf("discard %+v: %q", req, resp.ErrorCode)
-		}
+	r := HandleArchiveSessionDiscard(deps, proto.ArchiveSessionDiscardRequest{OrgID: testOrgA, StoredDigest: want, ConfirmDiscard: true})
+	if r.Success || r.Data != nil || r.ErrorCode != "archive_session_owner_unknown" || !reflect.DeepEqual(before, mem.Snapshot()) {
+		t.Fatal("digest authorized ownerless discard")
 	}
-	if !reflect.DeepEqual(before, mem.Snapshot()) {
-		t.Fatal("a refused discard changed the slot")
-	}
-	requireDiscarded(t, HandleArchiveSessionDiscard(deps, proto.ArchiveSessionDiscardRequest{OrgID: testOrgA, StoredDigest: want, ConfirmDiscard: true}), true)
-	requireOrgSlotGone(t, mem, testOrgA)
+	deps, mem, _ = newOrgSessionDeps(t)
 
 	// A slot that has a fingerprint is never discarded by a digest.
 	beginOrgSession(t, deps, testOrgA)
@@ -255,51 +216,4 @@ func boolWord(b bool) string {
 		return "ok"
 	}
 	return "refused"
-}
-
-// The derived fingerprint is begin's fingerprint of the same key, for a bare
-// PEM and one behind a header; a PKCS#8 key that is not RSA, and bytes that
-// are not a key, get the stored digest instead; the value read is left as
-// it was.
-func TestDeriveArchiveSessionFingerprint(t *testing.T) {
-	pair, err := crypto.GenerateRSAKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := fingerprintBase64Public(pair.PublicKey)
-	_, edKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	edDER, err := x509.MarshalPKCS8PrivateKey(edKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	edPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edDER}))
-	for name, tc := range map[string]struct {
-		value  string
-		wantFP string
-	}{
-		"bare RSA key":       {pair.PrivateKey, want},
-		"RSA behind v1":      {sessionSlotHeaderForTest + "1789000000\n" + pair.PrivateKey, want},
-		"Ed25519 PKCS#8 key": {edPEM, ""},
-		"not a key":          {"-----BEGIN PRIVATE KEY-----\nbm90IGEga2V5\n-----END PRIVATE KEY-----\n", ""},
-		"no PEM at all":      {"garbage", ""},
-	} {
-		t.Run(name, func(t *testing.T) {
-			value := strings.Clone(tc.value)
-			var slot archiveSessionSlot
-			deriveArchiveSessionFingerprint(&slot, value)
-			if slot.fingerprint != tc.wantFP {
-				t.Fatalf("fingerprint %q, want %q", slot.fingerprint, tc.wantFP)
-			}
-			digest := sha256.Sum256([]byte(tc.value))
-			if (tc.wantFP == "") != (slot.storedDigest == hex.EncodeToString(digest[:])) {
-				t.Fatalf("stored digest %q", slot.storedDigest)
-			}
-			if value != tc.value {
-				t.Fatal("the value read was changed")
-			}
-		})
-	}
 }

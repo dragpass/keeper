@@ -103,6 +103,7 @@ var pinnedAppRoutes = []string{
 	"/v1/account/chat-session/commit",
 	"/v1/account/chat-session/prepare",
 	"/v1/account/chat-session/status",
+	"/v1/account/login/end",
 	"/v1/archive/account_archive_key_generate",
 	"/v1/archive/archive_key_generate",
 	"/v1/archive/archive_key_rotate_abort",
@@ -732,7 +733,8 @@ func TestArchiveUnwrapAndRewrapBindsTheRotationTarget(t *testing.T) {
 func TestArchiveSessionExpiryRoutesRoundTrip(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
-	code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_begin", map[string]any{"org_id": routeOnlyOrg})
+	login := archiveRouteLogin(t, server, routeOwner)
+	code, begun, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_begin", map[string]any{"app_login": login, "org_id": routeOnlyOrg})
 	if code != http.StatusOK || !begun.Success {
 		t.Fatalf("begin: %d %s", code, body)
 	}
@@ -745,14 +747,14 @@ func TestArchiveSessionExpiryRoutesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	expires := bound.Add(-time.Minute).UTC().Format(time.RFC3339)
-	code, set, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"org_id": routeOnlyOrg, "fingerprint": data.Fingerprint, "expires_at": expires})
+	code, set, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "fingerprint": data.Fingerprint, "expires_at": expires})
 	if code != http.StatusOK || !set.Success {
 		t.Fatalf("set expiry: %d %s", code, body)
 	}
-	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"fingerprint": data.Fingerprint, "expires_at": expires, "org_id": routeOnlyOrg, "session_id": "x"}); code != http.StatusBadRequest {
+	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_set_expiry", map[string]any{"fingerprint": data.Fingerprint, "expires_at": expires, "app_login": login, "org_id": routeOnlyOrg, "session_id": "x"}); code != http.StatusBadRequest {
 		t.Fatalf("set expiry took an unknown field: %d", code)
 	}
-	code, ended, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg, "fingerprint": data.Fingerprint})
+	code, ended, body := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "fingerprint": data.Fingerprint})
 	var end proto.ArchiveSessionEndResponseData
 	if code != http.StatusOK || !ended.Success || remarshal(ended.Data, &end) != nil || !end.Ended {
 		t.Fatalf("end by fingerprint: %d %s", code, body)
@@ -762,6 +764,7 @@ func TestArchiveSessionExpiryRoutesRoundTrip(t *testing.T) {
 func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	server, _ := newChatTestServer(t)
 	session, csrf := openTestSession(t, server)
+	login := archiveRouteLogin(t, server, routeOwner)
 	for _, path := range []string{
 		"/v1/archive/archive_key_status", "/v1/archive/account_archive_key_generate",
 		"/v1/archive/archive_key_generate", "/v1/archive/archive_key_rotate_abort",
@@ -778,13 +781,13 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 	// it ends; the org_id-only end is refused.
 	fp := strings.Repeat("0", 64)
 	for path, body := range map[string]map[string]any{
-		"/v1/archive/archive_session_begin": {"org_id": routeOnlyOrg},
-		"/v1/archive/archive_session_end":   {"org_id": routeOnlyOrg, "fingerprint": fp},
+		"/v1/archive/archive_session_begin": {"app_login": login, "org_id": routeOnlyOrg},
+		"/v1/archive/archive_session_end":   {"app_login": login, "org_id": routeOnlyOrg, "fingerprint": fp},
 	} {
 		if code, result, raw := callRoute(t, server, session, csrf, path, body); code != http.StatusOK || !result.Success {
 			t.Fatalf("%s: %d %s", path, code, raw)
 		}
-		if code, result, _ := callRoute(t, server, session, csrf, path, map[string]any{}); code == http.StatusOK && result.Success {
+		if code, result, _ := callRoute(t, server, session, csrf, path, map[string]any{"app_login": login}); code == http.StatusOK && result.Success {
 			t.Fatalf("%s ran without org_id", path)
 		}
 		withUnknown := map[string]any{"public_key": "x"}
@@ -795,26 +798,26 @@ func TestArchiveRoutesPassTheirTypedRequests(t *testing.T) {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
 	}
-	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"org_id": routeOnlyOrg}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_end", map[string]any{"app_login": login, "org_id": routeOnlyOrg}); code != http.StatusOK || result.Success || result.ErrorCode != "validation_error" {
 		t.Fatalf("org_id-only end: %d %q", code, result.ErrorCode)
 	}
 	// The confirmed discard names the key and carries confirm_discard.
-	discard := map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp, "confirm_discard": true}
+	discard := map[string]any{"app_login": login, "org_id": routeOnlyOrg, "fingerprint": fp, "confirm_discard": true}
 	// The begin above left a session whose key is not fp: refused, sealed.
 	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", discard); code != http.StatusOK || result.ErrorCode != "archive_session_changed" {
 		t.Fatalf("discard of a key the slot does not hold: %d %s", code, raw)
 	}
-	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || result.ErrorCode != "validation_error" {
+	if code, result, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || result.ErrorCode != "validation_error" {
 		t.Fatalf("discard without confirm_discard: %d %q", code, result.ErrorCode)
 	}
-	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || !result.Success || !strings.Contains(raw, `"state":"live"`) || !strings.Contains(raw, `"fingerprint_matches":false`) {
+	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "fingerprint": fp}); code != http.StatusOK || !result.Success || !strings.Contains(raw, `"state":"live"`) || !strings.Contains(raw, `"fingerprint_matches":false`) {
 		t.Fatalf("status: %d %s", code, raw)
 	}
-	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
+	if code, _, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "public_key": "x"}); code != http.StatusBadRequest {
 		t.Fatalf("status took an unknown field: %d", code)
 	}
 	// stored_digest names only a slot with no fingerprint; this one has one.
-	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"org_id": routeOnlyOrg, "stored_digest": fp, "confirm_discard": true}); code != http.StatusOK || result.ErrorCode != "archive_session_changed" {
+	if code, result, raw := callRoute(t, server, session, csrf, "/v1/archive/archive_session_discard", map[string]any{"app_login": login, "org_id": routeOnlyOrg, "stored_digest": fp, "confirm_discard": true}); code != http.StatusOK || result.ErrorCode != "archive_session_changed" {
 		t.Fatalf("discard by stored_digest: %d %s", code, raw)
 	}
 	discard["public_key"] = "x"
@@ -967,5 +970,49 @@ func TestChatRuntimeRouteClaimAndProxiedFramesRace(t *testing.T) {
 		if claimed.Load() == (extensionRan.Load() > 0) {
 			t.Fatalf("round %d: claimed=%v extension ran %d", round, claimed.Load(), extensionRan.Load())
 		}
+	}
+}
+
+func archiveRouteLogin(t *testing.T, server *Server, account string) proto.ArchiveAppLoginEndRequest {
+	t.Helper()
+	store := server.app.Store
+	if err := keychain.SavePublicKey(store, routeKeypair(t).PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := keychain.SetAccountBinding(store, account, "user", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proto.ArchiveAppLoginEndRequest{AccountID: account, Generation: b.ChatStateGeneration}
+}
+
+func TestArchiveRoutesRefuseSupersededLoginBeforeReadingOrWriting(t *testing.T) {
+	server, _ := newChatTestServer(t)
+	session, csrf := openTestSession(t, server)
+	a := archiveRouteLogin(t, server, routeOwner)
+	b := archiveRouteLogin(t, server, routePeer)
+	body := map[string]any{"org_id": routeOnlyOrg, "begin_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "app_login": b}
+	_, begun, _ := callRoute(t, server, session, csrf, "/v1/archive/archive_session_begin", body)
+	if !begun.Success {
+		t.Fatal(begun.ErrorCode)
+	}
+	body["app_login"] = a
+	for _, path := range []string{"/v1/archive/archive_session_begin", "/v1/archive/archive_session_status"} {
+		if strings.HasSuffix(path, "status") {
+			delete(body, "begin_id")
+		}
+		_, r, _ := callRoute(t, server, session, csrf, path, body)
+		if r.Success || r.Data != nil || r.ErrorCode != "archive_session_login_unavailable" {
+			t.Fatal("stale login response", r.ErrorCode)
+		}
+	}
+	_, r, _ := callRoute(t, server, session, csrf, "/v1/account/login/end", a)
+	if !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	body["app_login"] = b
+	_, r, _ = callRoute(t, server, session, csrf, "/v1/archive/archive_session_status", body)
+	if !r.Success {
+		t.Fatal("stale logout affected next account", r.ErrorCode)
 	}
 }

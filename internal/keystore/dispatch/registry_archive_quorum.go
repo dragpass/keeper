@@ -7,6 +7,7 @@
 package dispatch
 
 import (
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
@@ -23,13 +24,26 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveSplitStatus:            wrap(handlers.HandleArchiveSplitStatus).appOnlyAction(),
 		proto.ActionArchiveSplitFinalize:          wrap(handlers.HandleArchiveSplitFinalize).appOnlyAction(),
 		proto.ActionArchiveSplitAbandon:           wrap(handlers.HandleArchiveSplitAbandon).appOnlyAction(),
-		proto.ActionArchiveSessionBegin:           wrap(handlers.HandleArchiveSessionBegin).appOnlyAction(),
-		proto.ActionArchiveSessionSetExpiry:       wrap(handlers.HandleArchiveSessionSetExpiry).appOnlyAction(),
-		proto.ActionArchiveSessionEnd:             wrap(handlers.HandleArchiveSessionEnd).appOnlyAction(),
-		proto.ActionArchiveSessionLegacyDiscard:   wrap(handlers.HandleArchiveSessionLegacyDiscard).appOnlyAction(),
-		proto.ActionArchiveSessionDiscard:         wrap(handlers.HandleArchiveSessionDiscard).appOnlyAction(),
-		proto.ActionArchiveSessionStatus:          wrap(handlers.HandleArchiveSessionStatus).appOnlyAction(),
-		proto.ActionArchiveQuorumCombineAndRewrap: wrap(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
+		proto.ActionArchiveSessionBegin:           archiveLoginAction(handlers.HandleArchiveSessionBegin).appOnlyAction(),
+		proto.ActionArchiveSessionSetExpiry:       archiveLoginAction(handlers.HandleArchiveSessionSetExpiry).appOnlyAction(),
+		proto.ActionArchiveSessionEnd:             archiveLoginAction(handlers.HandleArchiveSessionEnd).appOnlyAction(),
+		proto.ActionArchiveSessionLegacyDiscard:   archiveLoginAction(handlers.HandleArchiveSessionLegacyDiscard).appOnlyAction(),
+		proto.ActionArchiveSessionDiscard:         archiveLoginAction(handlers.HandleArchiveSessionDiscard).appOnlyAction(),
+		proto.ActionArchiveSessionStatus:          archiveLoginAction(handlers.HandleArchiveSessionStatus).appOnlyAction(),
+		proto.ActionArchiveQuorumCombineAndRewrap: archiveLoginAction(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
 		proto.ActionArchiveReconfigureStage:       wrap(handlers.HandleArchiveReconfigureStage).appOnlyAction(),
 	}
+}
+
+func archiveLoginAction[T interface {
+	InitiatingArchiveLogin() proto.ArchiveLoginIdentity
+}](handler func(handlers.Deps, T) proto.BaseResponse) action {
+	return wrap(func(d handlers.Deps, req T) proto.BaseResponse {
+		login := req.InitiatingArchiveLogin()
+		if err := login.Validate(); err != nil {
+			return errs.Response(err)
+		}
+		d.ArchiveRequestLogin = &login
+		return handler(d, req)
+	})
 }

@@ -23,6 +23,7 @@ var appRouteOnlyCalls = []struct {
 	body   any
 }{
 	{proto.ActionAccountBindingSet, "/v1/account/binding", map[string]any{"account_id": routeOnlyOwner, "alias": "alice"}},
+	{proto.ActionArchiveAppLoginEnd, "/v1/account/login/end", map[string]any{"account_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "generation": "AAAAAAAAAAAAAAAAAAAAAA"}},
 	{proto.ActionAccountBindingSignout, "/v1/account/binding/signout", map[string]any{}},
 	{proto.ActionRotateUserKeypairPrepare, "/v1/account-key/rotate/prepare", map[string]any{}},
 	{proto.ActionRotateUserKeypairPromote, "/v1/account-key/rotate/promote", map[string]any{}},

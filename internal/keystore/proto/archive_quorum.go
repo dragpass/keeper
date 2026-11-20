@@ -131,6 +131,7 @@ type ArchiveShareRewrapResponseData struct {
 // the organization and begin_id only; the account condition comes with the
 // account boundary change.
 type ArchiveSessionBeginRequest struct {
+	ArchiveLoginScope
 	OrgID   string `json:"org_id,omitempty"`
 	BeginID string `json:"begin_id,omitempty"`
 }
@@ -183,6 +184,7 @@ const (
 // ArchiveSessionStatusRequest — read OrgID's session slot. Fingerprint
 // (optional) asks whether the slot holds that key.
 type ArchiveSessionStatusRequest struct {
+	ArchiveLoginScope
 	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
@@ -233,6 +235,7 @@ type ArchiveSessionActiveData struct {
 // (required, as begin returned it) names the key that is ended, so an end
 // never removes a key it does not name.
 type ArchiveSessionEndRequest struct {
+	ArchiveLoginScope
 	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
@@ -248,6 +251,7 @@ func (r ArchiveSessionEndRequest) Validate() error {
 // (RFC 3339) to OrgID's slot, when it holds the session begin returned
 // Fingerprint for. The slot's expiry can only move earlier.
 type ArchiveSessionSetExpiryRequest struct {
+	ArchiveLoginScope
 	OrgID       string `json:"org_id,omitempty"`
 	Fingerprint string `json:"fingerprint"`
 	ExpiresAt   string `json:"expires_at"`
@@ -303,6 +307,7 @@ type ArchiveSessionEndResponseData struct {
 // is not a parsable key, with no public half and no v2 record, as
 // archive_session_status reports it.
 type ArchiveSessionDiscardRequest struct {
+	ArchiveLoginScope
 	OrgID          string `json:"org_id,omitempty"`
 	Fingerprint    string `json:"fingerprint,omitempty"`
 	StoredDigest   string `json:"stored_digest,omitempty"`
@@ -340,6 +345,7 @@ type ArchiveSessionDiscardResponseData struct {
 // ArchiveSessionLegacyDiscardRequest preserves the legacy RPC shape for
 // older callers. Confirmation does not identify the original slot owner.
 type ArchiveSessionLegacyDiscardRequest struct {
+	ArchiveLoginScope
 	ConfirmDiscard bool `json:"confirm_discard"`
 }
 
@@ -372,6 +378,7 @@ type RewrappedShareInput struct {
 //	                 shape of dek_unwrap_and_rewrap_for_many. The flat
 //	                 recipient_public_keys list was removed in 0.0.58.
 type ArchiveQuorumCombineAndRewrapRequest struct {
+	ArchiveLoginScope
 	RecoverySessionID string                `json:"recovery_session_id"`
 	Decision          *GroupRewrapDecision  `json:"decision,omitempty"`
 	RewrappedShares   []RewrappedShareInput `json:"rewrapped_shares"`
@@ -419,3 +426,11 @@ type QuorumRewrapGrant struct {
 type ArchiveQuorumCombineAndRewrapResponseData struct {
 	Grants []QuorumRewrapGrant `json:"grants"`
 }
+
+// ArchiveLoginScope identifies the App login that initiated a slot operation.
+// The paired caller captures it before dispatch. Keeper compares it under lock.
+type ArchiveLoginScope struct {
+	AppLogin ArchiveLoginIdentity `json:"app_login,omitzero"`
+}
+
+func (s ArchiveLoginScope) InitiatingArchiveLogin() ArchiveLoginIdentity { return s.AppLogin }

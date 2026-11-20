@@ -201,6 +201,7 @@ func TestReconfigurationKeyIsolation_Combine(t *testing.T) {
 // begin, combine and end.
 func TestReconfigurationKeyIsolation_StatusGenerateAndSessions(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	probe, _ := stageForIsolation(t, &deps, testOrgA)
 	_ = HandleArchiveKeyStatus(deps, proto.ArchiveKeyStatusRequest{OrgID: testOrgA})
 	_ = HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA})

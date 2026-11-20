@@ -101,7 +101,7 @@ func TestArchiveCombineRefusesSessionSlotWithoutExpiryAndKeepsIt(t *testing.T) {
 	legacy := writeSessionSlotWithoutExpiry(t, f.store)
 
 	response := HandleArchiveQuorumCombineAndRewrap(f.deps, req)
-	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_expiry_unknown" {
+	if response.Success || response.Data != nil || response.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("session slot without expiry was used: success=%v code=%s", response.Success, response.ErrorCode)
 	}
 	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
@@ -322,7 +322,7 @@ func TestArchiveSessionSetExpiryKeepsASlotWithoutExpiry(t *testing.T) {
 	response := HandleArchiveSessionSetExpiry(f.deps, proto.ArchiveSessionSetExpiryRequest{
 		OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint, ExpiresAt: f.clock.now().Add(time.Minute).UTC().Format(time.RFC3339),
 	})
-	if response.Success || response.ErrorCode != "archive_session_expiry_unknown" {
+	if response.Success || response.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("slot without expiry accepted an expiry: success=%v code=%s", response.Success, response.ErrorCode)
 	}
 	if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
@@ -386,12 +386,8 @@ func TestArchiveSessionEndKeepsASlotWithoutExpiry(t *testing.T) {
 
 	for _, req := range []proto.ArchiveSessionEndRequest{{OrgID: sessionExpiryOrg, Fingerprint: data.Fingerprint}} {
 		end := HandleArchiveSessionEnd(f.deps, req)
-		if !end.Success {
-			t.Fatalf("end failed: %s", end.ErrorCode)
-		}
-		out := end.Data.(proto.ArchiveSessionEndResponseData)
-		if out.Ended || !out.SlotWithoutExpiryKept {
-			t.Fatalf("end of a slot without expiry reported %+v", out)
+		if end.Success || end.Data != nil || end.ErrorCode != "archive_session_owner_unknown" {
+			t.Fatal("unexpected end result", end.ErrorCode)
 		}
 		if sessionSlotValue(f.store, config.OrgArchiveSessionPrivateKeyPrefix+sessionExpiryOrg) != legacy {
 			t.Fatal("end deleted a slot without expiry")

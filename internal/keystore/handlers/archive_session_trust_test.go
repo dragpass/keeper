@@ -35,16 +35,24 @@ func sessionSlotKeys(store interface{ Snapshot() map[string]string }) map[string
 	return out
 }
 
-// Begin writes the v2 record: the expiry, the begin time, the fingerprint
+// Begin writes the v3 owner-bound record: the expiry, the begin time, the fingerprint
 // of the public half and the begin_id ("-" without one).
 func TestArchiveSessionSlotRecordFormat(t *testing.T) {
 	deps, store, clock := newOrgSessionDeps(t)
 	a := beginOrgSession(t, deps, testOrgA)
 	now := clock.Now().Unix()
-	want := "dragpass-archive-session-v2 expires_at=" + strconv.FormatInt(now+int64(archiveSessionMaxTTL/time.Second), 10) +
-		" begun_at=" + strconv.FormatInt(now, 10) + " fp=" + a.Fingerprint + " begin_id=-\n-----BEGIN"
+	b, _, err := keychain.GetAccountBinding(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := keychain.GetPublicKey(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := archiveSessionSlotHeader + "expires_at=" + strconv.FormatInt(now+int64(archiveSessionMaxTTL/time.Second), 10) +
+		" begun_at=" + strconv.FormatInt(now, 10) + " fp=" + a.Fingerprint + " begin_id=- account=" + b.AccountID + " generation=" + strconv.FormatUint(b.Generation, 10) + " account_fp=" + crypto.AccountKeyFingerprint([]byte(pub)) + "\n-----BEGIN"
 	if got := orgSlotValue(store, testOrgA); !strings.HasPrefix(got, want) {
-		t.Fatalf("record header: %q", got[:strings.Index(got, "\n")])
+		t.Fatal("incorrect session header")
 	}
 	if fingerprintBase64Public(orgSlotPublic(store, testOrgA)) != a.Fingerprint {
 		t.Fatal("the public half does not have the returned fingerprint")
@@ -79,10 +87,10 @@ func untrustedSlotRecords(t *testing.T, store keychain.SecretStore, clock *orgSe
 	beyond := strings.Replace(v2, "expires_at="+strconv.FormatInt(now.Add(archiveSessionMaxTTL).Unix(), 10),
 		"expires_at="+strconv.FormatInt(now.Add(archiveSessionMaxTTL).Unix()+1, 10), 1)
 	return map[string]func(){
-		"v1 development record, live":       set(v1(now.Add(time.Minute)), public),
-		"v1 development record, expired":    set(v1(now.Add(-time.Minute)), public),
-		"no header":                         set(pem, public),
-		"malformed v2 header":               set("dragpass-archive-session-v2 expires_at="+strconv.FormatInt(now.Add(time.Minute).Unix(), 10)+"\n"+pem, public),
+		"v1 development record, live":    set(v1(now.Add(time.Minute)), public),
+		"v1 development record, expired": set(v1(now.Add(-time.Minute)), public),
+		"no header":                      set(pem, public),
+
 		"v2 with another public half":       set(v2, other.PublicKey),
 		"v2 without its public half":        set(v2, ""),
 		"v2 beyond the expiry bound":        set(beyond, public),
@@ -102,6 +110,10 @@ func TestArchiveSessionUntrustedSlot_NeverReplacedUsedOrDeleted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			clock.Set(start)
 			write()
+			if name == "no header" || strings.HasPrefix(name, "v1 ") {
+				assertUnknownOwnerPreserved(t, deps, store, clock, a.Fingerprint)
+				return
+			}
 			before := sessionSlotKeys(store)
 			begin := HandleArchiveSessionBegin(deps, proto.ArchiveSessionBeginRequest{OrgID: testOrgA})
 			if begin.Success || begin.ErrorCode != string(errs.ErrCodeArchiveSessionActive) {
@@ -196,14 +208,14 @@ func TestArchiveSessionSetExpiry_ForeignFingerprintNeverCleansUp(t *testing.T) {
 
 	writeOrgSlot(t, store, testOrgA, orgSlotPEM(t, store, testOrgA))
 	before = sessionSlotKeys(store)
-	if resp := setExpiry(deps, testOrgA, foreign, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeNotFound) {
+	if resp := setExpiry(deps, testOrgA, foreign, clock.Now().Add(time.Minute)); resp.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("foreign fingerprint on an untrusted slot: success=%v code=%q", resp.Success, resp.ErrorCode)
 	}
 	if !reflect.DeepEqual(before, sessionSlotKeys(store)) {
 		t.Fatal("a foreign fingerprint changed an untrusted slot")
 	}
 	// Its own fingerprint still meets the use rule.
-	if resp := setExpiry(deps, testOrgA, a.Fingerprint, clock.Now().Add(time.Minute)); resp.ErrorCode != string(errs.ErrCodeArchiveSessionExpiryUnknown) {
+	if resp := setExpiry(deps, testOrgA, a.Fingerprint, clock.Now().Add(time.Minute)); resp.ErrorCode != "archive_session_owner_unknown" {
 		t.Fatalf("own fingerprint on an untrusted slot: %q", resp.ErrorCode)
 	}
 }
@@ -239,9 +251,12 @@ func TestArchiveSessionSlot_InconsistentRecordsAreUntrusted(t *testing.T) {
 	a := beginOrgSession(t, deps, testOrgA)
 	v2 := orgSlotValue(store, testOrgA)
 	now := clock.Now()
-	pem := orgSlotPEM(t, store, testOrgA)
+	_, suffix, found := strings.Cut(v2, " fp=")
+	if !found {
+		t.Fatal("missing fingerprint in test record")
+	}
 	record := func(expires, begun string) string {
-		return "dragpass-archive-session-v2 expires_at=" + expires + " begun_at=" + begun + " fp=" + a.Fingerprint + " begin_id=-\n" + pem
+		return archiveSessionSlotHeader + "expires_at=" + expires + " begun_at=" + begun + " fp=" + suffix
 	}
 	unix := func(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
 	// sweepAt is when the sweep runs. A begin later than the clock is a
@@ -261,6 +276,10 @@ func TestArchiveSessionSlot_InconsistentRecordsAreUntrusted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			clock.Set(now)
 			writeOrgSlot(t, store, testOrgA, tc.value)
+			if tc.state == proto.ArchiveSessionStateUnowned {
+				assertUnknownOwnerPreserved(t, deps, store, clock, a.Fingerprint)
+				return
+			}
 			if got := sessionStatus(t, deps, testOrgA, ""); got.State != tc.state {
 				t.Fatalf("state %q, want %q", got.State, tc.state)
 			}

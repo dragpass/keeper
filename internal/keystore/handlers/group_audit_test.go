@@ -726,6 +726,7 @@ func TestAuditGrantKeepsTheLabelThroughAQuorumRegrant(t *testing.T) {
 	v := loadAuditVectors(t)
 	audit := &proto.GrantContext{Policy: proto.GrantPolicyAuditOnlyV1, OrgID: v.OrgID, GroupID: v.GroupID, DekVersion: 3}
 	deps, _, store := newTestDeps(t)
+	setSlotTestOwner(t, deps, slotTestAccount)
 	archiveKP, _ := crypto.GenerateRSAKeyPair()
 	_ = keychain.SaveArchivePrivateKey(store, archiveKP.PrivateKey)
 	_ = keychain.SaveArchivePublicKey(store, archiveKP.PublicKey)

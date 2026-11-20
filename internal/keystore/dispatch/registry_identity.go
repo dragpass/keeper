@@ -41,6 +41,7 @@ func identityActions() map[string]action {
 		proto.ActionAccountBindingSet:     wrap(handlers.HandleAccountBindingSet).appOnlyAction(),
 		proto.ActionDeviceAccountStatus:   wrap(handlers.HandleDeviceAccountStatus),
 		proto.ActionDeviceSignout:         wrap(handlers.HandleDeviceSignout),
+		proto.ActionArchiveAppLoginEnd:    wrap(handlers.HandleArchiveAppLoginEnd).appOnlyAction(),
 		proto.ActionAccountBindingSignout: wrap(handlers.HandleAccountBindingSignout).appOnlyAction(),
 
 		proto.ActionSaveSessionCode: wrap(handlers.HandleSaveSessionCode).appOnlyAction(),

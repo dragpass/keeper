@@ -69,6 +69,13 @@ func TestArchiveSessionStatus_WritesNothingInAnyState(t *testing.T) {
 			counting := &writeCountingStore{SecretStore: mem}
 			d := deps
 			d.Store = counting
+			if tc.want.state == proto.ArchiveSessionStateUnowned {
+				r := HandleArchiveSessionStatus(d, proto.ArchiveSessionStatusRequest{OrgID: testOrgA, Fingerprint: a.Fingerprint})
+				if r.Success || r.Data != nil || r.ErrorCode != "archive_session_owner_unknown" || counting.writes.Load() != 0 || !reflect.DeepEqual(before, mem.Snapshot()) {
+					t.Fatal("ownerless status exposed or changed slot")
+				}
+				return
+			}
 			got := sessionStatus(t, d, testOrgA, a.Fingerprint)
 			if got.State != tc.want.state || got.Fingerprint != tc.want.fp || (got.ExpiresAt != "") != tc.want.times || (got.BegunAt != "") != tc.want.times {
 				t.Fatalf("status: %+v", got)

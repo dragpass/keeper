@@ -7,6 +7,7 @@ import (
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore"
 	"github.com/dragpass/keeper/internal/keystore/handlers"
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"github.com/dragpass/keeper/internal/keystore/testdouble"
 )
@@ -18,6 +19,12 @@ const startupSweepOrg = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 // session key is gone before any action is served (lv100 F1).
 func TestPrepareProcessAppSweepsBeforeServing(t *testing.T) {
 	store := testdouble.NewMemorySecretStore()
+	if _, _, err := keychain.SetAccountBinding(store, startupSweepOrg, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := keychain.SavePublicKey(store, "test account public key"); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Unix(1788999000, 0)
 	app := keystore.NewApp(keystore.Deps{Store: store, Clock: func() time.Time { return now }})
 	if begun := handlers.HandleArchiveSessionBegin(app.HandlersDeps(), proto.ArchiveSessionBeginRequest{OrgID: startupSweepOrg}); !begun.Success {

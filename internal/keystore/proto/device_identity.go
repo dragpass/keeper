@@ -3,6 +3,8 @@
 
 package proto
 
+import "encoding/base64"
+
 // AccountAliasMaxBytes is ariadne's alias column width. The Keeper checks
 // the shape loosely (it is a hint, never an identity) but keeps anything it
 // could not be out of the keychain.
@@ -104,4 +106,42 @@ func requireAccountAlias(value, field string) error {
 		}
 	}
 	return nil
+}
+
+type ArchiveLoginIdentity struct {
+	AccountID  string `json:"account_id"`
+	Generation string `json:"generation"`
+}
+
+func (r ArchiveLoginIdentity) Validate() error {
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return err
+	}
+	b, err := base64.RawURLEncoding.Strict().DecodeString(r.Generation)
+	if err != nil || len(b) != 16 || len(r.Generation) != 22 {
+		return newValidationError("generation", "must be a 16-byte Base64URL generation")
+	}
+	return nil
+}
+
+// IntentID names the initiating login when its commit answer was lost.
+type ArchiveAppLoginEndRequest struct {
+	AfterSequence *uint64 `json:"after_sequence,omitempty"`
+	AccountID     string  `json:"account_id"`
+	Generation    string  `json:"generation,omitempty"`
+	IntentID      string  `json:"intent_id,omitempty"`
+}
+
+func (r ArchiveAppLoginEndRequest) Validate() error {
+	if r.AfterSequence != nil && (r.IntentID == "" || *r.AfterSequence >= 9007199254740991) {
+		return newValidationError("after_sequence", "invalid login preparation sequence")
+	}
+	identity := ArchiveLoginIdentity{AccountID: r.AccountID, Generation: r.Generation}
+	if r.IntentID != "" {
+		if r.Generation != "" {
+			return newValidationError("generation", "cannot be combined with intent_id")
+		}
+		identity.Generation = r.IntentID
+	}
+	return identity.Validate()
 }

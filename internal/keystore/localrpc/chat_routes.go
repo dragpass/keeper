@@ -610,6 +610,7 @@ func bindArchiveRewrap(s *Server, input any) (any, error) {
 // appQuorumCombine is the combine with only the pin-carrying recipient list:
 // every re-grant target names its account.
 type appQuorumCombine struct {
+	proto.ArchiveLoginScope
 	RecoverySessionID string                      `json:"recovery_session_id"`
 	Decision          *proto.GroupRewrapDecision  `json:"decision,omitempty"`
 	RewrappedShares   []proto.RewrappedShareInput `json:"rewrapped_shares"`
@@ -630,6 +631,7 @@ func bindQuorumCombine(_ *Server, input any) (any, error) {
 		}
 	}
 	return proto.ArchiveQuorumCombineAndRewrapRequest{
+		ArchiveLoginScope: in.ArchiveLoginScope,
 		RecoverySessionID: in.RecoverySessionID, Decision: in.Decision,
 		RewrappedShares:  in.RewrappedShares,
 		WrappedOldDEKB64: in.WrappedOldDEKB64,

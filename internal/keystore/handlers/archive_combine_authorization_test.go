@@ -206,12 +206,16 @@ func TestArchiveCombineRefusesStaleAuthorityBeforePrivateRead(t *testing.T) {
 
 func TestArchiveCombineWithholdsOutputIfAuthorityExpiresDuringCrypto(t *testing.T) {
 	f, req := authorizedCombineFixture(t)
-	probe := &combinePrivateReadProbe{SecretStore: f.store, beforeRead: func() { f.clock.advance(11) }}
+	probe := &combinePrivateReadProbe{SecretStore: f.store}
+	probe.beforeRead = func() {
+		if probe.reads == 2 {
+			f.clock.advance(11)
+		}
+	}
 	f.deps.Store = probe
 	response := HandleArchiveQuorumCombineAndRewrap(f.deps, req)
-	// Two reads of the session key slot: at the open and in the check right
-	// before output.
-	if probe.reads != 2 || response.Success || response.Data != nil {
+	// Read at admission, open and the final output check. Expire after admission.
+	if probe.reads != 3 || response.Success || response.Data != nil {
 		t.Fatal("expired combine returned output")
 	}
 }
@@ -237,5 +241,22 @@ func TestArchiveCombineSourceBindsStoredSessionAndShares(t *testing.T) {
 	}
 	if changed.sourceDigest == shareChanged.sourceDigest {
 		t.Fatal("source authority does not bind the stored approval shares")
+	}
+}
+
+func TestArchiveCombineEndedLoginPreservesPreparedDecision(t *testing.T) {
+	f, req := authorizedCombineFixture(t)
+	binding, _, err := keychain.GetAccountBinding(f.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end := HandleArchiveAppLoginEnd(f.deps, proto.ArchiveAppLoginEndRequest{AccountID: binding.AccountID, Generation: binding.ChatStateGeneration}); !end.Success {
+		t.Fatal(end.ErrorCode)
+	}
+	before := f.store.(*testdouble.MemorySecretStore).Snapshot()
+	r := HandleArchiveQuorumCombineAndRewrap(f.deps, req)
+	_, available := f.deps.GroupRewrapChallenges.peekEntry(req.Decision.Challenge, f.deps.Now())
+	if r.Success || r.Data != nil || r.ErrorCode != "archive_session_login_unavailable" || !available || !reflect.DeepEqual(before, f.store.(*testdouble.MemorySecretStore).Snapshot()) {
+		t.Fatal("ended login touched the decision or pin store")
 	}
 }
