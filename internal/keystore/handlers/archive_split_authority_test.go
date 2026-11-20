@@ -184,6 +184,24 @@ func TestArchiveKeySplitAcceptsValidSignedDecision(t *testing.T) {
 	}
 }
 
+func TestArchiveKeySplitV1RefusesStagedReconfigurationKey(t *testing.T) {
+	f := newSplitFixture(t)
+	staged := stageReconfiguration(f.deps, f.request.OrgID, f.request.OperationID)
+	if !staged.Success {
+		t.Fatalf("stage failed: %s", staged.ErrorCode)
+	}
+	target := staged.Data.(proto.ArchiveReconfigureStageResponseData)
+	if target.PublicKey == f.archive {
+		t.Fatal("fixture needs distinct active and reconfiguration keys")
+	}
+	// The v1 decision names the staged pair by both PEM and SPKI fingerprints.
+	f.archive = target.PublicKey
+	req := f.authorize(t, f.request)
+	f.probe.private[keychain.OrgArchiveReconfigurationSlot(req.OrgID).PrivateAccount] = true
+	f.resetProbe()
+	assertSplitRefusedUntouched(t, f, HandleArchiveKeySplit(f.deps, req))
+}
+
 func TestArchiveKeySplitRefusesInvalidAuthorityBeforePrivateRead(t *testing.T) {
 	cases := map[string]func(t *testing.T, f *splitFixture, req *proto.ArchiveKeySplitRequest){
 		"missing": func(t *testing.T, f *splitFixture, req *proto.ArchiveKeySplitRequest) { req.Decision = nil },
