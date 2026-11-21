@@ -460,3 +460,49 @@ func TestArchiveReconfigureStage_NoPrivateMaterialInAnswerOrLog(t *testing.T) {
 		}
 	}
 }
+
+func TestOrdinaryArchiveOperationsIgnoreReconfigurationPrivateKey(t *testing.T) {
+	d, _, store := newTestDeps(t)
+	setSlotTestOwner(t, d, slotTestAccount)
+	stage := stageReconfiguration(d, testOrgA, reconfigOpA)
+	if !stage.Success {
+		t.Fatal(stage.ErrorCode)
+	}
+	target := stage.Data.(proto.ArchiveReconfigureStageResponseData)
+	probe := &sessionReadProbe{SecretStore: store, account: keychain.OrgArchiveReconfigurationSlot(testOrgA).PrivateAccount}
+	d.Store = probe
+	pub, err := crypto.ParsePublicKey(target.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, ciphertext, err := crypto.HybridWrap(pub, []byte("test share"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	combine, _ := sessionCombineRequest(t, testOrgA, target.PublicKey, sessionTestDEK())
+	for _, tc := range []struct {
+		name string
+		call func() proto.BaseResponse
+	}{
+		{"ordinary unwrap", func() proto.BaseResponse {
+			return archiveUnwrapAndRewrap(d, proto.ArchiveUnwrapAndRewrapRequest{OrgID: testOrgA, WrappedForArchiveB64: wrapToArchive(t, target.PublicKey, sessionTestDEK()), RecipientPublicKey: target.PublicKey})
+		}},
+		{"rotation begin", func() proto.BaseResponse {
+			return HandleArchiveKeyRotateBegin(d, proto.ArchiveKeyRotateBeginRequest{OrgID: testOrgA})
+		}},
+		{"rotation commit", func() proto.BaseResponse {
+			return HandleArchiveKeyRotateCommit(d, proto.ArchiveKeyRotateCommitRequest{OrgID: testOrgA, ExpectedFingerprint: target.Fingerprint})
+		}},
+		{"share rewrap", func() proto.BaseResponse {
+			return rewrapArchiveShare(d, proto.ArchiveShareRewrapRequest{WrappedKey: wrapped, Ciphertext: ciphertext, SessionPublicKey: target.PublicKey})
+		}},
+		{"ordinary combine", func() proto.BaseResponse { return archiveQuorumCombineAndRewrap(d, testOrgA, combine) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := probe.reads
+			if tc.call().Success || probe.reads != before {
+				t.Fatal("ordinary operation used the reconfiguration slot")
+			}
+		})
+	}
+}
