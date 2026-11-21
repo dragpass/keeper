@@ -243,9 +243,31 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 // Called only for names in the candidate namespace. Live and unreadable
 // candidates are preserved throughout server response loss.
 func sweepSupplementCandidate(d Deps, org string) {
-	_, rec, pem, err := readSupplement(d, org)
+	candidate, rec, pem, err := readSupplement(d, org)
 	defer secure.WipeString(&pem)
-	if errors.Is(err, keychain.ErrSecretNotFound) || (err == nil && !d.Now().Before(rec.expiresAt)) {
+	if errors.Is(err, keychain.ErrSecretNotFound) {
+		_ = eraseSupplement(d, org)
+		return
+	}
+	if err != nil {
+		return
+	}
+	now := d.Now()
+	slot, err := inspectArchiveSessionSlotLocked(d, org, nil)
+	if err != nil {
+		return
+	}
+	// An interrupted acceptance may leave the old public half beside the
+	// expired candidate private record. A generic sweep preserves that
+	// mismatch. Only this stored candidate can identify its exact bytes.
+	if slot.publicKey == candidate.PriorPublic && slot.keyDigest == sha256.Sum256([]byte(pem)) &&
+		slot.record.owner == rec.owner && slot.record.fingerprint == rec.fingerprint &&
+		slot.record.beginID == rec.beginID && archiveSessionRecordConsistent(slot.record, now) && !now.Before(slot.record.expiresAt) {
+		if deleteArchiveSessionSlot(d, org) != nil {
+			return
+		}
+	}
+	if !now.Before(rec.expiresAt) {
 		_ = eraseSupplement(d, org)
 	}
 }

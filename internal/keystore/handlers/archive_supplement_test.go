@@ -100,9 +100,19 @@ func TestSupplementPreservesOriginalUntilSignedAcceptance(t *testing.T) {
 	if !nextAgain.Success || nextAgain.Data != next.Data {
 		t.Fatal("next candidate changed on earlier acceptance retry")
 	}
+	second := proto.SupplementReceipt{SupplementPrevious: params, AccountID: receipt.AccountID, DeviceID: receipt.DeviceID, SessionID: splitTestOperation, SPKI: next.Data.(proto.SupplementCandidate).SPKI, Round: 2, ExpiresAt: f.deps.Now().Unix() + 60, Version: 1}
+	second.Signature = f.sign(t, second.Canonical())
+	f.deps.Store = failSupplementWrite{originalStore, config.OrgArchiveSessionPublicKeyPrefix + split.OrgID}
+	if HandleSupplementPromote(f.deps, proto.SupplementPromote{Receipt: second}).Success {
+		t.Fatal("partial second promotion reported success")
+	}
+	f.deps.Store = originalStore
 	f.clock.advance(1900)
 	SweepExpiredArchiveSession(f.deps)
 	if _, err := keychain.GetArchiveSessionPrivateKey(f.store, supplementSlot(split.OrgID)); !errors.Is(err, keychain.ErrSecretNotFound) {
 		t.Fatal("expired candidate survived sweep")
+	}
+	if _, err := keychain.GetArchiveSessionPrivateKey(f.store, split.OrgID); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("expired partial promotion survived sweep")
 	}
 }
