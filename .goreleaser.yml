@@ -8,8 +8,11 @@ project_name: dragpass-keeper
 
 # Both darwin builds link the MLS library. The hook leaves one universal
 # archive where the cgo directive looks, and each GOARCH links its own slice.
+# The root public key check comes first, so a build without
+# ROOT_PUBLIC_KEY_PEM_BASE64 stops before anything is built.
 before:
   hooks:
+    - make require-root-public-key
     - make mls-lib-macos
 
 builds:
@@ -20,11 +23,22 @@ builds:
       - mls
     env:
       - CGO_ENABLED=1
+    # The same root public key the Makefile builds embed. Setting ldflags
+    # replaces GoReleaser's default, whose -X main.* values name variables
+    # this module does not have, so only -s -w is kept from it.
+    ldflags:
+      - -s -w
+      - -X github.com/dragpass/keeper/internal/keystore/anchor.rootPublicKeyPEMBase64={{ .Env.ROOT_PUBLIC_KEY_PEM_BASE64 }}
     goos:
       - darwin
     goarch:
       - amd64
       - arm64
+    # The release check runs on each binary before it is archived, so a binary
+    # that fails it never reaches the Homebrew archive, the release or the tap.
+    hooks:
+      post:
+        - make check-release-no-e2e BIN={{ .Path }}
 
 archives:
   - id: darwin-tarball

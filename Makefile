@@ -77,8 +77,12 @@ MLS_MAC_TRIPLES := aarch64-apple-darwin x86_64-apple-darwin
 
 # The root public key (Base64 of its PEM) that server key sets are verified
 # with. A release build must carry it: without one, refresh_server_keys
-# installs nothing (anchor.UnverifiedServerKeysAllowed). Builds without it are
-# for local work only. check-release-no-e2e does not check for it.
+# installs nothing (anchor.UnverifiedServerKeysAllowed), and
+# check-release-no-e2e rejects the binary. Every distribution path reads this
+# one name (scripts/check-root-public-key.sh lists them); in GitHub Actions it
+# is the repository variable of the same name. There is no default: the build-*
+# targets without it are for local work only, and every pkg-* target refuses
+# to package a binary that does not carry it.
 ROOT_PUBLIC_KEY_PEM_BASE64 ?=
 ROOT_GO_LDFLAGS := $(if $(ROOT_PUBLIC_KEY_PEM_BASE64),-ldflags "-X github.com/dragpass/keeper/internal/keystore/anchor.rootPublicKeyPEMBase64=$(ROOT_PUBLIC_KEY_PEM_BASE64)")
 
@@ -171,7 +175,7 @@ $(MAC_BIN_AMD64) $(MAC_BIN_ARM64): main.go go.mod $(MAC_MLS_LIB)
 MAC_E2E_BIN_AMD64 := dragpass-keeper-e2e-macos-x86_64
 MAC_E2E_BIN_ARM64 := dragpass-keeper-e2e-macos-arm64
 
-.PHONY: build-e2e-macos-amd64 build-e2e-macos-arm64 build-e2e-localtarget check-release-no-e2e
+.PHONY: build-e2e-macos-amd64 build-e2e-macos-arm64 build-e2e-localtarget check-release-no-e2e check-release-package require-root-public-key
 
 build-e2e-macos-amd64: $(MAC_MLS_LIB)
 	@echo "Building macOS x86_64 E2E binary: $(MAC_E2E_BIN_AMD64)..."
@@ -190,25 +194,24 @@ build-e2e-localtarget: $(HOST_MLS_LIB)
 	@echo "Building E2E local-target binary: $(E2E_LOCALTARGET_BIN)..."
 	@CGO_ENABLED=1 go build $(E2E_LOCALTARGET_GO_TAGS) -o $(E2E_LOCALTARGET_BIN) .
 
-# Fails when BIN was built with a test-only tag (keeper_e2e, or the
-# keeper_killseam crash seams) or carries E2E-only code. Build tags are read
-# from the build info; the strings are read from the binary itself. The
-# strings survive a stripped binary (-s -w), unlike symbols. Besides the E2E
-# mode they cover the dev App origin opt-in and the root key override; a
-# release build refuses those variables by prefix, so their full names never
-# reach it.
-E2E_ONLY_STRINGS := KEEPER_E2E_KEYRING_FILE KEEPER_E2E_OS_CLIPBOARD clipboard_get_last_hash \
-	DRAGPASS_KEEPER_DEV_APP_ORIGIN KEEPER_ROOT_PUBLIC_KEY_BASE64 \
-	KEEPER_E2E_LOCAL_TARGET_PORTS KEEPER_E2E_LOCAL_TARGET_CA_FILE
+# The release check, in scripts/check-release-binary.sh so GoReleaser and the
+# Windows probe run the same code: fails when BIN lacks the mls tag, was built
+# with a test-only tag (keeper_e2e, or the keeper_killseam crash seams),
+# carries E2E-only code, or does not carry the root public key
+# ROOT_PUBLIC_KEY_PEM_BASE64 names. check-release-package runs it on the
+# binary inside PKG (.pkg, .deb or .tar.gz).
+RELEASE_CHECK_ENV = ROOT_PUBLIC_KEY_PEM_BASE64="$(ROOT_PUBLIC_KEY_PEM_BASE64)"
+
+require-root-public-key:
+	@$(RELEASE_CHECK_ENV) scripts/check-root-public-key.sh
 
 check-release-no-e2e:
 	@test -n "$(BIN)" || { echo "usage: make check-release-no-e2e BIN=<binary>" >&2; exit 2; }
-	@if go version -m "$(BIN)" | grep -q 'keeper_e2e'; then echo "$(BIN) was built with the keeper_e2e tag" >&2; exit 1; fi
-	@if go version -m "$(BIN)" | grep -q 'keeper_killseam'; then echo "$(BIN) was built with the keeper_killseam tag" >&2; exit 1; fi
-	@for s in $(E2E_ONLY_STRINGS); do \
-		if LC_ALL=C grep -aq "$$s" "$(BIN)"; then echo "$(BIN) carries E2E-only code ($$s)" >&2; exit 1; fi; \
-	done
-	@echo "$(BIN): no test-only tag and no E2E-only code"
+	@$(RELEASE_CHECK_ENV) scripts/check-release-binary.sh "$(BIN)"
+
+check-release-package:
+	@test -n "$(PKG)" || { echo "usage: make check-release-package PKG=<package>" >&2; exit 2; }
+	@$(RELEASE_CHECK_ENV) scripts/check-release-package.sh "$(PKG)"
 
 build-windows: $(WIN_BIN)
 $(WIN_BIN): main.go go.mod $(WIN_MLS_LIB)
@@ -263,6 +266,7 @@ $(MAC_PKG_AMD64): MAC_BIN := $(MAC_BIN_AMD64)
 $(MAC_PKG_ARM64): MAC_BIN := $(MAC_BIN_ARM64)
 
 $(MAC_PKG_AMD64) $(MAC_PKG_ARM64):
+	@$(RELEASE_CHECK_ENV) scripts/check-release-binary.sh $(MAC_BIN)
 	@echo "Creating macOS $(MAC_LABEL) package structure in ./$(MAC_ROOT)..."
 	@rm -rf $(MAC_ROOT)
 	@mkdir -p $(MAC_ROOT)/Library/Application\ Support/DragPass
@@ -278,6 +282,7 @@ $(MAC_PKG_AMD64) $(MAC_PKG_ARM64):
             --identifier $(PKG_IDENTIFIER) \
             --version $(VERSION) \
             $@
+	@$(RELEASE_CHECK_ENV) scripts/check-release-package.sh $@
 	@echo "Successfully built $@"
 
 # Pinned to the digest of the last release-check run that built the
@@ -286,7 +291,11 @@ $(MAC_PKG_AMD64) $(MAC_PKG_ARM64):
 INNOSETUP_IMAGE ?= amake/innosetup@sha256:e003376ba818547275fe10c95e2a29be0f2d12d45e9eb8f205b6672dc5685bb1
 
 pkg-windows: $(WIN_PKG)
+# No portable extractor reads the installer, so the binary is checked before it
+# goes in; release-build.yml installs the installer on Windows and checks the
+# installed binary as well.
 $(WIN_PKG): $(WIN_BIN) setup.iss
+	@$(RELEASE_CHECK_ENV) scripts/check-release-binary.sh $(WIN_BIN)
 	@echo "Building Windows installer via Docker: $(WIN_PKG)..."
 	@docker run --rm -v "$$PWD:/work" $(INNOSETUP_IMAGE) "/DMyAppVersion=$(VERSION)" setup.iss
 	@echo "Successfully built Windows installer."
@@ -314,6 +323,7 @@ $(LINUX_DEB_ARM64): DEB_BIN := $(LINUX_BIN_ARM64)
 $(LINUX_DEB_AMD64) $(LINUX_DEB_ARM64): DEB_ROOT = build_root_linux_$(DEB_ARCH)
 
 $(LINUX_DEB_AMD64) $(LINUX_DEB_ARM64):
+	@$(RELEASE_CHECK_ENV) scripts/check-release-binary.sh $(DEB_BIN)
 	@echo "Creating Linux $(DEB_ARCH) package structure in ./$(DEB_ROOT)..."
 	@rm -rf $(DEB_ROOT)
 	@mkdir -p $(DEB_ROOT)/opt/dragpass
@@ -331,6 +341,7 @@ $(LINUX_DEB_AMD64) $(LINUX_DEB_ARM64):
 	@mkdir -p $(DEB_ROOT)/DEBIAN
 	@echo "Package: dragpass-keeper\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: $(DEB_ARCH)\nDepends: $(DEB_DEPENDS)\nMaintainer: DragPass <vjinhyeokv@gmail.com>\nDescription: DragPass Device Key Storage\n Native messaging host for DragPass Chrome extension" > $(DEB_ROOT)/DEBIAN/control
 	@docker run --rm -v "$$PWD:/work" -w /work debian:bookworm-slim sh -c "dpkg-deb --build $(DEB_ROOT) /work/$@"
+	@$(RELEASE_CHECK_ENV) scripts/check-release-package.sh $@
 	@echo "Successfully built $@"
 
 sign:
