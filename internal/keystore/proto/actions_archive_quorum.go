@@ -32,6 +32,8 @@ const (
 	ActionArchiveKeySplit              = "archive_key_split"
 	ActionArchiveRotationPrepare       = "archive_quorum_rotation_prepare"
 	ActionArchiveSessionKeyProof       = "archive_reconfiguration_session_key_proof"
+	ActionSupplementPrepare            = "archive_reconfiguration_supplement_prepare"
+	ActionSupplementPromote            = "archive_reconfiguration_supplement_promote"
 	ActionArchiveQuorumCombineToStaged = "archive_quorum_combine_to_staged"
 	ActionArchiveSplitPrepare          = "archive_split_prepare"
 	ActionArchiveShareProofPrepare     = "archive_share_proof_prepare"

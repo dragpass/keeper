@@ -27,6 +27,8 @@ const archiveOperationKindReconfiguration = "reconfiguration"
 // archiveReconfigurationJournal is the org's reconfiguration record. It holds
 // no secret.
 type archiveReconfigurationJournal struct {
+	ProofAcceptance     string `json:"proof_acceptance,omitempty"`
+	ProofRound          int    `json:"proof_round,omitempty"`
 	ProofSessionID      string `json:"proof_session_id,omitempty"`
 	ProofSessionSPKI    string `json:"proof_session_spki,omitempty"`
 	OwnerAccountID      string `json:"owner_account_id,omitempty"`

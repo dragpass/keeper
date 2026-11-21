@@ -36,6 +36,8 @@ var appRouteOnlyActions = []string{
 	proto.ActionArchiveKeySplit,
 	proto.ActionArchiveRotationPrepare,
 	proto.ActionArchiveSessionKeyProof,
+	proto.ActionSupplementPrepare,
+	proto.ActionSupplementPromote,
 	proto.ActionArchiveQuorumCombineToStaged,
 	proto.ActionArchiveSplitPrepare,
 	proto.ActionArchiveSplitStatus,

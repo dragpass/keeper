@@ -323,7 +323,7 @@ func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfig
 		}
 		sameSession := journal.ProofSessionID == r.SessionID
 		sameKey := journal.ProofSessionSPKI == fp
-		if sameSession != sameKey {
+		if sameSession != sameKey || (!sameKey && journal.ProofSessionID != "") {
 			return rotationRefused()
 		}
 		signed := signRequestCanonical(d, r.Canonical(target.owner.account, target.owner.device, fp))
