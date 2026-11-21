@@ -31,6 +31,7 @@ const (
 	//   per-recipient wraps are in the response.
 	ActionArchiveKeySplit              = "archive_key_split"
 	ActionArchiveRotationPrepare       = "archive_quorum_rotation_prepare"
+	ActionArchiveSessionKeyProof       = "archive_reconfiguration_session_key_proof"
 	ActionArchiveQuorumCombineToStaged = "archive_quorum_combine_to_staged"
 	ActionArchiveSplitPrepare          = "archive_split_prepare"
 	ActionArchiveShareProofPrepare     = "archive_share_proof_prepare"

@@ -39,7 +39,7 @@ func readRotationTarget(d Deps, r proto.ArchiveRotationRequest) (rotationTarget,
 	if err != nil {
 		return t, err
 	}
-	if !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.Finalization != "" || stage.UnregisteredCleanup != "" {
+	if !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.Finalization != "" || stage.Closure != nil || stage.UnregisteredCleanup != "" {
 		return t, errRotationUnavailable
 	}
 	slot := keychain.OrgArchiveReconfigurationSlot(r.OrgID)
@@ -288,4 +288,57 @@ func rotateOneGrant(source *rsa.PrivateKey, target *rsa.PublicKey, org string, g
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(output), nil
+}
+
+func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfigurationSessionKeyProof) proto.BaseResponse {
+	if err := r.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	return underStageLock(d.Store, func() proto.BaseResponse {
+		target, err := readRotationTarget(d, proto.ArchiveRotationRequest{OrgID: r.OrgID, OperationID: r.OperationID, ConfigDigest: r.ConfigDigest})
+		if err != nil {
+			return rotationRefused()
+		}
+		buf, session, err := openArchiveSessionSlotLocked(d, r.OrgID, target.owner.account)
+		if err != nil {
+			return archiveSessionSlotResponse(err)
+		}
+		defer buf.Destroy()
+		key, err := parseRotationPrivate(buf.Bytes())
+		if err != nil {
+			return rotationRefused()
+		}
+		defer clearRotationPrivate(key)
+		pub, err := crypto.PublicKeyToPEM(&key.PublicKey)
+		if err != nil || pub != session.publicKey {
+			return rotationRefused()
+		}
+		fp, err := crypto.RewrapKeyFingerprint(pub)
+		if err != nil || fp != r.SessionSPKI {
+			return rotationRefused()
+		}
+		journal, err := readStageJournal(d.Store, r.OrgID)
+		if err != nil {
+			return rotationRefused()
+		}
+		sameSession := journal.ProofSessionID == r.SessionID
+		sameKey := journal.ProofSessionSPKI == fp
+		if sameSession != sameKey {
+			return rotationRefused()
+		}
+		signed := signRequestCanonical(d, r.Canonical(target.owner.account, target.owner.device, fp))
+		if !signed.Success {
+			return signed
+		}
+		if err := recheckArchiveSessionSlotForOutputLocked(d, r.OrgID, session); err != nil {
+			return archiveSessionSlotResponse(err)
+		}
+		if !sameSession {
+			journal.ProofSessionID, journal.ProofSessionSPKI = r.SessionID, fp
+			if err := writeArchiveReconfigurationJournal(d.Store, journal); err != nil {
+				return rotationRefused()
+			}
+		}
+		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionKeySignature{Signature: signed.Data.(proto.SignRequestResponseData).Signature}}
+	})
 }

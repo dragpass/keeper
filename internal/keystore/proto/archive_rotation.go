@@ -164,3 +164,34 @@ type RotationGrantOutput struct {
 type RotationOutputs struct {
 	Grants []RotationGrantOutput `json:"grants"`
 }
+
+type ArchiveReconfigurationSessionKeyProof struct {
+	ArchiveLoginScope
+	OrgID        string `json:"org_id"`
+	OperationID  string `json:"operation_id"`
+	SessionID    string `json:"session_id"`
+	ConfigDigest string `json:"config_digest"`
+	SessionSPKI  string `json:"session_key_spki_fingerprint"`
+}
+
+func (r ArchiveReconfigurationSessionKeyProof) Validate() error {
+	for _, id := range []string{r.OrgID, r.OperationID, r.SessionID} {
+		if err := requireMessageUUID(id, "session.identity"); err != nil {
+			return err
+		}
+	}
+	for _, digest := range []string{r.ConfigDigest, r.SessionSPKI} {
+		if err := requireMessageDigest(digest, "session.digest"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ArchiveReconfigurationSessionKeyProof) Canonical(account, device, localSPKI string) string {
+	return archiveShareCanonical("dragpass.archive.reconfiguration.session-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, localSPKI)
+}
+
+type ArchiveSessionKeySignature struct {
+	Signature string `json:"keeper_key_signature"`
+}

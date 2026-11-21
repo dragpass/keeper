@@ -114,7 +114,13 @@ type RotateRequestKeyPrepareRequest struct {
 }
 
 func (r RotateRequestKeyPrepareRequest) Validate() error {
-	return requireString(r.ChallengeToken, "challenge_token")
+	if err := requireMessageUUID(r.ChallengeToken, "challenge_token"); err != nil {
+		return err
+	}
+	if r.ChallengeToken[14] != '4' || !strings.ContainsRune("89ab", rune(r.ChallengeToken[19])) {
+		return newValidationError("challenge_token", "must be a canonical UUIDv4")
+	}
+	return nil
 }
 
 type RotateRequestKeyPrepareResponseData struct {

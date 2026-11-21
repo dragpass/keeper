@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +110,49 @@ func TestRotationToStagedUsesSignedRowsAndLocalTarget(t *testing.T) {
 	f.probe.beforePrivateRead = func() { f.clock.advance(11) }
 	if r := run(late); r.Success || r.Data != nil {
 		t.Fatal("expired output")
+	}
+}
+
+func TestSessionKeyProofMustMatchOwnedLiveSessionAndOperation(t *testing.T) {
+	f := newSplitFixture(t)
+	split, _ := f.authorizeReconfiguration(t)
+	if r := HandleArchiveKeySplit(f.deps, split); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	session := beginOrgSession(t, f.deps, split.OrgID)
+	fp, err := crypto.RewrapKeyFingerprint(session.SessionPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := HandleRequestKeyGenerate(f.deps, proto.RequestKeyGenerateRequest{})
+	if !generated.Success {
+		t.Fatal(generated.ErrorCode)
+	}
+	req := proto.ArchiveReconfigurationSessionKeyProof{OrgID: split.OrgID, OperationID: split.OperationID, SessionID: splitTestOther, ConfigDigest: split.ConfigDigest, SessionSPKI: fp}
+	sign := func(req proto.ArchiveReconfigurationSessionKeyProof) proto.BaseResponse {
+		return HandleArchiveReconfigurationSessionKeyProof(f.deps, req)
+	}
+	bad := req
+	bad.SessionSPKI = strings.Repeat("0", 64)
+	if r := sign(bad); r.Success || r.Data != nil {
+		t.Fatal("signed a mismatched session")
+	}
+	r := sign(req)
+	if !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	sig, err := base64.StdEncoding.DecodeString(r.Data.(proto.ArchiveSessionKeySignature).Signature)
+	pub64, err2 := keychain.GetRequestSigningPublicKey(f.store)
+	pub, err3 := base64.StdEncoding.DecodeString(pub64)
+	if err != nil || err2 != nil || err3 != nil || !ed25519.Verify(pub, []byte(req.Canonical(f.v.AccountID, splitTestDevice, fp)), sig) {
+		t.Fatal("invalid proof signature")
+	}
+	if !sign(req).Success {
+		t.Fatal("idempotent proof refused")
+	}
+	bad = req
+	bad.SessionID = splitTestToken
+	if r := sign(bad); r.Success || r.Data != nil {
+		t.Fatal("signed another session for the same local key")
 	}
 }
