@@ -3627,6 +3627,16 @@ seconds, server key version. JSON carries the recipients as
 `recipients: [{ account_id, key_fingerprint }]` and
 `session_issued_at_nanos` as a decimal string.
 
+The reconfiguration split decision encoder uses the domain
+`dragpass.archive.split.decision|2`. The prefix through operation ID
+and the suffix from threshold N through server key version follow the
+v1 field order. Between them, the signed fields are `kind` (exactly
+`reconfiguration`), `config_digest`, `source_config_digest`,
+`target_key_fingerprint` (PEM), `target_key_spki_fingerprint` and
+`active_key_spki_fingerprint`, in that order. The active key fingerprint
+identifies the existing key. Both target fingerprints identify the staged
+key. The serving split handler currently accepts v1 decisions only.
+
 Proof key. For each share, `seed = HKDF-SHA256(ikm = x || y (the serialized
 share as wrapped), salt = empty, info, 32 bytes)` with `info` the canonical
 `dragpass.archive.share.proof-key|1` with operation ID and share index; the key
