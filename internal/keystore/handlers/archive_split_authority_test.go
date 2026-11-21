@@ -369,8 +369,8 @@ func assertSplitRefusedUntouched(t *testing.T, f *splitFixture, response proto.B
 	}
 }
 
-func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
-	f := newSplitFixture(t)
+func (f *splitFixture) authorizeReconfiguration(t *testing.T) (proto.ArchiveKeySplitRequest, proto.ArchiveReconfigureStageResponseData) {
+	t.Helper()
 	stage := stageReconfiguration(f.deps, f.request.OrgID, f.request.OperationID)
 	if !stage.Success {
 		t.Fatal(stage.ErrorCode)
@@ -392,6 +392,28 @@ func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
 	}
 	signed.Signature = f.sign(t, canonical)
 	req.ReconfigurationDecision = &signed
+	return req, target
+}
+
+func TestArchiveKeySplitReconfigurationRefusesExpiryDuringLockWait(t *testing.T) {
+	f := newSplitFixture(t)
+	req, _ := f.authorizeReconfiguration(t)
+	f.probe.private[keychain.OrgArchiveReconfigurationSlot(req.OrgID).PrivateAccount] = true
+	f.resetProbe()
+	lock := archiveSlotProcessLock
+	t.Cleanup(func() { archiveSlotProcessLock = lock })
+	archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
+		return lock(s, func() error { f.clock.advance(11); return fn() })
+	}
+	result := HandleArchiveKeySplit(f.deps, req)
+	if result.Success || result.ErrorCode != string(errs.ErrCodeArchiveSplitAuthorityRequired) || f.probe.privateReads != 0 || f.probe.journalReads != 0 || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("expired authority accessed staged material")
+	}
+}
+
+func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
+	f := newSplitFixture(t)
+	req, target := f.authorizeReconfiguration(t)
 	f.resetProbe()
 	result := HandleArchiveKeySplit(f.deps, req)
 	if !result.Success {

@@ -69,7 +69,7 @@ type archiveSplitBinding struct {
 // A separate authenticated finalization must confirm server persistence before
 // removing the source private key. Missing source key returns not_found. Only
 // HandleArchiveKeySplit calls it, after the signed split decision passed.
-func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding archiveSplitBinding) proto.BaseResponse {
+func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding archiveSplitBinding, current func() bool) proto.BaseResponse {
 	d.Logger.Println("archive key split processing...")
 
 	if err := req.Validate(); err != nil {
@@ -93,7 +93,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 	if binding.Kind == archiveOperationKindReconfiguration {
 		var response proto.BaseResponse
 		err := archiveSlotProcessLock(d.Store, func() error {
-			if req.ReconfigurationDecision == nil || d.Now().Unix() >= req.ReconfigurationDecision.ExpiresAt {
+			if current == nil || !current() {
 				response = denyArchiveSplit()
 				return nil
 			}

@@ -107,12 +107,18 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	if err := d.ServerKeyVerifier.Verify(canonical, decision.Signature, decision.ServerKeyVersion); err != nil {
 		return denyArchiveSplit()
 	}
-	binding, found, err := keychain.GetAccountBinding(d.Store)
-	if err != nil || !found || binding.SignedOut || binding.AccountID != c.accountID || binding.Generation != c.bindingGeneration {
-		return denyArchiveSplit()
+	currentLogin := func() bool {
+		binding, found, err := keychain.GetAccountBinding(d.Store)
+		if err != nil || !found || binding.SignedOut || binding.AccountID != c.accountID || binding.Generation != c.bindingGeneration {
+			return false
+		}
+		device, found, err := keychain.GetDeviceID(d.Store)
+		if err != nil || !found || device != c.deviceID {
+			return false
+		}
+		return true
 	}
-	device, found, err := keychain.GetDeviceID(d.Store)
-	if err != nil || !found || device != c.deviceID {
+	if !currentLogin() {
 		return denyArchiveSplit()
 	}
 	// Public slot only: the key Keeper would split must be the one the server
@@ -144,7 +150,11 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 		verified.ActiveKeySPKIFingerprint = req.ReconfigurationDecision.ActiveKeySPKIFingerprint
 		verified.TargetKeyFingerprint = decision.ArchiveKeyFingerprint
 	}
-	response := prepareArchiveKeySplit(d, req, verified)
+	current := func() bool {
+		now := d.Now()
+		return now.Unix() < decision.ExpiresAt && now.Before(entry.expiresAt) && currentLogin()
+	}
+	response := prepareArchiveKeySplit(d, req, verified, current)
 	if !response.Success {
 		return response
 	}
@@ -153,8 +163,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	}
 	// The journal already holds the result; a retry under a fresh decision
 	// returns it, so late output is withheld rather than released.
-	now = d.Now()
-	if now.Unix() >= decision.ExpiresAt || !now.Before(entry.expiresAt) {
+	if !current() {
 		return denyArchiveSplit()
 	}
 	return response
