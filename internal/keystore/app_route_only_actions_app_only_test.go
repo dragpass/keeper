@@ -34,6 +34,8 @@ var appRouteOnlyActions = []string{
 	proto.ActionArchiveKeyRotateAbort,
 	proto.ActionArchiveUnwrapAndRewrap,
 	proto.ActionArchiveKeySplit,
+	proto.ActionArchiveRotationPrepare,
+	proto.ActionArchiveQuorumCombineToStaged,
 	proto.ActionArchiveSplitPrepare,
 	proto.ActionArchiveSplitStatus,
 	proto.ActionArchiveSplitFinalize,

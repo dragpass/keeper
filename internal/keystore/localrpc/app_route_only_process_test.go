@@ -43,6 +43,8 @@ var appRouteOnlyCalls = []struct {
 	}},
 	{proto.ActionArchiveKeySplit, "/v1/archive/archive_key_split", map[string]any{}},
 	{proto.ActionArchiveSharePrepare, "/v1/archive/archive_share_prepare", map[string]any{}},
+	{proto.ActionArchiveRotationPrepare, "/v1/archive/archive_quorum_rotation_prepare", map[string]any{}},
+	{proto.ActionArchiveQuorumCombineToStaged, "/v1/archive/archive_quorum_combine_to_staged", map[string]any{}},
 	{proto.ActionArchiveSplitPrepare, "/v1/archive/archive_split_prepare", map[string]any{}},
 	{proto.ActionArchiveShareProofPrepare, "/v1/archive/archive_share_proof_prepare", map[string]any{}},
 	{proto.ActionArchiveShareOpenProof, "/v1/archive/archive_share_open_proof", map[string]any{}},

@@ -296,20 +296,9 @@ func openArchiveSessionSlot(d Deps, orgID, decisionAccount string) (*memguard.Lo
 	var buf *memguard.LockedBuffer
 	var read archiveSessionSlot
 	err := withArchiveSessionSlotLock(d, func() error {
-		var private string
-		defer secure.WipeString(&private)
-		slot, err := inspectArchiveSessionSlotLocked(d, orgID, func(pem string) { private = pem })
-		if err != nil {
-			return err
-		}
-		owner, err := archiveSessionCaller(d, slot)
-		if err != nil {
-			return err
-		}
-		if owner.account != decisionAccount {
-			return errArchiveSessionLogin
-		}
-		return useArchiveSessionSlotLocked(d, orgID, slot, func() { read = slot; buf = memguard.NewBufferFromBytes([]byte(private)) })
+		var err error
+		buf, read, err = openArchiveSessionSlotLocked(d, orgID, decisionAccount)
+		return err
 	})
 	if err != nil {
 		if buf != nil {
@@ -318,6 +307,25 @@ func openArchiveSessionSlot(d Deps, orgID, decisionAccount string) (*memguard.Lo
 		return nil, archiveSessionSlot{}, err
 	}
 	return buf, read, nil
+}
+
+func openArchiveSessionSlotLocked(d Deps, orgID, decisionAccount string) (*memguard.LockedBuffer, archiveSessionSlot, error) {
+	var private string
+	defer secure.WipeString(&private)
+	slot, err := inspectArchiveSessionSlotLocked(d, orgID, func(pem string) { private = pem })
+	if err != nil {
+		return nil, archiveSessionSlot{}, err
+	}
+	owner, err := archiveSessionCaller(d, slot)
+	if err != nil {
+		return nil, archiveSessionSlot{}, err
+	}
+	if owner.account != decisionAccount {
+		return nil, archiveSessionSlot{}, errArchiveSessionLogin
+	}
+	var buf *memguard.LockedBuffer
+	err = useArchiveSessionSlotLocked(d, orgID, slot, func() { buf = memguard.NewBufferFromBytes([]byte(private)) })
+	return buf, slot, err
 }
 
 // recheckArchiveSessionSlotForOutput judges orgID's slot again, under the
@@ -331,21 +339,25 @@ func openArchiveSessionSlot(d Deps, orgID, decisionAccount string) (*memguard.Lo
 // too.
 func recheckArchiveSessionSlotForOutput(d Deps, orgID string, read archiveSessionSlot) error {
 	return withArchiveSessionSlotLock(d, func() error {
-		slot, err := inspectArchiveSessionSlotLocked(d, orgID, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := archiveSessionCaller(d, slot); err != nil {
-			return err
-		}
-		if slot.record.owner != read.record.owner {
-			return keychain.ErrSecretNotFound
-		}
-		if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.keyDigest[:], read.keyDigest[:]) != 1 {
-			return keychain.ErrSecretNotFound
-		}
-		return useArchiveSessionSlotLocked(d, orgID, slot, func() {})
+		return recheckArchiveSessionSlotForOutputLocked(d, orgID, read)
 	})
+}
+
+func recheckArchiveSessionSlotForOutputLocked(d Deps, orgID string, read archiveSessionSlot) error {
+	slot, err := inspectArchiveSessionSlotLocked(d, orgID, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := archiveSessionCaller(d, slot); err != nil {
+		return err
+	}
+	if slot.record.owner != read.record.owner {
+		return keychain.ErrSecretNotFound
+	}
+	if slot.state != archiveSessionSlotAbsent && subtle.ConstantTimeCompare(slot.keyDigest[:], read.keyDigest[:]) != 1 {
+		return keychain.ErrSecretNotFound
+	}
+	return useArchiveSessionSlotLocked(d, orgID, slot, func() {})
 }
 
 // useArchiveSessionSlotLocked applies the use rule to a slot just read: no
