@@ -84,6 +84,9 @@ func HandleArchiveSplitStatus(d Deps, req proto.ArchiveSplitStatusRequest) proto
 	}
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
+	if req.Kind == archiveOperationKindReconfiguration {
+		return underStageLock(d.Store, func() proto.BaseResponse { return ownedStageStatus(d, req.OrgID) })
+	}
 	_, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split state failed")
@@ -163,22 +166,22 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 	if d.Store == nil || d.ServerKeyVerifier == nil || req.Validate() != nil {
 		return denyArchiveSplitReceipt()
 	}
-	receipt := *req.Receipt
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
+	if proof := req.UnregisteredClosure; proof != nil {
+		if err := d.ServerKeyVerifier.Verify(proof.Canonical(), proof.Signature, proof.ServerKeyVersion); err != nil {
+			return denyArchiveSplitReceipt()
+		}
+		return underStageLock(d.Store, func() proto.BaseResponse {
+			return discardUnregisteredStage(d, *proof, req.ExpectedFingerprint, req.ExpectedLoginGeneration)
+		})
+	}
+	receipt := *req.Receipt
 	if err := d.ServerKeyVerifier.Verify(proto.ArchiveSplitClosureReceiptCanonical(receipt), receipt.Signature, receipt.ServerKeyVersion); err != nil {
 		return denyArchiveSplitReceipt()
 	}
 	if receipt.Kind == archiveOperationKindReconfiguration {
-		var response proto.BaseResponse
-		err := archiveSlotProcessLock(d.Store, func() error {
-			response = abandonReconfiguration(d.Store, receipt)
-			return nil
-		})
-		if err != nil {
-			return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive slot lock unavailable")
-		}
-		return response
+		return underStageLock(d.Store, func() proto.BaseResponse { return abandonReconfiguration(d.Store, receipt) })
 	}
 	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
 	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State != "" ||
@@ -231,7 +234,7 @@ func abandonReconfiguration(store keychain.SecretStore, r proto.ArchiveSplitClos
 	if closed && stage.OperationID != r.OperationID {
 		return success
 	}
-	if stage.Kind != r.Kind || stage.OrgID != r.OrgID || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint == "" {
+	if stage.UnregisteredCleanup != "" || stage.Kind != r.Kind || stage.OrgID != r.OrgID || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint == "" {
 		return denyArchiveSplitReceipt()
 	}
 	pub, err := slot.GetPublic(store)
@@ -266,6 +269,11 @@ func abandonReconfiguration(store keychain.SecretStore, r proto.ArchiveSplitClos
 			return denyArchiveSplitReceipt()
 		}
 	}
+	return finishStageCleanup(store, slot, account, marker, closedFacts, closed, success)
+}
+
+// Both closure formats persist their verified intent before the first delete.
+func finishStageCleanup(store keychain.SecretStore, slot keychain.ArchiveKeySlot, account, marker, closedFacts string, closed bool, success proto.BaseResponse) proto.BaseResponse {
 	pending := func() proto.BaseResponse {
 		return errs.CodeResponse(errs.ErrCodeArchiveSplitCleanupPending, "staged key deletion pending")
 	}

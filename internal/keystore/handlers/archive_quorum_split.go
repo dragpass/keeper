@@ -110,7 +110,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 			}
 			raw, err := d.Store.Get(config.Service, archiveReconfigurationJournalAccount(req.OrgID))
 			var staged archiveReconfigurationJournal
-			if err != nil || json.Unmarshal([]byte(raw), &staged) != nil || staged.Closure != nil || staged.Kind != binding.Kind || staged.OrgID != req.OrgID || staged.OperationID != req.OperationID || staged.TargetKeyFingerprint != binding.TargetKeyFingerprint {
+			if err != nil || json.Unmarshal([]byte(raw), &staged) != nil || staged.Closure != nil || staged.UnregisteredCleanup != "" || ((staged.OwnerAccountID != "" || staged.OwnerDeviceID != "") && (staged.OwnerAccountID != binding.AccountID || staged.OwnerDeviceID != req.ReconfigurationDecision.DeviceID)) || staged.Kind != binding.Kind || staged.OrgID != req.OrgID || staged.OperationID != req.OperationID || staged.TargetKeyFingerprint != binding.TargetKeyFingerprint {
 				response = denyArchiveSplit()
 				return nil
 			}

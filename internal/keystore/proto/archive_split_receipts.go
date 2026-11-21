@@ -133,20 +133,60 @@ type ArchiveSplitFinalizeRequest struct {
 	Receipt *ArchiveSplitFinalizationReceipt `json:"receipt,omitempty"`
 }
 
+type ArchiveUnregisteredClosure struct {
+	OperationID        string `json:"operation_id"`
+	OrgID              string `json:"org_id"`
+	RequesterAccountID string `json:"requester_account_id"`
+	RequesterDeviceID  string `json:"requester_device_id"`
+	SourceConfigDigest string `json:"source_config_digest"`
+	Status             string `json:"status"`
+	ServerKeyVersion   uint   `json:"server_key_version"`
+	Signature          string `json:"signature"`
+}
+
+func (r ArchiveUnregisteredClosure) Canonical() string {
+	return archiveShareCanonical("dragpass.archive.reconfiguration.closed-unregistered|1", r.OperationID, r.OrgID, r.RequesterAccountID, r.RequesterDeviceID, r.SourceConfigDigest, r.Status, strconv.FormatUint(uint64(r.ServerKeyVersion), 10))
+}
+
+func (r ArchiveUnregisteredClosure) Validate() error {
+	for _, id := range []string{r.OperationID, r.OrgID, r.RequesterAccountID, r.RequesterDeviceID} {
+		if err := requireMessageUUID(id, "closure.identity"); err != nil {
+			return err
+		}
+	}
+	if err := requireMessageDigest(r.SourceConfigDigest, "closure.source_config_digest"); err != nil {
+		return err
+	}
+	switch r.Status {
+	case ArchiveSplitClosedCancelled, ArchiveSplitClosedExpired, ArchiveSplitClosedInvalidated:
+	default:
+		return newValidationError("closure.status", "invalid terminal status")
+	}
+	return validateArchiveReceiptSignature(r.ServerKeyVersion, r.Signature)
+}
+
 type ArchiveSplitAbandonRequest struct {
-	OrgID   string                      `json:"org_id"`
-	Receipt *ArchiveSplitClosureReceipt `json:"receipt,omitempty"`
+	ExpectedLoginGeneration string                      `json:"expected_login_generation,omitempty"`
+	UnregisteredClosure     *ArchiveUnregisteredClosure `json:"unregistered_closure,omitempty"`
+	Confirmed               bool                        `json:"confirmed,omitempty"`
+	ExpectedFingerprint     string                      `json:"expected_fingerprint,omitempty"`
+	OrgID                   string                      `json:"org_id"`
+	Receipt                 *ArchiveSplitClosureReceipt `json:"receipt,omitempty"`
 }
 
 type ArchiveSplitStatusRequest struct {
+	Kind  string `json:"kind,omitempty"`
 	OrgID string `json:"org_id"`
 }
 
 // ArchiveSplitStateResponseData names the journal state and its operation
 // only; it never carries shares, keys or receipts.
 type ArchiveSplitStateResponseData struct {
-	State       string `json:"state"`
-	OperationID string `json:"operation_id,omitempty"`
+	LoginGeneration string `json:"login_generation,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	Fingerprint     string `json:"fingerprint,omitempty"`
+	State           string `json:"state"`
+	OperationID     string `json:"operation_id,omitempty"`
 }
 
 func validateArchiveReceiptSignature(version uint, signature string) error {
@@ -160,6 +200,9 @@ func validateArchiveReceiptSignature(version uint, signature string) error {
 }
 
 func (r ArchiveSplitStatusRequest) Validate() error {
+	if r.Kind != "" && r.Kind != "activation" && r.Kind != "reconfiguration" {
+		return newValidationError("kind", "unsupported operation kind")
+	}
 	return requireMessageUUID(r.OrgID, "org_id")
 }
 
@@ -177,6 +220,21 @@ func (r ArchiveSplitFinalizeRequest) Validate() error {
 }
 
 func (r ArchiveSplitAbandonRequest) Validate() error {
+	if c := r.UnregisteredClosure; c != nil {
+		if r.Receipt != nil || !r.Confirmed || r.OrgID != c.OrgID {
+			return newValidationError("unregistered_closure", "requires matching organization and explicit confirmation")
+		}
+		if err := requireMessageDigest(r.ExpectedFingerprint, "expected_fingerprint"); err != nil {
+			return err
+		}
+		if err := (ArchiveLoginIdentity{AccountID: c.RequesterAccountID, Generation: r.ExpectedLoginGeneration}).Validate(); err != nil {
+			return err
+		}
+		return c.Validate()
+	}
+	if r.ExpectedLoginGeneration != "" || r.ExpectedFingerprint != "" || r.Confirmed {
+		return newValidationError("unregistered_closure", "missing confirmed closure")
+	}
 	if r.Receipt == nil {
 		return newValidationError("receipt", "required")
 	}
