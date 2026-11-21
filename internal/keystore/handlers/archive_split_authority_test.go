@@ -368,3 +368,40 @@ func assertSplitRefusedUntouched(t *testing.T, f *splitFixture, response proto.B
 			f.probe.privateReads, f.probe.journalReads, f.probe.sets, f.probe.deletes)
 	}
 }
+
+func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
+	f := newSplitFixture(t)
+	stage := stageReconfiguration(f.deps, f.request.OrgID, f.request.OperationID)
+	if !stage.Success {
+		t.Fatal(stage.ErrorCode)
+	}
+	target := stage.Data.(proto.ArchiveReconfigureStageResponseData)
+	req := f.request
+	req.Kind = "reconfiguration"
+	req = f.authorize(t, req)
+	d := req.Decision
+	req.Decision = nil
+	targetSPKI, err := crypto.RewrapKeyFingerprint(target.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := proto.ReconfigurationSplitDecision{Kind: req.Kind, Challenge: d.Challenge, AccountID: d.AccountID, DeviceID: d.DeviceID, TokenID: d.TokenID, SessionIssuedAtNanos: d.SessionIssuedAtNanos, OrgID: d.OrgID, OperationID: d.OperationID, ConfigDigest: d.ConfigDigest, SourceConfigDigest: strings.Repeat("a", 64), ActiveKeySPKIFingerprint: d.ArchiveKeySPKIFingerprint, TargetKeyFingerprint: target.Fingerprint, TargetKeySPKIFingerprint: targetSPKI, ThresholdN: d.ThresholdN, Recipients: d.Recipients, RequestDigest: d.RequestDigest, IssuedAt: d.IssuedAt, ExpiresAt: d.ExpiresAt, ServerKeyVersion: d.ServerKeyVersion}
+	canonical, err := signed.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed.Signature = f.sign(t, canonical)
+	req.ReconfigurationDecision = &signed
+	f.resetProbe()
+	result := HandleArchiveKeySplit(f.deps, req)
+	if !result.Success {
+		t.Fatal(result.ErrorCode)
+	}
+	data := result.Data.(proto.ArchiveKeySplitResponseData)
+	if data.KeyFingerprint != target.Fingerprint || len(data.Shares) != len(f.admins) || f.probe.privateReads != 0 {
+		t.Fatal("split did not isolate staged key from active private slots")
+	}
+	if HandleArchiveKeySplit(f.deps, req).Success {
+		t.Fatal("replayed challenge returned shares")
+	}
+}

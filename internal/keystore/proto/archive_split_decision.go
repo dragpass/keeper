@@ -96,6 +96,13 @@ func ArchiveSplitRequestDigest(r ArchiveKeySplitRequest) (string, error) {
 		fields = append(fields, r.RecipientAccountIDs[i], ArchiveRecipientFingerprint(pem))
 	}
 	digest := sha256.Sum256([]byte(archiveShareCanonical("dragpass.archive.split.request|1", fields...)))
+	switch r.Kind {
+	case "", "activation":
+	case "reconfiguration":
+		digest = sha256.Sum256([]byte(archiveShareCanonical("dragpass.archive.split.request|2", r.Kind, hex.EncodeToString(digest[:]))))
+	default:
+		return "", newValidationError("kind", "unsupported split kind")
+	}
 	return hex.EncodeToString(digest[:]), nil
 }
 

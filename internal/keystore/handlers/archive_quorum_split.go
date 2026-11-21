@@ -54,6 +54,10 @@ type archiveSplitJournal struct {
 // keeps, so a retry under a fresh decision must name the same requester,
 // configuration and archive key, and finalization can be checked against it.
 type archiveSplitBinding struct {
+	Kind                      string `json:"kind,omitempty"`
+	SourceConfigDigest        string `json:"source_config_digest,omitempty"`
+	TargetKeyFingerprint      string `json:"target_key_fingerprint,omitempty"`
+	ActiveKeySPKIFingerprint  string `json:"active_key_spki_fingerprint,omitempty"`
 	OrgID                     string `json:"org_id"`
 	AccountID                 string `json:"account_id"`
 	ConfigDigest              string `json:"config_digest"`
@@ -86,6 +90,38 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 		pubs[i] = pk
 	}
 
+	if binding.Kind == archiveOperationKindReconfiguration {
+		var response proto.BaseResponse
+		err := archiveSlotProcessLock(d.Store, func() error {
+			if req.ReconfigurationDecision == nil || d.Now().Unix() >= req.ReconfigurationDecision.ExpiresAt {
+				response = denyArchiveSplit()
+				return nil
+			}
+			slot := keychain.OrgArchiveReconfigurationSlot(req.OrgID)
+			pub, err := slot.GetPublic(d.Store)
+			if err != nil || fingerprintBase64Public(pub) != binding.TargetKeyFingerprint {
+				response = denyArchiveSplit()
+				return nil
+			}
+			spki, err := crypto.RewrapKeyFingerprint(pub)
+			if err != nil || spki != binding.ArchiveKeySPKIFingerprint {
+				response = denyArchiveSplit()
+				return nil
+			}
+			raw, err := d.Store.Get(config.Service, archiveReconfigurationJournalAccount(req.OrgID))
+			var staged archiveReconfigurationJournal
+			if err != nil || json.Unmarshal([]byte(raw), &staged) != nil || staged.Kind != binding.Kind || staged.OrgID != req.OrgID || staged.OperationID != req.OperationID || staged.TargetKeyFingerprint != binding.TargetKeyFingerprint {
+				response = denyArchiveSplit()
+				return nil
+			}
+			response = splitArchiveSlot(d, req, binding, pubs, slot, pub)
+			return nil
+		})
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive slot lock unavailable")
+		}
+		return response
+	}
 	// The slot holding the org's public key owns its key. Once a split has
 	// wiped that slot's private half, the device-wide key is another key and
 	// must not be split in its place.
@@ -96,8 +132,16 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 	if !found {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key unavailable")
 	}
+	return splitArchiveSlot(d, req, binding, pubs, slot, activePublic)
+}
+
+func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveSplitBinding, pubs []*rsa.PublicKey, slot keychain.ArchiveKeySlot, activePublic string) proto.BaseResponse {
 	// The decision changes on every retry; the journal names the request only.
 	req.Decision = nil
+	req.ReconfigurationDecision = nil
+	if req.Kind == "activation" {
+		req.Kind = ""
+	}
 	requestBytes, err := json.Marshal(req)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid split request")
@@ -113,7 +157,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 			journal.KeyFingerprint == "" ||
 			journal.Binding != binding || journal.State != "" ||
 			journal.KeyFingerprint != journal.Result.KeyFingerprint ||
-			!found || fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
+			fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
 			len(journal.Result.Shares) != len(req.RecipientPublicKeys) {
 			return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation unavailable")
 		}
@@ -140,7 +184,7 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to derive archive public key: "+err.Error())
 	}
 	keyFingerprint := fingerprintBase64Public(splitPubPEM)
-	if found && fingerprintBase64Public(activePublic) != keyFingerprint {
+	if fingerprintBase64Public(activePublic) != keyFingerprint {
 		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key changed")
 	}
 

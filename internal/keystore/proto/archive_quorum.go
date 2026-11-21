@@ -44,7 +44,9 @@ type WrappedShare struct {
 // Each recipient PEM is an admin's account archive public key (the coordinator
 // may include their own).
 type ArchiveKeySplitRequest struct {
-	OperationID string `json:"operation_id"`
+	Kind                    string                        `json:"kind,omitempty"`
+	ReconfigurationDecision *ReconfigurationSplitDecision `json:"reconfiguration_decision,omitempty"`
+	OperationID             string                        `json:"operation_id"`
 	// AccountID is the requesting (coordinator) account; the signed split
 	// decision and the prepared challenge both bind it.
 	AccountID string `json:"account_id,omitempty"`

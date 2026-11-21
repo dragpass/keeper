@@ -54,13 +54,34 @@ func HandleArchiveSplitPrepare(d Deps, r proto.ArchiveSplitPrepareRequest) proto
 // private-key or journal access. Every refusal here is
 // archive_split_authority_required. Dispatch holds requestMu throughout.
 func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseResponse {
-	if req.Decision == nil || d.ArchiveSplitChallenges == nil || d.Store == nil || d.ServerKeyVerifier == nil {
+	if d.ArchiveSplitChallenges == nil || d.Store == nil || d.ServerKeyVerifier == nil {
 		d.Logger.Println("archive key split refused: no signed split decision")
 		return denyArchiveSplit()
 	}
-	decision := *req.Decision
-	if decision.Validate() != nil {
-		return denyArchiveSplit()
+	var decision proto.ArchiveSplitDecision
+	var canonical string
+	if req.Kind == archiveOperationKindReconfiguration {
+		if req.Decision != nil || req.ReconfigurationDecision == nil {
+			return denyArchiveSplit()
+		}
+		var err error
+		decision, err = req.ReconfigurationDecision.SplitAuthority()
+		if err != nil {
+			return denyArchiveSplit()
+		}
+		canonical, err = req.ReconfigurationDecision.Canonical()
+		if err != nil {
+			return denyArchiveSplit()
+		}
+	} else {
+		if (req.Kind != "" && req.Kind != "activation") || req.Decision == nil || req.ReconfigurationDecision != nil {
+			return denyArchiveSplit()
+		}
+		decision = *req.Decision
+		if decision.Validate() != nil {
+			return denyArchiveSplit()
+		}
+		canonical = proto.ArchiveSplitDecisionCanonical(decision)
 	}
 	digest, err := proto.ArchiveSplitRequestDigest(req)
 	if err != nil {
@@ -83,7 +104,7 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	if !archiveSplitDecisionNamesRequest(decision, req) {
 		return denyArchiveSplit()
 	}
-	if err := d.ServerKeyVerifier.Verify(proto.ArchiveSplitDecisionCanonical(decision), decision.Signature, decision.ServerKeyVersion); err != nil {
+	if err := d.ServerKeyVerifier.Verify(canonical, decision.Signature, decision.ServerKeyVersion); err != nil {
 		return denyArchiveSplit()
 	}
 	binding, found, err := keychain.GetAccountBinding(d.Store)
@@ -98,13 +119,15 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	// authorized, by both its stored PEM and its parsed SPKI. It must also be
 	// the org's own slot: the device-wide fallback key may still serve other
 	// orgs on this device, and finalization would delete it for all of them.
-	slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
-	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg ||
-		fingerprintBase64Public(activePublic) != decision.ArchiveKeyFingerprint {
-		return denyArchiveSplit()
-	}
-	if spki, err := crypto.RewrapKeyFingerprint(activePublic); err != nil || spki != decision.ArchiveKeySPKIFingerprint {
-		return denyArchiveSplit()
+	if req.Kind != archiveOperationKindReconfiguration {
+		slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+		if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg ||
+			fingerprintBase64Public(activePublic) != decision.ArchiveKeyFingerprint {
+			return denyArchiveSplit()
+		}
+		if spki, err := crypto.RewrapKeyFingerprint(activePublic); err != nil || spki != decision.ArchiveKeySPKIFingerprint {
+			return denyArchiveSplit()
+		}
 	}
 	now = d.Now()
 	if now.Unix() >= decision.ExpiresAt {
@@ -114,10 +137,14 @@ func HandleArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest) proto.BaseR
 	if !ok || consumed != c {
 		return denyArchiveSplit()
 	}
-	response := prepareArchiveKeySplit(d, req, archiveSplitBinding{
-		OrgID: c.orgID, AccountID: c.accountID, ConfigDigest: decision.ConfigDigest,
-		ArchiveKeySPKIFingerprint: decision.ArchiveKeySPKIFingerprint, SplitRequestDigest: digest,
-	})
+	verified := archiveSplitBinding{OrgID: c.orgID, AccountID: c.accountID, ConfigDigest: decision.ConfigDigest, ArchiveKeySPKIFingerprint: decision.ArchiveKeySPKIFingerprint, SplitRequestDigest: digest}
+	if req.Kind == archiveOperationKindReconfiguration {
+		verified.Kind = req.Kind
+		verified.SourceConfigDigest = req.ReconfigurationDecision.SourceConfigDigest
+		verified.ActiveKeySPKIFingerprint = req.ReconfigurationDecision.ActiveKeySPKIFingerprint
+		verified.TargetKeyFingerprint = decision.ArchiveKeyFingerprint
+	}
+	response := prepareArchiveKeySplit(d, req, verified)
 	if !response.Success {
 		return response
 	}

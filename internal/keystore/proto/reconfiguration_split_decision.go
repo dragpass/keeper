@@ -46,3 +46,18 @@ func (d ReconfigurationSplitDecision) Canonical() (string, error) {
 		strconv.FormatInt(d.ExpiresAt, 10), strconv.FormatUint(uint64(d.ServerKeyVersion), 10))
 	return archiveShareCanonical("dragpass.archive.split.decision|2", fields...), nil
 }
+
+// SplitAuthority returns the common login and recipient claims after checking
+// the additional v2 bindings. The signature still covers Canonical().
+func (d ReconfigurationSplitDecision) SplitAuthority() (ArchiveSplitDecision, error) {
+	for _, digest := range []string{d.SourceConfigDigest, d.ActiveKeySPKIFingerprint} {
+		if err := requireMessageDigest(digest, "decision.digest"); err != nil {
+			return ArchiveSplitDecision{}, err
+		}
+	}
+	if d.Kind != "reconfiguration" || d.TargetKeySPKIFingerprint == d.ActiveKeySPKIFingerprint {
+		return ArchiveSplitDecision{}, newValidationError("decision", "invalid reconfiguration target")
+	}
+	common := ArchiveSplitDecision{Challenge: d.Challenge, AccountID: d.AccountID, DeviceID: d.DeviceID, TokenID: d.TokenID, SessionIssuedAtNanos: d.SessionIssuedAtNanos, OrgID: d.OrgID, OperationID: d.OperationID, ConfigDigest: d.ConfigDigest, ArchiveKeyFingerprint: d.TargetKeyFingerprint, ArchiveKeySPKIFingerprint: d.TargetKeySPKIFingerprint, ThresholdN: d.ThresholdN, Recipients: d.Recipients, RequestDigest: d.RequestDigest, IssuedAt: d.IssuedAt, ExpiresAt: d.ExpiresAt, ServerKeyVersion: d.ServerKeyVersion, Signature: d.Signature}
+	return common, common.Validate()
+}
