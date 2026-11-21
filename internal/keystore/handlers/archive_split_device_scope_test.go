@@ -66,7 +66,7 @@ func deviceScopeJournal(t *testing.T) (*finalizeFixture, proto.ArchiveKeySplitRe
 	response := prepareArchiveKeySplit(sf.deps, sf.request, archiveSplitBinding{
 		OrgID: sf.v.OrgID, AccountID: sf.v.AccountID, ConfigDigest: splitTestConfig,
 		ArchiveKeySPKIFingerprint: spki, SplitRequestDigest: digest,
-	})
+	}, nil)
 	if !response.Success {
 		t.Fatalf("device-scope preparation: %s", response.Error)
 	}

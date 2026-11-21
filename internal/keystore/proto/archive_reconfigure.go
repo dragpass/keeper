@@ -7,6 +7,7 @@ package proto
 // reconfiguration operation. Both IDs are required: the org selects the slot
 // and the operation ID binds the journal.
 type ArchiveReconfigureStageRequest struct {
+	ArchiveLoginScope
 	OrgID       string `json:"org_id"`
 	OperationID string `json:"operation_id"`
 }

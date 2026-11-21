@@ -27,14 +27,41 @@ const archiveOperationKindReconfiguration = "reconfiguration"
 // archiveReconfigurationJournal is the org's reconfiguration record. It holds
 // no secret.
 type archiveReconfigurationJournal struct {
-	Kind                 string `json:"kind"`
-	OperationID          string `json:"operation_id"`
-	OrgID                string `json:"org_id"`
-	TargetKeyFingerprint string `json:"target_key_fingerprint,omitempty"`
+	OwnerAccountID      string `json:"owner_account_id,omitempty"`
+	OwnerDeviceID       string `json:"owner_device_id,omitempty"`
+	UnregisteredCleanup string `json:"unregistered_cleanup,omitempty"`
+
+	// A signed closure pins cleanup across failed deletes and prevents stage retries from generating a replacement.
+	Closure              *proto.ArchiveSplitClosureReceipt `json:"closure,omitempty"`
+	Kind                 string                            `json:"kind"`
+	OperationID          string                            `json:"operation_id"`
+	OrgID                string                            `json:"org_id"`
+	TargetKeyFingerprint string                            `json:"target_key_fingerprint,omitempty"`
+}
+
+type stageOwner struct{ account, device, generation string }
+
+func currentStageOwner(d Deps) (stageOwner, error) {
+	b, err := activeArchiveBinding(d)
+	if err != nil {
+		return stageOwner{}, err
+	}
+	device, found, err := keychain.GetDeviceID(d.Store)
+	if err != nil {
+		return stageOwner{}, err
+	}
+	if !found {
+		return stageOwner{}, errArchiveSessionLogin
+	}
+	return stageOwner{b.AccountID, device, b.ChatStateGeneration}, nil
 }
 
 func archiveReconfigurationJournalAccount(orgID string) string {
 	return config.OrgArchiveReconfigurationJournalPrefix + orgID
+}
+
+func closedReconfigurationAccount(orgID, operationID string) string {
+	return archiveReconfigurationJournalAccount(orgID) + ":closed:" + operationID
 }
 
 func writeArchiveReconfigurationJournal(store keychain.SecretStore, journal archiveReconfigurationJournal) error {
@@ -68,8 +95,13 @@ func refuseArchiveReconfigurationPending() proto.BaseResponse {
 
 // reconfigurationStageDecision reads the org's journal. decided is true when
 // the state already answers the call.
-func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageRequest) (proto.BaseResponse, bool, error) {
+func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageRequest, owner stageOwner) (proto.BaseResponse, bool, error) {
 	slot := keychain.OrgArchiveReconfigurationSlot(req.OrgID)
+	if _, err := d.Store.Get(config.Service, closedReconfigurationAccount(req.OrgID, req.OperationID)); err == nil {
+		return refuseArchiveReconfigurationPending(), true, nil
+	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return proto.BaseResponse{}, false, err
+	}
 	raw, err := d.Store.Get(config.Service, archiveReconfigurationJournalAccount(req.OrgID))
 	if errors.Is(err, keychain.ErrSecretNotFound) {
 		pub, hasPriv, err := slotHalves(d.Store, slot)
@@ -91,12 +123,15 @@ func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageReque
 	// is its own, so it is kept and the stage refused.
 	if json.Unmarshal([]byte(raw), &journal) != nil ||
 		journal.Kind != archiveOperationKindReconfiguration ||
-		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID {
+		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID || journal.Closure != nil || journal.UnregisteredCleanup != "" || journal.OwnerAccountID != owner.account || journal.OwnerDeviceID != owner.device {
 		return refuseArchiveReconfigurationPending(), true, nil
 	}
 	pub, hasPriv, err := slotHalves(d.Store, slot)
 	if err != nil {
 		return proto.BaseResponse{}, false, err
+	}
+	if journal.TargetKeyFingerprint != "" && (!hasPriv || pub == "" || journal.TargetKeyFingerprint != fingerprintBase64Public(pub)) {
+		return errs.CodeResponse(errs.ErrCodeArchiveKeySlotIncomplete, "completed stage has an incomplete or changed key"), true, nil
 	}
 	if pub != "" && hasPriv && journal.TargetKeyFingerprint == fingerprintBase64Public(pub) {
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveReconfigureStageResponseData{
@@ -131,9 +166,23 @@ func HandleArchiveReconfigureStage(d Deps, req proto.ArchiveReconfigureStageRequ
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
 	d.Logger.Println("archive reconfigure stage processing...")
-	if resp, decided, err := reconfigurationStageDecision(d, req); err != nil {
+	var owner stageOwner
+	var decided bool
+	var resp proto.BaseResponse
+	if err := archiveSlotProcessLock(d.Store, func() error {
+		var err error
+		owner, err = currentStageOwner(d)
+		if err != nil {
+			resp = archiveOwnerRefusal(err)
+			decided = true
+			return nil
+		}
+		resp, decided, err = reconfigurationStageDecision(d, req, owner)
+		return err
+	}); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read reconfiguration journal failed")
-	} else if decided {
+	}
+	if decided {
 		return resp
 	}
 	keyPair, err := archiveKeyPairGenerator()
@@ -144,9 +193,15 @@ func HandleArchiveReconfigureStage(d Deps, req proto.ArchiveReconfigureStageRequ
 	secure.WipeString(&keyPair.PrivateKey)
 	defer privKeyBuf.Destroy()
 
-	var resp proto.BaseResponse
 	if err := archiveSlotProcessLock(d.Store, func() error {
-		decision, decided, err := reconfigurationStageDecision(d, req)
+		if current, err := currentStageOwner(d); err != nil {
+			resp = archiveOwnerRefusal(err)
+			return nil
+		} else if current != owner {
+			resp = refuseArchiveReconfigurationPending()
+			return nil
+		}
+		decision, decided, err := reconfigurationStageDecision(d, req, owner)
 		if err != nil {
 			resp = errs.CodeResponse(errs.ErrCodeStorageFailure, "read reconfiguration journal failed")
 			return nil
@@ -156,7 +211,7 @@ func HandleArchiveReconfigureStage(d Deps, req proto.ArchiveReconfigureStageRequ
 			resp = decision
 			return nil
 		}
-		resp = writeReconfigurationStage(d, req, privKeyBuf.Bytes(), keyPair.PublicKey)
+		resp = writeReconfigurationStage(d, req, owner, privKeyBuf.Bytes(), keyPair.PublicKey)
 		return nil
 	}); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive key lock unavailable")
@@ -168,8 +223,8 @@ func HandleArchiveReconfigureStage(d Deps, req proto.ArchiveReconfigureStageRequ
 // pair, private first, then the journal naming the key. Every interruption
 // leaves either nothing or a journal of this operation, which its retry
 // completes; a failed public write removes the private half again.
-func writeReconfigurationStage(d Deps, req proto.ArchiveReconfigureStageRequest, privatePEM []byte, publicPEM string) proto.BaseResponse {
-	journal := archiveReconfigurationJournal{Kind: archiveOperationKindReconfiguration, OperationID: req.OperationID, OrgID: req.OrgID}
+func writeReconfigurationStage(d Deps, req proto.ArchiveReconfigureStageRequest, owner stageOwner, privatePEM []byte, publicPEM string) proto.BaseResponse {
+	journal := archiveReconfigurationJournal{OwnerAccountID: owner.account, OwnerDeviceID: owner.device, Kind: archiveOperationKindReconfiguration, OperationID: req.OperationID, OrgID: req.OrgID}
 	if err := writeArchiveReconfigurationJournal(d.Store, journal); err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save reconfiguration journal failed")
 	}

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -184,6 +186,24 @@ func TestArchiveKeySplitAcceptsValidSignedDecision(t *testing.T) {
 	}
 }
 
+func TestArchiveKeySplitV1RefusesStagedReconfigurationKey(t *testing.T) {
+	f := newSplitFixture(t)
+	staged := stageReconfiguration(f.deps, f.request.OrgID, f.request.OperationID)
+	if !staged.Success {
+		t.Fatalf("stage failed: %s", staged.ErrorCode)
+	}
+	target := staged.Data.(proto.ArchiveReconfigureStageResponseData)
+	if target.PublicKey == f.archive {
+		t.Fatal("fixture needs distinct active and reconfiguration keys")
+	}
+	// The v1 decision names the staged pair by both PEM and SPKI fingerprints.
+	f.archive = target.PublicKey
+	req := f.authorize(t, f.request)
+	f.probe.private[keychain.OrgArchiveReconfigurationSlot(req.OrgID).PrivateAccount] = true
+	f.resetProbe()
+	assertSplitRefusedUntouched(t, f, HandleArchiveKeySplit(f.deps, req))
+}
+
 func TestArchiveKeySplitRefusesInvalidAuthorityBeforePrivateRead(t *testing.T) {
 	cases := map[string]func(t *testing.T, f *splitFixture, req *proto.ArchiveKeySplitRequest){
 		"missing": func(t *testing.T, f *splitFixture, req *proto.ArchiveKeySplitRequest) { req.Decision = nil },
@@ -348,5 +368,268 @@ func assertSplitRefusedUntouched(t *testing.T, f *splitFixture, response proto.B
 	if f.probe.privateReads != 0 || f.probe.journalReads != 0 || f.probe.sets != 0 || f.probe.deletes != 0 {
 		t.Fatalf("refused split touched secrets: private=%d journal=%d sets=%d deletes=%d",
 			f.probe.privateReads, f.probe.journalReads, f.probe.sets, f.probe.deletes)
+	}
+}
+
+func (f *splitFixture) authorizeReconfiguration(t *testing.T) (proto.ArchiveKeySplitRequest, proto.ArchiveReconfigureStageResponseData) {
+	t.Helper()
+	stage := stageReconfiguration(f.deps, f.request.OrgID, f.request.OperationID)
+	if !stage.Success {
+		t.Fatal(stage.ErrorCode)
+	}
+	target := stage.Data.(proto.ArchiveReconfigureStageResponseData)
+	req := f.request
+	req.Kind = "reconfiguration"
+	req = f.authorize(t, req)
+	d := req.Decision
+	req.Decision = nil
+	targetSPKI, err := crypto.RewrapKeyFingerprint(target.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := proto.ReconfigurationSplitDecision{Kind: req.Kind, Challenge: d.Challenge, AccountID: d.AccountID, DeviceID: d.DeviceID, TokenID: d.TokenID, SessionIssuedAtNanos: d.SessionIssuedAtNanos, OrgID: d.OrgID, OperationID: d.OperationID, ConfigDigest: d.ConfigDigest, SourceConfigDigest: strings.Repeat("a", 64), ActiveKeySPKIFingerprint: d.ArchiveKeySPKIFingerprint, TargetKeyFingerprint: target.Fingerprint, TargetKeySPKIFingerprint: targetSPKI, ThresholdN: d.ThresholdN, Recipients: d.Recipients, RequestDigest: d.RequestDigest, IssuedAt: d.IssuedAt, ExpiresAt: d.ExpiresAt, ServerKeyVersion: d.ServerKeyVersion}
+	canonical, err := signed.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed.Signature = f.sign(t, canonical)
+	req.ReconfigurationDecision = &signed
+	return req, target
+}
+
+func TestArchiveKeySplitReconfigurationRefusesExpiryDuringLockWait(t *testing.T) {
+	f := newSplitFixture(t)
+	req, _ := f.authorizeReconfiguration(t)
+	f.probe.private[keychain.OrgArchiveReconfigurationSlot(req.OrgID).PrivateAccount] = true
+	f.resetProbe()
+	lock := archiveSlotProcessLock
+	t.Cleanup(func() { archiveSlotProcessLock = lock })
+	archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
+		return lock(s, func() error { f.clock.advance(11); return fn() })
+	}
+	result := HandleArchiveKeySplit(f.deps, req)
+	if result.Success || result.ErrorCode != string(errs.ErrCodeArchiveSplitAuthorityRequired) || f.probe.privateReads != 0 || f.probe.journalReads != 0 || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("expired authority accessed staged material")
+	}
+}
+
+func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
+	f := newSplitFixture(t)
+	req, target := f.authorizeReconfiguration(t)
+	f.resetProbe()
+	result := HandleArchiveKeySplit(f.deps, req)
+	if !result.Success {
+		t.Fatal(result.ErrorCode)
+	}
+	data := result.Data.(proto.ArchiveKeySplitResponseData)
+	if data.KeyFingerprint != target.Fingerprint || len(data.Shares) != len(f.admins) || f.probe.privateReads != 0 {
+		t.Fatal("split did not isolate staged key from active private slots")
+	}
+	if HandleArchiveKeySplit(f.deps, req).Success {
+		t.Fatal("replayed challenge returned shares")
+	}
+}
+
+func TestArchiveSplitAbandonRegisteredTarget(t *testing.T) {
+	f := newSplitFixture(t)
+	req, target := f.authorizeReconfiguration(t)
+	if res := HandleArchiveKeySplit(f.deps, req); !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	d := req.ReconfigurationDecision
+	r := proto.ArchiveSplitClosureReceipt{Kind: req.Kind, OperationID: req.OperationID, OrgID: req.OrgID, Status: proto.ArchiveSplitClosedCancelled, SourceConfigDigest: d.SourceConfigDigest, TargetKeySPKIFingerprint: d.TargetKeySPKIFingerprint, ServerKeyVersion: 1}
+	abandon := func(receipt proto.ArchiveSplitClosureReceipt) proto.BaseResponse {
+		receipt.Signature = f.sign(t, proto.ArchiveSplitClosureReceiptCanonical(receipt))
+		return HandleArchiveSplitAbandon(f.deps, proto.ArchiveSplitAbandonRequest{OrgID: req.OrgID, Receipt: &receipt})
+	}
+	slot := keychain.OrgArchiveReconfigurationSlot(req.OrgID)
+	other := r
+	other.SourceConfigDigest = strings.Repeat("f", 64)
+	f.resetProbe()
+	if abandon(other).Success || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("wrong source changed staged material")
+	}
+	if pub, err := slot.GetPublic(f.store); err != nil || pub != target.PublicKey {
+		t.Fatal("refusal lost staged key")
+	}
+	f.probe.private[slot.PrivateAccount] = true
+	f.resetProbe()
+	f.probe.deleteHook = func(account string) error {
+		if account == slot.PrivateAccount {
+			return errors.New("test storage failure")
+		}
+		return nil
+	}
+	if res := abandon(r); res.ErrorCode != string(errs.ErrCodeArchiveSplitCleanupPending) {
+		t.Fatal("partial deletion did not report pending cleanup")
+	}
+	if f.probe.privateReads != 0 {
+		t.Fatal("private key read after failed deletion")
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, req.OperationID); res.Success {
+		t.Fatal("stage replaced a key during closure cleanup")
+	}
+	f.probe.deleteHook = nil
+	if res := abandon(r); !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	for _, account := range []string{slot.PrivateAccount, slot.PublicAccount, archiveSplitJournalAccount(slot), archiveReconfigurationJournalAccount(req.OrgID)} {
+		if _, err := f.store.Get(config.Service, account); !errors.Is(err, keychain.ErrSecretNotFound) {
+			t.Fatal("receipt cleanup left staged material")
+		}
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, req.OperationID); res.Success {
+		t.Fatal("closed operation staged a replacement")
+	}
+	next := stageReconfiguration(f.deps, req.OrgID, splitTestOther)
+	if !next.Success {
+		t.Fatal("closed operation blocked new stage")
+	}
+	nextKey := next.Data.(proto.ArchiveReconfigureStageResponseData).PublicKey
+	f.resetProbe()
+	if res := abandon(r); !res.Success {
+		t.Fatal("closure acknowledgement lost after next operation")
+	}
+	if pub, err := slot.GetPublic(f.store); err != nil || pub != nextKey || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("old closure modified the replacement")
+	}
+	if pub, err := keychain.OrgArchiveActiveSlot(req.OrgID).GetPublic(f.store); err != nil || pub != f.archive {
+		t.Fatal("abandon changed active key")
+	}
+}
+
+func TestUnregisteredClosureRequiresExactOwnedStage(t *testing.T) {
+	f := newSplitFixture(t)
+	org, op := f.request.OrgID, f.request.OperationID
+	stage := stageReconfiguration(f.deps, org, op)
+	if !stage.Success {
+		t.Fatal(stage.ErrorCode)
+	}
+	fp := stage.Data.(proto.ArchiveReconfigureStageResponseData).Fingerprint
+	lookup := func() proto.BaseResponse {
+		return HandleArchiveSplitStatus(f.deps, proto.ArchiveSplitStatusRequest{OrgID: org, Kind: "reconfiguration"})
+	}
+	status := lookup()
+	if !status.Success || status.Data.(proto.ArchiveSplitStateResponseData).Fingerprint != fp {
+		t.Fatal("owner lookup did not return staged fingerprint")
+	}
+	proof := proto.ArchiveUnregisteredClosure{OperationID: op, OrgID: org, RequesterAccountID: f.request.AccountID, RequesterDeviceID: splitTestDevice, SourceConfigDigest: strings.Repeat("b", 64), Status: "cancelled", ServerKeyVersion: 1}
+	proof.Signature = f.sign(t, proof.Canonical())
+	req := proto.ArchiveSplitAbandonRequest{OrgID: org, UnregisteredClosure: &proof, ExpectedFingerprint: fp, Confirmed: true, ExpectedLoginGeneration: status.Data.(proto.ArchiveSplitStateResponseData).LoginGeneration}
+	refuse := func(r proto.ArchiveSplitAbandonRequest) {
+		t.Helper()
+		f.resetProbe()
+		if result := HandleArchiveSplitAbandon(f.deps, r); result.Success || f.probe.sets != 0 || f.probe.deletes != 0 {
+			t.Fatal("unexpected change on refusal")
+		}
+	}
+	wrong := req
+	wrong.Confirmed = false
+	refuse(wrong)
+	wrong = req
+	wrong.ExpectedFingerprint = strings.Repeat("a", 64)
+	refuse(wrong)
+	for _, change := range []func(*proto.ArchiveUnregisteredClosure){
+		func(c *proto.ArchiveUnregisteredClosure) { c.Status = "expired" },
+		func(c *proto.ArchiveUnregisteredClosure) {
+			c.RequesterDeviceID = splitTestOther
+			c.Signature = f.sign(t, c.Canonical())
+		},
+		func(c *proto.ArchiveUnregisteredClosure) {
+			c.OperationID = splitTestOther
+			c.Signature = f.sign(t, c.Canonical())
+		},
+	} {
+		c := proof
+		change(&c)
+		wrong = req
+		wrong.UnregisteredClosure = &c
+		refuse(wrong)
+	}
+	if out := HandleArchiveAppLoginEnd(f.deps, proto.ArchiveAppLoginEndRequest{AccountID: f.request.AccountID, Generation: req.ExpectedLoginGeneration}); !out.Success {
+		t.Fatal("ending current App login failed", out.ErrorCode)
+	}
+	refuse(req)
+	if out := lookup(); out.Success {
+		t.Fatal("ended login saw staged key")
+	}
+	setSlotTestOwner(t, f.deps, splitTestOther)
+	if result := lookup(); result.Success && result.Data.(proto.ArchiveSplitStateResponseData).Fingerprint != "" {
+		t.Fatal("wrong owner saw fingerprint")
+	}
+	refuse(req)
+	setSlotTestOwner(t, f.deps, f.request.AccountID)
+	refuse(req) // A to B to A requires a fresh confirmation.
+	req.ExpectedLoginGeneration = lookup().Data.(proto.ArchiveSplitStateResponseData).LoginGeneration
+	journalKey := archiveReconfigurationJournalAccount(org)
+	raw, err := f.store.Get(config.Service, journalKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var j archiveReconfigurationJournal
+	if err := json.Unmarshal([]byte(raw), &j); err != nil {
+		t.Fatal(err)
+	}
+	j.OwnerAccountID = ""
+	if err := writeArchiveReconfigurationJournal(f.store, j); err != nil {
+		t.Fatal(err)
+	}
+	refuse(req)
+	if result := stageReconfiguration(f.deps, org, op); result.Success {
+		t.Fatal("ownerless stage adopted")
+	}
+	j.OwnerDeviceID = ""
+	if err := writeArchiveReconfigurationJournal(f.store, j); err != nil {
+		t.Fatal(err)
+	}
+	refuse(req)
+	if result := stageReconfiguration(f.deps, org, op); result.Success {
+		t.Fatal("legacy stage adopted")
+	}
+	if err := f.store.Set(config.Service, journalKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	slot := keychain.OrgArchiveReconfigurationSlot(org)
+	actualPub, _ := slot.GetPublic(f.store)
+	if err := slot.SavePublic(f.store, "changed key"); err != nil {
+		t.Fatal(err)
+	}
+	refuse(req)
+	if err := slot.SavePublic(f.store, actualPub); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Set(config.Service, archiveSplitJournalAccount(slot), "inconsistent split journal"); err != nil {
+		t.Fatal(err)
+	}
+	refuse(req)
+	if err := f.store.Delete(config.Service, archiveSplitJournalAccount(slot)); err != nil {
+		t.Fatal(err)
+	}
+	f.probe.private[slot.PrivateAccount] = true
+	f.resetProbe()
+	f.probe.deleteHook = func(a string) error {
+		if a == slot.PublicAccount {
+			return errors.New("cleanup interrupted")
+		}
+		return nil
+	}
+	if result := HandleArchiveSplitAbandon(f.deps, req); result.ErrorCode != string(errs.ErrCodeArchiveSplitCleanupPending) || f.probe.privateReads != 0 {
+		t.Fatal("partial cleanup not recoverable")
+	}
+	if result := lookup(); !result.Success || result.Data.(proto.ArchiveSplitStateResponseData).State != proto.ArchiveSplitStateCleanupPending {
+		t.Fatal("pending cleanup is not visible to the owner")
+	}
+	f.probe.deleteHook = nil
+	if result := HandleArchiveSplitAbandon(f.deps, req); !result.Success {
+		t.Fatal(result.ErrorCode)
+	}
+	if result := HandleArchiveSplitAbandon(f.deps, req); !result.Success {
+		t.Fatal("lost acknowledgement was not recoverable")
+	}
+	if result := stageReconfiguration(f.deps, org, op); result.Success {
+		t.Fatal("restaged closed operation")
+	}
+	if result := stageReconfiguration(f.deps, org, splitTestOther); !result.Success {
+		t.Fatal("next operation blocked")
 	}
 }

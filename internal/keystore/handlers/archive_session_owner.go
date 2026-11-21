@@ -27,32 +27,9 @@ var (
 // lock. Combine also checks the account independently signed by the server.
 func archiveSessionCaller(d Deps, slot archiveSessionSlot) (archiveSessionOwner, error) {
 	var owner archiveSessionOwner
-	b, found, err := keychain.GetAccountBinding(d.Store)
+	b, err := activeArchiveBinding(d)
 	if err != nil {
 		return owner, err
-	}
-	if !found || b.SignedOut || b.Generation == 0 || !isLowerUUID(b.AccountID) {
-		return owner, errArchiveSessionLogin
-	}
-	if expected := d.ArchiveRequestLogin; expected != nil && (b.AccountID != expected.AccountID || b.ChatStateGeneration != expected.Generation) {
-		return owner, errArchiveSessionLogin
-	}
-	login, err := keychain.ReadChatLogin(d.Store)
-	if err != nil {
-		return owner, err
-	}
-	if (proto.ArchiveLoginIdentity{AccountID: b.AccountID, Generation: b.ChatStateGeneration}).Validate() != nil {
-		return owner, errArchiveSessionLogin
-	}
-	if login.Committing || (login.Generation != "" && (login.AccountID != b.AccountID || login.Generation != b.ChatStateGeneration)) {
-		return owner, errArchiveSessionLogin
-	}
-	ended, err := archiveLoginEnded(d, b)
-	if err != nil {
-		return owner, err
-	}
-	if ended {
-		return owner, errArchiveSessionLogin
 	}
 	pub, err := keychain.GetPublicKey(d.Store)
 	if errors.Is(err, keychain.ErrSecretNotFound) {
@@ -76,6 +53,37 @@ func archiveSessionCaller(d Deps, slot archiveSessionSlot) (archiveSessionOwner,
 		return owner, errArchiveSessionLogin
 	}
 	return owner, nil
+}
+
+func activeArchiveBinding(d Deps) (keychain.AccountBinding, error) {
+	b, found, err := keychain.GetAccountBinding(d.Store)
+	if err != nil {
+		return keychain.AccountBinding{}, err
+	}
+	if !found || b.SignedOut || b.Generation == 0 || !isLowerUUID(b.AccountID) {
+		return keychain.AccountBinding{}, errArchiveSessionLogin
+	}
+	if expected := d.ArchiveRequestLogin; expected != nil && (b.AccountID != expected.AccountID || b.ChatStateGeneration != expected.Generation) {
+		return keychain.AccountBinding{}, errArchiveSessionLogin
+	}
+	login, err := keychain.ReadChatLogin(d.Store)
+	if err != nil {
+		return keychain.AccountBinding{}, err
+	}
+	if (proto.ArchiveLoginIdentity{AccountID: b.AccountID, Generation: b.ChatStateGeneration}).Validate() != nil {
+		return keychain.AccountBinding{}, errArchiveSessionLogin
+	}
+	if login.Committing || (login.Generation != "" && (login.AccountID != b.AccountID || login.Generation != b.ChatStateGeneration)) {
+		return keychain.AccountBinding{}, errArchiveSessionLogin
+	}
+	ended, err := archiveLoginEnded(d, b)
+	if err != nil {
+		return keychain.AccountBinding{}, err
+	}
+	if ended {
+		return keychain.AccountBinding{}, errArchiveSessionLogin
+	}
+	return b, nil
 }
 
 func archiveOwnerRefusal(err error) proto.BaseResponse {

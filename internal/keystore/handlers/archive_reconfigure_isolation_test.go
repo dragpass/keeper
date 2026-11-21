@@ -123,6 +123,9 @@ func TestReconfigurationKeyIsolation_UnwrapUsesOnlyTheActiveKey(t *testing.T) {
 // archive_unwrap_and_rewrap: before finalization the new key opens nothing.
 func TestReconfigurationKeyIsolation_UnwrapRefusesAGrantToTheStagedKey(t *testing.T) {
 	f := newAuditFixture(t)
+	if err := f.store.Set(config.Service, config.DeviceID, splitTestDevice); err != nil {
+		t.Fatal(err)
+	}
 	resp := stageReconfiguration(f.deps, f.v.OrgID, reconfigIsolationOp)
 	if !resp.Success {
 		t.Fatalf("stage: %+v", resp)
@@ -156,7 +159,7 @@ func TestReconfigurationKeyIsolation_RotationActions(t *testing.T) {
 		requireUntouched(t, probe, "archive rotation rewrap")
 	})
 	t.Run("begin commit abort", func(t *testing.T) {
-		deps, _, _ := newTestDeps(t)
+		deps, _, _ := newOwnedStageDeps(t)
 		generateFor(t, deps, testOrgA)
 		probe, _ := stageForIsolation(t, &deps, testOrgA)
 		if resp := HandleArchiveKeyRotateBegin(deps, proto.ArchiveKeyRotateBeginRequest{OrgID: testOrgA}); !resp.Success {
@@ -200,8 +203,7 @@ func TestReconfigurationKeyIsolation_Combine(t *testing.T) {
 // Status, generate (refused while the reconfiguration is staged), session
 // begin, combine and end.
 func TestReconfigurationKeyIsolation_StatusGenerateAndSessions(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	setSlotTestOwner(t, deps, slotTestAccount)
+	deps, _, _ := newOwnedStageDeps(t)
 	probe, _ := stageForIsolation(t, &deps, testOrgA)
 	_ = HandleArchiveKeyStatus(deps, proto.ArchiveKeyStatusRequest{OrgID: testOrgA})
 	_ = HandleArchiveKeyGenerate(deps, proto.ArchiveKeyGenerateRequest{OrgID: testOrgA})

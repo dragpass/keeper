@@ -29,6 +29,16 @@ const (
 	reconfigOpB = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 )
 
+func newOwnedStageDeps(t *testing.T) (Deps, *testdouble.MemoryLogger, *testdouble.MemorySecretStore) {
+	t.Helper()
+	d, l, s := newTestDeps(t)
+	setSlotTestOwner(t, d, slotTestAccount)
+	if err := s.Set(config.Service, config.DeviceID, splitTestDevice); err != nil {
+		t.Fatal(err)
+	}
+	return d, l, s
+}
+
 func stageReconfiguration(deps Deps, orgID, operationID string) proto.BaseResponse {
 	return HandleArchiveReconfigureStage(deps, proto.ArchiveReconfigureStageRequest{OrgID: orgID, OperationID: operationID})
 }
@@ -63,7 +73,7 @@ func readReconfigurationJournal(t *testing.T, store keychain.SecretStore, orgID 
 // rotation stage keep exactly what they held, and the journal records the
 // operation kind, the operation and the staged key.
 func TestArchiveReconfigureStage_StagesWithoutTouchingActiveOrRotationSlots(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newOwnedStageDeps(t)
 	generateFor(t, deps, testOrgA)
 	beginOrg(t, deps, testOrgA)
 	others := []keychain.ArchiveKeySlot{
@@ -92,7 +102,7 @@ func TestArchiveReconfigureStage_StagesWithoutTouchingActiveOrRotationSlots(t *t
 		t.Fatal("the answered key is not the staged pair")
 	}
 	journal := readReconfigurationJournal(t, store, testOrgA)
-	if journal["kind"] != "reconfiguration" || journal["operation_id"] != reconfigOpA ||
+	if journal["owner_account_id"] != slotTestAccount || journal["owner_device_id"] != splitTestDevice || journal["kind"] != "reconfiguration" || journal["operation_id"] != reconfigOpA ||
 		journal["org_id"] != testOrgA || journal["target_key_fingerprint"] != data.Fingerprint {
 		t.Fatalf("journal: %+v", journal)
 	}
@@ -100,7 +110,7 @@ func TestArchiveReconfigureStage_StagesWithoutTouchingActiveOrRotationSlots(t *t
 
 // Both IDs are required; a refused request writes nothing.
 func TestArchiveReconfigureStage_RequiresOrgAndOperation(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newOwnedStageDeps(t)
 	for name, req := range map[string]proto.ArchiveReconfigureStageRequest{
 		"no org":              {OperationID: reconfigOpA},
 		"malformed org":       {OrgID: "x", OperationID: reconfigOpA},
@@ -128,7 +138,7 @@ func TestArchiveReconfigureStage_RefusesAnotherOperationsJournal(t *testing.T) {
 		"unreadable":        `{`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			deps, _, store := newTestDeps(t)
+			deps, _, store := newOwnedStageDeps(t)
 			if journal == "" {
 				if resp := stageReconfiguration(deps, testOrgA, reconfigOpA); !resp.Success {
 					t.Fatalf("first stage: %+v", resp)
@@ -151,7 +161,7 @@ func TestArchiveReconfigureStage_RefusesAnotherOperationsJournal(t *testing.T) {
 // A retry of the same operation (the App lost the answer) gets the key it
 // staged, not a new one the server was never told about.
 func TestArchiveReconfigureStage_RetryReturnsTheStagedKey(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newOwnedStageDeps(t)
 	first := stageReconfiguration(deps, testOrgA, reconfigOpA)
 	if !first.Success {
 		t.Fatalf("first stage: %+v", first)
@@ -171,7 +181,7 @@ func TestArchiveReconfigureStage_RetryReturnsTheStagedKey(t *testing.T) {
 func TestArchiveReconfigureStage_RefusesAnUnjournaledSlot(t *testing.T) {
 	for _, half := range []string{"private", "public"} {
 		t.Run(half, func(t *testing.T) {
-			deps, _, store := newTestDeps(t)
+			deps, _, store := newOwnedStageDeps(t)
 			slot := keychain.OrgArchiveReconfigurationSlot(testOrgA)
 			other, _ := crypto.GenerateRSAKeyPair()
 			if half == "private" {
@@ -201,7 +211,7 @@ func TestArchiveReconfigureStage_FailedWriteIsRetriedBySameOperation(t *testing.
 		"journal write": config.OrgArchiveReconfigurationJournalPrefix + testOrgA,
 	} {
 		t.Run(name, func(t *testing.T) {
-			deps, _, mem := newTestDeps(t)
+			deps, _, mem := newOwnedStageDeps(t)
 			deps.Store = failOrgPublicStore{MemorySecretStore: mem, account: account}
 			failed := stageReconfiguration(deps, testOrgA, reconfigOpA)
 			if failed.Success || failed.Data != nil {
@@ -242,7 +252,7 @@ func (s *lockWatchStore) Set(service, account, value string) error {
 // The lv96 rule for org archive slot writers: the RSA pair is generated
 // outside the keychain process lock, and every write runs inside it.
 func TestArchiveReconfigureStage_WritesUnderTheProcessLockAndGeneratesOutside(t *testing.T) {
-	deps, _, mem := newTestDeps(t)
+	deps, _, mem := newOwnedStageDeps(t)
 	locked := false
 	store := &lockWatchStore{MemorySecretStore: mem, locked: &locked}
 	deps.Store = store
@@ -272,14 +282,14 @@ func TestArchiveReconfigureStage_WritesUnderTheProcessLockAndGeneratesOutside(t 
 // Another Keeper process may stage between this call's first read and its
 // lock. The re-check under the lock keeps that stage and refuses this one.
 func TestArchiveReconfigureStage_RechecksTheJournalUnderTheLock(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newOwnedStageDeps(t)
 	restoreLock := archiveSlotProcessLock
 	t.Cleanup(func() { archiveSlotProcessLock = restoreLock })
 	var otherProcess proto.BaseResponse
 	archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
 		archiveSlotProcessLock = restoreLock
 		other := mustRSA(t)
-		otherProcess = writeReconfigurationStage(deps, proto.ArchiveReconfigureStageRequest{OrgID: testOrgA, OperationID: reconfigOpB}, other.priv, other.pub)
+		otherProcess = writeReconfigurationStage(deps, proto.ArchiveReconfigureStageRequest{OrgID: testOrgA, OperationID: reconfigOpB}, stageOwner{account: slotTestAccount, device: splitTestDevice}, other.priv, other.pub)
 		return fn()
 	}
 	resp := stageReconfiguration(deps, testOrgA, reconfigOpA)
@@ -335,7 +345,7 @@ func (s *reconfigJournalBarrierStore) Set(service, account, value string) error 
 func TestArchiveReconfigureStage_ConcurrentStagesActOnce(t *testing.T) {
 	for name, secondOp := range map[string]string{"same operation": reconfigOpA, "another operation": reconfigOpB} {
 		t.Run(name, func(t *testing.T) {
-			deps, _, mem := newTestDeps(t)
+			deps, _, mem := newOwnedStageDeps(t)
 			gate := &reconfigJournalBarrierStore{SecretStore: mem, entered: make(chan struct{}), release: make(chan struct{})}
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(gate.release) }) }
@@ -380,7 +390,7 @@ func TestArchiveReconfigureStage_ConcurrentStagesActOnce(t *testing.T) {
 // archiveSplitPreparationMu for the whole call, so a stage never interleaves
 // with a generate, a rotation, a split, finalize or abandon in this process.
 func TestArchiveReconfigureStage_HoldsTheOrgArchiveWriterMutex(t *testing.T) {
-	deps, _, store := newTestDeps(t)
+	deps, _, store := newOwnedStageDeps(t)
 	archiveSplitPreparationMu.Lock()
 	locked := true
 	unlock := func() {
@@ -418,7 +428,7 @@ func TestArchiveReconfigureStage_HoldsTheOrgArchiveWriterMutex(t *testing.T) {
 func TestArchiveKeyGenerate_RefusesWhileAReconfigurationIsStaged(t *testing.T) {
 	for _, state := range []string{"staged key", "journal only"} {
 		t.Run(state, func(t *testing.T) {
-			deps, _, store := newTestDeps(t)
+			deps, _, store := newOwnedStageDeps(t)
 			if state == "staged key" {
 				if resp := stageReconfiguration(deps, testOrgA, reconfigOpA); !resp.Success {
 					t.Fatalf("stage: %+v", resp)
@@ -443,7 +453,7 @@ func TestArchiveKeyGenerate_RefusesWhileAReconfigurationIsStaged(t *testing.T) {
 // The staged private key never appears in the answer or the log, on success
 // or on a refusal.
 func TestArchiveReconfigureStage_NoPrivateMaterialInAnswerOrLog(t *testing.T) {
-	deps, log, store := newTestDeps(t)
+	deps, log, store := newOwnedStageDeps(t)
 	ok := stageReconfiguration(deps, testOrgA, reconfigOpA)
 	refused := stageReconfiguration(deps, testOrgA, reconfigOpB)
 	priv, _ := keychain.OrgArchiveReconfigurationSlot(testOrgA).GetPrivate(store)
@@ -458,5 +468,93 @@ func TestArchiveReconfigureStage_NoPrivateMaterialInAnswerOrLog(t *testing.T) {
 		if strings.Contains(msg, "PRIVATE KEY") || strings.Contains(msg, body) {
 			t.Fatalf("the log carried private key material: %q", msg)
 		}
+	}
+}
+
+func TestOrdinaryArchiveOperationsIgnoreReconfigurationPrivateKey(t *testing.T) {
+	d, _, store := newOwnedStageDeps(t)
+	setSlotTestOwner(t, d, slotTestAccount)
+	stage := stageReconfiguration(d, testOrgA, reconfigOpA)
+	if !stage.Success {
+		t.Fatal(stage.ErrorCode)
+	}
+	target := stage.Data.(proto.ArchiveReconfigureStageResponseData)
+	probe := &sessionReadProbe{SecretStore: store, account: keychain.OrgArchiveReconfigurationSlot(testOrgA).PrivateAccount}
+	d.Store = probe
+	pub, err := crypto.ParsePublicKey(target.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, ciphertext, err := crypto.HybridWrap(pub, []byte("test share"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	combine, _ := sessionCombineRequest(t, testOrgA, target.PublicKey, sessionTestDEK())
+	for _, tc := range []struct {
+		name string
+		call func() proto.BaseResponse
+	}{
+		{"ordinary unwrap", func() proto.BaseResponse {
+			return archiveUnwrapAndRewrap(d, proto.ArchiveUnwrapAndRewrapRequest{OrgID: testOrgA, WrappedForArchiveB64: wrapToArchive(t, target.PublicKey, sessionTestDEK()), RecipientPublicKey: target.PublicKey})
+		}},
+		{"rotation begin", func() proto.BaseResponse {
+			return HandleArchiveKeyRotateBegin(d, proto.ArchiveKeyRotateBeginRequest{OrgID: testOrgA})
+		}},
+		{"rotation commit", func() proto.BaseResponse {
+			return HandleArchiveKeyRotateCommit(d, proto.ArchiveKeyRotateCommitRequest{OrgID: testOrgA, ExpectedFingerprint: target.Fingerprint})
+		}},
+		{"share rewrap", func() proto.BaseResponse {
+			return rewrapArchiveShare(d, proto.ArchiveShareRewrapRequest{WrappedKey: wrapped, Ciphertext: ciphertext, SessionPublicKey: target.PublicKey})
+		}},
+		{"ordinary combine", func() proto.BaseResponse { return archiveQuorumCombineAndRewrap(d, testOrgA, combine) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := probe.reads
+			if tc.call().Success || probe.reads != before {
+				t.Fatal("ordinary operation used the reconfiguration slot")
+			}
+		})
+	}
+}
+
+func TestArchiveReconfigureStage_PreservesIncompleteFinalizedSlot(t *testing.T) {
+	slot := keychain.OrgArchiveReconfigurationSlot(testOrgA)
+	for _, account := range []string{slot.PrivateAccount, slot.PublicAccount} {
+		t.Run(account, func(t *testing.T) {
+			d, _, store := newOwnedStageDeps(t)
+			if !stageReconfiguration(d, testOrgA, reconfigOpA).Success {
+				t.Fatal("stage failed")
+			}
+			if err := store.Delete(config.Service, account); err != nil {
+				t.Fatal(err)
+			}
+			before := store.Snapshot()
+			r := stageReconfiguration(d, testOrgA, reconfigOpA)
+			if r.ErrorCode != string(errs.ErrCodeArchiveKeySlotIncomplete) || !reflect.DeepEqual(before, store.Snapshot()) {
+				t.Fatal("completed stage was replaced")
+			}
+		})
+	}
+}
+
+func TestArchiveReconfigureStageLoginChangesWhileWaitingForFirstLock(t *testing.T) {
+	d, _, store := newOwnedStageDeps(t)
+	b, _, err := keychain.GetAccountBinding(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ArchiveRequestLogin = &proto.ArchiveLoginIdentity{AccountID: b.AccountID, Generation: b.ChatStateGeneration}
+	lock := archiveSlotProcessLock
+	t.Cleanup(func() { archiveSlotProcessLock = lock })
+	var afterLogin map[string]string
+	archiveSlotProcessLock = func(s keychain.SecretStore, run func() error) error {
+		archiveSlotProcessLock = lock
+		setSlotTestOwner(t, d, slotTestAccount)
+		afterLogin = store.Snapshot()
+		return lock(s, run)
+	}
+	res := stageReconfiguration(d, testOrgA, reconfigOpA)
+	if res.ErrorCode != string(errs.ErrCodeArchiveSessionLoginUnavailable) || res.Data != nil || !reflect.DeepEqual(store.Snapshot(), afterLogin) {
+		t.Fatal("a request queued by the earlier login reached the stage")
 	}
 }
