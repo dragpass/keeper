@@ -20,13 +20,14 @@ func finalizeReconfiguration(d Deps, r proto.ArchiveSplitFinalizationReceipt) pr
 	normalized := r
 	normalized.ServerKeyVersion = 0
 	facts := proto.ArchiveSplitFinalizationReceiptCanonical(normalized)
+	ownerFacts := owner.account + "|" + owner.device + "|" + facts
 	marker := closedReconfigurationAccount(r.OrgID, r.OperationID)
 	saved, err := d.Store.Get(config.Service, marker)
 	closed := err == nil
 	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read completion marker failed")
 	}
-	if closed && saved != facts {
+	if closed && saved != ownerFacts {
 		return denyArchiveSplitReceipt()
 	}
 	success := proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{State: proto.ArchiveSplitStateFinalized, OperationID: r.OperationID}}
@@ -43,7 +44,7 @@ func finalizeReconfiguration(d Deps, r proto.ArchiveSplitFinalizationReceipt) pr
 	if closed && stage.OperationID != r.OperationID {
 		return success
 	}
-	if !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.UnregisteredCleanup != "" || (stage.Finalization != "" && stage.Finalization != facts) {
+	if !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.UnregisteredCleanup != "" || stage.Closure != nil || (stage.Finalization != "" && stage.Finalization != facts) {
 		return denyArchiveSplitReceipt()
 	}
 	target := keychain.OrgArchiveReconfigurationSlot(r.OrgID)
@@ -97,5 +98,5 @@ func finalizeReconfiguration(d Deps, r proto.ArchiveSplitFinalizationReceipt) pr
 			return errs.CodeResponse(errs.ErrCodeArchiveSplitCleanupPending, "publish finalized public key pending")
 		}
 	}
-	return finishStageCleanup(d.Store, target, archiveReconfigurationJournalAccount(r.OrgID), marker, facts, closed, success)
+	return finishStageCleanup(d.Store, target, archiveReconfigurationJournalAccount(r.OrgID), marker, ownerFacts, closed, success)
 }

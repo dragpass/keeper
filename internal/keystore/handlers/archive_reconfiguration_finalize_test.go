@@ -3,7 +3,9 @@ package handlers
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -43,10 +45,39 @@ func TestReconfigurationFinalizePromotesPublicAndClearsOnlyStage(t *testing.T) {
 	if got := call(r); got.ErrorCode != string(errs.ErrCodeArchiveSplitCleanupPending) {
 		t.Fatal("interrupted finalize:", got.ErrorCode)
 	}
-	f.probe.deleteHook = nil
-	if got := call(r); !got.Success {
-		t.Fatal(got.ErrorCode)
+	var privateDeletes atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.probe.deleteHook = func(account string) error {
+		if account == slot.PrivateAccount && privateDeletes.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return nil
 	}
+	r.Signature = f.sign(t, proto.ArchiveSplitFinalizationReceiptCanonical(r))
+	results := make(chan proto.BaseResponse, 2)
+	retry := func() {
+		results <- HandleArchiveSplitFinalize(f.deps, proto.ArchiveSplitFinalizeRequest{OrgID: req.OrgID, Receipt: &r})
+	}
+	go retry()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry did not enter cleanup")
+	}
+	started := make(chan struct{})
+	go func() { close(started); retry() }()
+	<-started
+	close(release)
+	for range 2 {
+		if got := <-results; !got.Success {
+			t.Fatal(got.ErrorCode)
+		}
+	}
+	if privateDeletes.Load() != 1 {
+		t.Fatal("both retries deleted staged private material")
+	}
+	f.probe.deleteHook = nil
 	if pub, err := active.GetPublic(f.store); err != nil || pub != target.PublicKey {
 		t.Fatal("wrong active public key")
 	}
@@ -56,5 +87,10 @@ func TestReconfigurationFinalizePromotesPublicAndClearsOnlyStage(t *testing.T) {
 	f.resetProbe()
 	if got := call(r); !got.Success || f.probe.sets != 0 || f.probe.deletes != 0 {
 		t.Fatal("replay mutated state")
+	}
+	setSlotTestOwner(t, f.deps, splitTestOther)
+	f.resetProbe()
+	if got := call(r); got.Success || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("foreign account received or changed completion state")
 	}
 }
