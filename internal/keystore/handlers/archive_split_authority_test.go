@@ -480,14 +480,17 @@ func TestArchiveSplitAbandonRegisteredTarget(t *testing.T) {
 	if res := stageReconfiguration(f.deps, req.OrgID, req.OperationID); res.Success {
 		t.Fatal("closed operation staged a replacement")
 	}
-	if res := stageReconfiguration(f.deps, req.OrgID, splitTestOther); !res.Success {
+	next := stageReconfiguration(f.deps, req.OrgID, splitTestOther)
+	if !next.Success {
 		t.Fatal("closed operation blocked new stage")
 	}
+	nextKey := next.Data.(proto.ArchiveReconfigureStageResponseData).PublicKey
+	f.resetProbe()
 	if res := abandon(r); !res.Success {
 		t.Fatal("closure acknowledgement lost after next operation")
 	}
-	if res := stageReconfiguration(f.deps, req.OrgID, splitTestOther); !res.Success {
-		t.Fatal("old closure removed new stage")
+	if pub, err := slot.GetPublic(f.store); err != nil || pub != nextKey || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("old closure modified the replacement")
 	}
 	if pub, err := keychain.OrgArchiveActiveSlot(req.OrgID).GetPublic(f.store); err != nil || pub != f.archive {
 		t.Fatal("abandon changed active key")
