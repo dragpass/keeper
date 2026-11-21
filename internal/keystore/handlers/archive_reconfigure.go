@@ -27,14 +27,20 @@ const archiveOperationKindReconfiguration = "reconfiguration"
 // archiveReconfigurationJournal is the org's reconfiguration record. It holds
 // no secret.
 type archiveReconfigurationJournal struct {
-	Kind                 string `json:"kind"`
-	OperationID          string `json:"operation_id"`
-	OrgID                string `json:"org_id"`
-	TargetKeyFingerprint string `json:"target_key_fingerprint,omitempty"`
+	// A signed closure pins cleanup across failed deletes and prevents stage retries from generating a replacement.
+	Closure              *proto.ArchiveSplitClosureReceipt `json:"closure,omitempty"`
+	Kind                 string                            `json:"kind"`
+	OperationID          string                            `json:"operation_id"`
+	OrgID                string                            `json:"org_id"`
+	TargetKeyFingerprint string                            `json:"target_key_fingerprint,omitempty"`
 }
 
 func archiveReconfigurationJournalAccount(orgID string) string {
 	return config.OrgArchiveReconfigurationJournalPrefix + orgID
+}
+
+func closedReconfigurationAccount(orgID, operationID string) string {
+	return archiveReconfigurationJournalAccount(orgID) + ":closed:" + operationID
 }
 
 func writeArchiveReconfigurationJournal(store keychain.SecretStore, journal archiveReconfigurationJournal) error {
@@ -70,6 +76,11 @@ func refuseArchiveReconfigurationPending() proto.BaseResponse {
 // the state already answers the call.
 func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageRequest) (proto.BaseResponse, bool, error) {
 	slot := keychain.OrgArchiveReconfigurationSlot(req.OrgID)
+	if _, err := d.Store.Get(config.Service, closedReconfigurationAccount(req.OrgID, req.OperationID)); err == nil {
+		return refuseArchiveReconfigurationPending(), true, nil
+	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return proto.BaseResponse{}, false, err
+	}
 	raw, err := d.Store.Get(config.Service, archiveReconfigurationJournalAccount(req.OrgID))
 	if errors.Is(err, keychain.ErrSecretNotFound) {
 		pub, hasPriv, err := slotHalves(d.Store, slot)
@@ -91,7 +102,7 @@ func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageReque
 	// is its own, so it is kept and the stage refused.
 	if json.Unmarshal([]byte(raw), &journal) != nil ||
 		journal.Kind != archiveOperationKindReconfiguration ||
-		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID {
+		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID || journal.Closure != nil {
 		return refuseArchiveReconfigurationPending(), true, nil
 	}
 	pub, hasPriv, err := slotHalves(d.Store, slot)

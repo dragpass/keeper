@@ -78,6 +78,9 @@ const (
 // operation ended without finalization. Keeper then drops its journal and
 // keeps the archive private key.
 type ArchiveSplitClosureReceipt struct {
+	Kind                      string `json:"kind,omitempty"`
+	SourceConfigDigest        string `json:"source_config_digest,omitempty"`
+	TargetKeySPKIFingerprint  string `json:"target_key_spki_fingerprint,omitempty"`
 	OperationID               string `json:"operation_id"`
 	OrgID                     string `json:"org_id"`
 	Status                    string `json:"status"`
@@ -87,6 +90,9 @@ type ArchiveSplitClosureReceipt struct {
 }
 
 func ArchiveSplitClosureReceiptCanonical(r ArchiveSplitClosureReceipt) string {
+	if r.Kind == "reconfiguration" {
+		return archiveShareCanonical("dragpass.archive.split.closed|2", r.Kind, r.OperationID, r.OrgID, r.Status, r.TargetKeySPKIFingerprint, r.SourceConfigDigest, strconv.FormatUint(uint64(r.ServerKeyVersion), 10))
+	}
 	return archiveShareCanonical("dragpass.archive.split.closed|1", r.OperationID, r.OrgID, r.Status,
 		r.ArchiveKeySPKIFingerprint, strconv.FormatUint(uint64(r.ServerKeyVersion), 10))
 }
@@ -101,6 +107,20 @@ func (r ArchiveSplitClosureReceipt) Validate() error {
 	case ArchiveSplitClosedCancelled, ArchiveSplitClosedExpired, ArchiveSplitClosedInvalidated:
 	default:
 		return newValidationError("receipt.status", "must be cancelled, expired or invalidated")
+	}
+	if r.Kind == "reconfiguration" {
+		if r.ArchiveKeySPKIFingerprint != "" {
+			return newValidationError("receipt.archive_key_spki_fingerprint", "unexpected activation key")
+		}
+		for _, digest := range []string{r.SourceConfigDigest, r.TargetKeySPKIFingerprint} {
+			if err := requireMessageDigest(digest, "receipt.digest"); err != nil {
+				return err
+			}
+		}
+		return validateArchiveReceiptSignature(r.ServerKeyVersion, r.Signature)
+	}
+	if r.Kind != "" || r.SourceConfigDigest != "" || r.TargetKeySPKIFingerprint != "" {
+		return newValidationError("receipt.kind", "invalid closure binding")
 	}
 	if err := requireMessageDigest(r.ArchiveKeySPKIFingerprint, "receipt.archive_key_spki_fingerprint"); err != nil {
 		return err

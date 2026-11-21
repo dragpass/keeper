@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -425,5 +426,70 @@ func TestArchiveKeySplitReconfigurationUsesOnlyStagedKey(t *testing.T) {
 	}
 	if HandleArchiveKeySplit(f.deps, req).Success {
 		t.Fatal("replayed challenge returned shares")
+	}
+}
+
+func TestArchiveSplitAbandonRegisteredTarget(t *testing.T) {
+	f := newSplitFixture(t)
+	req, target := f.authorizeReconfiguration(t)
+	if res := HandleArchiveKeySplit(f.deps, req); !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	d := req.ReconfigurationDecision
+	r := proto.ArchiveSplitClosureReceipt{Kind: req.Kind, OperationID: req.OperationID, OrgID: req.OrgID, Status: proto.ArchiveSplitClosedCancelled, SourceConfigDigest: d.SourceConfigDigest, TargetKeySPKIFingerprint: d.TargetKeySPKIFingerprint, ServerKeyVersion: 1}
+	abandon := func(receipt proto.ArchiveSplitClosureReceipt) proto.BaseResponse {
+		receipt.Signature = f.sign(t, proto.ArchiveSplitClosureReceiptCanonical(receipt))
+		return HandleArchiveSplitAbandon(f.deps, proto.ArchiveSplitAbandonRequest{OrgID: req.OrgID, Receipt: &receipt})
+	}
+	slot := keychain.OrgArchiveReconfigurationSlot(req.OrgID)
+	other := r
+	other.SourceConfigDigest = strings.Repeat("f", 64)
+	f.resetProbe()
+	if abandon(other).Success || f.probe.sets != 0 || f.probe.deletes != 0 {
+		t.Fatal("wrong source changed staged material")
+	}
+	if pub, err := slot.GetPublic(f.store); err != nil || pub != target.PublicKey {
+		t.Fatal("refusal lost staged key")
+	}
+	f.probe.private[slot.PrivateAccount] = true
+	f.resetProbe()
+	f.probe.deleteHook = func(account string) error {
+		if account == slot.PrivateAccount {
+			return errors.New("test storage failure")
+		}
+		return nil
+	}
+	if res := abandon(r); res.ErrorCode != string(errs.ErrCodeArchiveSplitCleanupPending) {
+		t.Fatal("partial deletion did not report pending cleanup")
+	}
+	if f.probe.privateReads != 0 {
+		t.Fatal("private key read after failed deletion")
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, req.OperationID); res.Success {
+		t.Fatal("stage replaced a key during closure cleanup")
+	}
+	f.probe.deleteHook = nil
+	if res := abandon(r); !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	for _, account := range []string{slot.PrivateAccount, slot.PublicAccount, archiveSplitJournalAccount(slot), archiveReconfigurationJournalAccount(req.OrgID)} {
+		if _, err := f.store.Get(config.Service, account); !errors.Is(err, keychain.ErrSecretNotFound) {
+			t.Fatal("receipt cleanup left staged material")
+		}
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, req.OperationID); res.Success {
+		t.Fatal("closed operation staged a replacement")
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, splitTestOther); !res.Success {
+		t.Fatal("closed operation blocked new stage")
+	}
+	if res := abandon(r); !res.Success {
+		t.Fatal("closure acknowledgement lost after next operation")
+	}
+	if res := stageReconfiguration(f.deps, req.OrgID, splitTestOther); !res.Success {
+		t.Fatal("old closure removed new stage")
+	}
+	if pub, err := keychain.OrgArchiveActiveSlot(req.OrgID).GetPublic(f.store); err != nil || pub != f.archive {
+		t.Fatal("abandon changed active key")
 	}
 }

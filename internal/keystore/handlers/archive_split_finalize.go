@@ -164,11 +164,22 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 		return denyArchiveSplitReceipt()
 	}
 	receipt := *req.Receipt
+	archiveSplitPreparationMu.Lock()
+	defer archiveSplitPreparationMu.Unlock()
 	if err := d.ServerKeyVerifier.Verify(proto.ArchiveSplitClosureReceiptCanonical(receipt), receipt.Signature, receipt.ServerKeyVersion); err != nil {
 		return denyArchiveSplitReceipt()
 	}
-	archiveSplitPreparationMu.Lock()
-	defer archiveSplitPreparationMu.Unlock()
+	if receipt.Kind == archiveOperationKindReconfiguration {
+		var response proto.BaseResponse
+		err := archiveSlotProcessLock(d.Store, func() error {
+			response = abandonReconfiguration(d.Store, receipt)
+			return nil
+		})
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "archive slot lock unavailable")
+		}
+		return response
+	}
 	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
 	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State != "" ||
 		journal.OperationID != receipt.OperationID ||
@@ -183,4 +194,93 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{
 		State: proto.ArchiveSplitStateNone, OperationID: receipt.OperationID,
 	}}
+}
+
+// abandonReconfiguration runs with both archive slot locks held. The stage
+// journal is the last entry removed so a partial deletion can be resumed.
+func abandonReconfiguration(store keychain.SecretStore, r proto.ArchiveSplitClosureReceipt) proto.BaseResponse {
+	slot := keychain.OrgArchiveReconfigurationSlot(r.OrgID)
+	account := archiveReconfigurationJournalAccount(r.OrgID)
+	marker := closedReconfigurationAccount(r.OrgID, r.OperationID)
+	facts := r
+	facts.ServerKeyVersion = 0
+	closedFacts := proto.ArchiveSplitClosureReceiptCanonical(facts)
+	saved, err := store.Get(config.Service, marker)
+	closed := err == nil
+	if err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read staged closure failed")
+	}
+	if closed && saved != closedFacts {
+		return denyArchiveSplitReceipt()
+	}
+	success := proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{State: proto.ArchiveSplitStateNone, OperationID: r.OperationID}}
+	var stage archiveReconfigurationJournal
+	raw, err := store.Get(config.Service, account)
+	if err != nil {
+		if !errors.Is(err, keychain.ErrSecretNotFound) {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "read stage journal failed")
+		}
+		if closed {
+			return success
+		}
+		return denyArchiveSplitReceipt()
+	}
+	if json.Unmarshal([]byte(raw), &stage) != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "invalid stage journal")
+	}
+	if closed && stage.OperationID != r.OperationID {
+		return success
+	}
+	if stage.Kind != r.Kind || stage.OrgID != r.OrgID || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint == "" {
+		return denyArchiveSplitReceipt()
+	}
+	pub, err := slot.GetPublic(store)
+	if err == nil {
+		spki, e := crypto.RewrapKeyFingerprint(pub)
+		if e != nil || spki != r.TargetKeySPKIFingerprint || fingerprintBase64Public(pub) != stage.TargetKeyFingerprint {
+			return denyArchiveSplitReceipt()
+		}
+	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read staged public key failed")
+	} else if stage.Closure == nil {
+		return denyArchiveSplitReceipt()
+	}
+	if stage.Closure == nil {
+		raw, err = store.Get(config.Service, archiveSplitJournalAccount(slot))
+		if err == nil {
+			var split archiveSplitJournal
+			if json.Unmarshal([]byte(raw), &split) != nil || split.State != "" || split.Binding.Kind != r.Kind || split.OperationID != r.OperationID || split.Binding.OrgID != r.OrgID || split.Binding.SourceConfigDigest != r.SourceConfigDigest || split.Binding.ArchiveKeySPKIFingerprint != r.TargetKeySPKIFingerprint || split.KeyFingerprint != stage.TargetKeyFingerprint {
+				return denyArchiveSplitReceipt()
+			}
+		} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "read staged split journal failed")
+		}
+		stage.Closure = &r
+		if err := writeArchiveReconfigurationJournal(store, stage); err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "record staged cleanup failed")
+		}
+	} else {
+		// A status reread can return the same facts signed by a newer server key.
+		c := stage.Closure
+		if c.Kind != r.Kind || c.OrgID != r.OrgID || c.OperationID != r.OperationID || c.Status != r.Status || c.TargetKeySPKIFingerprint != r.TargetKeySPKIFingerprint || c.SourceConfigDigest != r.SourceConfigDigest {
+			return denyArchiveSplitReceipt()
+		}
+	}
+	pending := func() proto.BaseResponse {
+		return errs.CodeResponse(errs.ErrCodeArchiveSplitCleanupPending, "staged key deletion pending")
+	}
+	for _, entry := range []string{slot.PrivateAccount, slot.PublicAccount, archiveSplitJournalAccount(slot)} {
+		if err := store.Delete(config.Service, entry); err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+			return pending()
+		}
+	}
+	if !closed {
+		if err := store.Set(config.Service, marker, closedFacts); err != nil {
+			return pending()
+		}
+	}
+	if err := store.Delete(config.Service, account); err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+		return pending()
+	}
+	return success
 }
