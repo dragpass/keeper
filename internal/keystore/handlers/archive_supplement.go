@@ -82,7 +82,25 @@ func readSupplement(d Deps, org string) (supplementCandidate, archiveSessionReco
 	if !ok || rec.fingerprint != fingerprintBase64Public(c.PublicKey) || !archiveSessionRecordConsistent(rec, d.Now()) {
 		return c, rec, nil, errSupplementUnreadable
 	}
-	return c, rec, memguard.NewBufferFromBytes([]byte(pem)), nil
+	// The record's fingerprint field and the private key itself are checked
+	// separately against the header: a candidate is returned, promoted or
+	// swept only when all three name the same key.
+	secret := memguard.NewBufferFromBytes([]byte(pem))
+	if !privateMatchesPublic(secret.Bytes(), c.PublicKey) {
+		secret.Destroy()
+		return c, rec, nil, errSupplementUnreadable
+	}
+	return c, rec, secret, nil
+}
+
+func privateMatchesPublic(privatePEM []byte, public string) bool {
+	key, err := parseRotationPrivate(privatePEM)
+	if err != nil {
+		return false
+	}
+	defer clearRotationPrivate(key)
+	derived, err := crypto.PublicKeyToPEM(&key.PublicKey)
+	return err == nil && derived == public
 }
 func supplementContext(d Deps, r proto.SupplementPrevious) (archiveReconfigurationJournal, rotationTarget, error) {
 	target, err := readRotationTarget(d, proto.ArchiveRotationRequest{OrgID: r.OrgID, OperationID: r.OperationID, ConfigDigest: r.ConfigDigest})
@@ -256,19 +274,6 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 			defer secret.Destroy()
 		}
 		if err != nil || c.SupplementPrevious != a.SupplementPrevious || c.SPKI != a.SPKI || c.Device != a.DeviceID || c.Round != a.Round-1 || rec.owner != owner || !d.Now().Before(rec.expiresAt) {
-			return rotationRefused()
-		}
-		private, err := parseRotationPrivate(secret.Bytes())
-		if err != nil {
-			return rotationRefused()
-		}
-		defer clearRotationPrivate(private)
-		pub, err := crypto.PublicKeyToPEM(&private.PublicKey)
-		if err != nil || pub != c.PublicKey {
-			return rotationRefused()
-		}
-		spki, err := crypto.RewrapKeyFingerprint(pub)
-		if err != nil || spki != a.SPKI {
 			return rotationRefused()
 		}
 		// Private first, public second. If a write was interrupted, accept only

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -236,5 +237,106 @@ func TestSupplementCandidateDeleteIsAllOrReported(t *testing.T) {
 	}
 	if _, err := c.candidateHeader(); !errors.Is(err, keychain.ErrSecretNotFound) {
 		t.Fatal("header survived the completed promotion")
+	}
+}
+
+// candidateItems is one prepared candidate's two keychain values.
+type candidateItems struct{ header, private, public string }
+
+// twoCandidates prepares a candidate, removes it and prepares another, and
+// returns both candidates' items. The second stays stored.
+func (c *supplementCase) twoCandidates(t *testing.T) (candidateItems, candidateItems) {
+	t.Helper()
+	take := func() candidateItems {
+		res := c.prepare()
+		if !res.Success {
+			t.Fatal(res.ErrorCode)
+		}
+		header, err1 := c.candidateHeader()
+		private, err2 := c.candidatePrivate()
+		if err1 != nil || err2 != nil {
+			t.Fatal("candidate items missing")
+		}
+		return candidateItems{header, private, res.Data.(proto.SupplementCandidate).PublicKey}
+	}
+	a := take()
+	for _, del := range []func(keychain.SecretStore, string) error{keychain.DeleteArchiveSessionPrivateKey, keychain.DeleteArchiveSessionPublicKey} {
+		if err := del(c.f.store, supplementSlot(c.split.OrgID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return a, take()
+}
+
+// recordWithFingerprint re-encodes the private record of items with the
+// given fingerprint field.
+func recordWithFingerprint(t *testing.T, items candidateItems, fingerprint string) string {
+	t.Helper()
+	rec, pem, ok := decodeArchiveSessionSlot(items.private)
+	if !ok {
+		t.Fatal("candidate record unreadable")
+	}
+	rec.fingerprint = fingerprint
+	record := encodeArchiveSessionSlot(rec, []byte(pem))
+	defer record.Destroy()
+	return string(record.Bytes())
+}
+
+// A header and a private half that do not belong together are never
+// returned, promoted or swept: prepare and promote refuse with not_found,
+// nothing is written and the live session key is untouched.
+func TestSupplementMixedCandidateHalvesFailClosed(t *testing.T) {
+	cases := map[string]func(t *testing.T, a, b candidateItems) (header, private string){
+		"items of two prepares": func(t *testing.T, a, b candidateItems) (string, string) {
+			return a.header, b.private
+		},
+		"record claims the header key": func(t *testing.T, a, b candidateItems) (string, string) {
+			return a.header, recordWithFingerprint(t, b, fingerprintBase64Public(a.public))
+		},
+		"record fingerprint altered": func(t *testing.T, a, b candidateItems) (string, string) {
+			return b.header, recordWithFingerprint(t, b, fingerprintBase64Public(a.public))
+		},
+	}
+	for name, mix := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := newSupplementCase(t)
+			a, b := c.twoCandidates(t)
+			header, private := mix(t, a, b)
+			if err := keychain.SaveArchiveSessionPublicKey(c.f.store, supplementSlot(c.split.OrgID), header); err != nil {
+				t.Fatal(err)
+			}
+			if err := keychain.SaveArchiveSessionPrivateKey(c.f.store, supplementSlot(c.split.OrgID), private); err != nil {
+				t.Fatal(err)
+			}
+			var stored supplementCandidate
+			if err := json.Unmarshal([]byte(header), &stored); err != nil {
+				t.Fatal(err)
+			}
+			livePrivate, _ := keychain.GetArchiveSessionPrivateKey(c.f.store, c.split.OrgID)
+			livePublic, _ := keychain.GetArchiveSessionPublicKey(c.f.store, c.split.OrgID)
+			c.f.resetProbe()
+			if r := c.prepare(); r.Success || r.ErrorCode != string(errs.ErrCodeNotFound) {
+				t.Fatal("prepare answered a mixed candidate:", r.ErrorCode)
+			}
+			if r := c.promote(c.receipt(t, stored.SupplementCandidate)); r.Success || r.ErrorCode != string(errs.ErrCodeNotFound) {
+				t.Fatal("promote accepted a mixed candidate:", r.ErrorCode)
+			}
+			if c.f.probe.sets != 0 || c.f.probe.deletes != 0 {
+				t.Fatal("refusal wrote or deleted state")
+			}
+			gotPrivate, _ := keychain.GetArchiveSessionPrivateKey(c.f.store, c.split.OrgID)
+			gotPublic, _ := keychain.GetArchiveSessionPublicKey(c.f.store, c.split.OrgID)
+			if gotPrivate != livePrivate || gotPublic != livePublic {
+				t.Fatal("live session key changed")
+			}
+			c.f.clock.advance(1900)
+			SweepExpiredArchiveSession(c.f.deps)
+			if got, err := c.candidatePrivate(); err != nil || got != private {
+				t.Fatal("sweep removed an unidentifiable candidate")
+			}
+			if got, err := c.candidateHeader(); err != nil || got != header {
+				t.Fatal("sweep removed the header of an unidentifiable candidate")
+			}
+		})
 	}
 }
