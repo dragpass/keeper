@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -398,6 +399,119 @@ func TestArchiveSplitRetryRefusesTamperedParts(t *testing.T) {
 					t.Fatal("refusal wrote or deleted an item")
 				}
 			})
+		}
+	}
+}
+
+// finalize sends the case's finalization receipt. A reconfiguration first
+// needs the active private key gone, as after the grant rotation.
+func (c *splitCase) finalize(t *testing.T, shares []proto.WrappedShare) proto.BaseResponse {
+	t.Helper()
+	f := c.f
+	if c.kind == "reconfiguration" {
+		if err := keychain.OrgArchiveActiveSlot(f.v.OrgID).DeletePrivate(f.store); err != nil && !errors.Is(err, keychain.ErrSecretNotFound) {
+			t.Fatal(err)
+		}
+		d := c.req.ReconfigurationDecision
+		r := proto.ArchiveSplitFinalizationReceipt{Kind: "reconfiguration", OperationID: c.req.OperationID, OrgID: c.req.OrgID, ArchiveKeySPKIFingerprint: d.ActiveKeySPKIFingerprint, TargetKeySPKIFingerprint: d.TargetKeySPKIFingerprint, SourceConfigDigest: d.SourceConfigDigest, ConfigDigest: d.ConfigDigest, SharesDigest: proto.ArchiveSplitSharesDigest(shares), GrantsDigest: strings.Repeat("f", 64), FinalizedAt: 500, ServerKeyVersion: 1}
+		r.Signature = f.sign(t, proto.ArchiveSplitFinalizationReceiptCanonical(r))
+		return HandleArchiveSplitFinalize(f.deps, proto.ArchiveSplitFinalizeRequest{OrgID: c.req.OrgID, Receipt: &r})
+	}
+	ff := &finalizeFixture{splitFixture: f, split: proto.ArchiveKeySplitResponseData{Shares: shares}, spki: splitCaseSPKI(t, f)}
+	return HandleArchiveSplitFinalize(f.deps, ff.receipt(t, nil))
+}
+
+// checkPrefix fails unless the record's remaining parts are exactly 0..k-1
+// and, when any part remains, its manifest is still there.
+func (c *splitCase) checkPrefix(t *testing.T) {
+	t.Helper()
+	manifest := false
+	indexes := map[int]bool{}
+	for _, account := range journalItems(t, c.f) {
+		if account == archiveSplitJournalAccount(c.slot) {
+			manifest = true
+			continue
+		}
+		_, index, ok := strings.Cut(account, ":part:")
+		n, err := strconv.Atoi(index)
+		if !ok || err != nil {
+			t.Fatalf("unexpected journal item %s", account)
+		}
+		indexes[n] = true
+	}
+	for i := range len(indexes) {
+		if !indexes[i] {
+			t.Fatalf("remaining parts are not a prefix: %v", indexes)
+		}
+	}
+	if len(indexes) > 0 && !manifest {
+		t.Fatal("a part outlived its manifest")
+	}
+}
+
+// A failed or interrupted delete at any position of finalization or closure,
+// for both kinds, leaves a record the same receipt completes, never a part
+// without its manifest, and never a record a split retry returns.
+func TestArchiveSplitDeleteFailureAtEveryPositionResumes(t *testing.T) {
+	type action struct {
+		name    string
+		run     func(t *testing.T, c *splitCase, shares []proto.WrappedShare) proto.BaseResponse
+		failure map[string]string // kind -> error code of an incomplete delete
+	}
+	actions := []action{
+		{"finalize", func(t *testing.T, c *splitCase, s []proto.WrappedShare) proto.BaseResponse { return c.finalize(t, s) },
+			map[string]string{"activation": string(errs.ErrCodeArchiveSplitCleanupPending), "reconfiguration": string(errs.ErrCodeArchiveSplitCleanupPending)}},
+		{"abandon", func(t *testing.T, c *splitCase, _ []proto.WrappedShare) proto.BaseResponse { return c.abandon(t) },
+			map[string]string{"activation": string(errs.ErrCodeStorageFailure), "reconfiguration": string(errs.ErrCodeArchiveSplitCleanupPending)}},
+	}
+	for _, kind := range splitKinds() {
+		for _, a := range actions {
+			// 3 recipients: 5 parts and the manifest, 6 journal deletes.
+			for at := 1; at <= 6; at++ {
+				for _, persist := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/delete%d/persist=%v", kind, a.name, at, persist), func(t *testing.T) {
+						c := newSplitCase(t, kind, 3)
+						split := c.split(t)
+						if !split.Success {
+							t.Fatal(split.ErrorCode)
+						}
+						shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
+						if j, _, _ := loadArchiveSplitJournal(c.f.store, c.slot); j.PartCount+1 != 6 {
+							t.Fatalf("fixture has %d parts", j.PartCount)
+						}
+						fault := &journalFaultStore{SecretStore: c.f.deps.Store, failDel: at, persist: persist}
+						c.f.deps.Store = fault
+						first := a.run(t, c, shares)
+						c.checkPrefix(t)
+						if !first.Success {
+							if persist || first.ErrorCode != a.failure[kind] {
+								t.Fatalf("failed delete answered %+v", first)
+							}
+							// A record that lost a part is never returned. One
+							// whose first delete failed is still complete.
+							if again := c.split(t); again.Success && len(journalItems(t, c.f)) < 6 {
+								t.Fatal("split retry returned shares of a partly deleted record")
+							}
+							if kind == "activation" && a.name == "finalize" {
+								if s := c.status(t); s.State != proto.ArchiveSplitStateCleanupPending {
+									t.Fatalf("status after a failed delete = %+v", s)
+								}
+							}
+						}
+						fault.reset(0, 0, false)
+						if r := a.run(t, c, shares); !first.Success && !r.Success {
+							t.Fatalf("retry: %s %s", r.ErrorCode, r.Error)
+						}
+						if left := journalItems(t, c.f); len(left) != 0 {
+							t.Fatalf("items left: %v", left)
+						}
+						_, err := c.slot.GetPrivate(c.f.store)
+						if kept := err == nil; kept != (kind == "activation" && a.name == "abandon") {
+							t.Fatalf("private key kept = %v after %s", kept, a.name)
+						}
+					})
+				}
+			}
 		}
 	}
 }
