@@ -413,9 +413,11 @@ rotation actions and the reconfiguration readers read the manifest.
 
 The manifest state is `writing` while parts are written, empty (prepared)
 once all are written, and `deleting` or `cleanup_pending` once finalization
-started. Every read, write and delete below runs under the archive slot
-mutex and the keychain process lock, held from the first read to the last
-write or delete of the call.
+started. The split, status, finalization and closure actions run under the
+archive slot mutex and the keychain process lock; the grant rotation and
+supplement actions, which read the manifest only, run under the keychain
+process lock alone. Each lock is held from the first read to the last write
+or delete of the call.
 
 Writing. A split writes the manifest in state `writing`, then the parts in
 index order, then the manifest as prepared, and returns the result only
@@ -457,8 +459,14 @@ Inconsistent records are never repaired, replaced or deleted by a split.
 A prepared record whose parts do not match its manifest is ended by the
 operation's signed closure or finalization, which read only the manifest. A
 manifest that does not parse is refused by every activation action (status
-answers `storage_failure`) and by the reconfiguration closure; no action
-removes it in this version.
+answers `storage_failure`), by the grant rotation and supplement actions,
+by a confirmed unregistered closure, and by a reconfiguration closure or
+finalization that has not yet recorded its signed facts in the stage
+journal. Once a
+reconfiguration closure or finalization has recorded them, resuming it with
+the same receipt removes the unparsable manifest and every part found from
+index 0 upward with the staged target. No action removes an unparsable
+activation manifest in this version.
 
 Development builds before this layout stored the whole result in the
 manifest item itself, without `"v"`. That item exceeds the macOS and Windows
