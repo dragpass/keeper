@@ -119,6 +119,9 @@ func HandleArchiveSplitFinalize(d Deps, req proto.ArchiveSplitFinalizeRequest) p
 	}
 	archiveSplitPreparationMu.Lock()
 	defer archiveSplitPreparationMu.Unlock()
+	if receipt.Kind == archiveOperationKindReconfiguration {
+		return underStageLock(d.Store, func() proto.BaseResponse { return finalizeReconfiguration(d, receipt) })
+	}
 	slot, activePublic, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
 	// Only an org-scoped slot is ever deleted; the split gate refuses the
 	// device-wide slot, and this repeats that check before any deletion.
@@ -234,7 +237,7 @@ func abandonReconfiguration(store keychain.SecretStore, r proto.ArchiveSplitClos
 	if closed && stage.OperationID != r.OperationID {
 		return success
 	}
-	if stage.UnregisteredCleanup != "" || stage.Kind != r.Kind || stage.OrgID != r.OrgID || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint == "" {
+	if stage.Finalization != "" || stage.UnregisteredCleanup != "" || stage.Kind != r.Kind || stage.OrgID != r.OrgID || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint == "" {
 		return denyArchiveSplitReceipt()
 	}
 	pub, err := slot.GetPublic(store)

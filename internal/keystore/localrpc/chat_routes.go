@@ -30,7 +30,7 @@ func longWriteRoute(path string) bool {
 		return false
 	}
 	switch path {
-	case "/v1/peer-key/chain-evaluate", "/v1/archive/archive_key_split", "/v1/archive/archive_quorum_combine_and_rewrap":
+	case "/v1/peer-key/chain-evaluate", "/v1/archive/archive_key_split", "/v1/archive/archive_quorum_combine_and_rewrap", "/v1/archive/archive_quorum_combine_to_staged":
 		return true
 	}
 	if path == "/v1/key-transparency/monitor" {
@@ -482,6 +482,11 @@ var archiveRoutes = map[string]appRoute{
 	},
 	// Split custody (lv86): each request carries its own signed decision or
 	// receipt, which the handler verifies; the route only forwards it.
+	"/v1/archive/archive_quorum_rotation_prepare":            {action: proto.ActionArchiveRotationPrepare, input: func() any { return &proto.ArchiveRotationPrepare{} }, plainLimit: proto.DEKRewrapMaxRequestBytes},
+	"/v1/archive/archive_reconfiguration_session_key_proof":  {action: proto.ActionArchiveSessionKeyProof, input: func() any { return &proto.ArchiveReconfigurationSessionKeyProof{} }},
+	"/v1/archive/archive_reconfiguration_supplement_prepare": {action: proto.ActionSupplementPrepare, input: func() any { return &proto.SupplementPrepare{} }},
+	"/v1/archive/archive_reconfiguration_supplement_promote": {action: proto.ActionSupplementPromote, input: func() any { return &proto.SupplementPromote{} }},
+	"/v1/archive/archive_quorum_combine_to_staged":           {action: proto.ActionArchiveQuorumCombineToStaged, input: func() any { return &proto.ArchiveRotationExecute{} }, plainLimit: proto.DEKRewrapMaxRequestBytes},
 	"/v1/archive/archive_split_prepare": {
 		action:     proto.ActionArchiveSplitPrepare,
 		input:      func() any { return &proto.ArchiveSplitPrepareRequest{} },

@@ -36,7 +36,7 @@ func stageBelongsTo(stage archiveReconfigurationJournal, owner stageOwner, org s
 func checkStagePublic(store keychain.SecretStore, slot keychain.ArchiveKeySlot, stage archiveReconfigurationJournal) (bool, error) {
 	pub, err := slot.GetPublic(store)
 	if errors.Is(err, keychain.ErrSecretNotFound) {
-		return stage.UnregisteredCleanup != "", nil
+		return stage.UnregisteredCleanup != "" || stage.Finalization != "", nil
 	}
 	if err != nil {
 		return false, err
@@ -75,7 +75,7 @@ func ownedStageStatus(d Deps, org string) proto.BaseResponse {
 		return denyArchiveSplitReceipt()
 	}
 	state := "key_staged"
-	if stage.UnregisteredCleanup != "" {
+	if stage.UnregisteredCleanup != "" || stage.Finalization != "" {
 		state = proto.ArchiveSplitStateCleanupPending
 	}
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{State: state, Kind: stage.Kind, OperationID: stage.OperationID, Fingerprint: stage.TargetKeyFingerprint, LoginGeneration: owner.generation}}
@@ -117,7 +117,7 @@ func discardUnregisteredStage(d Deps, r proto.ArchiveUnregisteredClosure, expect
 	if closed && stage.OperationID != r.OperationID {
 		return success
 	}
-	if !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint != expected || (stage.UnregisteredCleanup != "" && stage.UnregisteredCleanup != facts) {
+	if stage.Finalization != "" || !stageBelongsTo(stage, owner, r.OrgID) || stage.OperationID != r.OperationID || stage.TargetKeyFingerprint != expected || (stage.UnregisteredCleanup != "" && stage.UnregisteredCleanup != facts) {
 		return denyArchiveSplitReceipt()
 	}
 	slot := keychain.OrgArchiveReconfigurationSlot(r.OrgID)

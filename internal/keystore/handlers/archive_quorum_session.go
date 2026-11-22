@@ -31,6 +31,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/awnumar/memguard"
@@ -519,6 +520,10 @@ func SweepExpiredArchiveSession(d Deps) {
 			return nil
 		}
 		for _, orgID := range orgs {
+			if org, ok := strings.CutSuffix(orgID, ":supplement"); ok && isLowerUUID(org) {
+				sweepSupplementCandidate(d, org)
+				continue
+			}
 			sweepArchiveSessionSlotLocked(d, orgID)
 		}
 		return nil

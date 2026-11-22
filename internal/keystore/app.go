@@ -83,11 +83,12 @@ type Deps struct {
 	// challenges. Lives and dies with the process; never persisted.
 	MessageChallenges *handlers.MessageChallengeStore
 	// GroupDisplayChallenges holds one-use Group display challenges in memory.
-	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
-	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
-	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
-	ArchiveSplitChallenges *handlers.ArchiveShareChallengeStore
-	ArchiveProofChallenges *handlers.ArchiveShareChallengeStore
+	GroupDisplayChallenges    *handlers.GroupDisplayChallengeStore
+	GroupRewrapChallenges     *handlers.GroupRewrapChallengeStore
+	ArchiveShareChallenges    *handlers.ArchiveShareChallengeStore
+	ArchiveRotationChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveSplitChallenges    *handlers.ArchiveShareChallengeStore
+	ArchiveProofChallenges    *handlers.ArchiveShareChallengeStore
 	// AuditAuthorizations holds the receipts and permits the audit actions
 	// consumed. Lives and dies with the process; never persisted.
 	AuditAuthorizations *handlers.AuditAuthorizationStore
@@ -100,24 +101,25 @@ type Deps struct {
 // App is the single wiring container for the Keeper process. Handlers
 // access dependencies through App rather than global state.
 type App struct {
-	Store                  SecretStore
-	Clock                  Clock
-	Rand                   io.Reader
-	Logger                 Logger
-	ServerKeyVerifier      ServerKeyVerifier
-	GroupSessions          *sessions.GroupSessionStore
-	RecoverySessions       *sessions.RecoverySessionStore
-	RecoveryKeySessions    *sessions.RecoveryKeySessionStore
-	Clipboard              clipboard.Clipboard
-	MessageChallenges      *handlers.MessageChallengeStore
-	GroupDisplayChallenges *handlers.GroupDisplayChallengeStore
-	GroupRewrapChallenges  *handlers.GroupRewrapChallengeStore
-	ArchiveShareChallenges *handlers.ArchiveShareChallengeStore
-	ArchiveSplitChallenges *handlers.ArchiveShareChallengeStore
-	ArchiveProofChallenges *handlers.ArchiveShareChallengeStore
-	AuditAuthorizations    *handlers.AuditAuthorizationStore
-	CredentialNonces       *handlers.CredentialNonceStore
-	KeyTransparency        keytransparency.Gate
+	Store                     SecretStore
+	Clock                     Clock
+	Rand                      io.Reader
+	Logger                    Logger
+	ServerKeyVerifier         ServerKeyVerifier
+	GroupSessions             *sessions.GroupSessionStore
+	RecoverySessions          *sessions.RecoverySessionStore
+	RecoveryKeySessions       *sessions.RecoveryKeySessionStore
+	Clipboard                 clipboard.Clipboard
+	MessageChallenges         *handlers.MessageChallengeStore
+	GroupDisplayChallenges    *handlers.GroupDisplayChallengeStore
+	GroupRewrapChallenges     *handlers.GroupRewrapChallengeStore
+	ArchiveShareChallenges    *handlers.ArchiveShareChallengeStore
+	ArchiveRotationChallenges *handlers.ArchiveShareChallengeStore
+	ArchiveSplitChallenges    *handlers.ArchiveShareChallengeStore
+	ArchiveProofChallenges    *handlers.ArchiveShareChallengeStore
+	AuditAuthorizations       *handlers.AuditAuthorizationStore
+	CredentialNonces          *handlers.CredentialNonceStore
+	KeyTransparency           keytransparency.Gate
 	// ChangeBaselineChallenges holds one-use change-baseline challenges (lv83).
 	ChangeBaselineChallenges *handlers.GroupDisplayChallengeStore
 	// ChangeCompareChallenges holds one-use comparison challenges (lv83 H1).
@@ -153,24 +155,25 @@ type App struct {
 //	})
 func NewApp(deps Deps) *App {
 	app := &App{
-		Store:                  deps.Store,
-		Clock:                  deps.Clock,
-		Rand:                   deps.Rand,
-		Logger:                 deps.Logger,
-		ServerKeyVerifier:      deps.ServerKeyVerifier,
-		GroupSessions:          deps.GroupSessions,
-		RecoverySessions:       deps.RecoverySessions,
-		RecoveryKeySessions:    deps.RecoveryKeySessions,
-		Clipboard:              deps.Clipboard,
-		MessageChallenges:      deps.MessageChallenges,
-		GroupDisplayChallenges: deps.GroupDisplayChallenges,
-		GroupRewrapChallenges:  deps.GroupRewrapChallenges,
-		ArchiveShareChallenges: deps.ArchiveShareChallenges,
-		ArchiveSplitChallenges: deps.ArchiveSplitChallenges,
-		ArchiveProofChallenges: deps.ArchiveProofChallenges,
-		AuditAuthorizations:    deps.AuditAuthorizations,
-		CredentialNonces:       deps.CredentialNonces,
-		KeyTransparency:        deps.KeyTransparency,
+		Store:                     deps.Store,
+		Clock:                     deps.Clock,
+		Rand:                      deps.Rand,
+		Logger:                    deps.Logger,
+		ServerKeyVerifier:         deps.ServerKeyVerifier,
+		GroupSessions:             deps.GroupSessions,
+		RecoverySessions:          deps.RecoverySessions,
+		RecoveryKeySessions:       deps.RecoveryKeySessions,
+		Clipboard:                 deps.Clipboard,
+		MessageChallenges:         deps.MessageChallenges,
+		GroupDisplayChallenges:    deps.GroupDisplayChallenges,
+		GroupRewrapChallenges:     deps.GroupRewrapChallenges,
+		ArchiveShareChallenges:    deps.ArchiveShareChallenges,
+		ArchiveRotationChallenges: deps.ArchiveRotationChallenges,
+		ArchiveSplitChallenges:    deps.ArchiveSplitChallenges,
+		ArchiveProofChallenges:    deps.ArchiveProofChallenges,
+		AuditAuthorizations:       deps.AuditAuthorizations,
+		CredentialNonces:          deps.CredentialNonces,
+		KeyTransparency:           deps.KeyTransparency,
 	}
 	if app.Store == nil {
 		app.Store = KeyringSecretStore{}
@@ -206,6 +209,9 @@ func NewApp(deps Deps) *App {
 	}
 	if app.ArchiveShareChallenges == nil {
 		app.ArchiveShareChallenges = handlers.NewArchiveShareChallengeStore()
+	}
+	if app.ArchiveRotationChallenges == nil {
+		app.ArchiveRotationChallenges = handlers.NewArchiveShareChallengeStore()
 	}
 	if app.ArchiveSplitChallenges == nil {
 		app.ArchiveSplitChallenges = handlers.NewArchiveShareChallengeStore()

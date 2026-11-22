@@ -31,6 +31,11 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveSessionDiscard:         archiveLoginAction(handlers.HandleArchiveSessionDiscard).appOnlyAction(),
 		proto.ActionArchiveSessionStatus:          archiveLoginAction(handlers.HandleArchiveSessionStatus).appOnlyAction(),
 		proto.ActionArchiveQuorumCombineAndRewrap: archiveLoginAction(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
+		proto.ActionArchiveRotationPrepare:        archiveLoginAction(handlers.HandleArchiveRotationPrepare).appOnlyAction(),
+		proto.ActionArchiveSessionKeyProof:        archiveLoginAction(handlers.HandleArchiveReconfigurationSessionKeyProof).appOnlyAction(),
+		proto.ActionSupplementPrepare:             archiveLoginAction(handlers.HandleSupplementPrepare).appOnlyAction(),
+		proto.ActionSupplementPromote:             archiveLoginAction(handlers.HandleSupplementPromote).appOnlyAction(),
+		proto.ActionArchiveQuorumCombineToStaged:  archiveLoginAction(handlers.HandleArchiveQuorumCombineToStaged).appOnlyAction(),
 		proto.ActionArchiveReconfigureStage:       archiveLoginAction(handlers.HandleArchiveReconfigureStage).appOnlyAction(),
 	}
 }

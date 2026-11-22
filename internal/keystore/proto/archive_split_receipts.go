@@ -34,6 +34,10 @@ func ArchiveSplitSharesDigest(shares []WrappedShare) string {
 // and activated the quorum configuration. It has no expiry: Keeper accepts
 // it only against its own split journal and current archive key.
 type ArchiveSplitFinalizationReceipt struct {
+	Kind                      string `json:"kind,omitempty"`
+	TargetKeySPKIFingerprint  string `json:"target_key_spki_fingerprint,omitempty"`
+	SourceConfigDigest        string `json:"source_config_digest,omitempty"`
+	GrantsDigest              string `json:"grants_digest,omitempty"`
 	OperationID               string `json:"operation_id"`
 	OrgID                     string `json:"org_id"`
 	ArchiveKeySPKIFingerprint string `json:"archive_key_spki_fingerprint"`
@@ -45,12 +49,27 @@ type ArchiveSplitFinalizationReceipt struct {
 }
 
 func ArchiveSplitFinalizationReceiptCanonical(r ArchiveSplitFinalizationReceipt) string {
+	if r.Kind == "reconfiguration" {
+		return archiveShareCanonical("dragpass.archive.split.finalized|2", r.Kind, r.OperationID, r.OrgID, r.ArchiveKeySPKIFingerprint, r.TargetKeySPKIFingerprint, r.SourceConfigDigest, r.ConfigDigest, r.SharesDigest, r.GrantsDigest, strconv.FormatInt(r.FinalizedAt, 10), strconv.FormatUint(uint64(r.ServerKeyVersion), 10))
+	}
 	return archiveShareCanonical("dragpass.archive.split.finalized|1", r.OperationID, r.OrgID,
 		r.ArchiveKeySPKIFingerprint, r.ConfigDigest, r.SharesDigest, strconv.FormatInt(r.FinalizedAt, 10),
 		strconv.FormatUint(uint64(r.ServerKeyVersion), 10))
 }
 
 func (r ArchiveSplitFinalizationReceipt) Validate() error {
+	if r.Kind == "reconfiguration" {
+		for _, v := range []string{r.TargetKeySPKIFingerprint, r.SourceConfigDigest, r.GrantsDigest} {
+			if err := requireMessageDigest(v, "receipt.reconfiguration"); err != nil {
+				return err
+			}
+		}
+		if r.TargetKeySPKIFingerprint == r.ArchiveKeySPKIFingerprint {
+			return newValidationError("receipt.target", "must differ from source")
+		}
+	} else if r.Kind != "" || r.TargetKeySPKIFingerprint != "" || r.SourceConfigDigest != "" || r.GrantsDigest != "" {
+		return newValidationError("receipt.kind", "invalid finalization binding")
+	}
 	for _, id := range []string{r.OperationID, r.OrgID} {
 		if err := requireMessageUUID(id, "receipt.identity"); err != nil {
 			return err

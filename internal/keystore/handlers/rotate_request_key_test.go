@@ -12,10 +12,28 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
+const rotationTestChallenge = "fa7ba31c-b3bb-44f6-91d5-c4b47772e6c2"
+
+func TestRotateRequestKeyPrepareRequiresServerChallengeFormat(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	if r := HandleRequestKeyGenerate(deps, proto.RequestKeyGenerateRequest{}); !r.Success {
+		t.Fatal("fixture key generation failed")
+	}
+	for _, token := range []string{"sample", "fa7ba31c-b3bb-74f6-91d5-c4b47772e6c2", "fa7ba31c-b3bb-44f6-11d5-c4b47772e6c2"} {
+		r := HandleRotateRequestKeyPrepare(deps, proto.RotateRequestKeyPrepareRequest{ChallengeToken: token})
+		if r.Success || r.Data != nil || r.ErrorCode != "validation_error" {
+			t.Fatal("invalid challenge must be rejected without any signature")
+		}
+		if pending, _ := keychain.GetPendingRequestSigningPublicKey(deps.Store); pending != "" {
+			t.Fatal("invalid challenge created a pending rotation")
+		}
+	}
+}
+
 func TestRotateRequestKeyPrepare_NoActiveKey(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
 	resp := HandleRotateRequestKeyPrepare(deps,
-		proto.RotateRequestKeyPrepareRequest{ChallengeToken: "abc"})
+		proto.RotateRequestKeyPrepareRequest{ChallengeToken: rotationTestChallenge})
 	if resp.Success {
 		t.Fatal("prepare must fail without active key")
 	}
@@ -31,7 +49,7 @@ func TestRotateRequestKeyPrepare_HappyPath(t *testing.T) {
 	}
 
 	resp := HandleRotateRequestKeyPrepare(deps,
-		proto.RotateRequestKeyPrepareRequest{ChallengeToken: "challenge-1"})
+		proto.RotateRequestKeyPrepareRequest{ChallengeToken: rotationTestChallenge})
 	if !resp.Success {
 		t.Fatalf("prepare failed: %s", resp.Error)
 	}
@@ -50,14 +68,14 @@ func TestRotateRequestKeyPrepare_HappyPath(t *testing.T) {
 	oldPubB64, _ := keychain.GetRequestSigningPublicKey(deps.Store)
 	oldPub, _ := base64.StdEncoding.DecodeString(oldPubB64)
 	oldSig, _ := base64.StdEncoding.DecodeString(data.OldSignature)
-	if !ed25519.Verify(ed25519.PublicKey(oldPub), []byte("challenge-1"), oldSig) {
+	if !ed25519.Verify(ed25519.PublicKey(oldPub), []byte(rotationTestChallenge), oldSig) {
 		t.Error("OLD signature does not verify with active public key")
 	}
 
 	// NEW signature must verify against NewPublicKey.
 	newPub, _ := base64.StdEncoding.DecodeString(data.NewPublicKey)
 	newSig, _ := base64.StdEncoding.DecodeString(data.NewSignature)
-	if !ed25519.Verify(ed25519.PublicKey(newPub), []byte("challenge-1"), newSig) {
+	if !ed25519.Verify(ed25519.PublicKey(newPub), []byte(rotationTestChallenge), newSig) {
 		t.Error("NEW signature does not verify with new public key")
 	}
 }
@@ -68,7 +86,7 @@ func TestRotateRequestKeyPromote_HappyPath(t *testing.T) {
 		t.Fatalf("generate: %s", r.Error)
 	}
 	prep := HandleRotateRequestKeyPrepare(deps,
-		proto.RotateRequestKeyPrepareRequest{ChallengeToken: "ch-2"})
+		proto.RotateRequestKeyPrepareRequest{ChallengeToken: rotationTestChallenge})
 	if !prep.Success {
 		t.Fatalf("prepare: %s", prep.Error)
 	}
@@ -134,7 +152,7 @@ func TestRotateRequestKeyAbort_Idempotent(t *testing.T) {
 		t.Fatalf("generate: %s", r.Error)
 	}
 	if r := HandleRotateRequestKeyPrepare(deps,
-		proto.RotateRequestKeyPrepareRequest{ChallengeToken: "ch-3"}); !r.Success {
+		proto.RotateRequestKeyPrepareRequest{ChallengeToken: rotationTestChallenge}); !r.Success {
 		t.Fatalf("prepare: %s", r.Error)
 	}
 	resp2 := HandleRotateRequestKeyAbort(deps, proto.RotateRequestKeyAbortRequest{})

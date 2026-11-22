@@ -27,8 +27,13 @@ const archiveOperationKindReconfiguration = "reconfiguration"
 // archiveReconfigurationJournal is the org's reconfiguration record. It holds
 // no secret.
 type archiveReconfigurationJournal struct {
+	ProofAcceptance     string `json:"proof_acceptance,omitempty"`
+	ProofRound          int    `json:"proof_round,omitempty"`
+	ProofSessionID      string `json:"proof_session_id,omitempty"`
+	ProofSessionSPKI    string `json:"proof_session_spki,omitempty"`
 	OwnerAccountID      string `json:"owner_account_id,omitempty"`
 	OwnerDeviceID       string `json:"owner_device_id,omitempty"`
+	Finalization        string `json:"finalization,omitempty"`
 	UnregisteredCleanup string `json:"unregistered_cleanup,omitempty"`
 
 	// A signed closure pins cleanup across failed deletes and prevents stage retries from generating a replacement.
@@ -123,7 +128,7 @@ func reconfigurationStageDecision(d Deps, req proto.ArchiveReconfigureStageReque
 	// is its own, so it is kept and the stage refused.
 	if json.Unmarshal([]byte(raw), &journal) != nil ||
 		journal.Kind != archiveOperationKindReconfiguration ||
-		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID || journal.Closure != nil || journal.UnregisteredCleanup != "" || journal.OwnerAccountID != owner.account || journal.OwnerDeviceID != owner.device {
+		journal.OperationID != req.OperationID || journal.OrgID != req.OrgID || journal.Finalization != "" || journal.Closure != nil || journal.UnregisteredCleanup != "" || journal.OwnerAccountID != owner.account || journal.OwnerDeviceID != owner.device {
 		return refuseArchiveReconfigurationPending(), true, nil
 	}
 	pub, hasPriv, err := slotHalves(d.Store, slot)
