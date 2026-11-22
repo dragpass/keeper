@@ -144,6 +144,14 @@ func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveS
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split preparation failed")
 	}
+	if found && journal.State == archiveSplitJournalWriting {
+		// An interrupted preparation: its shares were never returned, so
+		// nothing depends on them. Remove it before a new preparation.
+		if !deleteArchiveSplitJournal(d.Store, slot, journal.PartCount) {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "discard interrupted archive split preparation failed")
+		}
+		found = false
+	}
 	if found {
 		if journal.OperationID != req.OperationID ||
 			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||

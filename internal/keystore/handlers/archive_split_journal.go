@@ -13,6 +13,13 @@
 // binding, state, share count, shares digest), so only a split retry reads
 // the parts. A retry checks the reassembled bytes against the manifest's
 // digest of the whole result encoding.
+//
+// Write order: the manifest in state "writing", then parts 0..n-1, then the
+// manifest in the prepared state. Only a prepared record is ever returned to
+// a caller, so a "writing" manifest proves its shares never left Keeper.
+// Delete order: parts from the highest index down, then the manifest. While
+// the manifest exists the parts present are a prefix 0..k-1, and no part
+// outlives its manifest.
 
 package handlers
 
@@ -31,6 +38,9 @@ import (
 
 const (
 	archiveSplitManifestVersion = 2
+	// archiveSplitJournalWriting marks a manifest whose parts are being
+	// written; its shares were never returned.
+	archiveSplitJournalWriting = "writing"
 	// archiveSplitPartBytes is the result bytes per part. With the part
 	// header (under 160 bytes) every part stays below keychain.ItemValueLimit.
 	archiveSplitPartBytes = 2048
@@ -51,7 +61,8 @@ type archiveSplitJournal struct {
 	RequestDigest  string              `json:"request_digest"`
 	KeyFingerprint string              `json:"key_fingerprint"`
 	Binding        archiveSplitBinding `json:"binding"`
-	// State is empty (prepared) until finalization starts deleting.
+	// State is "writing" until every part is written, then empty (prepared)
+	// until finalization starts deleting.
 	State        string `json:"state,omitempty"`
 	ShareCount   int    `json:"share_count"`
 	SharesDigest string `json:"shares_digest"`
@@ -75,7 +86,7 @@ func decodeArchiveSplitJournal(raw string) (archiveSplitJournal, error) {
 		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
 	}
 	switch j.State {
-	case "", archiveSplitJournalDeleting, archiveSplitJournalCleanupPending:
+	case "", archiveSplitJournalWriting, archiveSplitJournalDeleting, archiveSplitJournalCleanupPending:
 	default:
 		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
 	}
@@ -114,9 +125,10 @@ func encodeArchiveSplitPart(operationID, resultDigest string, index, count int, 
 		strconv.Itoa(index) + "|" + strconv.Itoa(count) + "|" + string(data)
 }
 
-// recordArchiveSplitPreparation writes a new record for result: the parts,
-// then the manifest. journal carries the operation, request digest, key
-// fingerprint and binding.
+// recordArchiveSplitPreparation writes a new record for result: the manifest
+// in state "writing", the parts, then the manifest as prepared. journal
+// carries the operation, request digest, key fingerprint and binding. A
+// failure leaves a "writing" record that the next split discards.
 func recordArchiveSplitPreparation(store keychain.SecretStore, slot keychain.ArchiveKeySlot, journal archiveSplitJournal, result proto.ArchiveKeySplitResponseData) error {
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -124,13 +136,16 @@ func recordArchiveSplitPreparation(store keychain.SecretStore, slot keychain.Arc
 	}
 	sum := sha256.Sum256(encoded)
 	journal.Version = archiveSplitManifestVersion
-	journal.State = ""
+	journal.State = archiveSplitJournalWriting
 	journal.ShareCount = len(result.Shares)
 	journal.SharesDigest = proto.ArchiveSplitSharesDigest(result.Shares)
 	journal.ResultDigest = hex.EncodeToString(sum[:])
 	journal.PartCount = (len(encoded) + archiveSplitPartBytes - 1) / archiveSplitPartBytes
 	if journal.PartCount > archiveSplitMaxParts {
 		return errors.New("archive split result too large")
+	}
+	if err := writeArchiveSplitJournal(store, slot, journal); err != nil {
+		return err
 	}
 	for i := range journal.PartCount {
 		end := min((i+1)*archiveSplitPartBytes, len(encoded))
@@ -139,6 +154,7 @@ func recordArchiveSplitPreparation(store keychain.SecretStore, slot keychain.Arc
 			return err
 		}
 	}
+	journal.State = ""
 	return writeArchiveSplitJournal(store, slot, journal)
 }
 
@@ -172,11 +188,24 @@ func readArchiveSplitResult(store keychain.SecretStore, slot keychain.ArchiveKey
 	return result, nil
 }
 
-// deleteArchiveSplitJournal removes the manifest's parts, then the manifest.
-// It reports false, with what was not deleted still in place, when any
-// delete did not complete.
-func deleteArchiveSplitJournal(store keychain.SecretStore, slot keychain.ArchiveKeySlot, parts int) bool {
-	for i := range parts {
+// deleteArchiveSplitJournal removes the parts, highest index first, then the
+// manifest. knownParts is the manifest's part count (0 when unknown); parts
+// at or past it are found by probing upward until one is absent. It reports
+// false, with what was not deleted still in place, when any read or delete
+// did not complete.
+func deleteArchiveSplitJournal(store keychain.SecretStore, slot keychain.ArchiveKeySlot, knownParts int) bool {
+	top := knownParts
+	for top < archiveSplitMaxParts {
+		_, err := store.Get(config.Service, archiveSplitPartAccount(slot, top))
+		if errors.Is(err, keychain.ErrSecretNotFound) {
+			break
+		}
+		if err != nil {
+			return false
+		}
+		top++
+	}
+	for i := top - 1; i >= 0; i-- {
 		if !deleteSecretGone(store, archiveSplitPartAccount(slot, i)) {
 			return false
 		}

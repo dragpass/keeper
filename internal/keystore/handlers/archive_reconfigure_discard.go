@@ -130,10 +130,12 @@ func discardUnregisteredStage(d Deps, r proto.ArchiveUnregisteredClosure, expect
 	}
 	// A split journal is positive evidence of registration. Keep all local
 	// material if it contradicts the statement, including on cleanup retry.
-	if _, err := store.Get(config.Service, archiveSplitJournalAccount(slot)); err == nil {
-		return denyArchiveSplitReceipt()
-	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+	// An interrupted preparation (state "writing") was never returned and is
+	// no such evidence; the cleanup removes it with the target.
+	if split, found, err := loadArchiveSplitJournal(store, slot); err != nil && !errors.Is(err, errArchiveSplitJournalInconsistent) {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read staged split journal failed")
+	} else if found && (err != nil || split.State != archiveSplitJournalWriting) {
+		return denyArchiveSplitReceipt()
 	}
 	if stage.UnregisteredCleanup == "" {
 		stage.UnregisteredCleanup = facts

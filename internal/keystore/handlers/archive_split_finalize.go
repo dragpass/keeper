@@ -73,7 +73,8 @@ func HandleArchiveSplitStatus(d Deps, req proto.ArchiveSplitStatusRequest) proto
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split state failed")
 	}
-	if !found {
+	// An interrupted preparation was never returned: report it as none.
+	if !found || journal.State == archiveSplitJournalWriting {
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{State: proto.ArchiveSplitStateNone}}
 	}
 	return proto.BaseResponse{Success: true, Data: proto.ArchiveSplitStateResponseData{
@@ -107,7 +108,7 @@ func HandleArchiveSplitFinalize(d Deps, req proto.ArchiveSplitFinalizeRequest) p
 	slot, activePublic, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
 	// Only an org-scoped slot is ever deleted; the split gate refuses the
 	// device-wide slot, and this repeats that check before any deletion.
-	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg {
+	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State == archiveSplitJournalWriting {
 		return denyArchiveSplitReceipt()
 	}
 	spki, err := crypto.RewrapKeyFingerprint(activePublic)
@@ -169,7 +170,8 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 		return underStageLock(d.Store, func() proto.BaseResponse { return abandonReconfiguration(d.Store, receipt) })
 	}
 	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
-	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State != "" ||
+	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg ||
+		(journal.State != "" && journal.State != archiveSplitJournalWriting) ||
 		journal.OperationID != receipt.OperationID ||
 		journal.Binding.OrgID != receipt.OrgID ||
 		journal.Binding.ArchiveKeySPKIFingerprint != receipt.ArchiveKeySPKIFingerprint {
@@ -235,7 +237,9 @@ func abandonReconfiguration(store keychain.SecretStore, r proto.ArchiveSplitClos
 	}
 	if stage.Closure == nil {
 		split, found, err := loadArchiveSplitJournal(store, slot)
-		if err == nil && found {
+		// An interrupted preparation was never returned; the cleanup below
+		// removes it with the target.
+		if err == nil && found && split.State != archiveSplitJournalWriting {
 			if split.State != "" || split.Binding.Kind != r.Kind || split.OperationID != r.OperationID || split.Binding.OrgID != r.OrgID || split.Binding.SourceConfigDigest != r.SourceConfigDigest || split.Binding.ArchiveKeySPKIFingerprint != r.TargetKeySPKIFingerprint || split.KeyFingerprint != stage.TargetKeyFingerprint {
 				return denyArchiveSplitReceipt()
 			}
