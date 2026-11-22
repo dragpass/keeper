@@ -228,3 +228,29 @@ func TestArchiveRecoverySessionKeyProofRefusesInvalidRequestBeforeReading(t *tes
 	c.req.DekVersion = 0
 	requireRecoveryProofRefused(t, c.sign(), errs.ErrCodeValidation)
 }
+
+// signingClockStore moves the clock when the request signing key is read,
+// so time passes inside the call between the slot read and the output.
+type signingClockStore struct {
+	keychain.SecretStore
+	onSigningKey func()
+}
+
+func (s signingClockStore) Get(service, account string) (string, error) {
+	if account == config.DragPassRequestSigningPrivateKey && s.onSigningKey != nil {
+		s.onSigningKey()
+	}
+	return s.SecretStore.Get(service, account)
+}
+
+// The slot expires after the signature is made: the re-check before output
+// withholds the signature and deletes the expired slot.
+func TestArchiveRecoverySessionKeyProofWithholdsSignatureWhenSlotExpiresDuringCall(t *testing.T) {
+	c := newRecoveryProofCase(t)
+	expiry := c.clock.Now().Add(archiveSessionMaxTTL)
+	c.deps.Store = signingClockStore{SecretStore: c.store, onSigningKey: func() { c.clock.Set(expiry) }}
+	requireRecoveryProofRefused(t, c.sign(), errs.ErrCodeArchiveSessionExpired)
+	if orgSlotValue(c.store, testOrgA) != "" || orgSlotPublic(c.store, testOrgA) != "" {
+		t.Fatal("expired slot kept")
+	}
+}
