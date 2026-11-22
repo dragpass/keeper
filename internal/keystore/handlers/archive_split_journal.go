@@ -11,8 +11,10 @@
 // The manifest holds everything finalization, abandonment, status and the
 // reconfiguration readers need (operation, request digest, key fingerprint,
 // binding, state, share count, shares digest), so only a split retry reads
-// the parts. A retry checks the reassembled bytes against the manifest's
-// digest of the whole result encoding.
+// the parts. Each part names the operation, the SHA-256 of the whole result
+// encoding, its index and the part count. A retry checks every part against
+// the manifest, refuses a missing, extra, foreign or reordered part, and
+// checks the reassembled bytes against the whole digest.
 //
 // Write order: the manifest in state "writing", then parts 0..n-1, then the
 // manifest in the prepared state. Only a prepared record is ever returned to
@@ -172,10 +174,19 @@ func readArchiveSplitResult(store keychain.SecretStore, slot keychain.ArchiveKey
 			return none, err
 		}
 		fields := strings.SplitN(raw, "|", 7)
-		if len(fields) != 7 {
+		if len(fields) != 7 || fields[0]+"|"+fields[1] != archiveSplitPartDomain ||
+			fields[2] != journal.OperationID || fields[3] != journal.ResultDigest ||
+			fields[4] != strconv.Itoa(i) || fields[5] != strconv.Itoa(journal.PartCount) ||
+			len(fields[6]) == 0 || len(fields[6]) > archiveSplitPartBytes {
 			return none, errArchiveSplitJournalInconsistent
 		}
 		whole.WriteString(fields[6])
+	}
+	// A part past the recorded count belongs to no complete record.
+	if _, err := store.Get(config.Service, archiveSplitPartAccount(slot, journal.PartCount)); err == nil {
+		return none, errArchiveSplitJournalInconsistent
+	} else if !errors.Is(err, keychain.ErrSecretNotFound) {
+		return none, err
 	}
 	encoded := whole.String()
 	sum := sha256.Sum256([]byte(encoded))

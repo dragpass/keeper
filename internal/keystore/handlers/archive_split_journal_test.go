@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -216,7 +217,9 @@ func TestArchiveSplitInterruptedWriteLeavesNothingBehind(t *testing.T) {
 // its closure leaves none of the first attempt's parts.
 func TestArchiveSplitInterruptedWriteIsDiscardedByTheNextSplit(t *testing.T) {
 	c := newSplitCase(t, "activation", 5)
-	fault := &journalFaultStore{SecretStore: c.f.deps.Store, failSet: 5, afterFailSetsAllFail: true}
+	// The manifest and parts 0..5 are written: more parts than the next
+	// operation's record has.
+	fault := &journalFaultStore{SecretStore: c.f.deps.Store, failSet: 8, afterFailSetsAllFail: true}
 	c.f.deps.Store = fault
 	if r := c.split(t); r.Success {
 		t.Fatal("interrupted split succeeded")
@@ -273,6 +276,126 @@ func TestArchiveSplitInterruptedWriteIsRemovedByClosure(t *testing.T) {
 					if _, err := c.slot.GetPrivate(c.f.store); err != nil {
 						t.Fatal("closure of an interrupted split removed the archive private key")
 					}
+				}
+			})
+		}
+	}
+}
+
+// splitPart reads part i of the case's record.
+func (c *splitCase) part(t *testing.T, i int) string {
+	t.Helper()
+	v, err := c.f.store.Get(config.Service, archiveSplitPartAccount(c.slot, i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func (c *splitCase) setPart(t *testing.T, i int, v string) {
+	t.Helper()
+	if err := c.f.store.Set(config.Service, archiveSplitPartAccount(c.slot, i), v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// partFields splits a part into its header fields and data.
+func partFields(t *testing.T, v string) []string {
+	t.Helper()
+	fields := strings.SplitN(v, "|", 7)
+	if len(fields) != 7 {
+		t.Fatalf("part format: %q", v[:min(len(v), 80)])
+	}
+	return fields
+}
+
+// A prepared record whose parts were mixed, edited, removed, added or
+// reordered is never returned: the retry answers not_found and writes and
+// deletes nothing, for both kinds.
+func TestArchiveSplitRetryRefusesTamperedParts(t *testing.T) {
+	other := newSplitCase(t, "activation", 5)
+	other.f.request.OperationID = splitTestOther
+	if r := other.split(t); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	foreignPart := other.part(t, 0)
+	tampers := map[string]func(t *testing.T, c *splitCase){
+		"part of another operation": func(t *testing.T, c *splitCase) { c.setPart(t, 0, foreignPart) },
+		"header names another operation": func(t *testing.T, c *splitCase) {
+			f := partFields(t, c.part(t, 1))
+			f[2] = splitTestOther
+			c.setPart(t, 1, strings.Join(f, "|"))
+		},
+		"header names another whole digest": func(t *testing.T, c *splitCase) {
+			f := partFields(t, c.part(t, 1))
+			f[3] = strings.Repeat("ab", 32)
+			c.setPart(t, 1, strings.Join(f, "|"))
+		},
+		"manifest names another whole digest": func(t *testing.T, c *splitCase) {
+			j, _, err := loadArchiveSplitJournal(c.f.store, c.slot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			j.ResultDigest = strings.Repeat("cd", 32)
+			if err := writeArchiveSplitJournal(c.f.store, c.slot, j); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"missing part": func(t *testing.T, c *splitCase) {
+			if err := c.f.store.Delete(config.Service, archiveSplitPartAccount(c.slot, 1)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"extra part": func(t *testing.T, c *splitCase) {
+			j, _, err := loadArchiveSplitJournal(c.f.store, c.slot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.setPart(t, j.PartCount, encodeArchiveSplitPart(j.OperationID, j.ResultDigest, j.PartCount, j.PartCount, []byte("{}")))
+		},
+		"reordered parts": func(t *testing.T, c *splitCase) {
+			p0, p1 := c.part(t, 0), c.part(t, 1)
+			c.setPart(t, 0, p1)
+			c.setPart(t, 1, p0)
+		},
+		"reordered data with renumbered headers": func(t *testing.T, c *splitCase) {
+			f0, f1 := partFields(t, c.part(t, 0)), partFields(t, c.part(t, 1))
+			f0[6], f1[6] = f1[6], f0[6]
+			c.setPart(t, 0, strings.Join(f0, "|"))
+			c.setPart(t, 1, strings.Join(f1, "|"))
+		},
+		"header index shifted": func(t *testing.T, c *splitCase) {
+			f := partFields(t, c.part(t, 1))
+			f[4] = "2"
+			c.setPart(t, 1, strings.Join(f, "|"))
+		},
+		"header count changed": func(t *testing.T, c *splitCase) {
+			f := partFields(t, c.part(t, 1))
+			f[5] = "99"
+			c.setPart(t, 1, strings.Join(f, "|"))
+		},
+		"truncated data": func(t *testing.T, c *splitCase) {
+			v := c.part(t, 1)
+			c.setPart(t, 1, v[:len(v)-1])
+		},
+	}
+	for _, kind := range splitKinds() {
+		for name, tamper := range tampers {
+			t.Run(kind+"/"+name, func(t *testing.T) {
+				c := newSplitCase(t, kind, 5)
+				if r := c.split(t); !r.Success {
+					t.Fatal(r.ErrorCode)
+				}
+				tamper(t, c)
+				mem := c.f.store.(*testdouble.MemorySecretStore)
+				before := mem.Snapshot()
+				c.f.resetProbe()
+				r := c.split(t)
+				if r.Success || r.Data != nil || r.ErrorCode != string(errs.ErrCodeNotFound) {
+					t.Fatalf("tampered record answered %+v", r)
+				}
+				if c.f.probe.sets != 0 || c.f.probe.deletes != 0 || !reflect.DeepEqual(before, mem.Snapshot()) {
+					t.Fatal("refusal wrote or deleted an item")
 				}
 			})
 		}
