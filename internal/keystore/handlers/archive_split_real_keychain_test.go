@@ -22,8 +22,8 @@ import (
 // realKeychainTestEnv opts in to TestArchiveSplitJournalItemsInTheRealKeychain.
 const realKeychainTestEnv = "KEEPER_REAL_KEYCHAIN_TEST"
 
-// The split journal items of the largest record (32 recipients), written, read back and
-// deleted through the real go-keyring backend of this machine under a
+// The split journal items of the largest record (32 recipients), written,
+// read back and deleted through the real go-keyring backend of this machine under a
 // throwaway service name. Opt-in, because CI runners may have no unlocked
 // keychain and other tests in this package replace the keyring with its mock
 // (keyring.MockInit) for the rest of the process. Run it alone:
@@ -74,13 +74,15 @@ func TestArchiveSplitJournalItemsInTheRealKeychain(t *testing.T) {
 			})
 			start := time.Now()
 			for i, account := range accounts {
+				// Registered first: a Set that stored the item but returned an
+				// error still leaves it for cleanup.
+				written = append(written, account)
 				if err := keyring.Set(service, account, items[account]); err != nil {
 					if i == 0 && !errors.Is(err, keyring.ErrSetDataTooBig) {
 						t.Skipf("no usable OS keychain here: %v", err)
 					}
 					t.Fatalf("set %s (%d bytes): %v", account, len(items[account]), err)
 				}
-				written = append(written, account)
 			}
 			setTime := time.Since(start)
 			if runtime.GOOS == "darwin" {
