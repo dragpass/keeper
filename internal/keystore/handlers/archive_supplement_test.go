@@ -8,6 +8,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
+	"reflect"
 	"testing"
 )
 
@@ -138,7 +139,12 @@ func newSupplementCase(t *testing.T) *supplementCase {
 	if !res.Success {
 		t.Fatal(res.ErrorCode)
 	}
-	prior := beginOrgSession(t, f.deps, split.OrgID)
+	// The App begins a reconfiguration session with the operation ID.
+	begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{OrgID: split.OrgID, BeginID: split.OperationID})
+	if !begun.Success {
+		t.Fatal(begun.ErrorCode)
+	}
+	prior := begun.Data.(proto.ArchiveSessionBeginResponseData)
 	prev, _ := crypto.RewrapKeyFingerprint(prior.SessionPublicKey)
 	if r := HandleRequestKeyGenerate(f.deps, proto.RequestKeyGenerateRequest{}); !r.Success {
 		t.Fatal(r.ErrorCode)
@@ -338,5 +344,46 @@ func TestSupplementMixedCandidateHalvesFailClosed(t *testing.T) {
 				t.Fatal("sweep removed the header of an unidentifiable candidate")
 			}
 		})
+	}
+}
+
+// A promoted session record carries no begin ID: a begin naming the
+// previous session, the original begin ID or none is refused as
+// archive_session_active, writes nothing and leaves the promoted key, its
+// status and its expiry handling as they were.
+func TestSupplementPromotedRecordReplaysNoBegin(t *testing.T) {
+	c := newSupplementCase(t)
+	res := c.prepare()
+	if !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	cand := res.Data.(proto.SupplementCandidate)
+	if r := c.promote(c.receipt(t, cand)); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	status := func() proto.BaseResponse {
+		return HandleArchiveSessionStatus(c.f.deps, proto.ArchiveSessionStatusRequest{OrgID: c.split.OrgID})
+	}
+	before := status()
+	if !before.Success {
+		t.Fatal(before.ErrorCode)
+	}
+	for _, beginID := range []string{c.params.PreviousSessionID, c.split.OperationID, ""} {
+		c.f.resetProbe()
+		r := HandleArchiveSessionBegin(c.f.deps, proto.ArchiveSessionBeginRequest{OrgID: c.split.OrgID, BeginID: beginID})
+		if r.Success || r.ErrorCode != string(errs.ErrCodeArchiveSessionActive) || c.f.probe.sets != 0 || c.f.probe.deletes != 0 {
+			t.Fatalf("begin %q after promotion: %s", beginID, r.ErrorCode)
+		}
+		if public, _ := keychain.GetArchiveSessionPublicKey(c.f.store, c.split.OrgID); public != cand.PublicKey {
+			t.Fatalf("begin %q changed the promoted key", beginID)
+		}
+	}
+	if after := status(); !reflect.DeepEqual(after, before) {
+		t.Fatal("status of the promoted record changed")
+	}
+	c.f.clock.advance(601)
+	SweepExpiredArchiveSession(c.f.deps)
+	if _, err := keychain.GetArchiveSessionPrivateKey(c.f.store, c.split.OrgID); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("expired promoted record survived the sweep")
 	}
 }
