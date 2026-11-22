@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -329,5 +332,92 @@ func TestSupplementPromoteRacingABeginKeepsOneKey(t *testing.T) {
 		if err != nil || slot.state != archiveSessionSlotLive || slot.publicKey != want {
 			t.Fatalf("round %d: slot does not hold the winner's key", round)
 		}
+	}
+}
+
+// Each field the pre-output recheck compares is changed between the first
+// read and the recheck, in a way the second read itself accepts: no output
+// leaves and nothing is written.
+func TestRotationRecheckComparesEveryTargetField(t *testing.T) {
+	cases := map[string]func(t *testing.T, c *supplementCase){
+		"login generation": func(t *testing.T, c *supplementCase) {
+			sum := sha256.Sum256([]byte(c.f.v.AccountID))
+			if err := c.f.store.Set(config.Service, "chat_state_generation_"+hex.EncodeToString(sum[:]), "AAAAAAAAAAAAAAAAAAAAAA"); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"target key": func(t *testing.T, c *supplementCase) {
+			other, err := crypto.GenerateRSAKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			spki, err := crypto.RewrapKeyFingerprint(other.PublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slot := keychain.OrgArchiveReconfigurationSlot(c.split.OrgID)
+			if err := slot.SavePublic(c.f.store, other.PublicKey); err != nil {
+				t.Fatal(err)
+			}
+			stage, err := readStageJournal(c.f.store, c.split.OrgID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage.TargetKeyFingerprint = fingerprintBase64Public(other.PublicKey)
+			if err := writeArchiveReconfigurationJournal(c.f.store, stage); err != nil {
+				t.Fatal(err)
+			}
+			editSplitJournal(t, c, func(j *archiveSplitJournal) {
+				j.KeyFingerprint, j.Binding.TargetKeyFingerprint, j.Binding.ArchiveKeySPKIFingerprint = stage.TargetKeyFingerprint, stage.TargetKeyFingerprint, spki
+			})
+		},
+		"source key": func(t *testing.T, c *supplementCase) {
+			editSplitJournal(t, c, func(j *archiveSplitJournal) { j.Binding.ActiveKeySPKIFingerprint = strings.Repeat("d", 64) })
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := newSupplementCase(t)
+			rot := newRotationRun(t, c.f, c.split, c.f.archiveSourcePEM(t, c.split.OrgID))
+			d := rot.decision(t)
+			lock := archiveSlotProcessLock
+			t.Cleanup(func() { archiveSlotProcessLock = lock })
+			calls := 0
+			archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
+				calls++
+				if calls == 2 {
+					change(t, c)
+					if _, err := readRotationTarget(c.f.deps, rot.req); err != nil {
+						t.Fatal("the changed state must still read as a target:", err)
+					}
+				}
+				return lock(s, fn)
+			}
+			c.f.resetProbe()
+			if r := rot.run(d); r.Success || r.Data != nil || c.f.probe.sets != 0 || c.f.probe.deletes != 0 {
+				t.Fatal("output released or state written after the target changed")
+			}
+		})
+	}
+}
+
+func editSplitJournal(t *testing.T, c *supplementCase, edit func(*archiveSplitJournal)) {
+	t.Helper()
+	account := archiveSplitJournalAccount(keychain.OrgArchiveReconfigurationSlot(c.split.OrgID))
+	raw, err := c.f.store.Get(config.Service, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var j archiveSplitJournal
+	if err := json.Unmarshal([]byte(raw), &j); err != nil {
+		t.Fatal(err)
+	}
+	edit(&j)
+	encoded, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.f.store.Set(config.Service, account, string(encoded)); err != nil {
+		t.Fatal(err)
 	}
 }
