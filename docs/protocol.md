@@ -349,8 +349,15 @@ writes the index entry, the header, then the private item; deletion removes
 the private item, then the header, then the index entry. An interruption
 therefore leaves either the complete candidate or a header without a private
 item, which holds no secret: the next prepare overwrites it and the sweep
-removes it. A failed delete stops and is reported; nothing that was not
-deleted is reported as deleted.
+removes it. In prepare and promote, a failed delete of the private item or
+the header stops and answers `storage_failure`; nothing that was not deleted
+is reported as deleted. Two exceptions are not reported. A failed removal of
+the index entry is ignored once both items are gone; the entry names an
+organization only, and the next sweep drops an entry whose candidate holds
+no private item. The startup and periodic sweep has no caller to answer: a
+failed delete there (of a candidate, a lone header or an expired partial
+promotion) leaves what was not deleted in place, writes no log line and is
+retried at the next sweep.
 
 Promotion writes the candidate's private record to the org's session slot,
 then its public half, then the journal, then deletes the candidate. If it is
@@ -360,8 +367,10 @@ is the prior one named by the candidate header and its private bytes and
 record equal the candidate's. A begin that replaced the source session after
 prepare is never overwritten.
 
-A private item whose header is missing or does not match it cannot be
-identified. It is kept: prepare and promote refuse with `not_found` and the
+A private item cannot be identified when its header is missing or
+unparsable, when its record's fingerprint field differs from the header's
+public key, or when its private key does not derive the header's public key.
+Such a candidate is kept: prepare and promote refuse with `not_found` and the
 sweep leaves it. No action removes it in this version.
 
 Key material handling, as the code does it: the candidate private key PEM is
