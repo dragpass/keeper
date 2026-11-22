@@ -515,3 +515,83 @@ func TestArchiveSplitDeleteFailureAtEveryPositionResumes(t *testing.T) {
 		}
 	}
 }
+
+// journalLockWatch records split journal and archive private slot accesses
+// made while the fake keychain process lock was not held.
+type journalLockWatch struct {
+	keychain.SecretStore
+	locked   *bool
+	private  map[string]bool
+	unlocked []string
+}
+
+func (s *journalLockWatch) note(op, account string) {
+	if !*s.locked && (strings.HasPrefix(account, splitJournalPrefix) || s.private[account]) {
+		s.unlocked = append(s.unlocked, op+" "+account)
+	}
+}
+
+func (s *journalLockWatch) Get(service, account string) (string, error) {
+	s.note("get", account)
+	return s.SecretStore.Get(service, account)
+}
+
+func (s *journalLockWatch) Set(service, account, value string) error {
+	s.note("set", account)
+	return s.SecretStore.Set(service, account, value)
+}
+
+func (s *journalLockWatch) Delete(service, account string) error {
+	s.note("delete", account)
+	return s.SecretStore.Delete(service, account)
+}
+
+// Every read, write and delete of a split record and of the archive private
+// key that split, status, finalization and closure make, for both kinds,
+// runs while the keychain process lock is held, so a decision is never made
+// from values another Keeper process changes in between.
+func TestArchiveSplitJournalAccessHoldsTheProcessLock(t *testing.T) {
+	type step struct {
+		name string
+		run  func(t *testing.T, c *splitCase, shares []proto.WrappedShare) proto.BaseResponse
+	}
+	status := func(t *testing.T, c *splitCase, _ []proto.WrappedShare) proto.BaseResponse {
+		return HandleArchiveSplitStatus(c.f.deps, proto.ArchiveSplitStatusRequest{OrgID: c.f.v.OrgID})
+	}
+	for _, kind := range splitKinds() {
+		for _, end := range []step{
+			{"finalize", func(t *testing.T, c *splitCase, s []proto.WrappedShare) proto.BaseResponse { return c.finalize(t, s) }},
+			{"abandon", func(t *testing.T, c *splitCase, _ []proto.WrappedShare) proto.BaseResponse { return c.abandon(t) }},
+		} {
+			t.Run(kind+"/"+end.name, func(t *testing.T) {
+				c := newSplitCase(t, kind, 3)
+				locked := false
+				restore := archiveSlotProcessLock
+				t.Cleanup(func() { archiveSlotProcessLock = restore })
+				archiveSlotProcessLock = func(s keychain.SecretStore, fn func() error) error {
+					return restore(s, func() error {
+						locked = true
+						defer func() { locked = false }()
+						return fn()
+					})
+				}
+				private := map[string]bool{c.slot.PrivateAccount: true}
+				watch := &journalLockWatch{SecretStore: c.f.deps.Store, locked: &locked, private: private}
+				c.f.deps.Store = watch
+				split := c.split(t)
+				if !split.Success {
+					t.Fatal(split.ErrorCode)
+				}
+				shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
+				for _, s := range []step{{"retry", func(t *testing.T, c *splitCase, _ []proto.WrappedShare) proto.BaseResponse { return c.split(t) }}, {"status", status}, end, {"status", status}} {
+					if r := s.run(t, c, shares); !r.Success {
+						t.Fatalf("%s: %s %s", s.name, r.ErrorCode, r.Error)
+					}
+				}
+				if len(watch.unlocked) != 0 {
+					t.Fatalf("accesses outside the process lock: %v", watch.unlocked)
+				}
+			})
+		}
+	}
+}

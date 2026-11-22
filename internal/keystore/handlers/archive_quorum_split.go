@@ -114,15 +114,18 @@ func prepareArchiveKeySplit(d Deps, req proto.ArchiveKeySplitRequest, binding ar
 	}
 	// The slot holding the org's public key owns its key. Once a split has
 	// wiped that slot's private half, the device-wide key is another key and
-	// must not be split in its place.
-	slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
-	if err != nil {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
-	}
-	if !found {
-		return errs.CodeResponse(errs.ErrCodeNotFound, "archive key unavailable")
-	}
-	return splitArchiveSlot(d, req, binding, pubs, slot, activePublic)
+	// must not be split in its place. The key and the journal are read and
+	// the journal written under one hold of the keychain process lock.
+	return underStageLock(d.Store, func() proto.BaseResponse {
+		slot, activePublic, found, err := keychain.FindArchiveKey(d.Store, keychain.OrgArchiveActiveCandidates(req.OrgID))
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive key failed")
+		}
+		if !found {
+			return errs.CodeResponse(errs.ErrCodeNotFound, "archive key unavailable")
+		}
+		return splitArchiveSlot(d, req, binding, pubs, slot, activePublic)
+	})
 }
 
 func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveSplitBinding, pubs []*rsa.PublicKey, slot keychain.ArchiveKeySlot, activePublic string) proto.BaseResponse {

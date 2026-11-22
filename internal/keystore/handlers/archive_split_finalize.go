@@ -69,7 +69,11 @@ func HandleArchiveSplitStatus(d Deps, req proto.ArchiveSplitStatusRequest) proto
 	if req.Kind == archiveOperationKindReconfiguration {
 		return underStageLock(d.Store, func() proto.BaseResponse { return ownedStageStatus(d, req.OrgID) })
 	}
-	_, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
+	return underStageLock(d.Store, func() proto.BaseResponse { return activationSplitStatus(d, req.OrgID) })
+}
+
+func activationSplitStatus(d Deps, orgID string) proto.BaseResponse {
+	_, _, journal, found, err := readArchiveSplitJournal(d.Store, orgID)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split state failed")
 	}
@@ -105,7 +109,12 @@ func HandleArchiveSplitFinalize(d Deps, req proto.ArchiveSplitFinalizeRequest) p
 	if receipt.Kind == archiveOperationKindReconfiguration {
 		return underStageLock(d.Store, func() proto.BaseResponse { return finalizeReconfiguration(d, receipt) })
 	}
-	slot, activePublic, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
+	return underStageLock(d.Store, func() proto.BaseResponse { return finalizeActivation(d, req.OrgID, receipt) })
+}
+
+// finalizeActivation runs under the keychain process lock.
+func finalizeActivation(d Deps, orgID string, receipt proto.ArchiveSplitFinalizationReceipt) proto.BaseResponse {
+	slot, activePublic, journal, found, err := readArchiveSplitJournal(d.Store, orgID)
 	// Only an org-scoped slot is ever deleted; the split gate refuses the
 	// device-wide slot, and this repeats that check before any deletion.
 	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg || journal.State == archiveSplitJournalWriting {
@@ -169,7 +178,12 @@ func HandleArchiveSplitAbandon(d Deps, req proto.ArchiveSplitAbandonRequest) pro
 	if receipt.Kind == archiveOperationKindReconfiguration {
 		return underStageLock(d.Store, func() proto.BaseResponse { return abandonReconfiguration(d.Store, receipt) })
 	}
-	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, req.OrgID)
+	return underStageLock(d.Store, func() proto.BaseResponse { return abandonActivation(d, req.OrgID, receipt) })
+}
+
+// abandonActivation runs under the keychain process lock.
+func abandonActivation(d Deps, orgID string, receipt proto.ArchiveSplitClosureReceipt) proto.BaseResponse {
+	slot, _, journal, found, err := readArchiveSplitJournal(d.Store, orgID)
 	if err != nil || !found || slot.Scope != keychain.ArchiveScopeOrg ||
 		(journal.State != "" && journal.State != archiveSplitJournalWriting) ||
 		journal.OperationID != receipt.OperationID ||
