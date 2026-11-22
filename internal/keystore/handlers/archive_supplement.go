@@ -7,11 +7,12 @@ import (
 	"errors"
 	"time"
 
+	"github.com/awnumar/memguard"
+
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
-	"github.com/dragpass/keeper/internal/keystore/secure"
 )
 
 // A supplementary round's candidate session key is held in two keychain
@@ -54,32 +55,34 @@ func publicDigest(pem string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func readSupplement(d Deps, org string) (supplementCandidate, archiveSessionRecord, string, error) {
+// readSupplement returns the candidate with its private key PEM in a locked
+// buffer the caller destroys. The keychain returns the record as a Go string,
+// which cannot be wiped; only the copy handed on is.
+func readSupplement(d Deps, org string) (supplementCandidate, archiveSessionRecord, *memguard.LockedBuffer, error) {
 	var c supplementCandidate
 	var rec archiveSessionRecord
 	raw, err := keychain.GetArchiveSessionPrivateKey(d.Store, supplementSlot(org))
 	if err != nil {
-		return c, rec, "", err
+		return c, rec, nil, err
 	}
-	defer secure.WipeString(&raw)
 	header, err := keychain.GetArchiveSessionPublicKey(d.Store, supplementSlot(org))
 	if errors.Is(err, keychain.ErrSecretNotFound) {
-		return c, rec, "", errSupplementUnreadable
+		return c, rec, nil, errSupplementUnreadable
 	}
 	if err != nil {
-		return c, rec, "", err
+		return c, rec, nil, err
 	}
 	if json.Unmarshal([]byte(header), &c) != nil || c.V != supplementHeaderVersion || c.OrgID != org {
-		return c, rec, "", errSupplementUnreadable
+		return c, rec, nil, errSupplementUnreadable
 	}
 	if spki, err := crypto.RewrapKeyFingerprint(c.PublicKey); err != nil || spki != c.SPKI {
-		return c, rec, "", errSupplementUnreadable
+		return c, rec, nil, errSupplementUnreadable
 	}
 	rec, pem, ok := decodeArchiveSessionSlot(raw)
 	if !ok || rec.fingerprint != fingerprintBase64Public(c.PublicKey) || !archiveSessionRecordConsistent(rec, d.Now()) {
-		return c, rec, "", errSupplementUnreadable
+		return c, rec, nil, errSupplementUnreadable
 	}
-	return c, rec, pem, nil
+	return c, rec, memguard.NewBufferFromBytes([]byte(pem)), nil
 }
 func supplementContext(d Deps, r proto.SupplementPrevious) (archiveReconfigurationJournal, rotationTarget, error) {
 	target, err := readRotationTarget(d, proto.ArchiveRotationRequest{OrgID: r.OrgID, OperationID: r.OperationID, ConfigDigest: r.ConfigDigest})
@@ -126,6 +129,7 @@ func HandleSupplementPrepare(d Deps, r proto.SupplementPrepare) proto.BaseRespon
 		return errs.Response(err)
 	}
 	var pair *crypto.KeyPair
+	var private *memguard.LockedBuffer
 	var generate bool
 	decide := func() proto.BaseResponse {
 		j, t, err := supplementContext(d, r.SupplementPrevious)
@@ -144,8 +148,10 @@ func HandleSupplementPrepare(d Deps, r proto.SupplementPrepare) proto.BaseRespon
 		if err != nil || fp != r.PreviousSPKI {
 			return rotationRefused()
 		}
-		c, rec, pem, err := readSupplement(d, r.OrgID)
-		defer secure.WipeString(&pem)
+		c, rec, secret, err := readSupplement(d, r.OrgID)
+		if secret != nil {
+			secret.Destroy()
+		}
 		if err == nil && !d.Now().Before(rec.expiresAt) {
 			if eraseSupplement(d, r.OrgID) != nil {
 				return supplementStorageFailure()
@@ -178,7 +184,7 @@ func HandleSupplementPrepare(d Deps, r proto.SupplementPrepare) proto.BaseRespon
 		now := d.Now()
 		// No begin_id: a begin resend never replays a promoted candidate.
 		rec = archiveSessionRecord{owner: owner, begunAt: now, expiresAt: now.Add(archiveSessionMaxTTL), fingerprint: fingerprintBase64Public(pair.PublicKey)}
-		record := encodeArchiveSessionSlot(rec, []byte(pair.PrivateKey))
+		record := encodeArchiveSessionSlot(rec, private.Bytes())
 		defer record.Destroy()
 		if err := writeSupplement(d, r.OrgID, header, record.Bytes()); err != nil {
 			return supplementStorageFailure()
@@ -194,7 +200,11 @@ func HandleSupplementPrepare(d Deps, r proto.SupplementPrepare) proto.BaseRespon
 	if err != nil {
 		return rotationRefused()
 	}
-	defer secure.WipeString(&pair.PrivateKey)
+	// The generator returns the PEM as a Go string, which cannot be wiped;
+	// the reference is dropped and only the locked copy is used.
+	private = memguard.NewBufferFromBytes([]byte(pair.PrivateKey))
+	pair.PrivateKey = ""
+	defer private.Destroy()
 	return underStageLock(d.Store, decide)
 }
 func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseResponse {
@@ -227,7 +237,9 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 			}
 			// A later prepare may already have stored its own candidate.
 			c, _, secret, err := readSupplement(d, a.OrgID)
-			defer secure.WipeString(&secret)
+			if secret != nil {
+				secret.Destroy()
+			}
 			if err == nil && c.SPKI == a.SPKI && eraseSupplement(d, a.OrgID) != nil {
 				return supplementStorageFailure()
 			}
@@ -239,12 +251,14 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 		if j.ProofSessionID != a.PreviousSessionID || j.ProofSessionSPKI != a.PreviousSPKI || j.ProofRound != a.Round-1 {
 			return rotationRefused()
 		}
-		c, rec, pem, err := readSupplement(d, a.OrgID)
-		defer secure.WipeString(&pem)
+		c, rec, secret, err := readSupplement(d, a.OrgID)
+		if secret != nil {
+			defer secret.Destroy()
+		}
 		if err != nil || c.SupplementPrevious != a.SupplementPrevious || c.SPKI != a.SPKI || c.Device != a.DeviceID || c.Round != a.Round-1 || rec.owner != owner || !d.Now().Before(rec.expiresAt) {
 			return rotationRefused()
 		}
-		private, err := parseRotationPrivate([]byte(pem))
+		private, err := parseRotationPrivate(secret.Bytes())
 		if err != nil {
 			return rotationRefused()
 		}
@@ -260,7 +274,7 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 		// Private first, public second. If a write was interrupted, accept only
 		// the exact candidate private bytes with the prior or candidate public
 		// half. An intervening begin, end or replacement is never overwritten.
-		candidateDigest := sha256.Sum256([]byte(pem))
+		candidateDigest := sha256.Sum256(secret.Bytes())
 		priorPublic := publicDigest(slot.publicKey) == c.PriorPublicDigest
 		oldHalf := hex.EncodeToString(slot.keyDigest[:]) == c.PriorDigest && priorPublic && slot.state == archiveSessionSlotLive
 		newHalf := slot.keyDigest == candidateDigest && (priorPublic || slot.publicKey == c.PublicKey)
@@ -277,7 +291,7 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 			return rotationRefused()
 		}
 		if !newHalf {
-			record := encodeArchiveSessionSlot(rec, []byte(pem))
+			record := encodeArchiveSessionSlot(rec, secret.Bytes())
 			defer record.Destroy()
 			if keychain.SaveArchiveSessionPrivateKey(d.Store, a.OrgID, string(record.Bytes())) != nil {
 				return rotationRefused()
@@ -304,8 +318,10 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 // candidates are preserved throughout server response loss. A header without
 // a private item holds no secret and is removed.
 func sweepSupplementCandidate(d Deps, org string) {
-	candidate, rec, pem, err := readSupplement(d, org)
-	defer secure.WipeString(&pem)
+	candidate, rec, secret, err := readSupplement(d, org)
+	if secret != nil {
+		defer secret.Destroy()
+	}
 	if errors.Is(err, keychain.ErrSecretNotFound) {
 		_ = eraseSupplement(d, org)
 		return
@@ -324,7 +340,7 @@ func sweepSupplementCandidate(d Deps, org string) {
 	// An interrupted acceptance may leave the old public half beside the
 	// expired candidate private record. A generic sweep preserves that
 	// mismatch. Only this stored candidate can identify its exact bytes.
-	if publicDigest(slot.publicKey) == candidate.PriorPublicDigest && slot.keyDigest == sha256.Sum256([]byte(pem)) &&
+	if publicDigest(slot.publicKey) == candidate.PriorPublicDigest && slot.keyDigest == sha256.Sum256(secret.Bytes()) &&
 		slot.record.owner == rec.owner && slot.record.fingerprint == rec.fingerprint &&
 		slot.record.beginID == rec.beginID && archiveSessionRecordConsistent(slot.record, now) && !now.Before(slot.record.expiresAt) {
 		if deleteArchiveSessionSlot(d, org) != nil {
