@@ -117,26 +117,32 @@ func newSplitCase(t *testing.T, kind string, recipients int) *splitCase {
 // split runs a freshly authorized split of the case's request.
 func (c *splitCase) split(t *testing.T) proto.BaseResponse {
 	t.Helper()
-	if c.kind == "reconfiguration" {
-		// A reconfiguration decision is bound to the staged key; re-sign a
-		// fresh one through the same path.
-		f := c.f
-		req := f.request
-		req.Kind = "reconfiguration"
-		req = f.authorize(t, req)
-		d := req.Decision
-		req.Decision = nil
-		signed := *c.req.ReconfigurationDecision
-		signed.Challenge, signed.RequestDigest, signed.IssuedAt, signed.ExpiresAt = d.Challenge, d.RequestDigest, d.IssuedAt, d.ExpiresAt
-		canonical, err := signed.Canonical()
-		if err != nil {
-			t.Fatal(err)
-		}
-		signed.Signature = f.sign(t, canonical)
-		req.ReconfigurationDecision = &signed
-		return HandleArchiveKeySplit(f.deps, req)
+	return HandleArchiveKeySplit(c.f.deps, c.authorized(t))
+}
+
+// authorized returns the case's request carrying a fresh decision.
+func (c *splitCase) authorized(t *testing.T) proto.ArchiveKeySplitRequest {
+	t.Helper()
+	f := c.f
+	if c.kind != "reconfiguration" {
+		return f.authorize(t, f.request)
 	}
-	return HandleArchiveKeySplit(c.f.deps, c.f.authorize(t, c.f.request))
+	// A reconfiguration decision is bound to the staged key; sign a fresh
+	// one over the same facts.
+	req := f.request
+	req.Kind = "reconfiguration"
+	req = f.authorize(t, req)
+	d := req.Decision
+	req.Decision = nil
+	signed := *c.req.ReconfigurationDecision
+	signed.Challenge, signed.RequestDigest, signed.IssuedAt, signed.ExpiresAt = d.Challenge, d.RequestDigest, d.IssuedAt, d.ExpiresAt
+	canonical, err := signed.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed.Signature = f.sign(t, canonical)
+	req.ReconfigurationDecision = &signed
+	return req
 }
 
 // abandon closes the case's operation with a signed closure receipt.
@@ -711,5 +717,99 @@ func setUnlimited(t *testing.T, store keychain.SecretStore, account, value strin
 	t.Helper()
 	if err := store.Set(config.Service, account, value); err != nil {
 		t.Fatal(err)
+	}
+}
+
+const splitRaceRounds = 4
+
+// Two splits of one operation released together write one record and return
+// the same shares, for both kinds.
+func TestArchiveSplitConcurrentSplitsOfOneOperationShareOneRecord(t *testing.T) {
+	for _, kind := range splitKinds() {
+		for round := range splitRaceRounds {
+			t.Run(fmt.Sprintf("%s/%d", kind, round), func(t *testing.T) {
+				c := newSplitCase(t, kind, 3)
+				counter := &journalFaultStore{SecretStore: c.f.deps.Store}
+				c.f.deps.Store = counter
+				a, b := c.authorized(t), c.authorized(t)
+				var ra, rb proto.BaseResponse
+				raceActors(t,
+					func() { ra = HandleArchiveKeySplit(c.f.deps, a) },
+					func() { rb = HandleArchiveKeySplit(c.f.deps, b) },
+				)
+				if !ra.Success || !rb.Success || !reflect.DeepEqual(ra.Data, rb.Data) {
+					t.Fatalf("concurrent splits: %+v / %+v", ra.ErrorCode, rb.ErrorCode)
+				}
+				j, _, err := loadArchiveSplitJournal(c.f.store, c.slot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// One record: the manifest twice (writing, prepared) and each part once.
+				if counter.sets != j.PartCount+2 {
+					t.Fatalf("%d journal writes for a %d-part record", counter.sets, j.PartCount)
+				}
+			})
+		}
+	}
+}
+
+// A split retry released together with the closure or the finalization of
+// its operation ends in one serial outcome: the retry returns the original
+// shares or is refused, the closing action completes, and no part of the
+// record is left behind or mixed with a new one.
+func TestArchiveSplitRetryRacingClosingActions(t *testing.T) {
+	for _, kind := range splitKinds() {
+		for _, closing := range []string{"abandon", "finalize"} {
+			for round := range splitRaceRounds {
+				t.Run(fmt.Sprintf("%s/%s/%d", kind, closing, round), func(t *testing.T) {
+					c := newSplitCase(t, kind, 3)
+					first := c.split(t)
+					if !first.Success {
+						t.Fatal(first.ErrorCode)
+					}
+					shares := first.Data.(proto.ArchiveKeySplitResponseData).Shares
+					retryReq := c.authorized(t)
+					var retry, end proto.BaseResponse
+					raceActors(t,
+						func() { retry = HandleArchiveKeySplit(c.f.deps, retryReq) },
+						func() {
+							if closing == "abandon" {
+								end = c.abandon(t)
+							} else {
+								end = c.finalize(t, shares)
+							}
+						},
+					)
+					if !end.Success {
+						t.Fatalf("%s: %s %s", closing, end.ErrorCode, end.Error)
+					}
+					items := journalItems(t, c.f)
+					switch {
+					case retry.Success && reflect.DeepEqual(retry.Data, first.Data):
+						// The retry ran first; the closing action removed the record.
+						if len(items) != 0 {
+							t.Fatalf("items left: %v", items)
+						}
+					case retry.Success:
+						// Only an activation closure leaves the key, so a split after
+						// it may prepare anew; that record must be complete.
+						if kind != "activation" || closing != "abandon" {
+							t.Fatal("retry returned other shares")
+						}
+						j, found, err := loadArchiveSplitJournal(c.f.store, c.slot)
+						if err != nil || !found || j.State != "" {
+							t.Fatal("new preparation is not a complete record")
+						}
+						if got, err := readArchiveSplitResult(c.f.store, c.slot, j); err != nil || !reflect.DeepEqual(got, retry.Data) {
+							t.Fatal("new preparation does not hold the returned shares")
+						}
+					default:
+						if len(items) != 0 {
+							t.Fatalf("items left after a refused retry: %v", items)
+						}
+					}
+				})
+			}
+		}
 	}
 }
