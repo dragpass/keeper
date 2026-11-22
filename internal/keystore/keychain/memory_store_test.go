@@ -7,7 +7,11 @@
 
 package keychain
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/zalando/go-keyring"
+)
 
 // MemorySecretStore is an in-memory SecretStore for unit tests.
 // Similar to keyring.MockInit(), but isolated per instance rather than
@@ -40,7 +44,11 @@ func (s *MemorySecretStore) Get(service, account string) (string, error) {
 	return v, nil
 }
 
+// Set refuses a value over ItemValueLimit as go-keyring does on Windows.
 func (s *MemorySecretStore) Set(service, account, value string) error {
+	if len(value) > ItemValueLimit {
+		return keyring.ErrSetDataTooBig
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[s.key(service, account)] = value

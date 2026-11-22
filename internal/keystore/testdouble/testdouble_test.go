@@ -8,6 +8,10 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
+
+	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 func TestMemoryLogger_PrintlnCaptured(t *testing.T) {
@@ -154,5 +158,25 @@ func TestNoProductionPackageImportsTestDouble(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The in-memory store refuses a value over the smallest platform limit the
+// way go-keyring does on Windows, so a test using it fails on a record that
+// a release build could not store.
+func TestMemorySecretStore_RefusesValueOverPlatformLimit(t *testing.T) {
+	s := NewMemorySecretStore()
+	if err := s.Set("svc", "fits", strings.Repeat("a", keychain.ItemValueLimit)); err != nil {
+		t.Fatalf("value at the limit refused: %v", err)
+	}
+	if err := s.Set("svc", "fits", strings.Repeat("b", keychain.ItemValueLimit+1)); !errors.Is(err, keyring.ErrSetDataTooBig) {
+		t.Fatalf("oversized value: err = %v", err)
+	}
+	if v, _ := s.Get("svc", "fits"); v != strings.Repeat("a", keychain.ItemValueLimit) {
+		t.Fatal("refused write changed the stored value")
+	}
+	s.LiftItemValueLimit()
+	if err := s.Set("svc", "big", strings.Repeat("c", 3*keychain.ItemValueLimit)); err != nil {
+		t.Fatalf("Set after LiftItemValueLimit: %v", err)
 	}
 }

@@ -14,16 +14,20 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 )
 
 // MemorySecretStore is an in-memory keychain.SecretStore. Similar to
 // keyring.MockInit(), but isolated per instance rather than process-global, so
 // parallel tests are safe. Returns the last Set value for the same
-// (service, account) pair; keychain.ErrSecretNotFound when missing.
+// (service, account) pair; keychain.ErrSecretNotFound when missing. Like the
+// platform keyring it refuses a value over keychain.ItemValueLimit.
 type MemorySecretStore struct {
-	mu      sync.Mutex
-	entries map[string]string
+	mu        sync.Mutex
+	entries   map[string]string
+	unlimited bool
 }
 
 // NewMemorySecretStore returns an empty store.
@@ -45,11 +49,26 @@ func (s *MemorySecretStore) Get(service, account string) (string, error) {
 	return v, nil
 }
 
+// Set refuses a value over keychain.ItemValueLimit with
+// keyring.ErrSetDataTooBig and stores nothing, as go-keyring does on Windows,
+// so a test fails on a record a release build could not store.
 func (s *MemorySecretStore) Set(service, account, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(value) > keychain.ItemValueLimit && !s.unlimited {
+		return keyring.ErrSetDataTooBig
+	}
 	s.entries[s.key(service, account)] = value
 	return nil
+}
+
+// LiftItemValueLimit makes Set accept a value of any size, as the Linux
+// Secret Service backend (no limit in the library) does, for tests of records
+// only such a backend could hold.
+func (s *MemorySecretStore) LiftItemValueLimit() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unlimited = true
 }
 
 func (s *MemorySecretStore) Delete(service, account string) error {

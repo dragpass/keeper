@@ -711,11 +711,17 @@ func TestArchiveSplitLegacySingleItemRecord(t *testing.T) {
 	})
 }
 
-// setUnlimited writes a value past the platform limit, as only the Linux
-// Secret Service backend (no limit in the library) could have stored it.
+// setUnlimited writes a value past the platform limit and keeps accepting
+// such values, as only the Linux Secret Service backend (no limit in the
+// library) could have stored the record and written it back.
 func setUnlimited(t *testing.T, store keychain.SecretStore, account, value string) {
 	t.Helper()
-	if err := store.Set(config.Service, account, value); err != nil {
+	mem, ok := store.(*testdouble.MemorySecretStore)
+	if !ok {
+		t.Fatal("fixture store is not the in-memory store")
+	}
+	mem.LiftItemValueLimit()
+	if err := mem.Set(config.Service, account, value); err != nil {
 		t.Fatal(err)
 	}
 }
