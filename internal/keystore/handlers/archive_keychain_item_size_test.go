@@ -22,12 +22,18 @@ import (
 // The Linux Secret Service backend sets no limit in the library.
 const keychainItemLimit = 2560
 
-// preexistingOversizeItems names item kinds written by code outside the
-// lv90 rotation, supplement and finalize handlers that already exceed
-// keychainItemLimit in these fixtures. They are measured and logged, not
-// refused, so this guard covers the new item kinds without hiding the
-// earlier defect.
-var preexistingOversizeItems = []string{"archive_quorum_split_pending:"}
+// knownDefectSplitJournalPrefix exempts ONLY the split journal from the
+// size limit. KNOWN DEFECT on main, not fixed here: archive_key_split (since
+// #198/#200) stores every wrapped share in this one item, measured at about
+// 6400 bytes for 2 recipients, 9000 to 9600 for 3 and 15000 for 5. A real
+// keyring.Set of that size returns ErrSetDataTooBig on macOS and Windows, so
+// the split answers storage_failure there. Remove this exemption together
+// with the split journal fix. check fails if any other item kind uses it.
+const knownDefectSplitJournalPrefix = "archive_quorum_split_pending:"
+
+// knownDefectSplitJournalKinds are the only item kinds the exemption may
+// cover: the journal of an active slot split and of a reconfiguration split.
+var knownDefectSplitJournalKinds = regexp.MustCompile(`^archive_quorum_split_pending:org_archive_private_key(_reconfiguration)?:<uuid>$`)
 
 var keychainItemUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
@@ -36,9 +42,10 @@ var keychainItemUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 // value written per item kind (the account with UUIDs replaced).
 type sizeLimitedStore struct {
 	keychain.SecretStore
-	mu      sync.Mutex
-	largest map[string]int
-	refused []string
+	mu       sync.Mutex
+	largest  map[string]int
+	refused  []string
+	exempted []string
 }
 
 func newSizeLimitedStore(inner keychain.SecretStore) *sizeLimitedStore {
@@ -51,14 +58,13 @@ func (s *sizeLimitedStore) Set(service, account, value string) error {
 	if len(value) > s.largest[kind] {
 		s.largest[kind] = len(value)
 	}
-	exempt := false
-	for _, prefix := range preexistingOversizeItems {
-		exempt = exempt || strings.HasPrefix(account, prefix)
-	}
-	if len(value) > keychainItemLimit && !exempt {
-		s.refused = append(s.refused, kind)
-		s.mu.Unlock()
-		return keyring.ErrSetDataTooBig
+	if len(value) > keychainItemLimit {
+		if !strings.HasPrefix(account, knownDefectSplitJournalPrefix) {
+			s.refused = append(s.refused, kind)
+			s.mu.Unlock()
+			return keyring.ErrSetDataTooBig
+		}
+		s.exempted = append(s.exempted, kind)
 	}
 	s.mu.Unlock()
 	return s.SecretStore.Set(service, account, value)
@@ -79,6 +85,11 @@ func (s *sizeLimitedStore) check(t *testing.T) {
 	}
 	for _, kind := range s.refused {
 		t.Errorf("keychain item %s exceeds the %d byte platform limit", kind, keychainItemLimit)
+	}
+	for _, kind := range s.exempted {
+		if !knownDefectSplitJournalKinds.MatchString(kind) {
+			t.Errorf("keychain item %s used the split journal size exemption", kind)
+		}
 	}
 }
 
