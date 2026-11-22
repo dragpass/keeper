@@ -292,10 +292,10 @@ dependency).
 |Action|Request fields|Response fields|Description|
 |---|---|---|---|
 |`archive_split_prepare`|`request` (the exact `archive_key_split` request without `decision`), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|App only. Records a process-local, one-use challenge for ten seconds bound to the current account binding generation, device, login token, organization, operation and split request digest. `request.account_id` must equal the bound account. Reads no private key. Any refusal is `archive_split_authority_required`.|
-|`archive_key_split`|`operation_id`, `account_id`, `org_id`, `threshold_n`, `recipient_public_keys[]`, `recipient_account_ids[]` (same order, distinct), `config_digest`, `decision`|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint, proof_public_key }] }`|App only. Requires the prepared challenge and a server-signed `archive_split` decision for this exact request. The decision, challenge, live binding, device, and the org's current archive public key (PEM and SPKI fingerprints) are checked before any archive private-key or journal access. The key must be in the org-scoped slot (`org_archive_*:<org_id>`); an org still on the device-wide fallback slot is refused, because that key may serve other orgs on the device and finalization would delete it for all of them. The org rotates to its own key first; every refusal is `archive_split_authority_required` with nothing read, written or returned. On success Keeper splits the key, wraps each share to its recipient, derives each share's proof public key, and writes the journal `archive_quorum_split_pending:<private slot>` with the operation, request digest, key fingerprint, decision binding (org, requester, config digest, SPKI fingerprint, split request digest) and result. The original private key is kept. A retry of the same operation and request under a fresh decision returns the journaled result; a different request, binding or key returns `not_found`, as does a retry once finalization started. Output is withheld if the decision expires during the call.|
-|`archive_split_status`|`org_id`, optional `kind`|`{ state, operation_id? }`|App only. `state` is `none`, `prepared`, `deleting` or `cleanup_pending` for the org's active archive slot. Reads public slots and the journal only. With `kind=reconfiguration`, only the locally bound owner on the originating device can read the operation ID and PEM fingerprint plus the current `login_generation` of an owned stage (`key_staged` or `cleanup_pending`). A lookup that finds neither a journal nor a public key returns `none`.|
-|`archive_split_finalize`|`org_id`, `receipt` (finalization receipt)|`{ state: "finalized", operation_id }`|App only. Acts only on the org-scoped slot; a device-wide fallback slot is refused with `not_found` and nothing is deleted. Deletes the original archive private key only when the signed receipt names the journaled operation, organization, config digest, archive key SPKI fingerprint and shares digest, and the org's current public key is still the journaled one. Otherwise `not_found` and nothing changes, so a receipt for an older operation or a key rotated since the split never deletes the newer key. The journal is marked `deleting`, the private slot is deleted, then the journal. A failed deletion keeps the journal and returns `archive_split_cleanup_pending`; a retry with the same receipt repeats the deletion. The split journal mutex is held from the journal read through deletion, so concurrent calls delete once. The public slot is kept. After completion there is no journal and a repeated call is `not_found`; `archive_split_status` then reports `none`. For a reconfiguration, the v2 finalization receipt binds kind, operation, organization, source and target SPKI fingerprints, source configuration, new configuration, committed shares, committed grants, finalization time and signer version. Keeper matches the staged split journal and its local active public key, refuses an active private key, promotes only the staged public key and removes the temporary keypair and journals. A durable finalization record lets the same receipt resume incomplete publication or cleanup. A completed replay leaves later operations untouched. When this device holds no active public key for the org (the legacy configuration was activated on another device), the staged public key is published without a local source comparison; the source is then bound only by the signed split decision recorded in the split journal and the signed receipt. Only the org-scoped active private slot is checked for a remaining private key.|
-|`archive_split_abandon`|`org_id` and either `receipt` or the confirmed unregistered closure described below|`{ state: "none", operation_id }`|App only. Acts only on the org-scoped slot (`not_found` for a device-wide fallback slot, nothing deleted). For activation, drops a `prepared` journal when the signed closure receipt (`cancelled`, `expired` or `invalidated`) names its operation, organization and archive key SPKI fingerprint. The archive private key is kept. A journal whose deletion started is never abandoned (`not_found`). For reconfiguration the v2 closure signature binds the operation, organization, status, target SPKI and source configuration digest. Keeper compares the staged public key and stage journal, and the signed split binding when a split journal exists. It removes only this target and its journals. A partial deletion returns `archive_split_cleanup_pending`; the same closure resumes cleanup, and staging is refused until cleanup finishes. A per-operation record of the public closure facts persists after cleanup so a late stage cannot recreate the closed operation. Another operation can stage normally.|
+|`archive_key_split`|`operation_id`, `account_id`, `org_id`, `threshold_n`, `recipient_public_keys[]`, `recipient_account_ids[]` (same order, distinct), `config_digest`, `decision`|`{ key_fingerprint, shares: [{ share_index, wrapped_key, ciphertext, recipient_fingerprint, proof_public_key }] }`|App only. Requires the prepared challenge and a server-signed `archive_split` decision for this exact request. The decision, challenge, live binding, device, and the org's current archive public key (PEM and SPKI fingerprints) are checked before any archive private-key or journal access. The key must be in the org-scoped slot (`org_archive_*:<org_id>`); an org still on the device-wide fallback slot is refused, because that key may serve other orgs on the device and finalization would delete it for all of them. The org rotates to its own key first; every refusal is `archive_split_authority_required` with nothing read, written or returned. On success Keeper splits the key, wraps each share to its recipient, derives each share's proof public key, and records the split journal described under "Split journal storage": a manifest with the operation, request digest, key fingerprint, decision binding (org, requester, config digest, SPKI fingerprint, split request digest) and shares digest, and the result in size-bounded parts. The original private key is kept. A retry of the same operation and request under a fresh decision returns the journaled result; a different request, binding or key returns `not_found`, as does a retry once finalization started, a record whose parts do not match its manifest, and a record in the single-item form of unreleased development builds. A failed journal write returns `storage_failure`. Output is withheld if the decision expires during the call.|
+|`archive_split_status`|`org_id`, optional `kind`|`{ state, operation_id? }`|App only. `state` is `none`, `prepared`, `deleting` or `cleanup_pending` for the org's active archive slot; an interrupted split write (a manifest in state `writing`) is `none`. Reads public slots and the journal manifest only, under the keychain process lock. With `kind=reconfiguration`, only the locally bound owner on the originating device can read the operation ID and PEM fingerprint plus the current `login_generation` of an owned stage (`key_staged` or `cleanup_pending`). A lookup that finds neither a journal nor a public key returns `none`.|
+|`archive_split_finalize`|`org_id`, `receipt` (finalization receipt)|`{ state: "finalized", operation_id }`|App only. Acts only on the org-scoped slot; a device-wide fallback slot is refused with `not_found` and nothing is deleted. Deletes the original archive private key only when the signed receipt names the journaled operation, organization, config digest, archive key SPKI fingerprint and shares digest, and the org's current public key is still the journaled one. Otherwise `not_found` and nothing changes, so a receipt for an older operation or a key rotated since the split never deletes the newer key. The journal manifest is marked `deleting`, the private slot is deleted, then the journal parts and manifest. A failed deletion keeps what was not deleted, marks the manifest `cleanup_pending` and returns `archive_split_cleanup_pending`; a retry with the same receipt repeats the deletion. The split journal mutex and the keychain process lock are held from the journal read through deletion, so concurrent calls delete once. The public slot is kept. After completion there is no journal and a repeated call is `not_found`; `archive_split_status` then reports `none`. For a reconfiguration, the v2 finalization receipt binds kind, operation, organization, source and target SPKI fingerprints, source configuration, new configuration, committed shares, committed grants, finalization time and signer version. Keeper matches the staged split journal and its local active public key, refuses an active private key, promotes only the staged public key and removes the temporary keypair and journals. A durable finalization record lets the same receipt resume incomplete publication or cleanup. A completed replay leaves later operations untouched. When this device holds no active public key for the org (the legacy configuration was activated on another device), the staged public key is published without a local source comparison; the source is then bound only by the signed split decision recorded in the split journal and the signed receipt. Only the org-scoped active private slot is checked for a remaining private key.|
+|`archive_split_abandon`|`org_id` and either `receipt` or the confirmed unregistered closure described below|`{ state: "none", operation_id }`|App only. Acts only on the org-scoped slot (`not_found` for a device-wide fallback slot, nothing deleted). For activation, drops a `prepared` journal, or one whose split write was interrupted, when the signed closure receipt (`cancelled`, `expired` or `invalidated`) names its operation, organization and archive key SPKI fingerprint. The archive private key is kept. A journal deletion that does not complete returns `storage_failure`; the same receipt resumes it. A journal whose deletion started is never abandoned (`not_found`). For reconfiguration the v2 closure signature binds the operation, organization, status, target SPKI and source configuration digest. Keeper compares the staged public key and stage journal, and the signed split binding when a prepared split journal exists. It removes only this target and its journals. A partial deletion returns `archive_split_cleanup_pending`; the same closure resumes cleanup, and staging is refused until cleanup finishes. A per-operation record of the public closure facts persists after cleanup so a late stage cannot recreate the closed operation. Another operation can stage normally.|
 |`archive_share_proof_prepare`|`request` (the exact `archive_share_open_proof` request without `decision`), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|App only. Records a one-use ten-second challenge bound to binding generation, device, login token, organization, operation, share index and proof request digest, in a store separate from split and share-rewrap challenges. Reads no private key.|
 |`archive_share_open_proof`|`account_id`, `org_id`, `operation_id`, `config_digest`, `share_index`, `wrapped_key`, `ciphertext`, `proof_public_key`, `decision`|`{ signature }`|App only. Verifies the prepared challenge and the signed share-open proof decision, the live binding and device before reading the account archive private key; any mismatch is `not_found` with no key read. Then opens the share, requires its embedded index to equal `share_index`, re-derives the share proof key, and refuses with `crypto_failure` when it differs from `proof_public_key`. Signs the proof statement with the derived key and returns only the Base64 Ed25519 signature. The share, seed and private key are zeroized and never leave Keeper. Output is withheld if the decision expires during the call.|
 |`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
@@ -381,6 +381,102 @@ and each keychain write passes the record as a Go string. These copies stay
 in process memory until garbage collection. The session key proof and the
 rotation read the session key the same way as `archive_quorum_combine_and_rewrap`.
 
+
+### Split journal storage
+
+`archive_key_split` keeps its result so that a retry of the same operation
+returns the same shares. A result carries every wrapped share, about 2.9 KB
+per recipient (91 KB for 32 recipients, the server's participant limit, and
+730 KB for 255, the most a split request accepts), so it cannot be one
+keychain item: the vendored go-keyring refuses a value over 2560 bytes on
+Windows and a raw value over 3057 bytes on macOS. The journal of a slot is a
+manifest item and the JSON encoding of the result cut into parts:
+
+- `archive_quorum_split_pending:<private slot>` holds the manifest
+  (`"v": 2`): operation ID, split request digest, key PEM fingerprint,
+  decision binding, state, share count, shares digest (the value a
+  finalization receipt carries), the SHA-256 hex of the whole result
+  encoding and the part count. It holds no share and measures about 830
+  bytes (activation) or 1140 bytes (reconfiguration) at any recipient count.
+- `archive_quorum_split_pending:<private slot>:part:<i>`, for `i` from 0 to
+  the part count minus one, holds
+  `dragpass.archive.split.part|1|<operation ID>|<result digest>|<i>|<count>|<data>`,
+  where `data` is at most 2048 bytes of the result encoding. A part measures
+  at most about 2190 bytes. 32 recipients need 45 parts, 255 need 357.
+
+The result is ciphertext to its recipients plus public proof keys and
+fingerprints; neither item holds a private key, share plaintext or seed.
+Only a split retry reads the parts. Status, finalization, closure, the
+rotation actions and the reconfiguration readers read the manifest.
+
+The manifest state is `writing` while parts are written, empty (prepared)
+once all are written, and `deleting` or `cleanup_pending` once finalization
+started. Every read, write and delete below runs under the archive slot
+mutex and the keychain process lock, held from the first read to the last
+write or delete of the call.
+
+Writing. A split writes the manifest in state `writing`, then the parts in
+index order, then the manifest as prepared, and returns the result only
+after that last write. A failed write answers `storage_failure` and leaves a
+`writing` record or nothing. Because a `writing` record was never returned:
+the next split of the slot, for any operation, deletes it before preparing
+(`storage_failure` when that delete does not complete); `archive_split_status`
+reports `none`; an activation closure for its operation removes it; a
+reconfiguration closure or confirmed unregistered closure removes it with
+the staged target and does not treat it as evidence of registration;
+finalization and the rotation actions refuse it.
+
+Retry. A prepared manifest must name the same operation, request digest and
+binding, the current key and the requested recipient count. Each part `i`
+must exist and its header must name the manifest's operation, result digest,
+`i` and part count, with 1 to 2048 data bytes. No part may exist at the
+index equal to the part count. The joined data must hash to the result
+digest and decode to a result whose key fingerprint, share count and shares
+digest equal the manifest's. Any mismatch, including a part of another
+operation and a missing, extra, reordered or edited part, answers
+`not_found` and writes and deletes nothing; a keychain read error answers
+`storage_failure`.
+
+Deleting. Keeper first looks for parts at and past the recorded count, then
+deletes the parts from the highest index down, then the manifest. A delete
+that does not complete stops the sequence; what was not deleted stays and
+nothing is reported as deleted that was not. While the manifest exists the
+remaining parts are a prefix, and no part outlives its manifest.
+Finalization records `deleting`, deletes the archive private key, then the
+journal; an incomplete delete records `cleanup_pending` and answers
+`archive_split_cleanup_pending`, and the same receipt resumes. An activation
+closure answers `storage_failure` for an incomplete delete; a split retry
+then refuses the record once any part is gone, and the same receipt resumes.
+A reconfiguration deletes the journal as part of the staged cleanup after
+recording the signed facts in the stage journal; an incomplete delete
+answers `archive_split_cleanup_pending`.
+
+Inconsistent records are never repaired, replaced or deleted by a split.
+A prepared record whose parts do not match its manifest is ended by the
+operation's signed closure or finalization, which read only the manifest. A
+manifest that does not parse is refused by every activation action (status
+answers `storage_failure`) and by the reconfiguration closure; no action
+removes it in this version.
+
+Development builds before this layout stored the whole result in the
+manifest item itself, without `"v"`. That item exceeds the macOS and Windows
+limits, so only a Linux Secret Service keyring or an E2E mock can hold it.
+Keeper reads it as a legacy record: a split never returns or replaces it
+(`not_found`); status reports its state; a matching signed closure removes
+it and keeps the key; a matching signed finalization deletes the key and the
+record, writing its state change back in the same single-item form. Nothing
+converts it.
+
+Not verified: the items were written, read back and deleted through the
+real go-keyring backend on macOS only (an opt-in test under a throwaway
+service name). The Windows Credential Manager and Linux Secret Service
+backends, and lock contention between separate Keeper processes, are not
+exercised. On macOS go-keyring runs `/usr/bin/security` once per item: the
+46 items of a 32-recipient record took about 2.0 s to write, 0.9 s to read
+and 1.1 s to delete on the test machine, and the 358 items of a
+255-recipient record about 17 s, 9 s and 11 s. The split holds the keychain
+process lock for that time, and another Keeper process waits for it at most
+five seconds.
 
 ### Device-wide recovery-session slot before lv90
 
@@ -2964,7 +3060,7 @@ message. Codes are stable enums; messages are not.
 |`unsupported`|Unknown `action` name, or protocol version mismatch.|Prompt user to upgrade Keeper.|
 |`internal_error`|Unexpected error not covered by the above.|Bug — capture for diagnostics.|
 |`archive_split_authority_required`|`archive_split_prepare` / `archive_key_split`: no valid prepared challenge and server-signed split decision for this exact request and current archive key, or the org's archive key is still the device-wide fallback slot. Nothing was read, written or returned.|Prepare again and request a fresh split decision; an org on the device-wide slot rotates its archive key first. Existing quorum recovery is unaffected.|
-|`archive_split_cleanup_pending`|`archive_split_finalize`: the receipt matched, but deleting the original archive private key or the split journal did not complete. The journal is kept.|Retry `archive_split_finalize` with the same receipt; never report the finalization as complete.|
+|`archive_split_cleanup_pending`|`archive_split_finalize`: the receipt matched, but deleting the original archive private key or the split journal did not complete. What was not deleted is kept, and the journal manifest is kept until every part is gone.|Retry `archive_split_finalize` with the same receipt; never report the finalization as complete.|
 |`archive_session_expired`|`app_login`, `archive_quorum_combine_and_rewrap`, `archive_session_set_expiry`: the recovery-session key slot's expiry has passed. The slot was deleted; no output.|End the server session and open a new one with `archive_session_begin`.|
 |`archive_session_expiry_unknown`|`app_login`, `archive_quorum_combine_and_rewrap`, `archive_session_set_expiry`: the organization's recovery-session key slot has no expiry or record Keeper trusts (`expiry_unknown` or `unowned`, see "Recovery-session key expiry"). It was not used and not deleted.|End the server session. The slot stays, and begin refuses while it is there, until the user confirms discarding it: `archive_session_status` gives its fingerprint (or, for a slot without one, its `stored_digest`), then `archive_session_discard` with that value.|
 |`archive_session_active`|`app_login`, `archive_session_begin`: the organization's slot holds a key begin does not replace: a live session begun with another or no `begin_id` (`data: { state: "live", fingerprint, expires_at, begun_at }`), or a slot whose expiry or record Keeper cannot trust (`data: { state: "expiry_unknown" or "unowned", fingerprint? or stored_digest? }`). Nothing was generated, replaced or deleted.|Resume the recorded session if this App opened it; otherwise wait for its expiry, or tell the user that discarding may invalidate a recovery attempt in progress and, only after confirmation, call `archive_session_discard` with the reported fingerprint (or `stored_digest`).|
@@ -3714,7 +3810,9 @@ configuration digest, terminal status and signing key version.
 Under the keychain process lock, Keeper matches the requesting account and
 device to the journal, the operation to the statement, and the confirmed
 fingerprint to the journal and staged public key. A local split journal
-contradicts the unregistered statement and prevents disposal. Signed-out,
+contradicts the unregistered statement and prevents disposal, except a
+journal whose split write was interrupted (state `writing`): its shares were
+never returned, and the cleanup removes it with the target. Signed-out,
 ownerless, mismatched and unreadable records are preserved. An interrupted
 deletion retains the confirmed public facts for an idempotent retry. A
 completed marker prevents a delayed stage from recreating the operation.
