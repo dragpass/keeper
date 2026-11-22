@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
+	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 	"testing"
@@ -114,5 +115,126 @@ func TestSupplementPreservesOriginalUntilSignedAcceptance(t *testing.T) {
 	}
 	if _, err := keychain.GetArchiveSessionPrivateKey(f.store, split.OrgID); !errors.Is(err, keychain.ErrSecretNotFound) {
 		t.Fatal("expired partial promotion survived sweep")
+	}
+}
+
+// supplementCase is a split reconfiguration with a live proven source
+// session, ready for supplement_prepare.
+type supplementCase struct {
+	f      *splitFixture
+	split  proto.ArchiveKeySplitRequest
+	shares []proto.WrappedShare
+	prior  proto.ArchiveSessionBeginResponseData
+	params proto.SupplementPrevious
+}
+
+func newSupplementCase(t *testing.T) *supplementCase {
+	t.Helper()
+	f := newSplitFixture(t)
+	f.deps.ArchiveRotationChallenges = NewArchiveShareChallengeStore()
+	split, _ := f.authorizeReconfiguration(t)
+	res := HandleArchiveKeySplit(f.deps, split)
+	if !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	prior := beginOrgSession(t, f.deps, split.OrgID)
+	prev, _ := crypto.RewrapKeyFingerprint(prior.SessionPublicKey)
+	if r := HandleRequestKeyGenerate(f.deps, proto.RequestKeyGenerateRequest{}); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	if r := HandleArchiveReconfigurationSessionKeyProof(f.deps, proto.ArchiveReconfigurationSessionKeyProof{OrgID: split.OrgID, OperationID: split.OperationID, ConfigDigest: split.ConfigDigest, SessionID: splitTestOther, SessionSPKI: prev}); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	return &supplementCase{f: f, split: split, shares: res.Data.(proto.ArchiveKeySplitResponseData).Shares, prior: prior,
+		params: proto.SupplementPrevious{OrgID: split.OrgID, OperationID: split.OperationID, ConfigDigest: split.ConfigDigest, PreviousSessionID: splitTestOther, PreviousSPKI: prev}}
+}
+
+func (c *supplementCase) prepare() proto.BaseResponse {
+	return HandleSupplementPrepare(c.f.deps, proto.SupplementPrepare{SupplementPrevious: c.params})
+}
+
+// receipt is a signed acceptance of cand for the first supplementary round.
+func (c *supplementCase) receipt(t *testing.T, cand proto.SupplementCandidate) proto.SupplementReceipt {
+	t.Helper()
+	r := proto.SupplementReceipt{SupplementPrevious: c.params, AccountID: c.f.v.AccountID, DeviceID: splitTestDevice, SessionID: splitTestToken, SPKI: cand.SPKI, Round: 1, ExpiresAt: c.f.deps.Now().Unix() + 600, Version: 1}
+	r.Signature = c.f.sign(t, r.Canonical())
+	return r
+}
+
+func (c *supplementCase) promote(r proto.SupplementReceipt) proto.BaseResponse {
+	return HandleSupplementPromote(c.f.deps, proto.SupplementPromote{Receipt: r})
+}
+
+func (c *supplementCase) candidatePrivate() (string, error) {
+	return keychain.GetArchiveSessionPrivateKey(c.f.store, supplementSlot(c.split.OrgID))
+}
+
+func (c *supplementCase) candidateHeader() (string, error) {
+	return keychain.GetArchiveSessionPublicKey(c.f.store, supplementSlot(c.split.OrgID))
+}
+
+// An interrupted candidate write leaves no private key, only the header; a
+// retry stores a complete candidate and the sweep removes a lone header.
+func TestSupplementInterruptedWriteLeavesNoPrivateKey(t *testing.T) {
+	c := newSupplementCase(t)
+	inner := c.f.deps.Store
+	c.f.deps.Store = failSupplementWrite{inner, config.OrgArchiveSessionPrivateKeyPrefix + supplementSlot(c.split.OrgID)}
+	if r := c.prepare(); r.Success || r.ErrorCode != string(errs.ErrCodeStorageFailure) {
+		t.Fatal("interrupted candidate write:", r.ErrorCode)
+	}
+	c.f.deps.Store = inner
+	if _, err := c.candidatePrivate(); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("private candidate written after failure")
+	}
+	if _, err := c.candidateHeader(); err != nil {
+		t.Fatal("header was not written first")
+	}
+	SweepExpiredArchiveSession(c.f.deps)
+	if _, err := c.candidateHeader(); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("lone header survived the sweep")
+	}
+	first := c.prepare()
+	if !first.Success {
+		t.Fatal(first.ErrorCode)
+	}
+	if again := c.prepare(); !again.Success || again.Data != first.Data {
+		t.Fatal("retry did not return the stored candidate")
+	}
+}
+
+// A failed candidate delete is reported and leaves the complete candidate,
+// which the same receipt then removes.
+func TestSupplementCandidateDeleteIsAllOrReported(t *testing.T) {
+	c := newSupplementCase(t)
+	res := c.prepare()
+	if !res.Success {
+		t.Fatal(res.ErrorCode)
+	}
+	cand := res.Data.(proto.SupplementCandidate)
+	receipt := c.receipt(t, cand)
+	c.f.probe.deleteHook = func(account string) error {
+		if account == config.OrgArchiveSessionPrivateKeyPrefix+supplementSlot(c.split.OrgID) {
+			return errors.New("simulated delete failure")
+		}
+		return nil
+	}
+	if r := c.promote(receipt); r.Success || r.ErrorCode != string(errs.ErrCodeStorageFailure) {
+		t.Fatal("failed candidate delete:", r.ErrorCode)
+	}
+	if _, err := c.candidatePrivate(); err != nil {
+		t.Fatal("candidate private half lost")
+	}
+	if _, err := c.candidateHeader(); err != nil {
+		t.Fatal("header deleted before the private half")
+	}
+	c.f.probe.deleteHook = nil
+	if r := c.promote(receipt); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	if _, err := c.candidatePrivate(); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("candidate survived the completed promotion")
+	}
+	if _, err := c.candidateHeader(); !errors.Is(err, keychain.ErrSecretNotFound) {
+		t.Fatal("header survived the completed promotion")
 	}
 }
