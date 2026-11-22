@@ -4,14 +4,12 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"github.com/awnumar/memguard"
 	"math/big"
 	"time"
 
-	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
@@ -43,13 +41,12 @@ func readRotationTarget(d Deps, r proto.ArchiveRotationRequest) (rotationTarget,
 		return t, errRotationUnavailable
 	}
 	slot := keychain.OrgArchiveReconfigurationSlot(r.OrgID)
-	raw, err := d.Store.Get(config.Service, archiveSplitJournalAccount(slot))
+	split, found, err := loadArchiveSplitJournal(d.Store, slot)
+	if errors.Is(err, errArchiveSplitJournalInconsistent) || (err == nil && !found) {
+		return t, errRotationUnavailable
+	}
 	if err != nil {
 		return t, err
-	}
-	var split archiveSplitJournal
-	if json.Unmarshal([]byte(raw), &split) != nil {
-		return t, errRotationUnavailable
 	}
 	b := split.Binding
 	if split.State != "" || split.OperationID != r.OperationID || b.OrgID != r.OrgID || b.Kind != stage.Kind || b.AccountID != owner.account || b.ConfigDigest != r.ConfigDigest || split.KeyFingerprint != stage.TargetKeyFingerprint || b.TargetKeyFingerprint != stage.TargetKeyFingerprint {

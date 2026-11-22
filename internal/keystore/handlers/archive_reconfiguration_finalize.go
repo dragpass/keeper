@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"github.com/dragpass/keeper/config"
 	"github.com/dragpass/keeper/internal/keystore/crypto"
@@ -76,13 +75,12 @@ func finalizeReconfiguration(d Deps, r proto.ArchiveSplitFinalizationReceipt) pr
 		if pub == "" {
 			return denyArchiveSplitReceipt()
 		}
-		raw, err := d.Store.Get(config.Service, archiveSplitJournalAccount(target))
-		var split archiveSplitJournal
-		if err != nil || json.Unmarshal([]byte(raw), &split) != nil {
+		split, found, err := loadArchiveSplitJournal(d.Store, target)
+		if err != nil || !found {
 			return denyArchiveSplitReceipt()
 		}
 		b := split.Binding
-		if split.State != "" || split.OperationID != r.OperationID || b.Kind != r.Kind || b.OrgID != r.OrgID || b.AccountID != owner.account || b.ConfigDigest != r.ConfigDigest || b.SourceConfigDigest != r.SourceConfigDigest || b.ActiveKeySPKIFingerprint != r.ArchiveKeySPKIFingerprint || b.ArchiveKeySPKIFingerprint != r.TargetKeySPKIFingerprint || split.KeyFingerprint != stage.TargetKeyFingerprint || proto.ArchiveSplitSharesDigest(split.Result.Shares) != r.SharesDigest {
+		if split.State != "" || split.OperationID != r.OperationID || b.Kind != r.Kind || b.OrgID != r.OrgID || b.AccountID != owner.account || b.ConfigDigest != r.ConfigDigest || b.SourceConfigDigest != r.SourceConfigDigest || b.ActiveKeySPKIFingerprint != r.ArchiveKeySPKIFingerprint || b.ArchiveKeySPKIFingerprint != r.TargetKeySPKIFingerprint || split.KeyFingerprint != stage.TargetKeyFingerprint || split.SharesDigest != r.SharesDigest {
 			return denyArchiveSplitReceipt()
 		}
 		stage.Finalization = facts

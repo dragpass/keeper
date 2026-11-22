@@ -1,9 +1,10 @@
 package handlers
 
 import (
+	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 
@@ -22,30 +23,20 @@ import (
 // The Linux Secret Service backend sets no limit in the library.
 const keychainItemLimit = 2560
 
-// knownDefectSplitJournalPrefix exempts ONLY the split journal from the
-// size limit. KNOWN DEFECT on main, not fixed here: archive_key_split (since
-// #198/#200) stores every wrapped share in this one item, measured at about
-// 6400 bytes for 2 recipients, 9000 to 9600 for 3 and 15000 for 5. A real
-// keyring.Set of that size returns ErrSetDataTooBig on macOS and Windows, so
-// the split answers storage_failure there. Remove this exemption together
-// with the split journal fix. check fails if any other item kind uses it.
-const knownDefectSplitJournalPrefix = "archive_quorum_split_pending:"
-
-// knownDefectSplitJournalKinds are the only item kinds the exemption may
-// cover: the journal of an active slot split and of a reconfiguration split.
-var knownDefectSplitJournalKinds = regexp.MustCompile(`^archive_quorum_split_pending:org_archive_private_key(_reconfiguration)?:<uuid>$`)
-
 var keychainItemUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// keychainItemPartIndex folds the index of a split journal part into its kind.
+var keychainItemPartIndex = regexp.MustCompile(`:part:[0-9]+$`)
 
 // sizeLimitedStore refuses a value over keychainItemLimit the way the real
 // keyring does (ErrSetDataTooBig, nothing stored) and records the largest
-// value written per item kind (the account with UUIDs replaced).
+// value written per item kind (the account with UUIDs and part indexes
+// replaced).
 type sizeLimitedStore struct {
 	keychain.SecretStore
-	mu       sync.Mutex
-	largest  map[string]int
-	refused  []string
-	exempted []string
+	mu      sync.Mutex
+	largest map[string]int
+	refused []string
 }
 
 func newSizeLimitedStore(inner keychain.SecretStore) *sizeLimitedStore {
@@ -53,18 +44,15 @@ func newSizeLimitedStore(inner keychain.SecretStore) *sizeLimitedStore {
 }
 
 func (s *sizeLimitedStore) Set(service, account, value string) error {
-	kind := keychainItemUUID.ReplaceAllString(account, "<uuid>")
+	kind := keychainItemPartIndex.ReplaceAllString(keychainItemUUID.ReplaceAllString(account, "<uuid>"), ":part:<n>")
 	s.mu.Lock()
 	if len(value) > s.largest[kind] {
 		s.largest[kind] = len(value)
 	}
 	if len(value) > keychainItemLimit {
-		if !strings.HasPrefix(account, knownDefectSplitJournalPrefix) {
-			s.refused = append(s.refused, kind)
-			s.mu.Unlock()
-			return keyring.ErrSetDataTooBig
-		}
-		s.exempted = append(s.exempted, kind)
+		s.refused = append(s.refused, kind)
+		s.mu.Unlock()
+		return keyring.ErrSetDataTooBig
 	}
 	s.mu.Unlock()
 	return s.SecretStore.Set(service, account, value)
@@ -86,10 +74,107 @@ func (s *sizeLimitedStore) check(t *testing.T) {
 	for _, kind := range s.refused {
 		t.Errorf("keychain item %s exceeds the %d byte platform limit", kind, keychainItemLimit)
 	}
-	for _, kind := range s.exempted {
-		if !knownDefectSplitJournalKinds.MatchString(kind) {
-			t.Errorf("keychain item %s used the split journal size exemption", kind)
+}
+
+// splitSizeRecipientCounts are the recipient counts measured: small
+// quorums, the server's participant cap (ariadne splitMaxParticipants = 32)
+// and the largest count Keeper accepts (proto.ArchiveKeySplitRequest.Validate,
+// 255).
+var splitSizeRecipientCounts = []int{2, 3, 5, 32, 255}
+
+var (
+	splitSizeKeysOnce sync.Once
+	splitSizeKeys     []string
+	splitSizeAccounts []string
+)
+
+// splitSizeRecipients returns n distinct RSA-2048 recipient public keys and
+// account IDs, generated once for the largest count.
+func splitSizeRecipients(t *testing.T, n int) ([]string, []string) {
+	t.Helper()
+	splitSizeKeysOnce.Do(func() {
+		max := splitSizeRecipientCounts[len(splitSizeRecipientCounts)-1]
+		splitSizeKeys = make([]string, max)
+		splitSizeAccounts = make([]string, max)
+		var wg sync.WaitGroup
+		errs := make([]error, max)
+		for i := range max {
+			splitSizeAccounts[i] = fmt.Sprintf("b%07x-0000-4000-8000-%012x", i, i)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				kp, err := crypto.GenerateRSAKeyPair()
+				if err == nil {
+					splitSizeKeys[i] = kp.PublicKey
+				}
+				errs[i] = err
+			}()
 		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				splitSizeKeys = nil
+			}
+		}
+	})
+	if len(splitSizeKeys) < n {
+		t.Fatal("recipient key generation failed")
+	}
+	return append([]string(nil), splitSizeKeys[:n]...), append([]string(nil), splitSizeAccounts[:n]...)
+}
+
+// Every item an activation split and its finalization write, and every item a
+// reconfiguration split and its closure write, fits the smallest platform
+// limit at every measured recipient count, and a retry of the split returns
+// the same shares.
+func TestArchiveSplitKeychainItemsFitPlatformLimitAtEveryRecipientCount(t *testing.T) {
+	for _, n := range splitSizeRecipientCounts {
+		t.Run(fmt.Sprintf("activation/%d", n), func(t *testing.T) {
+			f := newSplitFixture(t)
+			f.request.RecipientPublicKeys, f.request.RecipientAccountIDs = splitSizeRecipients(t, n)
+			limited := newSizeLimitedStore(f.deps.Store)
+			f.deps.Store = limited
+			first := HandleArchiveKeySplit(f.deps, f.authorize(t, f.request))
+			if !first.Success {
+				limited.check(t)
+				t.Fatalf("split with %d recipients: %s %s", n, first.ErrorCode, first.Error)
+			}
+			again := HandleArchiveKeySplit(f.deps, f.authorize(t, f.request))
+			if !again.Success || !reflect.DeepEqual(first.Data, again.Data) {
+				t.Fatal("split retry did not return the journaled shares")
+			}
+			shares := first.Data.(proto.ArchiveKeySplitResponseData).Shares
+			ff := &finalizeFixture{splitFixture: f, split: first.Data.(proto.ArchiveKeySplitResponseData)}
+			ff.spki, _ = crypto.RewrapKeyFingerprint(f.archive)
+			if len(shares) != n {
+				t.Fatal("share count")
+			}
+			if r := HandleArchiveSplitFinalize(f.deps, ff.receipt(t, nil)); !r.Success {
+				limited.check(t)
+				t.Fatalf("finalize: %s %s", r.ErrorCode, r.Error)
+			}
+			limited.check(t)
+		})
+		t.Run(fmt.Sprintf("reconfiguration/%d", n), func(t *testing.T) {
+			f := newSplitFixture(t)
+			f.request.RecipientPublicKeys, f.request.RecipientAccountIDs = splitSizeRecipients(t, n)
+			limited := newSizeLimitedStore(f.deps.Store)
+			f.deps.Store = limited
+			req, _ := f.authorizeReconfiguration(t)
+			first := HandleArchiveKeySplit(f.deps, req)
+			if !first.Success {
+				limited.check(t)
+				t.Fatalf("reconfiguration split with %d recipients: %s %s", n, first.ErrorCode, first.Error)
+			}
+			d := req.ReconfigurationDecision
+			closure := proto.ArchiveSplitClosureReceipt{Kind: req.Kind, OperationID: req.OperationID, OrgID: req.OrgID, Status: proto.ArchiveSplitClosedCancelled, SourceConfigDigest: d.SourceConfigDigest, TargetKeySPKIFingerprint: d.TargetKeySPKIFingerprint, ServerKeyVersion: 1}
+			closure.Signature = f.sign(t, proto.ArchiveSplitClosureReceiptCanonical(closure))
+			if r := HandleArchiveSplitAbandon(f.deps, proto.ArchiveSplitAbandonRequest{OrgID: req.OrgID, Receipt: &closure}); !r.Success {
+				limited.check(t)
+				t.Fatalf("closure: %s %s", r.ErrorCode, r.Error)
+			}
+			limited.check(t)
+		})
 	}
 }
 

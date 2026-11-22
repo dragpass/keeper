@@ -40,16 +40,6 @@ import (
 // again and never takes it while holding the keychain process lock.
 var archiveSplitPreparationMu sync.Mutex
 
-type archiveSplitJournal struct {
-	OperationID    string              `json:"operation_id"`
-	RequestDigest  string              `json:"request_digest"`
-	KeyFingerprint string              `json:"key_fingerprint"`
-	Binding        archiveSplitBinding `json:"binding"`
-	// State is empty (prepared) until finalization starts deleting.
-	State  string                            `json:"state,omitempty"`
-	Result proto.ArchiveKeySplitResponseData `json:"result"`
-}
-
 // archiveSplitBinding is the part of the verified split decision the journal
 // keeps, so a retry under a fresh decision must name the same requester,
 // configuration and archive key, and finalization can be checked against it.
@@ -147,24 +137,29 @@ func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveS
 		return errs.CodeResponse(errs.ErrCodeValidation, "invalid split request")
 	}
 	requestDigest := sha256.Sum256(requestBytes)
-	journalAccount := "archive_quorum_split_pending:" + slot.PrivateAccount
-	pending, err := d.Store.Get(config.Service, journalAccount)
-	if err == nil {
-		var journal archiveSplitJournal
-		if json.Unmarshal([]byte(pending), &journal) != nil ||
-			journal.OperationID != req.OperationID ||
+	journal, found, err := loadArchiveSplitJournal(d.Store, slot)
+	if errors.Is(err, errArchiveSplitJournalInconsistent) {
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation unavailable")
+	}
+	if err != nil {
+		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split preparation failed")
+	}
+	if found {
+		if journal.OperationID != req.OperationID ||
 			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||
-			journal.KeyFingerprint == "" ||
 			journal.Binding != binding || journal.State != "" ||
-			journal.KeyFingerprint != journal.Result.KeyFingerprint ||
 			fingerprintBase64Public(activePublic) != journal.KeyFingerprint ||
-			len(journal.Result.Shares) != len(req.RecipientPublicKeys) {
+			journal.ShareCount != len(req.RecipientPublicKeys) {
 			return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation unavailable")
 		}
-		return proto.BaseResponse{Success: true, Data: journal.Result}
-	}
-	if !errors.Is(err, keychain.ErrSecretNotFound) {
-		return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split preparation failed")
+		result, err := readArchiveSplitResult(d.Store, slot, journal)
+		if errors.Is(err, errArchiveSplitJournalInconsistent) {
+			return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation unavailable")
+		}
+		if err != nil {
+			return errs.CodeResponse(errs.ErrCodeStorageFailure, "read archive split preparation failed")
+		}
+		return proto.BaseResponse{Success: true, Data: result}
 	}
 	privKeyBuf, err := getArchiveSlotPrivateKeySecure(d.Store, slot)
 	if err != nil {
@@ -217,11 +212,10 @@ func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveS
 	}
 
 	result := proto.ArchiveKeySplitResponseData{KeyFingerprint: keyFingerprint, Shares: out}
-	journalBytes, err := json.Marshal(archiveSplitJournal{
+	if recordArchiveSplitPreparation(d.Store, slot, archiveSplitJournal{
 		OperationID: req.OperationID, RequestDigest: hex.EncodeToString(requestDigest[:]),
-		KeyFingerprint: keyFingerprint, Binding: binding, Result: result,
-	})
-	if err != nil || d.Store.Set(config.Service, journalAccount, string(journalBytes)) != nil {
+		KeyFingerprint: keyFingerprint, Binding: binding,
+	}, result) != nil {
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "save archive split preparation failed")
 	}
 	d.Logger.Printf("archive key split prepared: %d shares (threshold %d), private key retained",
