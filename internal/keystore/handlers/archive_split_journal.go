@@ -52,8 +52,9 @@ const (
 	// archiveSplitPartBytes is the result bytes per part. With the part
 	// header (under 160 bytes) every part stays below keychain.ItemValueLimit.
 	archiveSplitPartBytes = 2048
-	// archiveSplitMaxParts bounds the part count read from a manifest. 255
-	// recipients (the most a split request accepts) need about 360 parts.
+	// archiveSplitMaxParts bounds the part count read from a manifest. A
+	// split accepts at most 32 recipients, about 45 parts with RSA-2048
+	// recipient and archive keys; longer keys need more.
 	archiveSplitMaxParts   = 512
 	archiveSplitPartDomain = "dragpass.archive.split.part|1"
 )

@@ -22,7 +22,7 @@ import (
 // realKeychainTestEnv opts in to TestArchiveSplitJournalItemsInTheRealKeychain.
 const realKeychainTestEnv = "KEEPER_REAL_KEYCHAIN_TEST"
 
-// The split journal items of the largest records, written, read back and
+// The split journal items of the largest record (32 recipients), written, read back and
 // deleted through the real go-keyring backend of this machine under a
 // throwaway service name. Opt-in, because CI runners may have no unlocked
 // keychain and other tests in this package replace the keyring with its mock
@@ -44,7 +44,7 @@ func TestArchiveSplitJournalItemsInTheRealKeychain(t *testing.T) {
 	if service == config.Service || strings.HasPrefix(config.Service, service) {
 		t.Fatal("throwaway service collides with the Keeper service")
 	}
-	for _, n := range []int{32, 255} {
+	for _, n := range []int{32} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			c := newSplitCase(t, "activation", n)
 			split := c.split(t)

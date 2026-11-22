@@ -76,11 +76,10 @@ func (s *sizeLimitedStore) check(t *testing.T) {
 	}
 }
 
-// splitSizeRecipientCounts are the recipient counts measured: small
-// quorums, the server's participant cap (ariadne splitMaxParticipants = 32)
-// and the largest count Keeper accepts (proto.ArchiveKeySplitRequest.Validate,
-// 255).
-var splitSizeRecipientCounts = []int{2, 3, 5, 32, 255}
+// splitSizeRecipientCounts are the recipient counts measured: small quorums
+// and the largest count a split accepts (proto.ArchiveSplitMaxRecipients,
+// the server's participant cap).
+var splitSizeRecipientCounts = []int{2, 3, 5, 32}
 
 var (
 	splitSizeKeysOnce sync.Once
