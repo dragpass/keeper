@@ -155,6 +155,11 @@ func splitArchiveSlot(d Deps, req proto.ArchiveKeySplitRequest, binding archiveS
 		}
 		found = false
 	}
+	if found && journal.legacy() {
+		// Written by an unreleased development build; closure or
+		// finalization of its operation removes it.
+		return errs.CodeResponse(errs.ErrCodeNotFound, "archive split preparation in an unsupported form")
+	}
 	if found {
 		if journal.OperationID != req.OperationID ||
 			journal.RequestDigest != hex.EncodeToString(requestDigest[:]) ||

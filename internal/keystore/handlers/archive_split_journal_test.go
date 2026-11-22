@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -593,5 +594,122 @@ func TestArchiveSplitJournalAccessHoldsTheProcessLock(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// toLegacyRecord replaces the case's record with the single-item form that
+// unreleased development builds wrote (the whole result in one item, no
+// version field), with the given state.
+func (c *splitCase) toLegacyRecord(t *testing.T, state string) {
+	t.Helper()
+	j, found, err := loadArchiveSplitJournal(c.f.store, c.slot)
+	if err != nil || !found {
+		t.Fatal("no record to convert", err)
+	}
+	result, err := readArchiveSplitResult(c.f.store, c.slot, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := json.Marshal(map[string]any{
+		"operation_id": j.OperationID, "request_digest": j.RequestDigest, "key_fingerprint": j.KeyFingerprint,
+		"binding": j.Binding, "state": state, "result": result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range j.PartCount {
+		if err := c.f.store.Delete(config.Service, archiveSplitPartAccount(c.slot, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setUnlimited(t, c.f.store, archiveSplitJournalAccount(c.slot), string(legacy))
+}
+
+// The single-item record of unreleased development builds is never returned
+// or replaced by a split, and the existing signed actions still end it:
+// status reports it, closure removes it and keeps the key, finalization
+// removes it with the key, for both kinds.
+func TestArchiveSplitLegacySingleItemRecord(t *testing.T) {
+	for _, kind := range splitKinds() {
+		t.Run(kind+"/split refuses", func(t *testing.T) {
+			c := newSplitCase(t, kind, 2)
+			if r := c.split(t); !r.Success {
+				t.Fatal(r.ErrorCode)
+			}
+			c.toLegacyRecord(t, "")
+			mem := c.f.store.(*testdouble.MemorySecretStore)
+			before := mem.Snapshot()
+			c.f.resetProbe()
+			if r := c.split(t); r.Success || r.ErrorCode != string(errs.ErrCodeNotFound) {
+				t.Fatalf("split over a legacy record answered %+v", r)
+			}
+			if c.f.probe.sets != 0 || c.f.probe.deletes != 0 || !reflect.DeepEqual(before, mem.Snapshot()) {
+				t.Fatal("split changed a legacy record")
+			}
+			if kind == "activation" {
+				if s := c.status(t); s.State != proto.ArchiveSplitStatePrepared || s.OperationID != c.f.request.OperationID {
+					t.Fatalf("status of a legacy record = %+v", s)
+				}
+			}
+		})
+		t.Run(kind+"/closure removes it", func(t *testing.T) {
+			c := newSplitCase(t, kind, 2)
+			if r := c.split(t); !r.Success {
+				t.Fatal(r.ErrorCode)
+			}
+			c.toLegacyRecord(t, "")
+			if r := c.abandon(t); !r.Success {
+				t.Fatalf("closure of a legacy record: %s %s", r.ErrorCode, r.Error)
+			}
+			if left := journalItems(t, c.f); len(left) != 0 {
+				t.Fatalf("items left: %v", left)
+			}
+		})
+		t.Run(kind+"/finalization removes it", func(t *testing.T) {
+			c := newSplitCase(t, kind, 2)
+			split := c.split(t)
+			if !split.Success {
+				t.Fatal(split.ErrorCode)
+			}
+			c.toLegacyRecord(t, "")
+			shares := split.Data.(proto.ArchiveKeySplitResponseData).Shares
+			wrong := append([]proto.WrappedShare(nil), shares...)
+			wrong[0].ProofPublicKey = "AAAA"
+			if r := c.finalize(t, wrong); r.Success {
+				t.Fatal("finalization accepted another share set")
+			}
+			if r := c.finalize(t, shares); !r.Success {
+				t.Fatalf("finalization of a legacy record: %s %s", r.ErrorCode, r.Error)
+			}
+			if left := journalItems(t, c.f); len(left) != 0 {
+				t.Fatalf("items left: %v", left)
+			}
+		})
+	}
+	t.Run("activation/started deletion resumes", func(t *testing.T) {
+		c := newSplitCase(t, "activation", 2)
+		split := c.split(t)
+		if !split.Success {
+			t.Fatal(split.ErrorCode)
+		}
+		c.toLegacyRecord(t, archiveSplitJournalCleanupPending)
+		if r := c.abandon(t); r.Success {
+			t.Fatal("closure removed a legacy record whose deletion started")
+		}
+		if r := c.finalize(t, split.Data.(proto.ArchiveKeySplitResponseData).Shares); !r.Success {
+			t.Fatalf("finalization: %s %s", r.ErrorCode, r.Error)
+		}
+		if left := journalItems(t, c.f); len(left) != 0 {
+			t.Fatalf("items left: %v", left)
+		}
+	})
+}
+
+// setUnlimited writes a value past the platform limit, as only the Linux
+// Secret Service backend (no limit in the library) could have stored it.
+func setUnlimited(t *testing.T, store keychain.SecretStore, account, value string) {
+	t.Helper()
+	if err := store.Set(config.Service, account, value); err != nil {
+		t.Fatal(err)
 	}
 }

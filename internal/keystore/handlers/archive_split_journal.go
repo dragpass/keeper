@@ -22,6 +22,12 @@
 // Delete order: parts from the highest index down, then the manifest. While
 // the manifest exists the parts present are a prefix 0..k-1, and no part
 // outlives its manifest.
+//
+// Unreleased development builds stored the whole result in the manifest
+// item itself (no "v" field). Such a record is read as a legacy view: a
+// split never returns or replaces it, while status, finalization, closure
+// and the reconfiguration readers act on it as before, writing a state
+// change back in its own form, so it is never converted.
 
 package handlers
 
@@ -70,7 +76,23 @@ type archiveSplitJournal struct {
 	SharesDigest string `json:"shares_digest"`
 	ResultDigest string `json:"result_digest"`
 	PartCount    int    `json:"part_count"`
+
+	// legacyResult is set only for a record in the unreleased single-item
+	// form; ShareCount and SharesDigest are then derived from it.
+	legacyResult *proto.ArchiveKeySplitResponseData
 }
+
+// legacyArchiveSplitJournal is the unreleased single-item form.
+type legacyArchiveSplitJournal struct {
+	OperationID    string                            `json:"operation_id"`
+	RequestDigest  string                            `json:"request_digest"`
+	KeyFingerprint string                            `json:"key_fingerprint"`
+	Binding        archiveSplitBinding               `json:"binding"`
+	State          string                            `json:"state,omitempty"`
+	Result         proto.ArchiveKeySplitResponseData `json:"result"`
+}
+
+func (j archiveSplitJournal) legacy() bool { return j.legacyResult != nil }
 
 func archiveSplitJournalAccount(slot keychain.ArchiveKeySlot) string {
 	return "archive_quorum_split_pending:" + slot.PrivateAccount
@@ -80,9 +102,19 @@ func archiveSplitPartAccount(slot keychain.ArchiveKeySlot, index int) string {
 	return archiveSplitJournalAccount(slot) + ":part:" + strconv.Itoa(index)
 }
 
-// decodeArchiveSplitJournal parses a manifest; anything that is not a
-// well-formed manifest is errArchiveSplitJournalInconsistent.
+// decodeArchiveSplitJournal parses a manifest or a legacy single-item
+// record; anything else is errArchiveSplitJournalInconsistent.
 func decodeArchiveSplitJournal(raw string) (archiveSplitJournal, error) {
+	var probe struct {
+		Version int             `json:"v"`
+		Result  json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal([]byte(raw), &probe) != nil {
+		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
+	}
+	if probe.Version == 0 && len(probe.Result) > 0 {
+		return decodeLegacyArchiveSplitJournal(raw)
+	}
 	var j archiveSplitJournal
 	if json.Unmarshal([]byte(raw), &j) != nil || j.Version != archiveSplitManifestVersion {
 		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
@@ -97,6 +129,24 @@ func decodeArchiveSplitJournal(raw string) (archiveSplitJournal, error) {
 		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
 	}
 	return j, nil
+}
+
+func decodeLegacyArchiveSplitJournal(raw string) (archiveSplitJournal, error) {
+	var l legacyArchiveSplitJournal
+	if json.Unmarshal([]byte(raw), &l) != nil || l.OperationID == "" || l.KeyFingerprint == "" ||
+		l.KeyFingerprint != l.Result.KeyFingerprint || len(l.Result.Shares) == 0 {
+		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
+	}
+	switch l.State {
+	case "", archiveSplitJournalDeleting, archiveSplitJournalCleanupPending:
+	default:
+		return archiveSplitJournal{}, errArchiveSplitJournalInconsistent
+	}
+	return archiveSplitJournal{
+		OperationID: l.OperationID, RequestDigest: l.RequestDigest, KeyFingerprint: l.KeyFingerprint,
+		Binding: l.Binding, State: l.State, ShareCount: len(l.Result.Shares),
+		SharesDigest: proto.ArchiveSplitSharesDigest(l.Result.Shares), legacyResult: &l.Result,
+	}, nil
 }
 
 // loadArchiveSplitJournal reads the slot's manifest. found is false when
@@ -114,8 +164,17 @@ func loadArchiveSplitJournal(store keychain.SecretStore, slot keychain.ArchiveKe
 	return j, true, err
 }
 
+// writeArchiveSplitJournal writes the manifest, or a legacy record back in
+// its own form.
 func writeArchiveSplitJournal(store keychain.SecretStore, slot keychain.ArchiveKeySlot, journal archiveSplitJournal) error {
-	encoded, err := json.Marshal(journal)
+	var record any = journal
+	if journal.legacy() {
+		record = legacyArchiveSplitJournal{
+			OperationID: journal.OperationID, RequestDigest: journal.RequestDigest, KeyFingerprint: journal.KeyFingerprint,
+			Binding: journal.Binding, State: journal.State, Result: *journal.legacyResult,
+		}
+	}
+	encoded, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
