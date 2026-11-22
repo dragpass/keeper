@@ -13,6 +13,16 @@ import (
 // inside the keystore package.
 var ErrSecretNotFound = errors.New("secret not found")
 
+// ItemValueLimit is the largest value, in bytes, that the vendored go-keyring
+// v0.2.6 stores on every release platform. Windows refuses a value over 2560
+// bytes (keyring_windows.go). macOS stores the prefix "go-keyring-base64:"
+// plus the Base64 value and refuses more than 4096 bytes (keyring_darwin.go),
+// so a raw value over 3057 bytes fails there. The Linux Secret Service backend
+// sets no limit in the library. A larger value fails with
+// keyring.ErrSetDataTooBig before any OS call, so a record that may exceed it
+// must be split across items.
+const ItemValueLimit = 2560
+
 // SecretStore is the minimum contract for an OS Keychain-style secret store.
 // Get / Set / Delete cover every storage flow in the keystore package.
 //

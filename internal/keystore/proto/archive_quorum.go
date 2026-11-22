@@ -64,6 +64,9 @@ type ArchiveKeySplitRequest struct {
 	Decision     *ArchiveSplitDecision `json:"decision,omitempty"`
 }
 
+// ArchiveSplitMaxRecipients is the most recipients one split accepts.
+const ArchiveSplitMaxRecipients = 32
+
 func (r ArchiveKeySplitRequest) Validate() error {
 	if err := requireMessageUUID(r.OperationID, "operation_id"); err != nil {
 		return err
@@ -77,8 +80,11 @@ func (r ArchiveKeySplitRequest) Validate() error {
 	if len(r.RecipientPublicKeys) < r.ThresholdN {
 		return newValidationError("recipient_public_keys", "must have at least threshold_n entries")
 	}
-	if len(r.RecipientPublicKeys) > 255 {
-		return newValidationError("recipient_public_keys", "must have at most 255 entries")
+	// The server's participant cap (ariadne splitMaxParticipants). Larger
+	// splits held the keychain process lock longer than other Keeper
+	// processes wait for it and outlasted the split decision window.
+	if len(r.RecipientPublicKeys) > ArchiveSplitMaxRecipients {
+		return newValidationError("recipient_public_keys", "must have at most 32 entries")
 	}
 	for i, pem := range r.RecipientPublicKeys {
 		if err := requirePEM(pem, fmt.Sprintf("recipient_public_keys[%d]", i)); err != nil {

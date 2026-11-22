@@ -10,6 +10,8 @@
 package keychain
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -135,4 +137,15 @@ func TestSessionCodeOperations(t *testing.T) {
 // helpers directly.
 func defaultKeyringStore() SecretStore {
 	return KeyringSecretStore{}
+}
+
+// This package's in-memory store refuses a value over ItemValueLimit too.
+func TestMemorySecretStoreRefusesValueOverPlatformLimit(t *testing.T) {
+	s := NewMemorySecretStore()
+	if err := s.Set("svc", "a", strings.Repeat("x", ItemValueLimit+1)); !errors.Is(err, keyring.ErrSetDataTooBig) {
+		t.Fatalf("oversized value: err = %v", err)
+	}
+	if _, err := s.Get("svc", "a"); !errors.Is(err, ErrSecretNotFound) {
+		t.Fatal("refused write stored a value")
+	}
 }

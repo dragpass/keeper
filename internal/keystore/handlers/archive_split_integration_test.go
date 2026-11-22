@@ -40,12 +40,21 @@ type splitJournalBarrierStore struct {
 	writes  atomic.Int32
 	entered chan struct{}
 	release chan struct{}
+	mu      sync.Mutex
+	parts   map[string]int
 }
 
 func (s *splitJournalBarrierStore) Set(service, account, value string) error {
-	if strings.HasPrefix(account, "archive_quorum_split_pending:") && s.writes.Add(1) == 1 {
-		close(s.entered)
-		<-s.release
+	if strings.HasPrefix(account, "archive_quorum_split_pending:") {
+		if strings.Contains(account, ":part:") {
+			s.mu.Lock()
+			s.parts[account]++
+			s.mu.Unlock()
+		}
+		if s.writes.Add(1) == 1 {
+			close(s.entered)
+			<-s.release
+		}
 	}
 	return s.SecretStore.Set(service, account, value)
 }
@@ -63,7 +72,7 @@ func TestArchiveSplitConcurrentRetryUsesOneDurableResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, recipients := genAdminKeys(t, 2)
-	gate := &splitJournalBarrierStore{SecretStore: store, entered: make(chan struct{}), release: make(chan struct{})}
+	gate := &splitJournalBarrierStore{SecretStore: store, entered: make(chan struct{}), release: make(chan struct{}), parts: map[string]int{}}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(gate.release) }) }
 	t.Cleanup(release)
@@ -102,7 +111,14 @@ func TestArchiveSplitConcurrentRetryUsesOneDurableResult(t *testing.T) {
 	if !firstResult.Success || !secondResult.Success || !reflect.DeepEqual(firstResult.Data, secondResult.Data) {
 		t.Fatal("concurrent retry produced a different split result")
 	}
-	if gate.writes.Load() != 1 {
-		t.Fatal("retry replaced the durable split journal")
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if len(gate.parts) == 0 {
+		t.Fatal("no split journal part written")
+	}
+	for account, writes := range gate.parts {
+		if writes != 1 {
+			t.Fatalf("retry rewrote split journal part %s", account)
+		}
 	}
 }

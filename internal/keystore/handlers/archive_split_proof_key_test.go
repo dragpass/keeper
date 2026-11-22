@@ -76,8 +76,12 @@ func TestArchiveKeySplitRetryReturnsSameProofKeysFromJournal(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &journal); err != nil {
 		t.Fatal(err)
 	}
+	stored, err := readArchiveSplitResult(f.store, slot, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, share := range first.Data.(proto.ArchiveKeySplitResponseData).Shares {
-		if share.ProofPublicKey == "" || journal.Result.Shares[i].ProofPublicKey != share.ProofPublicKey {
+		if share.ProofPublicKey == "" || stored.Shares[i].ProofPublicKey != share.ProofPublicKey {
 			t.Fatalf("journal does not hold share %d's proof public key", i)
 		}
 	}
