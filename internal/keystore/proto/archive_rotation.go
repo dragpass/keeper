@@ -192,6 +192,33 @@ func (r ArchiveReconfigurationSessionKeyProof) Canonical(account, device, localS
 	return archiveShareCanonical("dragpass.archive.reconfiguration.session-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, localSPKI)
 }
 
+// ArchiveRecoverySessionKeyProof asks for the proof the server requires to
+// open an ordinary quorum recovery session for a group DEK version.
+type ArchiveRecoverySessionKeyProof struct {
+	ArchiveLoginScope
+	OrgID       string `json:"org_id"`
+	GroupID     string `json:"group_id"`
+	DekVersion  int    `json:"dek_version"`
+	SessionSPKI string `json:"session_key_spki_fingerprint"`
+}
+
+func (r ArchiveRecoverySessionKeyProof) Validate() error {
+	for _, id := range []string{r.OrgID, r.GroupID} {
+		if err := requireMessageUUID(id, "session.identity"); err != nil {
+			return err
+		}
+	}
+	if r.DekVersion < 1 {
+		return newValidationError("dek_version", "must be a positive integer")
+	}
+	return requireMessageDigest(r.SessionSPKI, "session.digest")
+}
+
+// Canonical is the server's recovery statement; the DEK version is decimal.
+func (r ArchiveRecoverySessionKeyProof) Canonical(account, device, localSPKI string) string {
+	return archiveShareCanonical("dragpass.archive.recovery.session-key|1", account, device, r.OrgID, r.GroupID, strconv.Itoa(r.DekVersion), localSPKI)
+}
+
 type ArchiveSessionKeySignature struct {
 	Signature string `json:"keeper_key_signature"`
 }

@@ -296,23 +296,9 @@ func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfig
 		if err != nil {
 			return rotationRefused()
 		}
-		buf, session, err := openArchiveSessionSlotLocked(d, r.OrgID, target.owner.account)
-		if err != nil {
-			return archiveSessionSlotResponse(err)
-		}
-		defer buf.Destroy()
-		key, err := parseRotationPrivate(buf.Bytes())
-		if err != nil {
-			return rotationRefused()
-		}
-		defer clearRotationPrivate(key)
-		pub, err := crypto.PublicKeyToPEM(&key.PublicKey)
-		if err != nil || pub != session.publicKey {
-			return rotationRefused()
-		}
-		fp, err := crypto.RewrapKeyFingerprint(pub)
-		if err != nil || fp != r.SessionSPKI {
-			return rotationRefused()
+		session, fp, refusal := provenSessionKeyLocked(d, r.OrgID, target.owner.account, r.SessionSPKI)
+		if refusal != nil {
+			return *refusal
 		}
 		journal, err := readStageJournal(d.Store, r.OrgID)
 		if err != nil {
@@ -335,6 +321,66 @@ func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfig
 			if err := writeArchiveReconfigurationJournal(d.Store, journal); err != nil {
 				return rotationRefused()
 			}
+		}
+		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionKeySignature{Signature: signed.Data.(proto.SignRequestResponseData).Signature}}
+	})
+}
+
+// provenSessionKeyLocked reads orgID's session slot for account under the
+// use rule, derives the SPKI fingerprint from the slot's private key and
+// requires it to match both the slot's public half and want. It returns the
+// slot as read, for the output recheck, and the derived fingerprint. The
+// private key is cleared before it returns. The caller holds the lock.
+func provenSessionKeyLocked(d Deps, orgID, account, want string) (archiveSessionSlot, string, *proto.BaseResponse) {
+	refuse := func(r proto.BaseResponse) (archiveSessionSlot, string, *proto.BaseResponse) {
+		return archiveSessionSlot{}, "", &r
+	}
+	buf, session, err := openArchiveSessionSlotLocked(d, orgID, account)
+	if err != nil {
+		return refuse(archiveSessionSlotResponse(err))
+	}
+	defer buf.Destroy()
+	key, err := parseRotationPrivate(buf.Bytes())
+	if err != nil {
+		return refuse(rotationRefused())
+	}
+	defer clearRotationPrivate(key)
+	pub, err := crypto.PublicKeyToPEM(&key.PublicKey)
+	if err != nil || pub != session.publicKey {
+		return refuse(rotationRefused())
+	}
+	fp, err := crypto.RewrapKeyFingerprint(pub)
+	if err != nil || fp != want {
+		return refuse(rotationRefused())
+	}
+	return session, fp, nil
+}
+
+// HandleArchiveRecoverySessionKeyProof signs the statement the server
+// requires to open an ordinary quorum recovery session: the account and
+// device of the App login, the organization, the target group DEK version
+// and the SPKI derived from the organization's live session key. Only that
+// organization's slot is read, never the device-wide slot of earlier
+// Keepers.
+func HandleArchiveRecoverySessionKeyProof(d Deps, r proto.ArchiveRecoverySessionKeyProof) proto.BaseResponse {
+	if err := r.Validate(); err != nil {
+		return errs.Response(err)
+	}
+	return underStageLock(d.Store, func() proto.BaseResponse {
+		owner, err := currentStageOwner(d)
+		if err != nil {
+			return archiveOwnerRefusal(err)
+		}
+		session, fp, refusal := provenSessionKeyLocked(d, r.OrgID, owner.account, r.SessionSPKI)
+		if refusal != nil {
+			return *refusal
+		}
+		signed := signRequestCanonical(d, r.Canonical(owner.account, owner.device, fp))
+		if !signed.Success {
+			return signed
+		}
+		if err := recheckArchiveSessionSlotForOutputLocked(d, r.OrgID, session); err != nil {
+			return archiveSessionSlotResponse(err)
 		}
 		return proto.BaseResponse{Success: true, Data: proto.ArchiveSessionKeySignature{Signature: signed.Data.(proto.SignRequestResponseData).Signature}}
 	})
