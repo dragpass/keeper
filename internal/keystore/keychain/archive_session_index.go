@@ -9,7 +9,7 @@ package keychain
 //
 //	org_archive_session_index → {"v":1,"orgs":["<org_id>", ...]}
 //
-// It holds organization IDs only, never key material. archive_session_begin
+// Entries identify organization slots and supplementary slots, never key material. archive_session_begin
 // adds the organization before it writes the slot, so a slot is never left
 // without an entry; a deleted slot removes its entry afterwards, and an entry
 // whose slot is gone is dropped by the next sweep. Callers hold the keychain
@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/dragpass/keeper/config"
 )
@@ -39,61 +40,123 @@ type archiveSessionIndex struct {
 	Orgs []string `json:"orgs"`
 }
 
-// ListArchiveSessionOrgs returns the indexed organizations. A missing index
-// is an empty list.
-func ListArchiveSessionOrgs(store SecretStore) ([]string, error) {
-	raw, err := store.Get(config.Service, config.OrgArchiveSessionIndex)
-	if errors.Is(err, ErrSecretNotFound) || (err == nil && raw == "") {
-		return nil, nil
+// Page zero keeps the original v1 name and encoding. Numbered overflow pages
+// stay contiguous, including empty interior pages, so no manifest is needed.
+func archiveSessionIndexKey(page int) string {
+	if page == 0 {
+		return config.OrgArchiveSessionIndex
 	}
+	return config.OrgArchiveSessionIndex + ":" + strconv.Itoa(page)
+}
+
+func readArchiveSessionPages(store SecretStore) ([][]string, error) {
+	var pages [][]string
+	var legacyErr error
+	for page := 0; ; page++ {
+		raw, err := store.Get(config.Service, archiveSessionIndexKey(page))
+		if errors.Is(err, ErrSecretNotFound) || (page == 0 && err == nil && raw == "") {
+			if page == 0 {
+				// An older Keeper can delete the legacy item while overflow exists.
+				pages = append(pages, nil)
+				continue
+			}
+			return pages, legacyErr
+		}
+		if err != nil {
+			return nil, err
+		}
+		var index archiveSessionIndex
+		if json.Unmarshal([]byte(raw), &index) != nil || index.V != ArchiveSessionIndexVersion {
+			if page != 0 {
+				return nil, ErrArchiveSessionIndexUnreadable
+			}
+			// Validate all overflow before allowing begin to repair the legacy item.
+			legacyErr = ErrArchiveSessionIndexUnreadable
+			pages = append(pages, nil)
+			continue
+		}
+		pages = append(pages, index.Orgs)
+	}
+}
+
+// ListArchiveSessionOrgs returns a slot only once, even if an older Keeper
+// added it to the legacy page without seeing its overflow entry.
+func ListArchiveSessionOrgs(store SecretStore) ([]string, error) {
+	pages, err := readArchiveSessionPages(store)
 	if err != nil {
 		return nil, err
 	}
-	var index archiveSessionIndex
-	if json.Unmarshal([]byte(raw), &index) != nil || index.V != ArchiveSessionIndexVersion {
-		return nil, ErrArchiveSessionIndexUnreadable
+	var orgs []string
+	seen := make(map[string]bool)
+	for _, page := range pages {
+		for _, org := range page {
+			if !seen[org] {
+				orgs = append(orgs, org)
+				seen[org] = true
+			}
+		}
 	}
-	return index.Orgs, nil
+	return orgs, nil
 }
 
-// AddArchiveSessionOrg records orgID. Idempotent. An unreadable index is
-// replaced by one naming orgID: the organizations it named lose only the
-// startup sweep, not the refusal at use.
+func encodeArchiveSessionPage(orgs []string) ([]byte, error) {
+	return json.Marshal(archiveSessionIndex{V: ArchiveSessionIndexVersion, Orgs: orgs})
+}
+
+// AddArchiveSessionOrg writes one item before the caller stores the slot.
 func AddArchiveSessionOrg(store SecretStore, orgID string) error {
-	orgs, err := ListArchiveSessionOrgs(store)
-	if err != nil && !errors.Is(err, ErrArchiveSessionIndexUnreadable) {
-		return err
-	}
-	if slices.Contains(orgs, orgID) {
-		return nil
-	}
-	return saveArchiveSessionIndex(store, append(orgs, orgID))
-}
-
-// RemoveArchiveSessionOrg drops orgID. Idempotent; an unreadable index is
-// left as it is.
-func RemoveArchiveSessionOrg(store SecretStore, orgID string) error {
-	orgs, err := ListArchiveSessionOrgs(store)
+	pages, err := readArchiveSessionPages(store)
 	if err != nil {
-		return err
-	}
-	kept := slices.DeleteFunc(slices.Clone(orgs), func(org string) bool { return org == orgID })
-	if len(kept) == len(orgs) {
-		return nil
-	}
-	if len(kept) == 0 {
-		if err := store.Delete(config.Service, config.OrgArchiveSessionIndex); err != nil && !errors.Is(err, ErrSecretNotFound) {
+		// Begin has historically replaced an unreadable legacy index. A
+		// damaged overflow page must never cause a healthy root to be replaced.
+		if !errors.Is(err, ErrArchiveSessionIndexUnreadable) || pages == nil {
 			return err
 		}
-		return nil
+		pages = [][]string{nil}
 	}
-	return saveArchiveSessionIndex(store, kept)
+	for _, orgs := range pages {
+		if slices.Contains(orgs, orgID) {
+			return nil
+		}
+	}
+	for page, orgs := range append(pages, nil) {
+		data, err := encodeArchiveSessionPage(append(orgs, orgID))
+		if err != nil {
+			return err
+		}
+		if len(data) <= ItemValueLimit {
+			return store.Set(config.Service, archiveSessionIndexKey(page), string(data))
+		}
+	}
+	return errors.New("archive session index entry exceeds the platform item limit")
 }
 
-func saveArchiveSessionIndex(store SecretStore, orgs []string) error {
-	raw, err := json.Marshal(archiveSessionIndex{V: ArchiveSessionIndexVersion, Orgs: orgs})
+// RemoveArchiveSessionOrg preserves the path to every later page. A partially
+// completed removal of duplicate entries can be retried.
+func RemoveArchiveSessionOrg(store SecretStore, orgID string) error {
+	pages, err := readArchiveSessionPages(store)
 	if err != nil {
 		return err
 	}
-	return store.Set(config.Service, config.OrgArchiveSessionIndex, string(raw))
+	for page, orgs := range pages {
+		kept := slices.DeleteFunc(orgs, func(org string) bool { return org == orgID })
+		if len(kept) == len(orgs) {
+			continue
+		}
+		key := archiveSessionIndexKey(page)
+		if len(kept) == 0 && page == len(pages)-1 {
+			if err := store.Delete(config.Service, key); err != nil && !errors.Is(err, ErrSecretNotFound) {
+				return err
+			}
+			continue
+		}
+		data, err := encodeArchiveSessionPage(kept)
+		if err != nil {
+			return err
+		}
+		if err := store.Set(config.Service, key, string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
