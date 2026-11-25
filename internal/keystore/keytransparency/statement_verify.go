@@ -19,6 +19,7 @@ const (
 )
 
 type VerifiedStatement struct {
+	DevicePublicKey       string
 	AccountKeyFingerprint string
 	SourceType            string
 	AccountID             string
@@ -95,7 +96,7 @@ func VerifyAccountStatement(statement []byte, expectedAccountID string) (Verifie
 			return result, ErrInvalidCheckpoint
 		}
 		fingerprint := sha256.Sum256([]byte(binding.PublicKey))
-		result = VerifiedStatement{AccountKeyFingerprint: crypto.AccountKeyFingerprint([]byte(fields[1])), SourceType: StatementDeviceRequestKeyBinding, AccountID: binding.AccountID, DeviceID: binding.DeviceID, Fingerprint: hex.EncodeToString(fingerprint[:]), Reason: "enroll"}
+		result = VerifiedStatement{DevicePublicKey: binding.PublicKey, AccountKeyFingerprint: crypto.AccountKeyFingerprint([]byte(fields[1])), SourceType: StatementDeviceRequestKeyBinding, AccountID: binding.AccountID, DeviceID: binding.DeviceID, Fingerprint: hex.EncodeToString(fingerprint[:]), Reason: "enroll"}
 	case StatementMLSLeafBinding:
 		if len(fields) != mlsLeafStatementFieldCount {
 			return result, ErrInvalidCheckpoint

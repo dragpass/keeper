@@ -49,7 +49,7 @@ func HandleKeyTransparencyMonitor(d Deps, request proto.KeyTransparencyMonitorRe
 			deviceID, found, deviceErr := keychain.GetDeviceID(d.Store)
 			pub, pubErr := keychain.GetRequestSigningPublicKey(d.Store)
 			known = deviceErr == nil && pubErr == nil && found && deviceID == verified.DeviceID &&
-				pub != "" && fingerprintBase64Public(pub) == verified.Fingerprint && isOwnActiveKey(d, verified.AccountKeyFingerprint)
+				pub != "" && pub == verified.DevicePublicKey && isOwnActiveKey(d, verified.AccountKeyFingerprint)
 		}
 		response.Events = append(response.Events, proto.KeyTransparencyMonitorEventResult{
 			EventID: event.EventID, SourceType: verified.SourceType, DeviceID: verified.DeviceID,

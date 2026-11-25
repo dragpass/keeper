@@ -208,7 +208,7 @@ func TestMonitorDeviceRequestKeyBinding(t *testing.T) {
 		return VerifyAccountStatement([]byte(strings.Join(parts, "|")), monitorAccountID)
 	}
 	got, err := verify(payload)
-	if err != nil || got.DeviceID != device || got.AccountID != monitorAccountID {
+	if err != nil || got.DeviceID != device || got.AccountID != monitorAccountID || got.DevicePublicKey != pub {
 		t.Fatalf("binding rejected: %v", err)
 	}
 	if _, err := verify(strings.Replace(payload, device, monitorAccountID, 1)); err == nil {
