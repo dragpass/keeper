@@ -10,6 +10,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -282,6 +283,26 @@ func TestArchiveSessionOrgSlot_BeginIndexesItsOrg(t *testing.T) {
 	}
 }
 
+func TestArchiveSessionOrgSlot_BeginAndSweepPastLegacyItemLimit(t *testing.T) {
+	deps, store, clock := newOrgSessionDeps(t)
+	for i := range 65 {
+		if err := keychain.AddArchiveSessionOrg(store, fmt.Sprintf("10000000-0000-4000-8000-%012d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beginOrgSession(t, deps, testOrgA)
+	SweepExpiredArchiveSession(deps)
+	if orgSlotValue(store, testOrgA) == "" || !slices.Equal(sessionIndexOrgs(t, store), []string{testOrgA}) {
+		t.Fatal("sweep lost the live overflow slot")
+	}
+	clock.Set(clock.Now().Add(archiveSessionMaxTTL))
+	SweepExpiredArchiveSession(deps)
+	requireOrgSlotGone(t, store, testOrgA)
+	if len(sessionIndexOrgs(t, store)) != 0 {
+		t.Fatal("expired overflow entry remained in the index")
+	}
+}
+
 // An index Keeper cannot read does not stop a session: begin replaces it,
 // and every use still refuses an expired slot on its own clock.
 func TestArchiveSessionOrgSlot_UnreadableIndexDoesNotBlockBeginOrUseRefusal(t *testing.T) {
@@ -379,7 +400,7 @@ type sessionAccountProbe struct {
 func isSessionAccount(account string) bool {
 	return strings.HasPrefix(account, config.LegacyOrgArchiveSessionPrivateKey) ||
 		strings.HasPrefix(account, config.LegacyOrgArchiveSessionPublicKey) ||
-		account == config.OrgArchiveSessionIndex
+		account == config.OrgArchiveSessionIndex || strings.HasPrefix(account, config.OrgArchiveSessionIndex+":")
 }
 
 func (p *sessionAccountProbe) Get(service, account string) (string, error) {

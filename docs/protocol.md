@@ -3995,13 +3995,18 @@ server reporting that a session ended.
   with that organization's session public key only, so a request for one
   organization carrying another organization's session fingerprint answers
   `not_found` (`set_expiry`) or `ended=false` (`end`) and changes nothing.
-- **Session index.** The keyring cannot be listed, so
-  `org_archive_session_index` (`{"v":1,"orgs":[...]}`, organization IDs
-  only) names the organizations that may hold a slot. Begin adds the
-  organization before it writes the slot; every deletion of a slot removes
-  its entry afterwards, and a sweep drops an entry whose slot holds no
-  private record. `archive_session_status` never repairs it. An index Keeper cannot read is skipped by the sweep and replaced by
-  the next begin; the refusal at use does not depend on it.
+- **Session index.** The keyring cannot be listed. The original
+  `org_archive_session_index` item and its numbered overflow items
+  (`org_archive_session_index:1`, `:2`, ...) carry version 1 JSON
+  (`{"v":1,"orgs":[...]}`). Each new item fits the 2560-byte platform
+  limit. Begin indexes a slot before writing it. Deletion drops its index
+  entry afterwards. An empty interior page stays in place so a sweep can
+  reach later entries. Older Keepers see only the original item and check
+  expiry at use. A newer Keeper can still read overflow when an older
+  Keeper removes the original item. Status reads never repair the index.
+  A sweep skips an unreadable index. Begin can replace an unreadable
+  original item, but refuses an unreadable overflow page. Every use still
+  enforces the slot's own expiry.
 - **Serialization.** Begin's index and slot writes and every
   read-check-delete or read-check-write of a slot, the index or the
   device-wide slot (use, `archive_session_set_expiry`, `archive_session_end`,
