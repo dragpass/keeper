@@ -16,6 +16,8 @@ import (
 // Only the selected approver's archive key can open this attachment. The
 // session signature is verified against the target captured before the API call.
 type archiveRequesterProof struct {
+	ConfigDigest              string                         `json:"config_digest,omitempty"`
+	SessionRound              *int                           `json:"session_round,omitempty"`
 	RequesterAccountID        string                         `json:"requester_account_id"`
 	RequesterDeviceID         string                         `json:"requester_device_id"`
 	RequesterAccountPublicKey string                         `json:"requester_account_public_key"`
@@ -29,9 +31,9 @@ type archiveRequesterProof struct {
 
 func verifiedArchiveRequester(d Deps, req proto.ArchiveShareRewrapRequest, private *rsa.PrivateKey) bool {
 	envelope := req.Decision.RequesterProof
-	target := req.RecoveryTarget
+	requester := req.RequesterAccount()
 	trust, err := usableTrust(d)
-	if envelope == nil || target == nil || err != nil || trust == nil || trust.ConfigDigest == "" {
+	if envelope == nil || requester == "" || err != nil || trust == nil || trust.ConfigDigest == "" {
 		return false
 	}
 	plaintext, err := crypto.HybridUnwrap(private, envelope.WrappedKey, envelope.Ciphertext)
@@ -40,7 +42,7 @@ func verifiedArchiveRequester(d Deps, req proto.ArchiveShareRewrapRequest, priva
 	}
 	defer secure.Zeroize(plaintext)
 	var p archiveRequesterProof
-	if len(plaintext) > proto.ArchiveRequesterProofMaxBytes || json.Unmarshal(plaintext, &p) != nil || p.RequesterAccountID != target.RequesterAccountID || p.GroupID != target.GroupID || p.DekVersion != target.DekVersion {
+	if len(plaintext) > proto.ArchiveRequesterProofMaxBytes || json.Unmarshal(plaintext, &p) != nil || p.RequesterAccountID != requester {
 		return false
 	}
 
@@ -48,7 +50,7 @@ func verifiedArchiveRequester(d Deps, req proto.ArchiveShareRewrapRequest, priva
 	if err != nil {
 		return false
 	}
-	binding, err := keytransparency.VerifyAccountStatement(statement, target.RequesterAccountID)
+	binding, err := keytransparency.VerifyAccountStatement(statement, requester)
 	accountFingerprint := crypto.AccountKeyFingerprint([]byte(p.RequesterAccountPublicKey))
 	if err != nil || binding.SourceType != keytransparency.StatementDeviceRequestKeyBinding || binding.DeviceID != p.RequesterDeviceID || binding.AccountKeyFingerprint != accountFingerprint {
 		return false
@@ -71,10 +73,23 @@ func (p *archiveRequesterProof) verifiesSession(req proto.ArchiveShareRewrapRequ
 	if err != nil {
 		return false
 	}
-	scope := proto.ArchiveRecoverySessionKeyProof{SessionID: &req.RecoverySessionID, OrgID: req.OrgID, GroupID: req.RecoveryTarget.GroupID, DekVersion: req.RecoveryTarget.DekVersion, SessionSPKI: spki}
+	var statement string
+	if t := req.SourceTarget; t != nil {
+		if p.ConfigDigest != t.ConfigDigest || p.SessionRound == nil || t.SessionRound == nil || *p.SessionRound != *t.SessionRound || p.GroupID != "" || p.DekVersion != 0 {
+			return false
+		}
+		scope := proto.ArchiveReconfigurationSessionKeyProof{OrgID: req.OrgID, OperationID: req.SplitOperationID, SessionID: req.RecoverySessionID, ConfigDigest: t.ConfigDigest}
+		statement = scope.SourceCanonical(t.RequesterAccountID, p.RequesterDeviceID, spki, *t.SessionRound)
+	} else {
+		t := req.RecoveryTarget
+		if t == nil || p.SessionRound != nil || p.ConfigDigest != "" || p.GroupID != t.GroupID || p.DekVersion != t.DekVersion {
+			return false
+		}
+		scope := proto.ArchiveRecoverySessionKeyProof{SessionID: &req.RecoverySessionID, OrgID: req.OrgID, GroupID: t.GroupID, DekVersion: t.DekVersion, SessionSPKI: spki}
+		statement = scope.Canonical(t.RequesterAccountID, p.RequesterDeviceID, spki)
+	}
 	sig, err := base64.StdEncoding.DecodeString(p.SessionSignatureB64)
-	return err == nil && ed25519.Verify(device, []byte(scope.Canonical(req.RecoveryTarget.RequesterAccountID, p.RequesterDeviceID, spki)), sig)
-
+	return err == nil && ed25519.Verify(device, []byte(statement), sig)
 }
 
 func (p *archiveRequesterProof) verifyAccountForRelease(d Deps, owner, accountFingerprint string) bool {

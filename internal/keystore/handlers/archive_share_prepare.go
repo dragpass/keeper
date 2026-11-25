@@ -37,27 +37,30 @@ func HandleArchiveSharePrepare(d Deps, r proto.ArchiveSharePrepareRequest) proto
 	prepared := proto.ArchiveSharePrepareResponseData{Challenge: challenge, RequestDigest: digest}
 	if t := r.Request.RecoveryTarget; t != nil {
 		state.recoveryTarget = *t
-		trust, err := usableTrust(d)
-		if err != nil || trust == nil || trust.ConfigDigest == "" {
-			return deny()
-		}
-		anchor, _, err := keychain.GetKeyTransparencyCheckpoint(d.Store)
+	} else {
+		source := r.Request.SourceTarget
+		state.sourceRequester, state.sourceConfig, state.sourceRound = source.RequesterAccountID, source.ConfigDigest, *source.SessionRound
+	}
+	trust, err := usableTrust(d)
+	if err != nil || trust == nil || trust.ConfigDigest == "" {
+		return deny()
+	}
+	anchor, _, err := keychain.GetKeyTransparencyCheckpoint(d.Store)
+	if err != nil {
+		return deny()
+	}
+	prepared.PreviousTreeSize = &anchor.Size
+	owner, found, err := keychain.GetPeerKeyOwner(d.Store)
+	if err != nil || (found && owner.AccountID != binding.AccountID) {
+		return deny()
+	}
+	if found {
+		pin, err := loadPeerKeyPin(d.Store, owner.AccountID, r.Request.RequesterAccount())
 		if err != nil {
 			return deny()
 		}
-		prepared.PreviousTreeSize = &anchor.Size
-		owner, found, err := keychain.GetPeerKeyOwner(d.Store)
-		if err != nil || (found && owner.AccountID != binding.AccountID) {
-			return deny()
-		}
-		if found {
-			pin, err := loadPeerKeyPin(d.Store, owner.AccountID, t.RequesterAccountID)
-			if err != nil {
-				return deny()
-			}
-			if enrollmentRooted(d, pin, owner.AccountID, t.RequesterAccountID) {
-				prepared.RequesterPinFingerprint = pin.Fingerprint
-			}
+		if enrollmentRooted(d, pin, owner.AccountID, r.Request.RequesterAccount()) {
+			prepared.RequesterPinFingerprint = pin.Fingerprint
 		}
 	}
 	if err := d.ArchiveShareChallenges.Put(challenge, state, d.Now()); err != nil {
@@ -90,6 +93,9 @@ func HandleArchiveShareRewrap(d Deps, req proto.ArchiveShareRewrapRequest) proto
 	entry, found := d.ArchiveShareChallenges.peekEntry(decision.Challenge, now)
 	c := entry.context
 	if c.operationID != req.SplitOperationID || c.operationID != decision.SplitOperationID {
+		return deny()
+	}
+	if t := req.SourceTarget; t != nil && (t.RequesterAccountID != c.sourceRequester || t.ConfigDigest != c.sourceConfig || *t.SessionRound != c.sourceRound) {
 		return deny()
 	}
 	if t := req.RecoveryTarget; t != nil && *t != c.recoveryTarget {

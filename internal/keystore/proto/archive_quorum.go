@@ -106,6 +106,7 @@ type ArchiveKeySplitResponseData struct {
 // ArchiveShareRewrapRequest — an admin re-wraps their own hybrid-wrapped share
 // (currently under their account archive key) to the recovery session key.
 type ArchiveShareRewrapRequest struct {
+	SourceTarget      *ArchiveSourceTarget   `json:"source_target,omitempty"`
 	SplitOperationID  string                 `json:"split_operation_id,omitempty"`
 	RecoveryTarget    *ArchiveRecoveryTarget `json:"recovery_target,omitempty"`
 	AccountID         string                 `json:"account_id"`

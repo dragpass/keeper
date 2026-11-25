@@ -27,6 +27,22 @@ type ArchiveRecoveryTarget struct {
 	DekVersion         int    `json:"dek_version"`
 }
 
+type ArchiveSourceTarget struct {
+	RequesterAccountID string `json:"requester_account_id"`
+	ConfigDigest       string `json:"config_digest"`
+	SessionRound       *int   `json:"session_round"`
+}
+
+func (r ArchiveShareRewrapRequest) RequesterAccount() string {
+	if r.SourceTarget != nil {
+		return r.SourceTarget.RequesterAccountID
+	}
+	if r.RecoveryTarget != nil {
+		return r.RecoveryTarget.RequesterAccountID
+	}
+	return ""
+}
+
 // ArchiveShareDecision is separate from Group DEK authority. The request
 // digest commits the exact share envelope and recovery-session public key.
 type ArchiveShareDecision struct {
@@ -72,14 +88,17 @@ func ArchiveShareDecisionCanonical(d ArchiveShareDecision) string {
 }
 
 func (d ArchiveShareDecision) Validate() error {
+	p := d.RequesterProof
+	if p == nil || p.WrappedKey == "" || len(p.WrappedKey) > 2048 || p.Ciphertext == "" || len(p.Ciphertext) > base64.StdEncoding.EncodedLen(ArchiveRequesterProofMaxBytes+28) {
+		return newValidationError("requester_proof", "invalid requester attachment")
+	}
 	switch d.Purpose {
 	case "recovery":
-		p := d.RequesterProof
-		if d.SplitOperationID != "" || p == nil || p.WrappedKey == "" || len(p.WrappedKey) > 2048 || p.Ciphertext == "" || len(p.Ciphertext) > base64.StdEncoding.EncodedLen(ArchiveRequesterProofMaxBytes+28) {
-			return newValidationError("requester_proof", "invalid recovery attachment")
+		if d.SplitOperationID != "" {
+			return newValidationError("decision", "invalid recovery scope")
 		}
 	case "reconfiguration":
-		if d.RequesterProof != nil || requireMessageUUID(d.SplitOperationID, "split_operation_id") != nil {
+		if requireMessageUUID(d.SplitOperationID, "split_operation_id") != nil {
 			return newValidationError("decision", "invalid reconfiguration scope")
 		}
 	default:
@@ -111,11 +130,14 @@ func ArchiveShareRequestDigest(r ArchiveShareRewrapRequest) (string, error) {
 		return "", err
 	}
 	if t := r.RecoveryTarget; t != nil {
-		if r.SplitOperationID != "" || requireMessageUUID(t.RequesterAccountID, "requester_account_id") != nil || requireMessageUUID(t.GroupID, "group_id") != nil || t.DekVersion < 1 {
+		if r.SourceTarget != nil || r.SplitOperationID != "" || requireMessageUUID(t.RequesterAccountID, "requester_account_id") != nil || requireMessageUUID(t.GroupID, "group_id") != nil || t.DekVersion < 1 {
 			return "", newValidationError("recovery_target", "invalid recovery target")
 		}
-	} else if err := requireMessageUUID(r.SplitOperationID, "split_operation_id"); err != nil {
-		return "", err
+	} else {
+		t := r.SourceTarget
+		if requireMessageUUID(r.SplitOperationID, "split_operation_id") != nil || t == nil || requireMessageUUID(t.RequesterAccountID, "requester_account_id") != nil || requireMessageDigest(t.ConfigDigest, "config_digest") != nil || t.SessionRound == nil || *t.SessionRound < 0 {
+			return "", newValidationError("source_target", "invalid reconfiguration source target")
+		}
 	}
 	for _, id := range []string{r.AccountID, r.OrgID, r.RecoverySessionID} {
 		if err := requireMessageUUID(id, "request.identity"); err != nil {

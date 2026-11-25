@@ -26,10 +26,12 @@ type archiveShareContext struct {
 	orgID             string
 	recoverySessionID string
 	// A share rewrap challenge binds the selected recovery card or split operation.
-	recoveryTarget proto.ArchiveRecoveryTarget
-	operationID    string
-	shareIndex     int
-	requestDigest  string
+	recoveryTarget                proto.ArchiveRecoveryTarget
+	sourceRequester, sourceConfig string
+	sourceRound                   int
+	operationID                   string
+	shareIndex                    int
+	requestDigest                 string
 }
 
 type archiveShareEntry struct {
