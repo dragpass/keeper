@@ -29,6 +29,8 @@ var (
 )
 
 type Trust struct {
+	// ConfigDigest binds persisted enrollment evidence to the full verifier keys and policy.
+	ConfigDigest     string
 	Origin           string
 	LogVerifier      note.Verifier
 	WitnessVerifiers []note.Verifier

@@ -98,8 +98,10 @@ type PeerKeyTransparency struct {
 	Fingerprint    string `json:"fingerprint"`
 	// Source is the statement kind that proved it: account_key_enrollment,
 	// account_key_rotation or mls_leaf_binding.
-	Source     string `json:"source"`
-	VerifiedAt int64  `json:"verified_at"`
+	Source string `json:"source"`
+	// EnrollmentTrust identifies the verifier policy used from enrollment through this key.
+	EnrollmentTrust string `json:"enrollment_trust,omitempty"`
+	VerifiedAt      int64  `json:"verified_at"`
 }
 
 // KeyTransparencyVerified reports whether a log proof verified the key this

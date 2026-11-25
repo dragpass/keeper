@@ -19,12 +19,14 @@ const (
 )
 
 type VerifiedStatement struct {
-	SourceType  string
-	AccountID   string
-	DeviceID    string
-	Fingerprint string
-	Reason      string
-	Digest      string
+	DevicePublicKey       string
+	AccountKeyFingerprint string
+	SourceType            string
+	AccountID             string
+	DeviceID              string
+	Fingerprint           string
+	Reason                string
+	Digest                string
 }
 
 func VerifyAccountStatement(statement []byte, expectedAccountID string) (VerifiedStatement, error) {
@@ -80,6 +82,21 @@ func VerifyAccountStatement(statement []byte, expectedAccountID string) (Verifie
 			return result, ErrInvalidCheckpoint
 		}
 		result = VerifiedStatement{SourceType: StatementAccountKeyRotation, AccountID: rotation.AccountID, Fingerprint: rotation.NewFingerprint, Reason: rotation.Reason}
+	case StatementDeviceRequestKeyBinding:
+		if len(fields) != 3 {
+			return result, ErrInvalidCheckpoint
+		}
+		parts := strings.Split(fields[0], "|")
+		if len(parts) != 6 || parts[2] != expectedAccountID {
+			return result, ErrInvalidCheckpoint
+		}
+		binding := proto.RequestKeyBinding{AccountID: parts[2], DeviceID: parts[3], PublicKey: parts[5]}
+		canonical, err := binding.Canonical()
+		if err != nil || canonical != fields[0] || verifyAccountSignatureBytes(fields[1], []byte(fields[2]), canonical) != nil {
+			return result, ErrInvalidCheckpoint
+		}
+		fingerprint := sha256.Sum256([]byte(binding.PublicKey))
+		result = VerifiedStatement{DevicePublicKey: binding.PublicKey, AccountKeyFingerprint: crypto.AccountKeyFingerprint([]byte(fields[1])), SourceType: StatementDeviceRequestKeyBinding, AccountID: binding.AccountID, DeviceID: binding.DeviceID, Fingerprint: hex.EncodeToString(fingerprint[:]), Reason: "enroll"}
 	case StatementMLSLeafBinding:
 		if len(fields) != mlsLeafStatementFieldCount {
 			return result, ErrInvalidCheckpoint

@@ -115,6 +115,7 @@ var pinnedAppRoutes = []string{
 	"/v1/archive/archive_quorum_combine_to_staged",
 	"/v1/archive/archive_quorum_rotation_prepare",
 	"/v1/archive/archive_reconfiguration_session_key_proof",
+	"/v1/archive/archive_reconfiguration_source_key_proof",
 	"/v1/archive/archive_reconfiguration_supplement_prepare",
 	"/v1/archive/archive_reconfiguration_supplement_promote",
 	"/v1/archive/archive_reconfigure_stage",
@@ -149,6 +150,7 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/recovery/close",
 	"/v1/auth/recovery/prepare",
 	"/v1/auth/recovery/rewrap-group-dek",
+	"/v1/auth/request-key/binding",
 	"/v1/auth/signup/abort",
 	"/v1/auth/signup/prepare",
 	"/v1/auth/signup/save-session-code",
@@ -629,6 +631,12 @@ func TestPeerKeyRoutesPassTheirTypedRequests(t *testing.T) {
 		if code, _, _ := callRoute(t, server, session, csrf, path, withExtra); code != http.StatusBadRequest {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
+	}
+	code, result, _ = callRoute(t, server, session, csrf, "/v1/peer-key/chain-evaluate", map[string]any{
+		"owner_account_id": routeOwner, "account_id": routePeer, "public_key": peer.PublicKey, "require_transparency": true,
+	})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "key_transparency_trust_invalid" {
+		t.Fatalf("required transparency without trust: HTTP %d, code %s", code, result.ErrorCode)
 	}
 	// Forgetting a pin re-TOFUs a changed key; the key-trust UI dropped it
 	// (MLS hardening policy Q9 (a)) and the App origin cannot reach it.

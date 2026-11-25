@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"github.com/dragpass/keeper/config"
@@ -54,6 +56,10 @@ func TestSupplementPreservesOriginalUntilSignedAcceptance(t *testing.T) {
 	promote := func() proto.BaseResponse {
 		return HandleSupplementPromote(f.deps, proto.SupplementPromote{Receipt: receipt})
 	}
+	sourceRequest := proto.ArchiveReconfigurationSessionKeyProof{OrgID: split.OrgID, OperationID: split.OperationID, SessionID: receipt.SessionID, ConfigDigest: split.ConfigDigest, SessionSPKI: cand.SPKI}
+	if r := HandleArchiveReconfigurationSourceProof(f.deps, sourceRequest); r.Success || r.Data != nil {
+		t.Fatal("unpromoted candidate signed a source proof")
+	}
 	if promote().Success {
 		t.Fatal("accepted invalid signature")
 	}
@@ -90,6 +96,16 @@ func TestSupplementPreservesOriginalUntilSignedAcceptance(t *testing.T) {
 	slot, err := inspectArchiveSessionSlotLocked(f.deps, split.OrgID, nil)
 	if err != nil || slot.publicKey != cand.PublicKey || slot.state != archiveSessionSlotLive || slot.record.expiresAt.Unix() != receipt.ExpiresAt {
 		t.Fatal("promotion did not install accepted candidate")
+	}
+	source := HandleArchiveReconfigurationSourceProof(f.deps, sourceRequest)
+	if !source.Success {
+		t.Fatal("promoted source key refused", source.ErrorCode)
+	}
+	sig, err := base64.StdEncoding.DecodeString(source.Data.(proto.ArchiveSessionKeySignature).Signature)
+	pub64, err2 := keychain.GetRequestSigningPublicKey(f.store)
+	pub, err3 := base64.StdEncoding.DecodeString(pub64)
+	if err != nil || err2 != nil || err3 != nil || !ed25519.Verify(pub, []byte(sourceRequest.SourceCanonical(f.v.AccountID, splitTestDevice, cand.SPKI, 1)), sig) {
+		t.Fatal("promoted key proof did not verify for round one")
 	}
 	params.PreviousSessionID, params.PreviousSPKI = receipt.SessionID, cand.SPKI
 	next := HandleSupplementPrepare(f.deps, proto.SupplementPrepare{SupplementPrevious: params, PreviousRound: 1})

@@ -179,3 +179,39 @@ func signStatement(t *testing.T, privateKey *rsa.PrivateKey, canonical string) (
 	signature, err := keepercrypto.SignData(privateKey, canonical)
 	return base64.StdEncoding.EncodeToString(signature), err
 }
+
+func TestMonitorDeviceRequestKeyBinding(t *testing.T) {
+	pair, err := keepercrypto.GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := keepercrypto.ParsePrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const device = "77777777-7777-4777-8777-bbbbbbbbbbbb"
+	pub := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	payload := "dragpass.request-key-binding|1|" + monitorAccountID + "|" + device + "|ed25519|" + pub
+	signature, err := signStatement(t, priv, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func(data string) (VerifiedStatement, error) {
+		parts := []string{"dragpass.kt.statement", "1", "device_request_key_binding"}
+		for _, field := range [][]byte{[]byte(data), []byte(pair.PublicKey), sig} {
+			parts = append(parts, base64.RawURLEncoding.EncodeToString(field))
+		}
+		return VerifyAccountStatement([]byte(strings.Join(parts, "|")), monitorAccountID)
+	}
+	got, err := verify(payload)
+	if err != nil || got.DeviceID != device || got.AccountID != monitorAccountID || got.DevicePublicKey != pub {
+		t.Fatalf("binding rejected: %v", err)
+	}
+	if _, err := verify(strings.Replace(payload, device, monitorAccountID, 1)); err == nil {
+		t.Fatal("substituted device accepted")
+	}
+}

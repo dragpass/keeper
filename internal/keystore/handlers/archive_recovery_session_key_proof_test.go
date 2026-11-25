@@ -254,3 +254,39 @@ func TestArchiveRecoverySessionKeyProofWithholdsSignatureWhenSlotExpiresDuringCa
 		t.Fatal("expired slot kept")
 	}
 }
+
+func TestReservedRecoverySessionSignatureIsSpecificToOneSession(t *testing.T) {
+	c := newRecoveryProofCase(t)
+	sessionID := "eb7d834a-4a10-4d7c-9686-0083947eb584"
+	c.req.SessionID = &sessionID
+	r := c.sign()
+	if !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	sig, err := base64.StdEncoding.DecodeString(r.Data.(proto.ArchiveSessionKeySignature).Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := keychain.GetRequestSigningPublicKey(c.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func() bool {
+		return ed25519.Verify(pub, []byte(c.req.Canonical(slotTestAccount, splitTestDevice, c.spki)), sig)
+	}
+	if !verify() {
+		t.Fatal("reserved session signature did not verify")
+	}
+	sessionID = "6b66c02b-509d-4db3-bf45-f2647947e692"
+	if verify() {
+		t.Fatal("signature accepted for another session")
+	}
+	c.req.SessionID = nil
+	if verify() {
+		t.Fatal("signature accepted as a version 1 proof")
+	}
+}

@@ -166,7 +166,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 	want := []string{
 		"account_archive_key_generate", "account_binding_set", "account_binding_signout", "archive_app_login_end",
 		"archive_key_rotate_abort", "archive_key_rotate_begin", "archive_key_rotate_commit",
-		"archive_key_split", "archive_key_status", "archive_quorum_combine_and_rewrap", "archive_quorum_combine_to_staged", "archive_quorum_rotation_prepare", "archive_reconfiguration_session_key_proof", "archive_reconfiguration_supplement_prepare", "archive_reconfiguration_supplement_promote",
+		"archive_key_split", "archive_key_status", "archive_quorum_combine_and_rewrap", "archive_quorum_combine_to_staged", "archive_quorum_rotation_prepare", "archive_reconfiguration_session_key_proof", "archive_reconfiguration_source_key_proof", "archive_reconfiguration_supplement_prepare", "archive_reconfiguration_supplement_promote",
 		"archive_reconfigure_stage", "archive_recovery_session_key_proof", "archive_session_begin", "archive_session_discard", "archive_session_end", "archive_session_legacy_discard", "archive_session_set_expiry", "archive_session_status", "archive_share_open_proof", "archive_share_prepare",
 		"archive_share_proof_prepare", "archive_share_rewrap",
 		"archive_split_abandon", "archive_split_finalize", "archive_split_prepare", "archive_split_status",
@@ -191,7 +191,7 @@ func TestChatRuntimeAppOnlyActionListIsPinned(t *testing.T) {
 		"mls_room_name_open", "mls_room_name_seal",
 		"org_emergency_seed_derive", "org_member_removal_sign",
 		"peer_key_chain_evaluate", "peer_key_pin_list", "peer_key_pin_verify", "peer_key_safety_number", "personal_dek_bind",
-		"recovery_session_close",
+		"recovery_session_close", "request_key_binding",
 		"rotate_user_keypair_prepare", "rotate_user_keypair_promote",
 		"savesessioncode",
 		"sign_app_session_refresh",

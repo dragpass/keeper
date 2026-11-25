@@ -86,3 +86,24 @@ func TestArchiveRecoverySessionKeyProofValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveRecoverySessionKeyProofWithReservedID(t *testing.T) {
+	r := recoveryProofRequest()
+	session := "5abd03bb-7fa2-4caf-bddc-6bf43542eb1c"
+	r.SessionID = &session
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	local := strings.Repeat("cd", 32)
+	want := ariadneSessionKeyProofCanonical("dragpass.archive.recovery.session-key|2",
+		recoveryProofAccount, recoveryProofDevice, r.OrgID, session, r.GroupID, "12", local)
+	if got := r.Canonical(recoveryProofAccount, recoveryProofDevice, local); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	for _, invalid := range []string{"", "bad", strings.ToUpper(session)} {
+		r.SessionID = &invalid
+		if r.Validate() == nil {
+			t.Fatalf("accepted invalid session ID %q", invalid)
+		}
+	}
+}

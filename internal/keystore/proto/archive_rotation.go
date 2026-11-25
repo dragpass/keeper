@@ -192,17 +192,29 @@ func (r ArchiveReconfigurationSessionKeyProof) Canonical(account, device, localS
 	return archiveShareCanonical("dragpass.archive.reconfiguration.session-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, localSPKI)
 }
 
+// SourceCanonical binds the pre-approval proof to the round recorded in the local
+// operation journal. Rotation material release uses a separate signing domain.
+func (r ArchiveReconfigurationSessionKeyProof) SourceCanonical(account, device, localSPKI string, round int) string {
+	return archiveShareCanonical("dragpass.archive.reconfiguration.source-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, strconv.Itoa(round), localSPKI)
+}
+
 // ArchiveRecoverySessionKeyProof asks for the proof the server requires to
 // open an ordinary quorum recovery session for a group DEK version.
 type ArchiveRecoverySessionKeyProof struct {
 	ArchiveLoginScope
-	OrgID       string `json:"org_id"`
-	GroupID     string `json:"group_id"`
-	DekVersion  int    `json:"dek_version"`
-	SessionSPKI string `json:"session_key_spki_fingerprint"`
+	SessionID   *string `json:"session_id,omitempty"`
+	OrgID       string  `json:"org_id"`
+	GroupID     string  `json:"group_id"`
+	DekVersion  int     `json:"dek_version"`
+	SessionSPKI string  `json:"session_key_spki_fingerprint"`
 }
 
 func (r ArchiveRecoverySessionKeyProof) Validate() error {
+	if r.SessionID != nil {
+		if err := requireMessageUUID(*r.SessionID, "session_id"); err != nil {
+			return err
+		}
+	}
 	for _, id := range []string{r.OrgID, r.GroupID} {
 		if err := requireMessageUUID(id, "session.identity"); err != nil {
 			return err
@@ -216,6 +228,9 @@ func (r ArchiveRecoverySessionKeyProof) Validate() error {
 
 // Canonical is the server's recovery statement; the DEK version is decimal.
 func (r ArchiveRecoverySessionKeyProof) Canonical(account, device, localSPKI string) string {
+	if r.SessionID != nil {
+		return archiveShareCanonical("dragpass.archive.recovery.session-key|2", account, device, r.OrgID, *r.SessionID, r.GroupID, strconv.Itoa(r.DekVersion), localSPKI)
+	}
 	return archiveShareCanonical("dragpass.archive.recovery.session-key|1", account, device, r.OrgID, r.GroupID, strconv.Itoa(r.DekVersion), localSPKI)
 }
 

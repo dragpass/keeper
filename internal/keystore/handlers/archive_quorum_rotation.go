@@ -288,6 +288,14 @@ func rotateOneGrant(source *rsa.PrivateKey, target *rsa.PublicKey, org string, g
 }
 
 func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfigurationSessionKeyProof) proto.BaseResponse {
+	return signReconfigurationSessionProof(d, r, false)
+}
+
+func HandleArchiveReconfigurationSourceProof(d Deps, r proto.ArchiveReconfigurationSessionKeyProof) proto.BaseResponse {
+	return signReconfigurationSessionProof(d, r, true)
+}
+
+func signReconfigurationSessionProof(d Deps, r proto.ArchiveReconfigurationSessionKeyProof, forSourceApproval bool) proto.BaseResponse {
 	if err := r.Validate(); err != nil {
 		return errs.Response(err)
 	}
@@ -309,7 +317,18 @@ func HandleArchiveReconfigurationSessionKeyProof(d Deps, r proto.ArchiveReconfig
 		if sameSession != sameKey || (!sameKey && journal.ProofSessionID != "") {
 			return rotationRefused()
 		}
-		signed := signRequestCanonical(d, r.Canonical(target.owner.account, target.owner.device, fp))
+		statement := r.Canonical(target.owner.account, target.owner.device, fp)
+		if forSourceApproval {
+			// The first slot was opened with the operation ID. Later slots are
+			// installed only by promotion of an accepted supplementary key.
+			firstSlot := journal.ProofRound == 0 && session.record.beginID == r.OperationID
+			promotedSlot := journal.ProofRound > 0 && sameSession && sameKey && isLowerHex64(journal.ProofAcceptance)
+			if !firstSlot && !promotedSlot {
+				return rotationRefused()
+			}
+			statement = r.SourceCanonical(target.owner.account, target.owner.device, fp, journal.ProofRound)
+		}
+		signed := signRequestCanonical(d, statement)
 		if !signed.Success {
 			return signed
 		}
