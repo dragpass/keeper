@@ -40,6 +40,8 @@ var appRouteOnlyActions = []string{
 	proto.ActionRequestKeyBinding,
 	proto.ActionArchiveRecoverySessionKeyProof,
 	proto.ActionSupplementPrepare,
+	proto.ActionSupplementDamageStatus,
+	proto.ActionSupplementDiscard,
 	proto.ActionSupplementPromote,
 	proto.ActionArchiveQuorumCombineToStaged,
 	proto.ActionArchiveSplitPrepare,
