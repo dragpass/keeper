@@ -83,3 +83,24 @@ type SupplementPromoted struct {
 	Round     int    `json:"session_round"`
 	SPKI      string `json:"session_key_spki_fingerprint"`
 }
+
+type SupplementDamage struct {
+	State        string `json:"state"`
+	StoredDigest string `json:"stored_digest,omitempty"`
+}
+
+type SupplementDiscard struct {
+	SupplementPrepare
+	StoredDigest string `json:"stored_digest"`
+	Confirm      bool   `json:"confirm"`
+}
+
+func (r SupplementDiscard) Validate() error {
+	if !r.Confirm {
+		return newValidationError("confirm", "explicit confirmation required")
+	}
+	if err := requireMessageDigest(r.StoredDigest, "stored_digest"); err != nil {
+		return err
+	}
+	return r.SupplementPrepare.Validate()
+}

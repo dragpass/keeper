@@ -35,6 +35,8 @@ const (
 	ActionArchiveSourceKeyProof          = "archive_reconfiguration_source_key_proof"
 	ActionArchiveRecoverySessionKeyProof = "archive_recovery_session_key_proof"
 	ActionSupplementPrepare              = "archive_reconfiguration_supplement_prepare"
+	ActionSupplementDamageStatus         = "archive_reconfiguration_supplement_damage_status"
+	ActionSupplementDiscard              = "archive_reconfiguration_supplement_discard"
 	ActionSupplementPromote              = "archive_reconfiguration_supplement_promote"
 	ActionArchiveQuorumCombineToStaged   = "archive_quorum_combine_to_staged"
 	ActionArchiveSplitPrepare            = "archive_split_prepare"

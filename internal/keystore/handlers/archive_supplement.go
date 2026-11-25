@@ -45,7 +45,7 @@ const supplementHeaderVersion = 1
 
 // errSupplementUnreadable: a candidate private item exists but its header is
 // missing or does not match it. Nothing that cannot be identified is
-// deleted, so such a candidate is kept and every action refuses.
+// automatically deleted. Explicit discard requires independent stage evidence.
 var errSupplementUnreadable = errors.New("supplement candidate unreadable")
 
 func supplementSlot(org string) string { return org + ":supplement" }
@@ -72,7 +72,17 @@ func readSupplement(d Deps, org string) (supplementCandidate, archiveSessionReco
 	if err != nil {
 		return c, rec, nil, err
 	}
+	return decodeSupplement(d, org, raw, header)
+}
+
+func decodeSupplement(d Deps, org, raw, header string) (supplementCandidate, archiveSessionRecord, *memguard.LockedBuffer, error) {
+	var c supplementCandidate
+	var rec archiveSessionRecord
 	if json.Unmarshal([]byte(header), &c) != nil || c.V != supplementHeaderVersion || c.OrgID != org {
+		return c, rec, nil, errSupplementUnreadable
+	}
+	if c.SupplementPrevious.Validate() != nil || !isLowerUUID(c.Device) || c.Round < 0 ||
+		!isLowerHex64(c.PriorDigest) || !isLowerHex64(c.PriorPublicDigest) {
 		return c, rec, nil, errSupplementUnreadable
 	}
 	if spki, err := crypto.RewrapKeyFingerprint(c.PublicKey); err != nil || spki != c.SPKI {
@@ -204,6 +214,10 @@ func HandleSupplementPrepare(d Deps, r proto.SupplementPrepare) proto.BaseRespon
 		rec = archiveSessionRecord{owner: owner, begunAt: now, expiresAt: now.Add(archiveSessionMaxTTL), fingerprint: fingerprintBase64Public(pair.PublicKey)}
 		record := encodeArchiveSessionSlot(rec, private.Bytes())
 		defer record.Destroy()
+		j.SupplementBinding = supplementBinding(r, prior, sha256.Sum256(record.Bytes()))
+		if writeArchiveReconfigurationJournal(d.Store, j) != nil {
+			return supplementStorageFailure()
+		}
 		if err := writeSupplement(d, r.OrgID, header, record.Bytes()); err != nil {
 			return supplementStorageFailure()
 		}
@@ -305,6 +319,7 @@ func HandleSupplementPromote(d Deps, r proto.SupplementPromote) proto.BaseRespon
 		if slot.publicKey != c.PublicKey && keychain.SaveArchiveSessionPublicKey(d.Store, a.OrgID, c.PublicKey) != nil {
 			return rotationRefused()
 		}
+		j.SupplementBinding = ""
 		j.ProofSessionID, j.ProofSessionSPKI, j.ProofRound, j.ProofAcceptance = a.SessionID, a.SPKI, a.Round, acceptanceDigest
 		if writeArchiveReconfigurationJournal(d.Store, j) != nil {
 			return rotationRefused()
