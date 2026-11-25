@@ -298,7 +298,7 @@ dependency).
 |`archive_split_abandon`|`org_id` and either `receipt` or the confirmed unregistered closure described below|`{ state: "none", operation_id }`|App only. Acts only on the org-scoped slot (`not_found` for a device-wide fallback slot, nothing deleted). For activation, drops a `prepared` journal, or one whose split write was interrupted, when the signed closure receipt (`cancelled`, `expired` or `invalidated`) names its operation, organization and archive key SPKI fingerprint. The archive private key is kept. A journal deletion that does not complete returns `storage_failure`; the same receipt resumes it. A journal whose deletion started is never abandoned (`not_found`). For reconfiguration the v2 closure signature binds the operation, organization, status, target SPKI and source configuration digest. Keeper compares the staged public key and stage journal, and the signed split binding when a prepared split journal exists. It removes only this target and its journals. A partial deletion returns `archive_split_cleanup_pending`; the same closure resumes cleanup, and staging is refused until cleanup finishes. A per-operation record of the public closure facts persists after cleanup so a late stage cannot recreate the closed operation. Another operation can stage normally.|
 |`archive_share_proof_prepare`|`request` (the exact `archive_share_open_proof` request without `decision`), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|App only. Records a one-use ten-second challenge bound to binding generation, device, login token, organization, operation, share index and proof request digest, in a store separate from split and share-rewrap challenges. Reads no private key.|
 |`archive_share_open_proof`|`account_id`, `org_id`, `operation_id`, `config_digest`, `share_index`, `wrapped_key`, `ciphertext`, `proof_public_key`, `decision`|`{ signature }`|App only. Verifies the prepared challenge and the signed share-open proof decision, the live binding and device before reading the account archive private key; any mismatch is `not_found` with no key read. Then opens the share, requires its embedded index to equal `share_index`, re-derives the share proof key, and refuses with `crypto_failure` when it differs from `proof_public_key`. Signs the proof statement with the derived key and returns only the Base64 Ed25519 signature. The share, seed and private key are zeroized and never leave Keeper. Output is withheld if the decision expires during the call.|
-|`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest }`|Paired App only. Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
+|`archive_share_prepare`|`request` (exact share execution fields), `token_id`, `session_issued_at_nanos` (decimal string)|`{ challenge, request_digest, previous_tree_size? }`|Paired App only. The ordinary recovery response includes the local tree size (zero before the first checkpoint). Records a process-local, one-use challenge for ten seconds, scoped to the current account binding generation, device and login token. Reads no archive private key and returns no rewrapped share.|
 |`archive_share_rewrap`|`account_id`, `org_id`, `recovery_session_id`, `wrapped_key`, `ciphertext`, `session_public_key`, `decision`|`{ wrapped_key, ciphertext }`|Paired App only. Requires the prepared exact request and a server-signed archive-share decision before reading the account archive private key. Missing, expired, replayed or mismatched authority returns no output. The account receiving slot is used, never the org archive slot. Expiry is checked again after cryptography before output.|
 |`archive_session_begin`|`app_login`, `org_id` (required, lowercase UUID), `begin_id?` (lowercase UUID)|`{ session_public_key, fingerprint, expires_at, begun_at, replayed }`|App only. Starts or replays a session under the owner and expiry rules in "Recovery-session key expiry". A conflicting live begin is refused with `archive_session_active`.|
 |`archive_session_set_expiry`|`app_login`, `org_id` (required), `fingerprint`, `expires_at` (RFC 3339)|`{ expires_at }`|App only (a Native Messaging frame is refused). Applies the server session's `expires_at` to that organization's slot when its public key has `fingerprint`. The slot's expiry only moves earlier; the answer is the effective expiry. The fingerprint is compared before anything else: a fingerprint that is not that organization's session (another session of the same organization, any session of another organization, or no slot) → `not_found`, and nothing changes, even when the slot has expired or is untrusted. With the session's own fingerprint, reading the slot is a use: an expired slot → `archive_session_expired` (deleted), a slot without a trusted expiry or record → `archive_session_expiry_unknown` (kept); an `expires_at` already passed deletes the slot and answers `archive_session_expired`. When that delete does not complete it answers `storage_failure` instead (see "Recovery-session key expiry", Deletion). `fingerprint` must be 64 lowercase hex characters (`validation_error` otherwise, nothing read). Never reads the device-wide slot.|
@@ -3773,14 +3773,35 @@ witnesses a log proof is still a server-side record (see "Key Transparency").
 
 ### Archive share rewrap authorization
 
-Archive-share decisions use the distinct `dragpass.archive.share.rewrap|1`
+Archive-share decisions use the distinct `dragpass.archive.share.rewrap|2`
 domain. After that prefix, each field is encoded as `|<UTF-8-byte-length>:<value>`
 in this order: challenge, account ID, device ID, login token ID, session-issued
 nanoseconds, organization ID, recovery-session ID, quorum configuration ID,
-request digest, issued-at seconds, expires-at seconds, server key version.
+request digest, issued-at seconds, expires-at seconds, server key version,
+purpose, split operation ID and requester proof digest. For ordinary recovery,
+the operation ID is empty. The proof digest is the lowercase hex SHA-256 of
+the length-prefixed `dragpass.archive.requester-proof|1` encoding of the
+wrapped key and ciphertext. For reconfiguration, the operation ID matches
+the prepared source operation and the attachment digest is empty.
 The validity window is ten seconds. Keeper checks the configured server signing
 key, local challenge deadline and current binding before consuming the challenge
 and accessing the private key. Concurrent execution admits one caller only.
+
+The paired App prepares and executes with the selected pending card's
+`recovery_target` (requester account ID, group ID and DEK version), or with
+the source card's `split_operation_id`. A recovery challenge admits only a
+signed recovery decision. Its attachment is wrapped to the approver's
+registered archive key. Keeper opens it locally, authenticates the signed
+account enrollment and necessary rotations against its configured log and
+witnesses, and verifies the logged, account-signed binding of the requester
+device's Ed25519 key. It verifies that key's signature over the requester,
+device, organization, reserved session ID, group, DEK version and SHA-256
+of the recipient key's SPKI. The prepare response may include `requester_pin_fingerprint` for a pin
+whose enrollment Keeper proved under the current trust configuration. The
+API may use that hint to send the rotation suffix. Keeper verifies against
+the pin it reads at release. The device's strict peer policy applies at
+release. Each check precedes decryption of the share. A source approval
+retains its separate operation-bound authorization contract.
 
 The SHA-256 request digest covers the domain `dragpass.archive.share.request|1`
 and the same length-prefixed encoding of account ID, organization ID,

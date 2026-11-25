@@ -25,11 +25,11 @@ type archiveShareContext struct {
 	bindingGeneration uint64
 	orgID             string
 	recoverySessionID string
-	// operationID and shareIndex bind split and share-open proof challenges
-	// (lv86); they are empty or zero for share rewrap challenges.
-	operationID   string
-	shareIndex    int
-	requestDigest string
+	// A share rewrap challenge binds the selected recovery card or split operation.
+	recoveryTarget proto.ArchiveRecoveryTarget
+	operationID    string
+	shareIndex     int
+	requestDigest  string
 }
 
 type archiveShareEntry struct {

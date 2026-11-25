@@ -520,7 +520,7 @@ var archiveRoutes = map[string]appRoute{
 	"/v1/archive/archive_share_rewrap": {
 		action:     proto.ActionArchiveShareRewrap,
 		input:      func() any { return &proto.ArchiveShareRewrapRequest{} },
-		plainLimit: proto.ChatStateMaxRequestBytes,
+		plainLimit: proto.ArchiveShareRewrapMaxRequestBytes,
 	},
 	// Legacy quorum reconfiguration (lv90): stages the new key in the org's
 	// reconfiguration slot and returns only public material.

@@ -7,7 +7,7 @@ import (
 )
 
 func TestArchiveShareDecisionCanonicalVector(t *testing.T) {
-	raw, err := os.ReadFile("testdata/archive-share-decision-v1.json")
+	raw, err := os.ReadFile("testdata/archive-share-decision-v2.json")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,7 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveKeySplit:                wrap(handlers.HandleArchiveKeySplit).appOnlyAction(),
 		proto.ActionArchiveSplitPrepare:            wrapCapped(proto.DEKRewrapMaxRequestBytes, handlers.HandleArchiveSplitPrepare).appOnlyAction(),
 		proto.ActionArchiveSharePrepare:            wrapCapped(proto.DEKRewrapMaxRequestBytes, handlers.HandleArchiveSharePrepare).appOnlyAction(),
-		proto.ActionArchiveShareRewrap:             wrap(handlers.HandleArchiveShareRewrap).appOnlyAction(),
+		proto.ActionArchiveShareRewrap:             wrapCapped(proto.ArchiveShareRewrapMaxRequestBytes, handlers.HandleArchiveShareRewrap).appOnlyAction(),
 		proto.ActionArchiveShareProofPrepare:       wrapCapped(proto.DEKRewrapMaxRequestBytes, handlers.HandleArchiveShareProofPrepare).appOnlyAction(),
 		proto.ActionArchiveShareOpenProof:          wrapCapped(proto.DEKRewrapMaxRequestBytes, handlers.HandleArchiveShareOpenProof).appOnlyAction(),
 		proto.ActionArchiveSplitStatus:             wrap(handlers.HandleArchiveSplitStatus).appOnlyAction(),

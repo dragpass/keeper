@@ -267,6 +267,11 @@ func rewrapArchiveShare(d Deps, req proto.ArchiveShareRewrapRequest) proto.BaseR
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "failed to parse account archive private key: "+err.Error())
 	}
 
+	if req.Decision != nil && req.Decision.Purpose == "recovery" {
+		if !verifiedArchiveRequester(d, req, priv) || d.Now().Unix() >= req.Decision.ExpiresAt {
+			return errs.CodeResponse(errs.ErrCodeNotFound, "archive share authorization unavailable")
+		}
+	}
 	share, err := crypto.HybridUnwrap(priv, req.WrappedKey, req.Ciphertext)
 	if err != nil {
 		return errs.CodeResponse(errs.ErrCodeCryptoFailure, "share unwrap failed: "+err.Error())
