@@ -36,6 +36,7 @@ import (
 	"github.com/dragpass/keeper/internal/keystore/crypto"
 	"github.com/dragpass/keeper/internal/keystore/errs"
 	"github.com/dragpass/keeper/internal/keystore/keychain"
+	"github.com/dragpass/keeper/internal/keystore/keytransparency"
 	"github.com/dragpass/keeper/internal/keystore/proto"
 )
 
@@ -46,6 +47,16 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 
 	if err := req.Validate(); err != nil {
 		return errs.Response(err)
+	}
+
+	if req.RequireTransparency {
+		trust, err := usableTrust(d)
+		if err != nil {
+			return keyTransparencyRefusal(d, err)
+		}
+		if trust == nil || trust.ConfigDigest == "" {
+			return keyTransparencyRefusal(d, keytransparency.ErrTrustInvalid)
+		}
 	}
 
 	if resp, ok := requirePeerKeyOwner(d, req.OwnerAccountID); !ok {
@@ -69,28 +80,14 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 		d.Logger.Printf("peer key chain evaluate error: failed to read pin: %v", err)
 		return errs.CodeResponse(errs.ErrCodeStorageFailure, "failed to read peer key pin: "+err.Error())
 	}
-	if existing != nil && existing.Fingerprint != observed {
-		if err := verifyRotationTransparency(d, req.RotationStatements); err != nil {
-			return keyTransparencyRefusal(d, err)
-		}
+	outcome, err := evaluatePeerKeyWithProof(d, req, existing, observed)
+	if err != nil {
+		return keyTransparencyRefusal(d, err)
 	}
-
-	// The same call the wrap path makes, with the same arguments.
-	//
-	// applyPeerKeyPolicy is deliberately absent. Strict mode's rule is "do
-	// not wrap to a key nobody compared out of band", and this action wraps
-	// nothing, so it has no output to withhold. Applying it here would also
-	// make the deadlock this action exists to break strictly worse: a strict
-	// device could never learn that a rotation chain was valid, and would be
-	// left with exactly the two wrong escapes above. The enforcement point
-	// stays where §6.5 put it — a pin this action moves to `rotated` still
-	// refuses the next wrap with `peer_key_unverified` until a human verifies
-	// it, so reporting the true state hands out no wrap strict mode would
-	// have refused. It only lets the UI ask for that verification against the
-	// right key.
-	outcome := evaluatePeerKeyTrust(existing, req.AccountID, observed, req.RotationStatements, d.Now().Unix())
-
 	if !outcome.Allowed {
+		if req.RequireTransparency {
+			return errs.CodeResponse(errs.ErrCodePeerKeyChanged, outcome.Reason)
+		}
 		d.Logger.Printf("peer key chain evaluate: no chain explains the key change: %s", outcome.Reason)
 		return proto.BaseResponse{Success: true, Data: proto.PeerKeyChainEvaluateResponseData{
 			State:             string(keychain.PeerKeyPinStateChanged),
@@ -98,12 +95,6 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 			Advanced:          false,
 			PinnedFingerprint: outcome.PinnedFingerprint,
 		}}
-	}
-
-	// The same proof rule as the wrap path: a pin alone is not a log proof.
-	if err := requirePeerKeyProof(d, req.OwnerAccountID, req.AccountID, existing, &outcome.Pin,
-		req.PublicKey, req.EnrollmentEvidence); err != nil {
-		return keyTransparencyRefusal(d, err)
 	}
 
 	// "Moved" means the record now points at a different key than it did:
@@ -118,8 +109,43 @@ func HandlePeerKeyChainEvaluate(d Deps, req proto.PeerKeyChainEvaluateRequest) p
 
 	d.Logger.Printf("peer key chain evaluate successful (state=%s, advanced=%t)", outcome.State, advanced)
 	return proto.BaseResponse{Success: true, Data: proto.PeerKeyChainEvaluateResponseData{
-		State:       string(outcome.State),
-		Fingerprint: observed,
-		Advanced:    advanced,
+		State:                string(outcome.State),
+		Fingerprint:          observed,
+		Advanced:             advanced,
+		TransparencyVerified: req.RequireTransparency && enrollmentRooted(d, &outcome.Pin, req.OwnerAccountID, req.AccountID),
 	}}
+}
+
+// Evaluation wraps nothing. The wrap handler applies the device's manual
+// verification policy again before producing a wrapped key.
+func evaluatePeerKeyWithProof(d Deps, req proto.PeerKeyChainEvaluateRequest, existing *keychain.PeerKeyPin, observed string) (peerKeyTrustOutcome, error) {
+	if req.RequireTransparency {
+		rooted := enrollmentRooted(d, existing, req.OwnerAccountID, req.AccountID)
+		if len(req.RotationStatements) > 0 && (!rooted || req.EnrollmentEvidence != nil) {
+			return evaluatePeerFromEnrollment(d, req, existing, observed)
+		}
+		if existing != nil && !rooted {
+			// Preserve the pin as a constraint. A leaf binding alone cannot
+			// establish the account key that signed that same binding.
+			unproven := *existing
+			unproven.KeyTransparency = nil
+			existing = &unproven
+		}
+		if rooted && existing.Fingerprint != observed {
+			for len(req.RotationStatements) > 0 && req.RotationStatements[0].OldFingerprint != existing.Fingerprint {
+				req.RotationStatements = req.RotationStatements[1:]
+			}
+		}
+	}
+	if existing != nil && existing.Fingerprint != observed {
+		if err := verifyRotationTransparency(d, req.RotationStatements); err != nil {
+			return peerKeyTrustOutcome{}, err
+		}
+	}
+	outcome := evaluatePeerKeyTrust(existing, req.AccountID, observed, req.RotationStatements, d.Now().Unix())
+	if !outcome.Allowed {
+		return outcome, nil
+	}
+	err := requirePeerKeyProof(d, req.OwnerAccountID, req.AccountID, existing, &outcome.Pin, req.PublicKey, req.EnrollmentEvidence)
+	return outcome, err
 }

@@ -197,6 +197,17 @@ func TestKeyTransparencyMonitorKnowsTheEnrollmentOfItsOwnKey(t *testing.T) {
 
 func signedStatementEvidence(t *testing.T, statement []byte) (proto.KeyTransparencyEvidence, *keytransparency.Trust) {
 	t.Helper()
+	evidence, trust := signedAccountEvidence(t, statement)
+	return evidence[0], trust
+}
+
+// Build one checkpoint for enrollment and its rotation so the proofs agree
+// with the same persistent anchor throughout a first-contact evaluation.
+func signedAccountEvidence(t *testing.T, statements ...[]byte) ([]proto.KeyTransparencyEvidence, *keytransparency.Trust) {
+	t.Helper()
+	if len(statements) < 1 || len(statements) > 2 {
+		t.Fatal("expected one or two statements")
+	}
 	logPrivate, logPublic, err := note.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x31}, 4096)), "dragpass.test/log")
 	if err != nil {
 		t.Fatal(err)
@@ -226,16 +237,23 @@ func signedStatementEvidence(t *testing.T, statement []byte) (proto.KeyTranspare
 		}
 	}
 	trust := &keytransparency.Trust{
-		Origin: "dragpass.test/log", LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
+		ConfigDigest: "test-trust-config", Origin: "dragpass.test/log", LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
 		Quorum: 2, MaxCheckpointAge: time.Hour, FutureSkew: time.Minute,
 	}
 	salt := bytes.Repeat([]byte{0x53}, 32)
-	commitInput := append([]byte("dragpass.kt.leaf.v1\x00"), salt...)
-	commitInput = binary.BigEndian.AppendUint32(commitInput, uint32(len(statement)))
-	commitInput = append(commitInput, statement...)
-	commitment := sha256.Sum256(commitInput)
-	leaf := rfc6962.DefaultHasher.HashLeaf(commitment[:])
-	checkpoint := formatlog.Checkpoint{Origin: trust.Origin, Size: 1, Hash: leaf}
+	leaves := make([][]byte, len(statements))
+	for i, statement := range statements {
+		commitInput := append([]byte("dragpass.kt.leaf.v1\x00"), salt...)
+		commitInput = binary.BigEndian.AppendUint32(commitInput, uint32(len(statement)))
+		commitInput = append(commitInput, statement...)
+		commitment := sha256.Sum256(commitInput)
+		leaves[i] = rfc6962.DefaultHasher.HashLeaf(commitment[:])
+	}
+	root := leaves[0]
+	if len(leaves) == 2 {
+		root = rfc6962.DefaultHasher.HashChildren(leaves[0], leaves[1])
+	}
+	checkpoint := formatlog.Checkpoint{Origin: trust.Origin, Size: uint64(len(leaves)), Hash: root}
 	raw, err := note.Sign(&note.Note{Text: string(checkpoint.Marshal())}, logSigner)
 	if err != nil {
 		t.Fatal(err)
@@ -255,8 +273,13 @@ func signedStatementEvidence(t *testing.T, statement []byte) (proto.KeyTranspare
 			t.Fatal(err)
 		}
 	}
-	return proto.KeyTransparencyEvidence{
-		StatementB64: base64.StdEncoding.EncodeToString(statement), SaltB64: base64.StdEncoding.EncodeToString(salt),
-		CheckpointB64: base64.StdEncoding.EncodeToString(raw), LeafIndex: 0,
-	}, trust
+	proofs := make([]proto.KeyTransparencyEvidence, len(statements))
+	for i, statement := range statements {
+		proofs[i] = proto.KeyTransparencyEvidence{StatementB64: base64.StdEncoding.EncodeToString(statement), SaltB64: base64.StdEncoding.EncodeToString(salt),
+			CheckpointB64: base64.StdEncoding.EncodeToString(raw), LeafIndex: uint64(i)}
+		if len(leaves) == 2 {
+			proofs[i].InclusionProofB64 = []string{base64.StdEncoding.EncodeToString(leaves[1-i])}
+		}
+	}
+	return proofs, trust
 }

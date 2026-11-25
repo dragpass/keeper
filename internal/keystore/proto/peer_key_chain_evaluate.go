@@ -19,11 +19,12 @@ package proto
 // same reason peer_key_pin_verify does: a fingerprint the caller supplies is a
 // fingerprint the caller chose.
 type PeerKeyChainEvaluateRequest struct {
-	OwnerAccountID     string                   `json:"owner_account_id"`
-	AccountID          string                   `json:"account_id"`
-	PublicKey          string                   `json:"public_key"`
-	RotationStatements []KeyRotationStatement   `json:"rotation_statements,omitempty"`
-	EnrollmentEvidence *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
+	RequireTransparency bool                     `json:"require_transparency,omitempty"`
+	OwnerAccountID      string                   `json:"owner_account_id"`
+	AccountID           string                   `json:"account_id"`
+	PublicKey           string                   `json:"public_key"`
+	RotationStatements  []KeyRotationStatement   `json:"rotation_statements,omitempty"`
+	EnrollmentEvidence  *KeyTransparencyEvidence `json:"enrollment_evidence,omitempty"`
 }
 
 func (r PeerKeyChainEvaluateRequest) Validate() error {
@@ -44,13 +45,15 @@ func (r PeerKeyChainEvaluateRequest) Validate() error {
 
 // PeerKeyChainEvaluateResponseData is the verdict.
 //
-// It is returned on the success envelope even when `state` is `changed`,
+// In the default evaluation it is returned on the success envelope even when `state` is `changed`,
 // because the action succeeded at what it was asked to do: report what the
 // Keeper thinks of this key. `changed` is a verdict, not a failed evaluation,
 // and the caller of this action is precisely the code that wants to tell the
 // four states apart. The wrap actions keep the refusal envelope, since there
 // the verdict decides whether output exists at all.
 type PeerKeyChainEvaluateResponseData struct {
+	// Set only for a successful evaluation that required enrollment ancestry.
+	TransparencyVerified bool `json:"transparency_verified,omitempty"`
 	// State is `tofu`, `verified`, `rotated`, or `changed`.
 	State string `json:"state"`
 	// Fingerprint is what the Keeper computed from the supplied PEM, never a

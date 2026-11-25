@@ -631,6 +631,12 @@ func TestPeerKeyRoutesPassTheirTypedRequests(t *testing.T) {
 			t.Fatalf("%s took an unknown field: %d", path, code)
 		}
 	}
+	code, result, _ = callRoute(t, server, session, csrf, "/v1/peer-key/chain-evaluate", map[string]any{
+		"owner_account_id": routeOwner, "account_id": routePeer, "public_key": peer.PublicKey, "require_transparency": true,
+	})
+	if code != http.StatusOK || result.Success || result.ErrorCode != "key_transparency_trust_invalid" {
+		t.Fatalf("required transparency without trust: HTTP %d, code %s", code, result.ErrorCode)
+	}
 	// Forgetting a pin re-TOFUs a changed key; the key-trust UI dropped it
 	// (MLS hardening policy Q9 (a)) and the App origin cannot reach it.
 	if got := localRequest(server, http.MethodPost, "/v1/peer-key/pin-forget", `{"owner_account_id":"`+routeOwner+`","account_id":"`+routePeer+`"}`, session, csrf).Code; got != http.StatusNotFound {

@@ -105,3 +105,49 @@ func TestLoadGateFromEnvWithUnusableTrustFileFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustConfigDigestBindsVerifierPolicy(t *testing.T) {
+	path := writeTrustFile(t, nil)
+	before, err := loadTrustFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.ConfigDigest) != 64 {
+		t.Fatal("missing trust digest")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config trustConfig
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	check := func(wantSame bool) {
+		t.Helper()
+		formatted, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, formatted, 0600); err != nil {
+			t.Fatal(err)
+		}
+		after, err := loadTrustFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (before.ConfigDigest == after.ConfigDigest) != wantSame {
+			t.Fatal("wrong verifier policy digest")
+		}
+	}
+	check(true)
+	config.FutureSkewSeconds++
+	check(false)
+	config.FutureSkewSeconds--
+	_, replacement, err := note.GenerateKey(rand.Reader, "a.witness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.WitnessVerifiers[0] = replacement
+	check(false)
+}

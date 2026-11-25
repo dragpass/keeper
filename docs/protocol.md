@@ -3683,6 +3683,27 @@ when any `DRAGPASS_KEEPER_DEV_*` variable is set.
 
 ### First peer pin with Key Transparency (0.0.57)
 
+The paired App can set `require_transparency: true` on
+`peer_key_chain_evaluate` to require an account key traceable to a signed
+enrollment in the configured log. Only a successful response with
+`transparency_verified: true` and the expected fingerprint confirms that
+evaluation. A caller requiring this result must also check the flag on older
+Keeper versions. Missing or unusable log trust refuses the evaluation.
+
+On first contact, supply the requester's enrollment proof and, if the key
+has rotated, the signed rotation chain and inclusion proof for each link.
+A stored pin constrains the chain. A pin established by an MLS leaf or a
+rotation with unknown enrollment ancestry still requires enrollment proof.
+Keeper can reuse a proven enrollment or a rotation traced to one under
+the same log and witness configuration. A change of verifier keys or
+freshness policy requires a new proof.
+If another observation replaces that evidence with a leaf-only record,
+supply the enrollment and any rotations again. An
+unexplained change fails the required evaluation and preserves the pin.
+This action verifies an account key. Archive share authorization also
+requires verification of the device binding and the session-key signature
+at the point of release to enforce O2.
+
 When a Key Transparency trust file is active, `dek_rewrap_for_member`,
 `dek_unwrap_and_rewrap_for_many`, `archive_unwrap_and_rewrap`, and
 `peer_key_chain_evaluate` require `enrollment_evidence` before creating a first

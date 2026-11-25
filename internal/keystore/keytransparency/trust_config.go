@@ -1,6 +1,8 @@
 package keytransparency
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,8 +86,14 @@ func loadTrustFile(path string) (*Trust, error) {
 		names[verifier.Name()] = struct{}{}
 		witnessVerifiers = append(witnessVerifiers, verifier)
 	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(encoded)
 	return &Trust{
-		Origin: config.Origin, LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
+		ConfigDigest: hex.EncodeToString(digest[:]),
+		Origin:       config.Origin, LogVerifier: logVerifier, WitnessVerifiers: witnessVerifiers,
 		Quorum: 2, MaxCheckpointAge: time.Duration(config.MaxCheckpointAgeSeconds) * time.Second,
 		FutureSkew: time.Duration(config.FutureSkewSeconds) * time.Second,
 	}, nil

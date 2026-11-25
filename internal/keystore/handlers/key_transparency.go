@@ -73,6 +73,11 @@ func verifyAccountEnrollmentTransparency(
 	return err
 }
 
+func enrollmentRooted(d Deps, pin *keychain.PeerKeyPin, owner, account string) bool {
+	return d.KeyTransparency.Trust != nil && d.KeyTransparency.Trust.ConfigDigest != "" && pin != nil &&
+		pin.KeyTransparencyVerified(owner, account) && pin.KeyTransparency.EnrollmentTrust == d.KeyTransparency.Trust.ConfigDigest
+}
+
 // carryPeerKeyProof settles which log proof, if any, still stands behind the
 // pin an allowed observation is about to persist. It never refuses; it only
 // keeps the record honest:
@@ -88,6 +93,9 @@ func carryPeerKeyProof(d Deps, owner, account string, existing *keychain.PeerKey
 	rotated := existing != nil && existing.Fingerprint != pin.Fingerprint
 	if rotated && d.KeyTransparency.Required() && existing.KeyTransparencyVerified(owner, account) {
 		pin.KeyTransparency = peerKeyProofRecord(d, owner, account, pin.Fingerprint, keytransparency.StatementAccountKeyRotation)
+		if enrollmentRooted(d, existing, owner, account) {
+			pin.KeyTransparency.EnrollmentTrust = existing.KeyTransparency.EnrollmentTrust
+		}
 		return
 	}
 	if rotated || !pin.KeyTransparencyVerified(owner, account) {
@@ -116,6 +124,7 @@ func requirePeerKeyProof(
 		return err
 	}
 	pin.KeyTransparency = peerKeyProofRecord(d, owner, account, pin.Fingerprint, keytransparency.StatementAccountKeyEnrollment)
+	pin.KeyTransparency.EnrollmentTrust = d.KeyTransparency.Trust.ConfigDigest
 	return nil
 }
 
@@ -170,4 +179,37 @@ func keyTransparencyRefusalMessage(code errs.ErrorCode) string {
 		return "key transparency trust file is present but unusable; key changes are refused"
 	}
 	return "key transparency proof could not be verified"
+}
+
+// evaluatePeerFromEnrollment authenticates the complete path before recording
+// the current key. A pin without a log proof still constrains that path.
+func evaluatePeerFromEnrollment(d Deps, req proto.PeerKeyChainEvaluateRequest, stored *keychain.PeerKeyPin, observed string) (peerKeyTrustOutcome, error) {
+	links := req.RotationStatements
+	first := links[0]
+	if err := verifyRotationChain(links, req.AccountID, first.OldFingerprint, observed); err != nil {
+		return peerKeyTrustOutcome{}, err
+	}
+	suffix := links
+	if stored != nil {
+		for len(suffix) > 0 && suffix[0].OldFingerprint != stored.Fingerprint {
+			suffix = suffix[1:]
+		}
+	}
+	outcome := evaluatePeerKeyTrust(stored, req.AccountID, observed, suffix, d.Now().Unix())
+	if !outcome.Allowed {
+		return outcome, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(first.OldPublicKey)
+	if err != nil {
+		return peerKeyTrustOutcome{}, err
+	}
+	if err := verifyAccountEnrollmentTransparency(d, req.EnrollmentEvidence, req.AccountID, string(key)); err != nil {
+		return peerKeyTrustOutcome{}, err
+	}
+	if err := verifyRotationTransparency(d, links); err != nil {
+		return peerKeyTrustOutcome{}, err
+	}
+	outcome.Pin.KeyTransparency = peerKeyProofRecord(d, req.OwnerAccountID, req.AccountID, observed, keytransparency.StatementAccountKeyRotation)
+	outcome.Pin.KeyTransparency.EnrollmentTrust = d.KeyTransparency.Trust.ConfigDigest
+	return outcome, nil
 }
