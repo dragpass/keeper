@@ -149,6 +149,7 @@ var pinnedAppRoutes = []string{
 	"/v1/auth/recovery/close",
 	"/v1/auth/recovery/prepare",
 	"/v1/auth/recovery/rewrap-group-dek",
+	"/v1/auth/request-key/binding",
 	"/v1/auth/signup/abort",
 	"/v1/auth/signup/prepare",
 	"/v1/auth/signup/save-session-code",

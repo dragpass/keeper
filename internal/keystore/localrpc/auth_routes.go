@@ -6,6 +6,7 @@ import "github.com/dragpass/keeper/internal/keystore/proto"
 // action's own request; the two that store a secret answer only that it was
 // stored.
 var authLoginRoutes = map[string]appRoute{
+	"/v1/auth/request-key/binding": {action: proto.ActionRequestKeyBinding, input: func() any { return &proto.ArchiveLoginScope{} }},
 	"/v1/auth/personal-dek/bind": {
 		action: proto.ActionPersonalDEKBind,
 		input:  func() any { return &proto.PersonalDEKBindRequest{} },

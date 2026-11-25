@@ -18,6 +18,7 @@
 package proto
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -151,4 +152,27 @@ func (r RotateRequestKeyAbortRequest) Validate() error { return nil }
 
 type RotateRequestKeyAbortResponseData struct {
 	Aborted bool `json:"aborted"` // whether something was actually wiped (false for an idempotent call)
+}
+
+const ActionRequestKeyBinding = "request_key_binding"
+
+type RequestKeyBinding struct {
+	AccountID               string `json:"account_id"`
+	DeviceID                string `json:"device_id"`
+	PublicKey               string `json:"public_key"`
+	AccountBindingSignature string `json:"account_binding_signature"`
+}
+
+func (r RequestKeyBinding) Canonical() (string, error) {
+	if err := requireMessageUUID(r.AccountID, "account_id"); err != nil {
+		return "", err
+	}
+	if err := requireMessageUUID(r.DeviceID, "device_id"); err != nil {
+		return "", err
+	}
+	raw, err := base64.StdEncoding.DecodeString(r.PublicKey)
+	if err != nil || len(raw) != ed25519.PublicKeySize || base64.StdEncoding.EncodeToString(raw) != r.PublicKey {
+		return "", newValidationError("public_key", "a canonical Ed25519 public key is required")
+	}
+	return strings.Join([]string{"dragpass.request-key-binding", "1", r.AccountID, r.DeviceID, "ed25519", r.PublicKey}, "|"), nil
 }

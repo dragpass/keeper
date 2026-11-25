@@ -3331,6 +3331,7 @@ route-specific request shape; unknown fields are 400.
 |`/v1/auth/signup/abort`|`auth_signup_abort`||
 |`/v1/auth/recovery/abort`|`auth_recovery_abort`||
 |`/v1/auth/recovery/close`|`recovery_session_close`||
+|`/v1/auth/request-key/binding`|`request_key_binding`|Accepts the initiating App login. Keeper derives the account, device and active Ed25519 key locally, checks possession and signs the binding with the account key.|
 |`/v1/auth/login/pending/sign-alias`|`auth_login_pending_sign_alias`||
 |`/v1/auth/login/pending/sign-challenge`|`auth_login_pending_sign_challenge`|No stage or key field: the key is the staged one the server-signed binding names.|
 |`/v1/auth/recovery/rewrap-group-dek`|`dek_rewrap_with_old_key_to_self`|No `new_public_key`: the target is always this Keeper's active key.|

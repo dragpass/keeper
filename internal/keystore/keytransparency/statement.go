@@ -11,15 +11,16 @@ import (
 )
 
 const (
-	StatementAccountKeyEnrollment = "account_key_enrollment"
-	StatementAccountKeyRotation   = "account_key_rotation"
-	StatementMLSLeafBinding       = "mls_leaf_binding"
-	statementDomain               = "dragpass.kt.statement"
-	statementMaxBytes             = 64 * 1024
+	StatementAccountKeyEnrollment    = "account_key_enrollment"
+	StatementAccountKeyRotation      = "account_key_rotation"
+	StatementDeviceRequestKeyBinding = "device_request_key_binding"
+	StatementMLSLeafBinding          = "mls_leaf_binding"
+	statementDomain                  = "dragpass.kt.statement"
+	statementMaxBytes                = 64 * 1024
 )
 
 func EncodeStatement(kind string, fields ...[]byte) ([]byte, error) {
-	if kind != StatementAccountKeyEnrollment && kind != StatementAccountKeyRotation && kind != StatementMLSLeafBinding {
+	if kind != StatementAccountKeyEnrollment && kind != StatementAccountKeyRotation && kind != StatementMLSLeafBinding && kind != StatementDeviceRequestKeyBinding {
 		return nil, errors.New("unknown key transparency statement kind")
 	}
 	if len(fields) == 0 || len(fields) > 16 {
