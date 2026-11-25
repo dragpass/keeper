@@ -192,6 +192,12 @@ func (r ArchiveReconfigurationSessionKeyProof) Canonical(account, device, localS
 	return archiveShareCanonical("dragpass.archive.reconfiguration.session-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, localSPKI)
 }
 
+// SourceCanonical binds the pre-approval proof to the round recorded in the local
+// operation journal. Rotation material release uses a separate signing domain.
+func (r ArchiveReconfigurationSessionKeyProof) SourceCanonical(account, device, localSPKI string, round int) string {
+	return archiveShareCanonical("dragpass.archive.reconfiguration.source-key|1", account, device, r.OrgID, r.OperationID, r.SessionID, r.ConfigDigest, strconv.Itoa(round), localSPKI)
+}
+
 // ArchiveRecoverySessionKeyProof asks for the proof the server requires to
 // open an ordinary quorum recovery session for a group DEK version.
 type ArchiveRecoverySessionKeyProof struct {

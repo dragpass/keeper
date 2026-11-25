@@ -147,6 +147,9 @@ func TestSessionKeyProofMustMatchOwnedLiveSessionAndOperation(t *testing.T) {
 	if err != nil || err2 != nil || err3 != nil || !ed25519.Verify(pub, []byte(req.Canonical(f.v.AccountID, splitTestDevice, fp)), sig) {
 		t.Fatal("invalid proof signature")
 	}
+	if early := HandleArchiveReconfigurationSourceProof(f.deps, req); early.Success || early.Data != nil {
+		t.Fatal("source proof accepted a slot opened without this operation's begin ID")
+	}
 	if !sign(req).Success {
 		t.Fatal("idempotent proof refused")
 	}
@@ -154,5 +157,50 @@ func TestSessionKeyProofMustMatchOwnedLiveSessionAndOperation(t *testing.T) {
 	bad.SessionID = splitTestToken
 	if r := sign(bad); r.Success || r.Data != nil {
 		t.Fatal("signed another session for the same local key")
+	}
+}
+
+func TestSourceProofBindsPurposeAndRound(t *testing.T) {
+	f := newSplitFixture(t)
+	split, _ := f.authorizeReconfiguration(t)
+	if r := HandleArchiveKeySplit(f.deps, split); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	begun := HandleArchiveSessionBegin(f.deps, proto.ArchiveSessionBeginRequest{OrgID: split.OrgID, BeginID: split.OperationID})
+	if !begun.Success {
+		t.Fatal(begun.ErrorCode)
+	}
+	fp, err := crypto.RewrapKeyFingerprint(begun.Data.(proto.ArchiveSessionBeginResponseData).SessionPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := HandleRequestKeyGenerate(f.deps, proto.RequestKeyGenerateRequest{}); !r.Success {
+		t.Fatal(r.ErrorCode)
+	}
+	req := proto.ArchiveReconfigurationSessionKeyProof{OrgID: split.OrgID, OperationID: split.OperationID, SessionID: splitTestOther, ConfigDigest: split.ConfigDigest, SessionSPKI: fp}
+	early := HandleArchiveReconfigurationSourceProof(f.deps, req)
+	if !early.Success {
+		t.Fatal("source proof refused", early.ErrorCode)
+	}
+	earlySig, err := base64.StdEncoding.DecodeString(early.Data.(proto.ArchiveSessionKeySignature).Signature)
+	pub64, err2 := keychain.GetRequestSigningPublicKey(f.store)
+	pub, err3 := base64.StdEncoding.DecodeString(pub64)
+	if err != nil || err2 != nil || err3 != nil {
+		t.Fatal("invalid source proof encoding")
+	}
+	account := f.v.AccountID
+	source := req.SourceCanonical(account, splitTestDevice, req.SessionSPKI, 0)
+	if !ed25519.Verify(pub, []byte(source), earlySig) ||
+		ed25519.Verify(pub, []byte(req.Canonical(account, splitTestDevice, req.SessionSPKI)), earlySig) ||
+		ed25519.Verify(pub, []byte(req.SourceCanonical(account, splitTestDevice, req.SessionSPKI, 1)), earlySig) {
+		t.Fatal("source proof failed to bind its round or signing purpose")
+	}
+	other := req
+	other.SessionID = splitTestToken
+	if r := HandleArchiveReconfigurationSourceProof(f.deps, other); r.Success || r.Data != nil {
+		t.Fatal("source proof released for a second session ID on the same key")
+	}
+	if r := HandleArchiveReconfigurationSessionKeyProof(f.deps, req); !r.Success {
+		t.Fatal("source proof blocked subsequent material-release proof")
 	}
 }

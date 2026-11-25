@@ -484,6 +484,7 @@ var archiveRoutes = map[string]appRoute{
 	// receipt, which the handler verifies; the route only forwards it.
 	"/v1/archive/archive_quorum_rotation_prepare":            {action: proto.ActionArchiveRotationPrepare, input: func() any { return &proto.ArchiveRotationPrepare{} }, plainLimit: proto.DEKRewrapMaxRequestBytes},
 	"/v1/archive/archive_reconfiguration_session_key_proof":  {action: proto.ActionArchiveSessionKeyProof, input: func() any { return &proto.ArchiveReconfigurationSessionKeyProof{} }},
+	"/v1/archive/archive_reconfiguration_source_key_proof":   {action: proto.ActionArchiveSourceKeyProof, input: func() any { return &proto.ArchiveReconfigurationSessionKeyProof{} }},
 	"/v1/archive/archive_recovery_session_key_proof":         {action: proto.ActionArchiveRecoverySessionKeyProof, input: func() any { return &proto.ArchiveRecoverySessionKeyProof{} }},
 	"/v1/archive/archive_reconfiguration_supplement_prepare": {action: proto.ActionSupplementPrepare, input: func() any { return &proto.SupplementPrepare{} }},
 	"/v1/archive/archive_reconfiguration_supplement_promote": {action: proto.ActionSupplementPromote, input: func() any { return &proto.SupplementPromote{} }},

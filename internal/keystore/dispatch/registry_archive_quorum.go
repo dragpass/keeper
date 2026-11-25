@@ -33,6 +33,7 @@ func archiveQuorumActions() map[string]action {
 		proto.ActionArchiveQuorumCombineAndRewrap:  archiveLoginAction(handlers.HandleArchiveQuorumCombineAndRewrap).appOnlyAction(),
 		proto.ActionArchiveRotationPrepare:         archiveLoginAction(handlers.HandleArchiveRotationPrepare).appOnlyAction(),
 		proto.ActionArchiveSessionKeyProof:         archiveLoginAction(handlers.HandleArchiveReconfigurationSessionKeyProof).appOnlyAction(),
+		proto.ActionArchiveSourceKeyProof:          archiveLoginAction(handlers.HandleArchiveReconfigurationSourceProof).appOnlyAction(),
 		proto.ActionRequestKeyBinding:              wrap(handlers.HandleRequestKeyBinding).appOnlyAction(),
 		proto.ActionArchiveRecoverySessionKeyProof: archiveLoginAction(handlers.HandleArchiveRecoverySessionKeyProof).appOnlyAction(),
 		proto.ActionSupplementPrepare:              archiveLoginAction(handlers.HandleSupplementPrepare).appOnlyAction(),

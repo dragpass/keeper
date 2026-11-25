@@ -45,6 +45,7 @@ var appRouteOnlyCalls = []struct {
 	{proto.ActionArchiveSharePrepare, "/v1/archive/archive_share_prepare", map[string]any{}},
 	{proto.ActionArchiveRotationPrepare, "/v1/archive/archive_quorum_rotation_prepare", map[string]any{}},
 	{proto.ActionArchiveSessionKeyProof, "/v1/archive/archive_reconfiguration_session_key_proof", map[string]any{}},
+	{proto.ActionArchiveSourceKeyProof, "/v1/archive/archive_reconfiguration_source_key_proof", map[string]any{}},
 	{proto.ActionRequestKeyBinding, "/v1/auth/request-key/binding", map[string]any{}},
 	{proto.ActionArchiveRecoverySessionKeyProof, "/v1/archive/archive_recovery_session_key_proof", map[string]any{}},
 	{proto.ActionSupplementPrepare, "/v1/archive/archive_reconfiguration_supplement_prepare", map[string]any{}},
