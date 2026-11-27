@@ -73,8 +73,8 @@ func TestArchiveSessionDiscard_RefusesWhenTheKeyChangedAfterConfirmation(t *test
 	}
 }
 
-// Untrusted slots are removed only this way, and only by their own
-// fingerprint.
+// An owner can discard an untrusted slot by fingerprint. Records without
+// an identifiable owner are preserved even when the fingerprint matches.
 func TestArchiveSessionDiscard_RemovesAnUntrustedSlotByItsFingerprint(t *testing.T) {
 	deps, store, clock := newOrgSessionDeps(t)
 	a := beginOrgSession(t, deps, testOrgA)
@@ -108,12 +108,8 @@ func TestArchiveSessionDiscard_RemovesAnUntrustedSlotByItsFingerprint(t *testing
 	}
 }
 
-// A private half with no public half and no v2 record (a development-build
-// record whose public half is gone, bare or with the v1 header) has its
-// fingerprint derived from the private key, in the same encoding begin
-// uses. status reports it without writing anything, and only the confirmed
-// discard naming it removes the slot; end, set_expiry and the sweeps leave
-// it, and begin works once it is gone.
+// Bare keys and v1 records carry no owner. Losing the public half does
+// not give the current login authority to discard either form.
 func TestArchiveSessionDiscard_PreservesOwnerlessSlotWithoutPublicHalf(t *testing.T) {
 	for _, form := range []string{"bare key", "v1 record"} {
 		t.Run(form, func(t *testing.T) {
@@ -130,11 +126,7 @@ func TestArchiveSessionDiscard_PreservesOwnerlessSlotWithoutPublicHalf(t *testin
 	}
 }
 
-// A private half that is not a key Keeper can parse, with no public half
-// and no v2 record, has no fingerprint. status reports the digest of the
-// stored bytes instead (stored_digest: hex(sha256(stored private record)),
-// not a key fingerprint), and the confirmed discard naming that digest
-// removes it. The digest is accepted for that shape only.
+// Knowing the exact digest of a damaged record does not establish ownership.
 func TestArchiveSessionDiscard_PreservesAnUnparsableSlotEvenByItsStoredDigest(t *testing.T) {
 	deps, mem, clock := newOrgSessionDeps(t)
 	a := beginOrgSession(t, deps, testOrgA)

@@ -215,10 +215,7 @@ func (r ArchiveSessionStatusRequest) Validate() error {
 // slot key's public key fingerprint, omitted when there is none. ExpiresAt
 // and BegunAt are reported for live and expired slots only.
 // FingerprintMatches answers the request's fingerprint, when it had one.
-// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
-// is reported only for an unowned slot with no fingerprint: a private
-// record that is not a parsable key, with no public half and no v2 record;
-// archive_session_discard accepts it for that shape only.
+// StoredDigest remains in the wire type for compatibility. Status omits it.
 // LegacySlotPresent reports the device-wide slot of a Keeper before lv90.
 type ArchiveSessionStatusResponseData struct {
 	State              string `json:"state"`
@@ -312,11 +309,9 @@ type ArchiveSessionEndResponseData struct {
 // record Keeper cannot trust. confirm_discard must be true; the App sets it
 // only after the user's confirmation, which Keeper cannot verify.
 //
-// Exactly one of Fingerprint and StoredDigest names what is discarded.
-// StoredDigest (hex(sha256(stored private record)), not a key fingerprint)
-// is for the one slot shape that has no fingerprint: a private record that
-// is not a parsable key, with no public half and no v2 record, as
-// archive_session_status reports it.
+// The request accepts exactly one of Fingerprint and StoredDigest. Discard
+// deletes an owned slot only by its current fingerprint. A digest-only
+// request can identify neither the key for discard nor an unknown owner.
 type ArchiveSessionDiscardRequest struct {
 	ArchiveLoginScope
 	OrgID          string `json:"org_id,omitempty"`
